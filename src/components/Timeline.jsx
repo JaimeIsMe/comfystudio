@@ -14,6 +14,7 @@ import useAssetsStore from '../stores/assetsStore'
 import { useSnapping, SNAP_TYPES } from '../hooks/useSnapping'
 import { getAllKeyframeTimes } from '../utils/keyframes'
 import { TRANSITION_TYPES, TRANSITION_DURATIONS, FRAME_RATE } from '../constants/transitions'
+import MasterAudioMeter from './AudioMeter'
 
 function Timeline({ onOpenAudioGenerate }) {
   const timelineRef = useRef(null)
@@ -90,6 +91,8 @@ function Timeline({ onOpenAudioGenerate }) {
     clips,
     transitions,
     selectedClipIds,
+    activeTrackId,
+    setActiveTrack,
     snappingEnabled,
     activeSnapTime,
     rippleEditMode,
@@ -451,6 +454,32 @@ function Timeline({ onOpenAudioGenerate }) {
         const allClipIds = clips.map(c => c.id)
         useTimelineStore.getState().selectClips(allClipIds)
       }
+      
+      // X - split at playhead on active track only (seamless: second clip continues from cut in source)
+      if (e.key === 'x' && !e.ctrlKey && !e.metaKey && !e.altKey && activeTrackId) {
+        const clip = clips.find(
+          c => c.trackId === activeTrackId &&
+            playheadPosition > c.startTime &&
+            playheadPosition < c.startTime + c.duration
+        )
+        if (clip) {
+          e.preventDefault()
+          saveToHistory()
+          const splitTime = playheadPosition - clip.startTime
+          const remainder = clip.duration - splitTime
+          // Source time at the cut (so second clip continues from here — no repeat/slip)
+          const sourceTimeAtCut = (clip.trimStart || 0) + splitTime * getTimeScale(clip)
+          resizeClip(clip.id, splitTime)
+          const asset = assets.find(a => a.id === clip.assetId)
+          if (asset) {
+            const newClip = addClip(clip.trackId, asset, playheadPosition, timelineFps)
+            if (newClip) {
+              updateClipTrim(newClip.id, { trimStart: sourceTimeAtCut })
+              resizeClip(newClip.id, remainder)
+            }
+          }
+        }
+      }
     }
     
     const handleKeyUp = (e) => {
@@ -468,7 +497,7 @@ function Timeline({ onOpenAudioGenerate }) {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
     }
-  }, [toggleSnapping, toggleRippleEdit, selectedClipIds, removeSelectedClips, clearSelection, clips, undo, redo])
+  }, [toggleSnapping, toggleRippleEdit, selectedClipIds, removeSelectedClips, clearSelection, clips, undo, redo, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, updateClipTrim, assets, timelineFps])
 
   // Handle spacebar panning
   useEffect(() => {
@@ -698,17 +727,19 @@ function Timeline({ onOpenAudioGenerate }) {
         }
         break
       case 'split':
-        // Split clip at playhead
+        // Split clip at playhead (seamless: second clip continues from cut in source)
         if (playheadPosition > clip.startTime && playheadPosition < clip.startTime + clip.duration) {
           const splitTime = playheadPosition - clip.startTime
-          // Resize current clip to split point
+          const remainder = clip.duration - splitTime
+          const sourceTimeAtCut = (clip.trimStart || 0) + splitTime * getTimeScale(clip)
+          saveToHistory()
           resizeClip(clip.id, splitTime)
-          // Create new clip after split
           const asset = assets.find(a => a.id === clip.assetId)
           if (asset) {
             const newClip = addClip(clip.trackId, asset, playheadPosition, timelineFps)
             if (newClip) {
-              resizeClip(newClip.id, clip.duration - splitTime)
+              updateClipTrim(newClip.id, { trimStart: sourceTimeAtCut })
+              resizeClip(newClip.id, remainder)
             }
           }
         }
@@ -1024,21 +1055,22 @@ function Timeline({ onOpenAudioGenerate }) {
       let newTrackId = clipDragState.originalTrackId
       const isDraggingMultiple = selectedClipIds.includes(clipDragState.clipId) && selectedClipIds.length > 1
       
-      if (!isDraggingMultiple && timelineRef.current) {
-        const rect = timelineRef.current.getBoundingClientRect()
-        const relativeY = e.clientY - rect.top + timelineRef.current.scrollTop
+      // Use track content ref for Y (scrollable area where tracks live); layout: video tracks (h-12), spacer (h-5), audio tracks (h-10)
+      if (!isDraggingMultiple && trackContentRef.current) {
+        const contentRect = trackContentRef.current.getBoundingClientRect()
+        const relativeY = e.clientY - contentRect.top + trackContentRef.current.scrollTop
         
-        // Find which track the mouse is over
-        const trackHeight = clip.type === 'video' ? 48 : 40
-        const rulerHeight = 20
-        
-        // Calculate track positions
-        let currentY = rulerHeight
-        const trackType = clips.find(c => c.id === clipDragState.clipId)?.type || 'video'
+        const trackType = clip.type || 'video'
         const relevantTracks = tracks.filter(t => t.type === trackType)
+        const videoTrackHeight = 48
+        const audioSectionHeight = 20
+        const audioTrackHeight = 40
+        
+        // Start Y for video tracks is 0; for audio tracks it's after all video tracks + spacer
+        let currentY = trackType === 'video' ? 0 : videoTracks.length * videoTrackHeight + audioSectionHeight
         
         for (const track of relevantTracks) {
-          const height = track.type === 'video' ? 48 : 40
+          const height = track.type === 'video' ? videoTrackHeight : audioTrackHeight
           if (relativeY >= currentY && relativeY < currentY + height) {
             if (!track.locked) {
               newTrackId = track.id
@@ -1089,7 +1121,7 @@ function Timeline({ onOpenAudioGenerate }) {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [clipDragState, clips, pixelsPerSecond, tracks, moveClip, moveSelectedClips, selectedClipIds, snapClipPosition, setActiveSnapTime, clearActiveSnap])
+  }, [clipDragState, clips, pixelsPerSecond, tracks, videoTracks, moveClip, moveSelectedClips, selectedClipIds, snapClipPosition, setActiveSnapTime, clearActiveSnap])
 
   // Handle adding transition between adjacent clips - show type menu
   const handleAddTransition = (e, clipA, clipB) => {
@@ -1401,11 +1433,20 @@ function Timeline({ onOpenAudioGenerate }) {
             Video
           </button>
           <button 
-            onClick={() => addTrack('audio')}
+            onClick={() => addTrack('audio', { channels: 'mono' })}
             className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
+            title="Add mono audio track"
           >
             <Plus className="w-3 h-3" />
-            Audio
+            Mono
+          </button>
+          <button 
+            onClick={() => addTrack('audio', { channels: 'stereo' })}
+            className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
+            title="Add stereo audio track"
+          >
+            <Plus className="w-3 h-3" />
+            Stereo
           </button>
         </div>
         
@@ -1553,17 +1594,27 @@ function Timeline({ onOpenAudioGenerate }) {
             return (
             <div 
               key={track.id}
-              className={`h-12 flex items-center px-2 gap-1 border-b border-sf-dark-700 hover:bg-sf-dark-800 transition-colors group/track ${
+              onClick={() => setActiveTrack(track.id)}
+              title={activeTrackId === track.id ? 'Active track — press X to split at playhead' : 'Click to set as active track (X cuts at playhead on this track)'}
+              className={`h-12 flex items-center px-2 gap-1 border-b border-sf-dark-700 hover:bg-sf-dark-800 transition-colors group/track cursor-pointer ${
                 track.locked ? 'bg-sf-dark-800/50' : ''
               } ${isDragging ? 'opacity-50 bg-sf-dark-700' : ''} ${isDropTarget ? 'border-t-2 border-t-purple-500' : ''}`}
             >
               <div
                 className={`p-0.5 rounded hover:bg-sf-dark-600 ${track.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
-                onMouseDown={(e) => !track.locked && handleTrackDragStart(e, track, index)}
+                onMouseDown={(e) => {
+                  e.stopPropagation()
+                  !track.locked && handleTrackDragStart(e, track, index)
+                }}
               >
                 <GripVertical className={`w-3 h-3 ${track.locked ? 'text-sf-dark-600' : 'text-sf-dark-500'}`} />
               </div>
-              <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${getTrackColor(track)}`}>
+              {/* Track type box — red outline when active (Resolve style) */}
+              <div
+                className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${getTrackColor(track)} ${
+                  activeTrackId === track.id ? 'ring-2 ring-red-500 ring-offset-1 ring-offset-sf-dark-800' : ''
+                }`}
+              >
                 {getTrackIcon(track)}
               </div>
               
@@ -1581,17 +1632,17 @@ function Timeline({ onOpenAudioGenerate }) {
                     autoFocus
                     className="w-full bg-sf-dark-700 text-[11px] text-sf-text-primary px-1 py-0.5 rounded border border-sf-accent outline-none"
                   />
-                  <button onClick={handleFinishRename} className="p-0.5 hover:bg-sf-dark-600 rounded">
+                  <button onClick={(e) => { e.stopPropagation(); handleFinishRename() }} className="p-0.5 hover:bg-sf-dark-600 rounded">
                     <Check className="w-3 h-3 text-green-400" />
                   </button>
-                  <button onClick={handleCancelRename} className="p-0.5 hover:bg-sf-dark-600 rounded">
+                  <button onClick={(e) => { e.stopPropagation(); handleCancelRename() }} className="p-0.5 hover:bg-sf-dark-600 rounded">
                     <X className="w-3 h-3 text-sf-text-muted" />
                   </button>
                 </div>
               ) : (
                 <span 
                   className="text-[11px] text-sf-text-primary flex-1 truncate cursor-pointer hover:text-sf-accent"
-                  onDoubleClick={() => handleStartRename(track)}
+                  onDoubleClick={(e) => { e.stopPropagation(); handleStartRename(track) }}
                   title="Double-click to rename"
                 >
                   {track.name}
@@ -1601,14 +1652,14 @@ function Timeline({ onOpenAudioGenerate }) {
               <div className="flex items-center gap-0.5">
                 {/* Rename button */}
                 <button 
-                  onClick={() => handleStartRename(track)}
+                  onClick={(e) => { e.stopPropagation(); handleStartRename(track) }}
                   className="p-0.5 hover:bg-sf-dark-600 rounded opacity-0 group-hover/track:opacity-100 transition-opacity"
                   title="Rename track"
                 >
                   <Pencil className="w-3 h-3 text-sf-text-muted" />
                 </button>
                 <button 
-                  onClick={() => toggleTrackVisibility(track.id)}
+                  onClick={(e) => { e.stopPropagation(); toggleTrackVisibility(track.id) }}
                   className="p-0.5 hover:bg-sf-dark-600 rounded"
                 >
                   {track.visible ? (
@@ -1618,7 +1669,7 @@ function Timeline({ onOpenAudioGenerate }) {
                   )}
                 </button>
                 <button 
-                  onClick={() => toggleTrackLock(track.id)}
+                  onClick={(e) => { e.stopPropagation(); toggleTrackLock(track.id) }}
                   className="p-0.5 hover:bg-sf-dark-600 rounded"
                 >
                   {track.locked ? (
@@ -1630,13 +1681,25 @@ function Timeline({ onOpenAudioGenerate }) {
                 {/* Delete track button */}
                 {canDeleteTrack(track) && (
                   <button 
-                    onClick={() => handleDeleteTrack(track)}
+                    onClick={(e) => { e.stopPropagation(); handleDeleteTrack(track) }}
                     className="p-0.5 hover:bg-sf-error/30 rounded opacity-0 group-hover/track:opacity-100 transition-opacity"
                     title="Delete track"
                   >
                     <X className="w-3 h-3 text-sf-error" />
                   </button>
                 )}
+                {/* Primary track (Flame style) — click to set as active for X cut */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); setActiveTrack(track.id) }}
+                  className={`min-w-[18px] h-[18px] flex items-center justify-center rounded text-[10px] font-bold transition-colors ${
+                    activeTrackId === track.id
+                      ? 'bg-red-500 text-white'
+                      : 'bg-sf-dark-600 text-sf-text-muted hover:bg-sf-dark-500 hover:text-sf-text-secondary'
+                  }`}
+                  title={activeTrackId === track.id ? 'Primary track (X cuts here)' : 'Set as primary track'}
+                >
+                  P
+                </button>
               </div>
             </div>
           )})}
@@ -1661,17 +1724,27 @@ function Timeline({ onOpenAudioGenerate }) {
             return (
             <div 
               key={track.id}
-              className={`h-10 flex items-center px-2 gap-1 border-b border-sf-dark-700 hover:bg-sf-dark-800 transition-colors group/track ${
+              onClick={() => setActiveTrack(track.id)}
+              title={activeTrackId === track.id ? 'Active track — press X to split at playhead' : 'Click to set as active track (X cuts at playhead on this track)'}
+              className={`h-10 flex items-center px-2 gap-1 border-b border-sf-dark-700 hover:bg-sf-dark-800 transition-colors group/track cursor-pointer ${
                 track.locked ? 'bg-sf-dark-800/50' : ''
               } ${isDragging ? 'opacity-50 bg-sf-dark-700' : ''} ${isDropTarget ? 'border-t-2 border-t-purple-500' : ''}`}
             >
               <div
                 className={`p-0.5 rounded hover:bg-sf-dark-600 ${track.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
-                onMouseDown={(e) => !track.locked && handleTrackDragStart(e, track, index)}
+                onMouseDown={(e) => {
+                  e.stopPropagation()
+                  !track.locked && handleTrackDragStart(e, track, index)
+                }}
               >
                 <GripVertical className={`w-3 h-3 ${track.locked ? 'text-sf-dark-600' : 'text-sf-dark-500'}`} />
               </div>
-              <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${getTrackColor(track)}`}>
+              {/* Track type box — red outline when active (Resolve style) */}
+              <div
+                className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${getTrackColor(track)} ${
+                  activeTrackId === track.id ? 'ring-2 ring-red-500 ring-offset-1 ring-offset-sf-dark-800' : ''
+                }`}
+              >
                 {getTrackIcon(track)}
               </div>
               
@@ -1689,34 +1762,39 @@ function Timeline({ onOpenAudioGenerate }) {
                     autoFocus
                     className="w-full bg-sf-dark-700 text-[11px] text-sf-text-primary px-1 py-0.5 rounded border border-sf-accent outline-none"
                   />
-                  <button onClick={handleFinishRename} className="p-0.5 hover:bg-sf-dark-600 rounded">
+                  <button onClick={(e) => { e.stopPropagation(); handleFinishRename() }} className="p-0.5 hover:bg-sf-dark-600 rounded">
                     <Check className="w-3 h-3 text-green-400" />
                   </button>
-                  <button onClick={handleCancelRename} className="p-0.5 hover:bg-sf-dark-600 rounded">
+                  <button onClick={(e) => { e.stopPropagation(); handleCancelRename() }} className="p-0.5 hover:bg-sf-dark-600 rounded">
                     <X className="w-3 h-3 text-sf-text-muted" />
                   </button>
                 </div>
               ) : (
                 <span 
                   className="text-[11px] text-sf-text-primary flex-1 truncate cursor-pointer hover:text-sf-accent"
-                  onDoubleClick={() => handleStartRename(track)}
+                  onDoubleClick={(e) => { e.stopPropagation(); handleStartRename(track) }}
                   title="Double-click to rename"
                 >
                   {track.name}
+                  {track.type === 'audio' && track.channels && (
+                    <span className="text-[9px] text-sf-text-muted ml-0.5">
+                      ({track.channels})
+                    </span>
+                  )}
                 </span>
               )}
               
               <div className="flex items-center gap-0.5">
                 {/* Rename button */}
                 <button 
-                  onClick={() => handleStartRename(track)}
+                  onClick={(e) => { e.stopPropagation(); handleStartRename(track) }}
                   className="p-0.5 hover:bg-sf-dark-600 rounded opacity-0 group-hover/track:opacity-100 transition-opacity"
                   title="Rename track"
                 >
                   <Pencil className="w-3 h-3 text-sf-text-muted" />
                 </button>
                 <button 
-                  onClick={() => toggleTrackMute(track.id)}
+                  onClick={(e) => { e.stopPropagation(); toggleTrackMute(track.id) }}
                   className="p-0.5 hover:bg-sf-dark-600 rounded"
                 >
                   {track.muted ? (
@@ -1726,7 +1804,7 @@ function Timeline({ onOpenAudioGenerate }) {
                   )}
                 </button>
                 <button 
-                  onClick={() => toggleTrackLock(track.id)}
+                  onClick={(e) => { e.stopPropagation(); toggleTrackLock(track.id) }}
                   className="p-0.5 hover:bg-sf-dark-600 rounded"
                 >
                   {track.locked ? (
@@ -1738,13 +1816,25 @@ function Timeline({ onOpenAudioGenerate }) {
                 {/* Delete track button */}
                 {canDeleteTrack(track) && (
                   <button 
-                    onClick={() => handleDeleteTrack(track)}
+                    onClick={(e) => { e.stopPropagation(); handleDeleteTrack(track) }}
                     className="p-0.5 hover:bg-sf-error/30 rounded opacity-0 group-hover/track:opacity-100 transition-opacity"
                     title="Delete track"
                   >
                     <X className="w-3 h-3 text-sf-error" />
                   </button>
                 )}
+                {/* Primary track (Flame style) — click to set as active for X cut */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); setActiveTrack(track.id) }}
+                  className={`min-w-[18px] h-[18px] flex items-center justify-center rounded text-[10px] font-bold transition-colors ${
+                    activeTrackId === track.id
+                      ? 'bg-red-500 text-white'
+                      : 'bg-sf-dark-600 text-sf-text-muted hover:bg-sf-dark-500 hover:text-sf-text-secondary'
+                  }`}
+                  title={activeTrackId === track.id ? 'Primary track (X cuts here)' : 'Set as primary track'}
+                >
+                  P
+                </button>
               </div>
             </div>
           )})}
@@ -2485,6 +2575,28 @@ function Timeline({ onOpenAudioGenerate }) {
               }}
               title="Drag to scrub"
             />
+            {/* Notch at active track (Flame-style) — aligns with primary track */}
+            {activeTrackId && (() => {
+              const videoTrackHeight = 48
+              const audioSectionHeight = 20
+              const audioTrackHeight = 40
+              const timeRulerHeight = 20
+              const notchHeight = 10
+              const vi = videoTracks.findIndex(t => t.id === activeTrackId)
+              const ai = audioTracks.findIndex(t => t.id === activeTrackId)
+              let centerY = 0
+              if (vi >= 0) centerY = timeRulerHeight + vi * videoTrackHeight + videoTrackHeight / 2
+              else if (ai >= 0) centerY = timeRulerHeight + videoTracks.length * videoTrackHeight + audioSectionHeight + ai * audioTrackHeight + audioTrackHeight / 2
+              else return null
+              const top = centerY - notchHeight / 2
+              return (
+                <div
+                  className="absolute left-0 w-2 h-2.5 bg-sf-accent pointer-events-none"
+                  style={{ top: `${top}px`, clipPath: 'polygon(0 50%, 100% 0, 100% 100%)' }}
+                  title="Primary track"
+                />
+              )
+            })()}
             {/* Playhead line extension for easier grabbing */}
             <div 
               className="absolute top-0 left-1/2 -translate-x-1/2 w-2 h-full cursor-ew-resize"
@@ -2494,6 +2606,17 @@ function Timeline({ onOpenAudioGenerate }) {
                 setIsScrubbing(true)
               }}
             />
+          </div>
+        </div>
+        
+        {/* Audio Meter Panel - Right side, full height of track panel, resizes with it */}
+        <div className="flex-shrink-0 flex flex-col border-l border-sf-dark-700 w-[72px] min-h-0">
+          {/* Time ruler header spacer - aligns with time ruler */}
+          <div className="h-5 flex-shrink-0 border-b border-sf-dark-700 bg-sf-dark-800" />
+          
+          {/* Meter fills remaining height and resizes with track panel */}
+          <div className="flex-1 min-h-0 flex flex-col">
+            <MasterAudioMeter className="flex-1 min-h-0" />
           </div>
         </div>
       </div>
@@ -2661,11 +2784,11 @@ function Timeline({ onOpenAudioGenerate }) {
           <button
             onClick={() => handleContextMenuAction('split')}
             className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
-            title="Split clip at playhead position"
+            title="Split selected clip at playhead (or press X to split on active track)"
           >
             <span className="w-4 text-center">✂️</span>
             <span>Split at Playhead</span>
-            <span className="ml-auto text-sf-text-muted text-[10px]">C</span>
+            <span className="ml-auto text-sf-text-muted text-[10px]">X</span>
           </button>
           
           <button

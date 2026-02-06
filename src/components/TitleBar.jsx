@@ -1,5 +1,5 @@
-import { Minus, Square, X, Film, Home, Save } from 'lucide-react'
-import useProjectStore from '../stores/projectStore'
+import { Fragment } from 'react'
+import { Minus, Square, X } from 'lucide-react'
 
 const TOP_TABS = [
   { id: 'editor', label: 'Editor' },
@@ -15,16 +15,6 @@ function TitleBar({
   centerInsetLeft = 0,
   centerInsetRight = 0
 }) {
-  const { closeProject, saveProject } = useProjectStore()
-  
-  const handleSave = async () => {
-    await saveProject()
-  }
-  
-  const handleGoHome = async () => {
-    // Save and close current project, return to welcome screen
-    await closeProject()
-  }
 
   const handleMinimize = () => {
     window.electronAPI?.minimizeWindow?.()
@@ -39,66 +29,38 @@ function TitleBar({
   }
   
   return (
-    <div className="h-10 bg-sf-dark-900 border-b border-sf-dark-700 flex items-center justify-between px-4 drag-region relative">
-      {/* Left - Logo, Home & Project Name */}
-      <div className="flex items-center gap-2">
-        {/* Home/Projects Button */}
-        <button
-          onClick={handleGoHome}
-          className="no-drag flex items-center gap-1.5 px-2 py-1 hover:bg-sf-dark-700 rounded transition-colors group"
-          title="Back to Projects"
-        >
-          <Home className="w-4 h-4 text-sf-text-muted group-hover:text-sf-accent transition-colors" />
-        </button>
-        
-        <span className="text-sf-dark-600">|</span>
-        
-        {/* Logo */}
-        <div className="flex items-center gap-2">
-          <Film className="w-5 h-5 text-sf-accent" />
-          <span className="font-semibold text-sf-text-primary">StoryFlow</span>
-        </div>
-        
-        <span className="text-sf-dark-600">|</span>
-        
-        {/* Project Name */}
-        <span className="text-sf-text-secondary text-sm">{projectName}</span>
-        
-        {/* Save Button */}
-        <button
-          onClick={handleSave}
-          className="no-drag ml-2 p-1 hover:bg-sf-dark-700 rounded transition-colors group"
-          title="Save Project (Auto-saves every 30s)"
-        >
-          <Save className="w-3.5 h-3.5 text-sf-text-muted group-hover:text-sf-accent transition-colors" />
-        </button>
-      </div>
+    <div className="h-10 bg-black flex items-center justify-between px-4 drag-region relative">
+      {/* Left - Spacer for center alignment */}
+      <div className="w-[120px] flex-shrink-0" />
       
-      {/* Center - App mode tabs (aligned to preview area) */}
+      {/* Center - App mode tabs; extend 1px into content so grey touches with no black line */}
       <div
-        className="absolute inset-y-0 flex items-center justify-center"
+        className="absolute top-0 flex items-center justify-center"
         style={{
           left: `${centerInsetLeft}px`,
-          right: `${centerInsetRight}px`
+          right: `${centerInsetRight}px`,
+          bottom: -1,
+          height: 'calc(100% + 1px)'
         }}
       >
-        <div className="no-drag flex items-center gap-1 bg-sf-dark-800/80 border border-sf-dark-700 rounded-full p-0.5">
-          {TOP_TABS.map((tab) => {
-            const isActive = activeTab === tab.id
-            return (
+        <div className="no-drag flex items-center gap-0 h-full bg-sf-dark-800 border-x border-sf-dark-700 border-t-0 rounded-none p-0.5">
+          {TOP_TABS.map((tab, index) => (
+            <Fragment key={tab.id}>
+              {index > 0 && (
+                <div className="w-px h-4 bg-sf-dark-600 flex-shrink-0" aria-hidden="true" />
+              )}
               <button
-                key={tab.id}
                 onClick={() => onTabChange?.(tab.id)}
-                className={`px-3 py-1 text-[11px] rounded-full transition-colors ${
-                  isActive
+                className={`px-3 py-1 text-[11px] rounded-none transition-colors ${
+                  activeTab === tab.id
                     ? 'bg-sf-accent text-white'
                     : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700'
                 }`}
               >
                 {tab.label}
               </button>
-            )
-          })}
+            </Fragment>
+          ))}
         </div>
       </div>
       

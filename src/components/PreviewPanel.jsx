@@ -5,6 +5,7 @@ import useTimelineStore from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
 import { useTimelinePlayback } from '../hooks/useTimelinePlayback'
 import VideoLayerRenderer from './VideoLayerRenderer'
+import AudioLayerRenderer from './AudioLayerRenderer'
 
 /**
  * MaskPreview - Component for previewing mask assets with frame-by-frame playback
@@ -187,6 +188,8 @@ function PreviewPanel() {
   const containerRef = useRef(null)
   const viewportRef = useRef(null)
   const panelRef = useRef(null)
+  const holdFrameCanvasRef = useRef(null) // Canvas to hold last frame during video src changes
+  const [showHoldFrame, setShowHoldFrame] = useState(false) // Whether to show the hold frame canvas
   
   // Track active clips at current playhead position (for overlay display)
   const [activeLayerClips, setActiveLayerClips] = useState([])
@@ -643,6 +646,7 @@ function PreviewPanel() {
 
   // When a new asset preview is set, reset video to start and pause
   // (DaVinci Resolve behavior - asset selected shows at start, paused)
+  // Capture the current frame before switching to prevent black flicker
   useEffect(() => {
     if (currentPreview && previewMode === 'asset') {
       // Reset mask frame for mask previews
@@ -651,9 +655,20 @@ function PreviewPanel() {
         setAssetIsPlaying(false)
         setAssetCurrentTime(0)
       } else if (videoRefA.current) {
+        // Capture current frame to canvas before changing source (prevents black flicker)
+        const video = videoRefA.current
+        if (video.readyState >= 2 && video.videoWidth > 0 && holdFrameCanvasRef.current) {
+          const canvas = holdFrameCanvasRef.current
+          canvas.width = video.videoWidth
+          canvas.height = video.videoHeight
+          const ctx = canvas.getContext('2d')
+          ctx.drawImage(video, 0, 0)
+          setShowHoldFrame(true)
+        }
+        
         // Reset to start, paused - user controls playback
-        videoRefA.current.pause()
-        videoRefA.current.currentTime = 0
+        video.pause()
+        video.currentTime = 0
         setAssetIsPlaying(false)
         setAssetCurrentTime(0)
       }
@@ -662,6 +677,14 @@ function PreviewPanel() {
     setZoom('fit')
     setPan({ x: 0, y: 0 })
   }, [currentPreview, setAssetIsPlaying, setAssetCurrentTime, previewMode])
+  
+  // Hide the hold frame once the new video has loaded its first frame
+  const handleLoadedData = useCallback(() => {
+    // Small delay to ensure the frame is actually painted
+    requestAnimationFrame(() => {
+      setShowHoldFrame(false)
+    })
+  }, [])
   
   // Ref to track if we're updating mask time internally
   const maskTimeUpdateRef = useRef(false)
@@ -1282,6 +1305,9 @@ function PreviewPanel() {
               {/* Timeline Playback Mode */}
             {previewMode === 'timeline' && clips.length > 0 ? (
               <>
+                {/* Audio Layer Renderer - handles audio clip playback */}
+                <AudioLayerRenderer />
+                
                 {/* Video Layer Renderer - handles preloading and seamless playback */}
                 <VideoLayerRenderer
                   buildVideoTransform={buildVideoTransform}
@@ -1361,23 +1387,36 @@ function PreviewPanel() {
                     onContextMenu={(e) => e.preventDefault()}
                   />
                 ) : (
-                  <video
-                    ref={videoRefA}
-                    src={currentPreview.url}
-                    className="w-full h-full"
-                    style={{
-                      display: 'block',
-                      objectFit: 'contain', // Maintain aspect ratio, letterbox if needed (no stretching)
-                    }}
-                    onTimeUpdate={handleTimeUpdate}
-                    onLoadedMetadata={handleLoadedMetadata}
-                    onEnded={handleEnded}
-                    onPlay={() => setAssetIsPlaying(true)}
-                    onPause={() => setAssetIsPlaying(false)}
-                    onContextMenu={(e) => e.preventDefault()}
-                    controlsList="nodownload nofullscreen noremoteplayback"
-                    disablePictureInPicture
-                  />
+                  <>
+                    <video
+                      ref={videoRefA}
+                      src={currentPreview.url}
+                      className="w-full h-full"
+                      style={{
+                        display: 'block',
+                        objectFit: 'contain', // Maintain aspect ratio, letterbox if needed (no stretching)
+                      }}
+                      onTimeUpdate={handleTimeUpdate}
+                      onLoadedMetadata={handleLoadedMetadata}
+                      onLoadedData={handleLoadedData}
+                      onEnded={handleEnded}
+                      onPlay={() => setAssetIsPlaying(true)}
+                      onPause={() => setAssetIsPlaying(false)}
+                      onContextMenu={(e) => e.preventDefault()}
+                      controlsList="nodownload nofullscreen noremoteplayback"
+                      disablePictureInPicture
+                    />
+                    {/* Hold frame canvas - shows last frame during video src transition to prevent black flicker */}
+                    <canvas
+                      ref={holdFrameCanvasRef}
+                      className="absolute inset-0 w-full h-full pointer-events-none"
+                      style={{
+                        objectFit: 'contain',
+                        display: showHoldFrame ? 'block' : 'none',
+                        zIndex: 5,
+                      }}
+                    />
+                  </>
                 )}
                 
                 {/* Asset Info Overlay */}

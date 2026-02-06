@@ -282,7 +282,9 @@ const VideoLayer = memo(function VideoLayer({
   isInTransition = false, // Whether this clip is part of a transition
 }) {
   const videoRef = useRef(null)
+  const holdFrameRef = useRef(null) // Canvas to hold last frame during src changes
   const [isReady, setIsReady] = useState(false)
+  const [showHoldFrame, setShowHoldFrame] = useState(false)
   const [showSprite, setShowSprite] = useState(false)
   const [spriteContainerSize, setSpriteContainerSize] = useState({ width: 0, height: 0 })
   const lastSyncTime = useRef(0)
@@ -290,6 +292,7 @@ const VideoLayer = memo(function VideoLayer({
   const seekDebounceRef = useRef(null)
   const isScrubbing = useRef(false)
   const lastPlayheadRef = useRef(playheadPosition)
+  const lastClipUrlRef = useRef(null) // Track src changes for hold frame
   
   // Get the current valid URL (may be cached render or original)
   const { url: clipUrl, isCached: isCachedRender } = useClipUrl(clip)
@@ -298,7 +301,11 @@ const VideoLayer = memo(function VideoLayer({
   const getAssetSprite = useAssetsStore(state => state.getAssetSprite)
   const spriteData = clip?.assetId ? getAssetSprite(clip.assetId) : null
 
-  const useSpriteScrub = !!spriteData?.url && !isCachedRender
+  // Feature flag: Enable/disable sprite sheet scrubbing for real-time preview
+  // Set to false to disable sprite scrubbing (will use video seeking instead)
+  const ENABLE_SPRITE_SCRUBBING = false
+  
+  const useSpriteScrub = ENABLE_SPRITE_SCRUBBING && !!spriteData?.url && !isCachedRender
   
   // Get mask effect styles for video (skip if using cached render)
   const maskStyles = useMaskEffectStyle(clip, playheadPosition, isCachedRender)
@@ -388,28 +395,65 @@ const VideoLayer = memo(function VideoLayer({
   }, [spriteInfo, spriteContainerSize])
   
   // Get cached video element on mount and pre-seek for transitions
+  // Capture hold frame before src changes to prevent black flicker
   useEffect(() => {
-    if (!clipUrl) return
+    if (!clipUrl || !videoRef.current) return
     
-    // Get or create cached video for this clip (pass URL separately)
-    // Note: For cached renders, we use the blob URL directly
+    const video = videoRef.current
+    
+    // Check if src is actually changing
+    const srcChanging = lastClipUrlRef.current && lastClipUrlRef.current !== clipUrl
+    
+    if (srcChanging) {
+      // Capture current frame to hold frame canvas before src changes
+      if (video.readyState >= 2 && video.videoWidth > 0 && holdFrameRef.current) {
+        const canvas = holdFrameRef.current
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(video, 0, 0)
+        setShowHoldFrame(true)
+      }
+    }
+    
+    lastClipUrlRef.current = clipUrl
+    
+    // Get or create cached video for this clip
     const clipWithUrl = { ...clip, url: clipUrl }
     const cachedVideo = videoCache.getVideoElement(clipWithUrl)
-    if (cachedVideo && videoRef.current) {
-      // Copy source from cached video if different
-      if (videoRef.current.src !== clipUrl) {
-        videoRef.current.src = clipUrl
-        
-        // For transition clips, pre-seek to the correct position immediately
-        if (isInTransition && clip) {
+    
+    // Only change src if it's actually different
+    if (video.src !== clipUrl) {
+      video.src = clipUrl
+      setIsReady(false)
+      
+      // Seek immediately when video has enough data
+      const onLoadedData = () => {
+        if (clip) {
           const sourceTime = (clip.trimStart || 0) + clipTime * timeScale
           const maxTime = clip.sourceDuration || clip.trimEnd || (clip.duration * timeScale)
           const clampedTime = Math.max(0, Math.min(sourceTime, maxTime - 0.01))
-          videoRef.current.currentTime = clampedTime
+          video.currentTime = clampedTime
         }
+        setIsReady(true)
+        // Hide hold frame now that new video has a frame
+        requestAnimationFrame(() => {
+          setShowHoldFrame(false)
+        })
+        video.removeEventListener('loadeddata', onLoadedData)
+      }
+      video.addEventListener('loadeddata', onLoadedData)
+    } else if (clip && video.readyState >= 2) {
+      // Same src, ensure correct position
+      const sourceTime = (clip.trimStart || 0) + clipTime * timeScale
+      const maxTime = clip.sourceDuration || clip.trimEnd || (clip.duration * timeScale)
+      const clampedTime = Math.max(0, Math.min(sourceTime, maxTime - 0.01))
+      const timeDiff = Math.abs(video.currentTime - clampedTime)
+      if (timeDiff > 0.02) {
+        video.currentTime = clampedTime
       }
     }
-  }, [clipUrl, clip?.id, isCachedRender, isInTransition, clip, clipTime])
+  }, [clipUrl, clip?.id, isCachedRender, isInTransition, clip, clipTime, timeScale])
 
   // Detect scrubbing (rapid playhead changes while paused)
   useEffect(() => {
@@ -495,9 +539,25 @@ const VideoLayer = memo(function VideoLayer({
         video.playbackRate = timeScale
       }
 
-      // Start playing if paused
-      if (video.paused && video.readyState >= 2) {
-        video.play().catch(() => {})
+      // Start playing if paused and ready (don't wait for canplay - seek immediately)
+      if (video.paused) {
+        if (video.readyState >= 2) {
+          // Video has enough data to play - seek first, then play
+          if (timeDiff > 0.02) {
+            video.currentTime = clampedTime
+          }
+          video.play().catch(() => {})
+        } else if (video.readyState >= 1) {
+          // Video has metadata - seek immediately, play when ready
+          if (timeDiff > 0.02) {
+            video.currentTime = clampedTime
+          }
+          const onCanPlay = () => {
+            video.play().catch(() => {})
+            video.removeEventListener('canplay', onCanPlay)
+          }
+          video.addEventListener('canplay', onCanPlay)
+        }
       }
     } else if (isScrubbing.current) {
       // When scrubbing with sprite: skip video seeking entirely (sprite handles display)
@@ -521,7 +581,8 @@ const VideoLayer = memo(function VideoLayer({
       }
     } else {
       // When paused (not scrubbing): Use tight threshold for precise positioning
-      if (timeDiff > 0.02) {
+      // Seek immediately if video is ready, don't wait
+      if (video.readyState >= 1 && timeDiff > 0.02) {
         video.currentTime = clampedTime
         lastSyncTime.current = playheadPosition
       }
@@ -531,7 +592,7 @@ const VideoLayer = memo(function VideoLayer({
         video.pause()
       }
     }
-  }, [clip, clipTime, playheadPosition, isPlaying, spriteData, isInTransition])
+  }, [clip, clipTime, playheadPosition, isPlaying, spriteData, isInTransition, timeScale, useSpriteScrub])
 
   // Handle video ready state
   const handleCanPlay = useCallback(() => {
@@ -563,8 +624,8 @@ const VideoLayer = memo(function VideoLayer({
           top: 0,
           left: 0,
           zIndex: layerIndex + 1,
-          // Hide video when showing sprite
-          opacity: showSprite && spriteInfo ? 0 : 1,
+          // Hide video when showing sprite or hold frame
+          opacity: (showSprite && spriteInfo) || showHoldFrame ? 0 : 1,
           // Apply animated clip transforms
           ...transformStyle,
           // Apply mask effect styles
@@ -580,6 +641,24 @@ const VideoLayer = memo(function VideoLayer({
         onContextMenu={(e) => e.preventDefault()}
         controlsList="nodownload nofullscreen noremoteplayback"
         disablePictureInPicture
+      />
+      
+      {/* Hold frame canvas - shows last frame during video src transition to prevent black flicker */}
+      <canvas
+        ref={holdFrameRef}
+        className="pointer-events-none"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          objectFit: 'contain',
+          zIndex: layerIndex + 3,
+          display: showHoldFrame ? 'block' : 'none',
+          ...transformStyle,
+          ...maskStyles,
+        }}
       />
       
       {/* Sprite overlay (shown during fast scrubbing) */}
@@ -940,7 +1019,29 @@ function VideoLayerRenderer({
         preloadTimerRef.current = null
       }
       // Pause all cached videos when timeline stops
-      videoCache.pauseAll()
+      // But first ensure current active clips are properly positioned to avoid black frames
+      const allActiveClips = getActiveClipsAtTime(playheadPosition)
+      const videoClips = allActiveClips.filter(({ track }) => track.type === 'video')
+      
+      // Pre-seek all active videos before pausing to prevent black frames
+      videoClips.forEach(({ clip }) => {
+        const clipWithUrl = { ...clip, url: clip?.url }
+        const cachedVideo = videoCache.getVideoElement(clipWithUrl)
+        if (cachedVideo && cachedVideo.readyState >= 1) {
+          const timeScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
+            ? clip.timelineFps / clip.sourceFps
+            : 1)
+          const sourceTime = (clip.trimStart || 0) + (playheadPosition - clip.startTime) * timeScale
+          const maxTime = clip.sourceDuration || clip.trimEnd || (clip.duration * timeScale)
+          const clampedTime = Math.max(0, Math.min(sourceTime, maxTime - 0.01))
+          cachedVideo.currentTime = clampedTime
+        }
+      })
+      
+      // Small delay before pausing to ensure seeks complete
+      setTimeout(() => {
+        videoCache.pauseAll()
+      }, 10)
     }
 
     return () => {
@@ -948,7 +1049,7 @@ function VideoLayerRenderer({
         clearInterval(preloadTimerRef.current)
       }
     }
-  }, [isPlaying, preloadUpcoming])
+  }, [isPlaying, preloadUpcoming, getActiveClipsAtTime, playheadPosition])
 
   // Clean up preloaded set periodically to allow re-preloading
   useEffect(() => {
@@ -971,13 +1072,9 @@ function VideoLayerRenderer({
     return () => clearInterval(cleanup)
   }, [clips, playheadPosition])
 
-  // Handle no active clips
+  // Handle no active clips — just black, no message
   if (activeLayerClips.length === 0 && !transitionInfo) {
-    return (
-      <div className="absolute inset-0 flex items-center justify-center bg-black">
-        <span className="text-sf-text-muted text-sm">No clip at this position</span>
-      </div>
-    )
+    return <div className="absolute inset-0 bg-black" />
   }
 
   // Separate text clips (rendered on top)

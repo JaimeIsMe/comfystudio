@@ -6,12 +6,14 @@ import useTimelineStore from '../../stores/timelineStore'
 import { importAsset, isElectron } from '../../services/fileSystem'
 import MaskGenerationDialog from '../MaskGenerationDialog'
 
-// Thumbnail size presets
+// Thumbnail size presets (xs = extra small for denser grid)
 const THUMBNAIL_SIZES = {
+  xs: { cols: 5, iconSize: 'w-3 h-3', playSize: 'w-3 h-3', badgeSize: 'text-[5px]', nameSize: 'text-[8px]', infoSize: 'text-[7px]' },
   small: { cols: 3, iconSize: 'w-4 h-4', playSize: 'w-4 h-4', badgeSize: 'text-[6px]', nameSize: 'text-[9px]', infoSize: 'text-[8px]' },
   medium: { cols: 2, iconSize: 'w-6 h-6', playSize: 'w-6 h-6', badgeSize: 'text-[7px]', nameSize: 'text-[10px]', infoSize: 'text-[9px]' },
   large: { cols: 1, iconSize: 'w-8 h-8', playSize: 'w-8 h-8', badgeSize: 'text-[8px]', nameSize: 'text-[11px]', infoSize: 'text-[10px]' },
 }
+const THUMBNAIL_SIZE_ORDER = ['xs', 'small', 'medium', 'large']
 
 function AssetsPanel() {
   const [viewMode, setViewMode] = useState('grid')
@@ -444,11 +446,11 @@ function AssetsPanel() {
               <input
                 type="range"
                 min="0"
-                max="2"
-                value={thumbnailSize === 'small' ? 0 : thumbnailSize === 'medium' ? 1 : 2}
+                max={THUMBNAIL_SIZE_ORDER.length - 1}
+                value={THUMBNAIL_SIZE_ORDER.indexOf(thumbnailSize)}
                 onChange={(e) => {
-                  const sizes = ['small', 'medium', 'large']
-                  setAndSaveThumbnailSize(sizes[parseInt(e.target.value)])
+                  const index = Math.max(0, Math.min(parseInt(e.target.value, 10) || 0, THUMBNAIL_SIZE_ORDER.length - 1))
+                  setAndSaveThumbnailSize(THUMBNAIL_SIZE_ORDER[index])
                 }}
                 className="flex-1 h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
@@ -811,7 +813,25 @@ function AssetsPanel() {
                     isSelected ? 'bg-sf-accent/20' : 'hover:bg-sf-dark-800'
                   }`}
                 >
-                  <Icon className="w-3.5 h-3.5 text-sf-text-muted flex-shrink-0" />
+                  {/* Tiny thumbnail for video/image, icon for audio/other */}
+                  <div className="w-7 h-7 rounded overflow-hidden bg-sf-dark-700 flex-shrink-0 flex items-center justify-center">
+                    {asset.type === 'video' && asset.url ? (
+                      <video
+                        src={asset.url}
+                        className="w-full h-full object-cover"
+                        muted
+                        preload="metadata"
+                      />
+                    ) : asset.type === 'image' && asset.url ? (
+                      <img
+                        src={asset.url}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <Icon className="w-3.5 h-3.5 text-sf-text-muted" />
+                    )}
+                  </div>
                   <div className="flex-1 min-w-0">
                     {editingId === asset.id ? (
                       <form onSubmit={saveEdit}>

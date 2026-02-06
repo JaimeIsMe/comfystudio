@@ -106,6 +106,9 @@ export const useTimelineStore = create(
   // Selected clips (multi-select support)
   selectedClipIds: [], // Array of selected clip IDs
 
+  // Active track for cut-at-playhead (X): only this track is cut when pressing X
+  activeTrackId: null,
+
   // UI request: open Inspector (optionally mask picker) for a clip
   maskPickerRequest: null, // { clipId, openPicker }
   
@@ -2183,6 +2186,13 @@ export const useTimelineStore = create(
   },
 
   /**
+   * Set active track for cut-at-playhead (X key). Only the active track is split when pressing X.
+   */
+  setActiveTrack: (trackId) => {
+    set({ activeTrackId: trackId })
+  },
+
+  /**
    * Toggle play/pause
    */
   togglePlay: () => {
@@ -2305,8 +2315,10 @@ export const useTimelineStore = create(
 
   /**
    * Add a new track
+   * @param {string} type - 'video' | 'audio'
+   * @param {object} options - For audio: { channels: 'mono' | 'stereo' }
    */
-  addTrack: (type) => {
+  addTrack: (type, options = {}) => {
     const state = get()
     const existingTracks = state.tracks.filter(t => t.type === type)
     
@@ -2326,6 +2338,9 @@ export const useTimelineStore = create(
       muted: false,
       locked: false,
       visible: true
+    }
+    if (type === 'audio') {
+      newTrack.channels = options.channels === 'mono' ? 'mono' : 'stereo'
     }
     
     set((state) => {
@@ -2469,6 +2484,7 @@ export const useTimelineStore = create(
       clips: [],
       transitions: [],
       selectedClipIds: [],
+      activeTrackId: null,
       clipCounter: 1,
       transitionCounter: 1,
       snappingEnabled: true,

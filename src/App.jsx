@@ -11,6 +11,7 @@ import InspectorPanel from './components/InspectorPanel'
 import ResizeHandle from './components/ResizeHandle'
 import AudioGenerateModal from './components/AudioGenerateModal'
 import WelcomeScreen from './components/WelcomeScreen'
+import BottomBar from './components/BottomBar'
 import useProjectStore from './stores/projectStore'
 
 function App() {
@@ -42,12 +43,11 @@ function App() {
   const MAX_TIMELINE = 450
 
   const isFullScreenTab = mainTab === 'export' || mainTab === 'generate' || mainTab === 'llm-assistant'
-  const leftSidebarWidth = isFullScreenTab
-    ? 0
-    : (leftPanelExpanded ? ICON_BAR_WIDTH + leftPanelWidth : ICON_BAR_WIDTH)
-  const rightSidebarWidth = isFullScreenTab
-    ? 0
-    : (inspectorExpanded ? ICON_BAR_WIDTH + inspectorWidth : ICON_BAR_WIDTH)
+  // Editor layout insets (used for content when on Editor, and always for tab bar so it doesn't shift)
+  const editorLeftInset = leftPanelExpanded ? ICON_BAR_WIDTH + leftPanelWidth : ICON_BAR_WIDTH
+  const editorRightInset = inspectorExpanded ? ICON_BAR_WIDTH + inspectorWidth : ICON_BAR_WIDTH
+  const leftSidebarWidth = isFullScreenTab ? 0 : editorLeftInset
+  const rightSidebarWidth = isFullScreenTab ? 0 : editorRightInset
   
   // Project state
   const { currentProject, initialize, isLoading, saveProject, autoSaveEnabled, autoSaveInterval } = useProjectStore()
@@ -119,8 +119,8 @@ function App() {
         projectName={currentProject?.name || 'Untitled'} 
         activeTab={mainTab}
         onTabChange={setMainTab}
-        centerInsetLeft={leftSidebarWidth}
-        centerInsetRight={rightSidebarWidth}
+        centerInsetLeft={editorLeftInset}
+        centerInsetRight={editorRightInset}
       />
       
       {/* Main Content Area */}
@@ -235,6 +235,16 @@ function App() {
         )}
       </div>
       
+      {/* Bottom bar: settings menu + undo/redo */}
+      <BottomBar
+        projectName={currentProject?.name}
+        onOpenSettings={() => {
+          setMainTab('editor')
+          setLeftPanelTab('settings')
+          setLeftPanelExpanded(true)
+        }}
+      />
+
       {/* Audio Generate Modal */}
       <AudioGenerateModal 
         isOpen={audioModalOpen}

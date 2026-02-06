@@ -43,6 +43,12 @@ ipcMain.handle('window:isMaximized', () => {
   return mainWindow ? mainWindow.isMaximized() : false
 })
 
+ipcMain.handle('window:toggleFullScreen', () => {
+  if (!mainWindow) return false
+  mainWindow.setFullScreen(!mainWindow.isFullScreen())
+  return true
+})
+
 // Register custom protocol for serving local files
 function registerFileProtocol() {
   protocol.handle('storyflow', async (request) => {
@@ -79,6 +85,9 @@ async function createWindow() {
       webSecurity: !isDev,
     }
   })
+
+  // Start in fullscreen (F11-style: takes over entire screen, no taskbar)
+  mainWindow.setFullScreen(true)
 
   // Load the app
   if (isDev) {
