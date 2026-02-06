@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react'
 import TitleBar from './components/TitleBar'
 import ExportPanel from './components/ExportPanel'
 import GenerateWorkspace from './components/GenerateWorkspace'
+import LLMAssistantWorkspace from './components/LLMAssistantWorkspace'
 import LeftPanel from './components/LeftPanel'
 import PreviewPanel from './components/PreviewPanel'
 import Timeline from './components/Timeline'
@@ -40,7 +41,7 @@ function App() {
   const MIN_TIMELINE = 180 // Accounts for transport controls (40px) + minimum timeline
   const MAX_TIMELINE = 450
 
-  const isFullScreenTab = mainTab === 'export' || mainTab === 'generate'
+  const isFullScreenTab = mainTab === 'export' || mainTab === 'generate' || mainTab === 'llm-assistant'
   const leftSidebarWidth = isFullScreenTab
     ? 0
     : (leftPanelExpanded ? ICON_BAR_WIDTH + leftPanelWidth : ICON_BAR_WIDTH)
@@ -128,6 +129,8 @@ function App() {
           <ExportPanel />
         ) : mainTab === 'generate' ? (
           <GenerateWorkspace />
+        ) : mainTab === 'llm-assistant' ? (
+          <LLMAssistantWorkspace />
         ) : (
           <>
             {/* Left Panel - Full Height Mode (spans entire left side) */}

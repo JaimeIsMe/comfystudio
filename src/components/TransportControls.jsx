@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { Play, Pause, SkipBack, SkipForward, Volume2, Film, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ArrowLeftToLine, ArrowRightToLine, Repeat, Repeat1, ArrowLeftRight, Check } from 'lucide-react'
 import useAssetsStore from '../stores/assetsStore'
 import useTimelineStore from '../stores/timelineStore'
+import useProjectStore from '../stores/projectStore'
 import TimelineSwitcher from './TimelineSwitcher'
 
 // Playback mode options
@@ -58,6 +59,9 @@ function TransportControls() {
     loopMode,
     setLoopMode
   } = useTimelineStore()
+
+  // Project store (for timeline FPS)
+  const { getCurrentTimelineSettings } = useProjectStore()
   
   // Use the actual preview mode from assets store
   // Timeline mode when previewMode is 'timeline' AND there are clips
@@ -71,8 +75,9 @@ function TransportControls() {
   const duration = timelineMode ? (endTime || 60) : assetDuration
   const hasContent = timelineMode ? clips.length > 0 : currentPreview !== null
 
-  // Frame rate for frame stepping
-  const fps = 24
+  // Frame rate for frame stepping - use actual timeline FPS
+  const timelineSettings = getCurrentTimelineSettings()
+  const fps = timelineSettings?.fps || 24
   const frameStep = 1 / fps
 
   // Format time as MM:SS:FF (timecode)
@@ -183,6 +188,17 @@ function TransportControls() {
         e.preventDefault()
         clearInOutPoints()
       }
+      
+      // Left/Right Arrow keys for frame-by-frame navigation
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        frameBack()
+      }
+      
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        frameForward()
+      }
     }
     
     const handleKeyUp = (e) => {
@@ -198,7 +214,7 @@ function TransportControls() {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
     }
-  }, [isKHeld, shuttleReverse, shuttlePause, shuttleForward, shuttleSlow, setInPoint, setOutPoint, clearInOutPoints])
+  }, [isKHeld, shuttleReverse, shuttlePause, shuttleForward, shuttleSlow, setInPoint, setOutPoint, clearInOutPoints, frameBack, frameForward])
 
   // Format playback rate display
   const getPlaybackRateDisplay = () => {

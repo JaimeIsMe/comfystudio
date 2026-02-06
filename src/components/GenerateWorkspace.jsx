@@ -272,35 +272,51 @@ async function extractFrameAsFile(videoUrl, time, filename = 'frame.png') {
 // Main GenerateWorkspace Component
 // ============================================
 function GenerateWorkspace() {
-  // Category + workflow selection
-  const [category, setCategory] = useState('video')
-  const [workflowId, setWorkflowId] = useState('ltx2-t2v')
+  // Load persisted state from localStorage
+  const loadPersistedState = () => {
+    try {
+      const saved = localStorage.getItem('generate-workspace-state')
+      if (saved) {
+        return JSON.parse(saved)
+      }
+    } catch (error) {
+      console.error('Failed to load persisted Generate workspace state:', error)
+    }
+    return null
+  }
 
-  // Input asset
+  const persistedState = loadPersistedState()
+
+  // Category + workflow selection
+  const [category, setCategory] = useState(persistedState?.category || 'video')
+  const [workflowId, setWorkflowId] = useState(persistedState?.workflowId || 'ltx2-t2v')
+
+  // Input asset (store ID, will resolve to object)
+  const [selectedAssetId, setSelectedAssetId] = useState(persistedState?.selectedAssetId || null)
   const [selectedAsset, setSelectedAsset] = useState(null)
-  const [frameTime, setFrameTime] = useState(0)
+  const [frameTime, setFrameTime] = useState(persistedState?.frameTime || 0)
 
   // Common generation state
-  const [prompt, setPrompt] = useState('')
-  const [negativePrompt, setNegativePrompt] = useState('blurry, low quality, watermark')
-  const [seed, setSeed] = useState(Math.floor(Math.random() * 1000000))
-  const [selectedTags, setSelectedTags] = useState([])
+  const [prompt, setPrompt] = useState(persistedState?.prompt || '')
+  const [negativePrompt, setNegativePrompt] = useState(persistedState?.negativePrompt || 'blurry, low quality, watermark')
+  const [seed, setSeed] = useState(persistedState?.seed || Math.floor(Math.random() * 1000000))
+  const [selectedTags, setSelectedTags] = useState(persistedState?.selectedTags || [])
 
   // Video settings
-  const [duration, setDuration] = useState(5)
-  const [resolution, setResolution] = useState({ width: 1280, height: 720 })
-  const [fps, setFps] = useState(24)
+  const [duration, setDuration] = useState(persistedState?.duration || 5)
+  const [resolution, setResolution] = useState(persistedState?.resolution || { width: 1280, height: 720 })
+  const [fps, setFps] = useState(persistedState?.fps || 24)
 
   // Image edit settings
-  const [editSteps, setEditSteps] = useState(40)
-  const [editCfg, setEditCfg] = useState(4)
+  const [editSteps, setEditSteps] = useState(persistedState?.editSteps || 40)
+  const [editCfg, setEditCfg] = useState(persistedState?.editCfg || 4)
 
   // Music settings
-  const [musicTags, setMusicTags] = useState('')
-  const [lyrics, setLyrics] = useState('')
-  const [musicDuration, setMusicDuration] = useState(30)
-  const [bpm, setBpm] = useState(120)
-  const [keyscale, setKeyscale] = useState('C major')
+  const [musicTags, setMusicTags] = useState(persistedState?.musicTags || '')
+  const [lyrics, setLyrics] = useState(persistedState?.lyrics || '')
+  const [musicDuration, setMusicDuration] = useState(persistedState?.musicDuration || 30)
+  const [bpm, setBpm] = useState(persistedState?.bpm || 120)
+  const [keyscale, setKeyscale] = useState(persistedState?.keyscale || 'C major')
 
   // Generation state
   const [isGenerating, setIsGenerating] = useState(false)
@@ -312,8 +328,70 @@ function GenerateWorkspace() {
 
   // Hooks
   const { isConnected, wsConnected, currentNode, progress, queueCount } = useComfyUI()
-  const { addAsset, generateName } = useAssetsStore()
+  const { addAsset, generateName, assets } = useAssetsStore()
   const { currentProjectHandle } = useProjectStore()
+
+  // Restore selected asset from ID when assets are available
+  useEffect(() => {
+    if (selectedAssetId && assets.length > 0) {
+      const asset = assets.find(a => a.id === selectedAssetId)
+      if (asset) {
+        setSelectedAsset(asset)
+      } else {
+        // Asset no longer exists, clear selection
+        setSelectedAssetId(null)
+        setSelectedAsset(null)
+      }
+    }
+  }, [selectedAssetId, assets])
+
+  // Persist state to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      const stateToSave = {
+        category,
+        workflowId,
+        selectedAssetId,
+        frameTime,
+        prompt,
+        negativePrompt,
+        seed,
+        selectedTags,
+        duration,
+        resolution,
+        fps,
+        editSteps,
+        editCfg,
+        musicTags,
+        lyrics,
+        musicDuration,
+        bpm,
+        keyscale,
+      }
+      localStorage.setItem('generate-workspace-state', JSON.stringify(stateToSave))
+    } catch (error) {
+      console.error('Failed to save Generate workspace state:', error)
+    }
+  }, [
+    category,
+    workflowId,
+    selectedAssetId,
+    frameTime,
+    prompt,
+    negativePrompt,
+    seed,
+    selectedTags,
+    duration,
+    resolution,
+    fps,
+    editSteps,
+    editCfg,
+    musicTags,
+    lyrics,
+    musicDuration,
+    bpm,
+    keyscale,
+  ])
 
   // Current workflow info
   const currentWorkflow = useMemo(() => {
@@ -337,6 +415,37 @@ function GenerateWorkspace() {
 
   // Frame count helper
   const getFrameCount = () => Math.round(duration * fps) + 1
+
+  // Calculate aspect ratio mismatch warning
+  const aspectRatioWarning = useMemo(() => {
+    if (!selectedAsset || !selectedAsset.settings) return null
+    
+    const inputWidth = selectedAsset.settings.width || selectedAsset.width
+    const inputHeight = selectedAsset.settings.height || selectedAsset.height
+    
+    if (!inputWidth || !inputHeight) return null
+    
+    const inputAspect = inputWidth / inputHeight
+    const outputAspect = resolution.width / resolution.height
+    const aspectDiff = Math.abs(inputAspect - outputAspect)
+    
+    // Warn if aspect ratio differs by more than 5%
+    if (aspectDiff > 0.05) {
+      const inputLabel = inputAspect > 1 ? 'landscape' : inputAspect < 1 ? 'portrait' : 'square'
+      const outputLabel = outputAspect > 1 ? 'landscape' : outputAspect < 1 ? 'portrait' : 'square'
+      
+      return {
+        inputAspect: inputAspect.toFixed(2),
+        outputAspect: outputAspect.toFixed(2),
+        inputLabel,
+        outputLabel,
+        inputResolution: `${inputWidth}x${inputHeight}`,
+        outputResolution: `${resolution.width}x${resolution.height}`,
+      }
+    }
+    
+    return null
+  }, [selectedAsset, resolution])
 
   // ============================================
   // Generation handler
@@ -636,7 +745,10 @@ function GenerateWorkspace() {
           <div className="w-72 flex-shrink-0 border-r border-sf-dark-700 bg-sf-dark-900">
             <AssetInputBrowser
               selectedAsset={selectedAsset}
-              onSelectAsset={setSelectedAsset}
+              onSelectAsset={(asset) => {
+                setSelectedAsset(asset)
+                setSelectedAssetId(asset?.id || null)
+              }}
               filterType={currentWorkflow?.needsImage ? 'image' : null}
               frameTime={frameTime}
               onFrameTimeChange={setFrameTime}
@@ -706,11 +818,33 @@ function GenerateWorkspace() {
                       onChange={e => { const [w, h] = e.target.value.split('x').map(Number); setResolution({ width: w, height: h }) }}
                       className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
                     >
-                      <option value="1920x1080">1920x1080</option>
-                      <option value="1280x720">1280x720</option>
-                      <option value="1024x576">1024x576</option>
-                      <option value="768x512">768x512</option>
+                      <optgroup label="16:9 Landscape">
+                        <option value="1920x1080">1920x1080</option>
+                        <option value="1280x720">1280x720</option>
+                        <option value="1024x576">1024x576</option>
+                        <option value="768x512">768x512</option>
+                      </optgroup>
+                      <optgroup label="9:16 Portrait">
+                        <option value="1080x1920">1080x1920</option>
+                        <option value="720x1280">720x1280</option>
+                        <option value="576x1024">576x1024</option>
+                        <option value="512x768">512x768</option>
+                      </optgroup>
                     </select>
+                    {aspectRatioWarning && (
+                      <div className="mt-2 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded text-[10px] text-yellow-400">
+                        <div className="font-medium mb-1">⚠ Aspect Ratio Mismatch</div>
+                        <div className="text-[9px] opacity-90">
+                          Input: <strong>{aspectRatioWarning.inputResolution}</strong> ({aspectRatioWarning.inputLabel})
+                          <br />
+                          Output: <strong>{aspectRatioWarning.outputResolution}</strong> ({aspectRatioWarning.outputLabel})
+                          <br />
+                          <span className="mt-1 block">
+                            The input image will be resized/stretched to match the output resolution, which may cause distortion or cropping.
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div>
                     <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">FPS</label>

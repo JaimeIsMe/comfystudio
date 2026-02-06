@@ -4,6 +4,7 @@ import useProjectStore from '../stores/projectStore'
 const TOP_TABS = [
   { id: 'editor', label: 'Editor' },
   { id: 'generate', label: 'Generate' },
+  { id: 'llm-assistant', label: 'LLM Assistant' },
   { id: 'export', label: 'Export' },
 ]
 

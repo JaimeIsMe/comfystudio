@@ -46,6 +46,12 @@ body {
   -webkit-user-select: none;
 }
 
+/* Allow text selection in specific areas */
+.select-text {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
 /* Panel borders */
 .panel-border {
   border: 1px solid #2d2d2d;
