@@ -160,14 +160,18 @@ export const loadProject = async (projectDir) => {
     const filePath = await window.electronAPI.pathJoin(projectDir, 'project.storyflow')
     const exists = await window.electronAPI.exists(filePath)
     if (!exists) {
-      return null
+      throw new Error('Project file not found. This folder does not contain project.storyflow — the project may have been moved or the path is wrong. Try opening the project folder with "Open project".')
     }
     
     const result = await window.electronAPI.readFile(filePath, { encoding: 'utf8' })
     if (!result.success) {
-      throw new Error(result.error)
+      throw new Error(result.error || 'Could not read project file')
     }
-    return parseProjectJson(result.data, filePath)
+    const projectData = parseProjectJson(result.data, filePath)
+    if (!projectData) {
+      throw new Error('Project file is empty or invalid (corrupted JSON). The project.storyflow file may be damaged.')
+    }
+    return projectData
   }
   
   // Web fallback
@@ -175,10 +179,17 @@ export const loadProject = async (projectDir) => {
     const fileHandle = await projectDir.getFileHandle('project.storyflow')
     const file = await fileHandle.getFile()
     const text = await file.text()
-    return parseProjectJson(text, 'project.storyflow')
+    const projectData = parseProjectJson(text, 'project.storyflow')
+    if (!projectData) {
+      throw new Error('Project file is empty or invalid (corrupted JSON). The project.storyflow file may be damaged.')
+    }
+    return projectData
   } catch (err) {
     if (err.name === 'NotFoundError') {
-      return null
+      throw new Error('Project file not found. This folder does not contain project.storyflow.')
+    }
+    if (err.message && err.message.startsWith('Project file')) {
+      throw err
     }
     throw err
   }

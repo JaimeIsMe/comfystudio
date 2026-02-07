@@ -153,32 +153,40 @@ function AssetInputBrowser({ selectedAsset, onSelectAsset, filterType, frameTime
         <div className="flex-shrink-0 border-b border-sf-dark-700 p-2">
           <div className="text-[10px] text-sf-text-muted mb-1">Selected: <span className="text-sf-text-primary">{selectedAsset.name}</span></div>
           {selectedAsset.type === 'video' && filterType === 'image' ? (
-            <div className="space-y-2">
-              <div className="relative aspect-video bg-sf-dark-800 rounded overflow-hidden">
-                <video
-                  ref={videoRef}
-                  src={selectedAsset.url}
-                  className="w-full h-full object-contain"
-                  muted
-                  onSeeked={handleVideoSeeked}
-                  onLoadedMetadata={() => { if (videoRef.current) videoRef.current.currentTime = frameTime || 0 }}
-                />
-                <canvas ref={canvasRef} className="hidden" />
-                <div className="absolute bottom-1 right-1 px-1.5 py-0.5 bg-black/70 rounded text-[9px] text-white">
-                  Frame @ {(frameTime || 0).toFixed(2)}s
+            (() => {
+              const durationSec = selectedAsset.duration ?? selectedAsset.settings?.duration ?? 5
+              const fps = selectedAsset.fps ?? selectedAsset.settings?.fps ?? 24
+              const totalFrames = Math.max(0, Math.floor(durationSec * fps))
+              const currentFrame = Math.min(totalFrames, Math.round((frameTime || 0) * fps))
+              return (
+                <div className="space-y-2">
+                  <div className="relative aspect-video bg-sf-dark-800 rounded overflow-hidden">
+                    <video
+                      ref={videoRef}
+                      src={selectedAsset.url}
+                      className="w-full h-full object-contain"
+                      muted
+                      onSeeked={handleVideoSeeked}
+                      onLoadedMetadata={() => { if (videoRef.current) videoRef.current.currentTime = frameTime || 0 }}
+                    />
+                    <canvas ref={canvasRef} className="hidden" />
+                    <div className="absolute bottom-1 right-1 px-1.5 py-0.5 bg-black/70 rounded text-[9px] text-white">
+                      Frame {currentFrame}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[9px] text-sf-text-muted w-6">0</span>
+                    <input
+                      type="range" min="0" max={durationSec} step={1 / Math.max(1, fps)}
+                      value={frameTime || 0} onChange={e => onFrameTimeChange(parseFloat(e.target.value))}
+                      className="flex-1 h-1 accent-sf-accent"
+                    />
+                    <span className="text-[9px] text-sf-text-muted w-8 text-right">{totalFrames}</span>
+                  </div>
+                  <div className="text-[9px] text-sf-text-muted">Drag slider to pick a frame from this video</div>
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[9px] text-sf-text-muted w-6">0s</span>
-                <input
-                  type="range" min="0" max={selectedAsset.duration || selectedAsset.settings?.duration || 5} step="0.04"
-                  value={frameTime || 0} onChange={e => onFrameTimeChange(parseFloat(e.target.value))}
-                  className="flex-1 h-1 accent-sf-accent"
-                />
-                <span className="text-[9px] text-sf-text-muted w-8 text-right">{(selectedAsset.duration || selectedAsset.settings?.duration || 5).toFixed(1)}s</span>
-              </div>
-              <div className="text-[9px] text-sf-text-muted">Drag slider to pick a frame from this video</div>
-            </div>
+              )
+            })()
           ) : (
             <div className="aspect-video bg-sf-dark-800 rounded overflow-hidden">
               {selectedAsset.type === 'video' ? (
@@ -416,6 +424,16 @@ function GenerateWorkspace() {
   // Frame count helper
   const getFrameCount = () => Math.round(duration * fps) + 1
 
+  // Effective progress: use ComfyUI real progress when available during "Generating...", else our genProgress
+  const effectiveProgress = (() => {
+    if (!isGenerating && genProgress <= 0) return 0
+    const comfyPercent = progress?.percent ?? (progress?.max > 0 ? Math.round((progress.value / progress.max) * 100) : null)
+    if (genStatus === 'Generating...' && comfyPercent != null && comfyPercent > 0) return Math.min(99, comfyPercent)
+    return genProgress
+  })()
+
+  const showProgressStrip = isGenerating || genProgress > 0
+
   // Calculate aspect ratio mismatch warning
   const aspectRatioWarning = useMemo(() => {
     if (!selectedAsset || !selectedAsset.settings) return null
@@ -458,7 +476,7 @@ function GenerateWorkspace() {
     }
 
     setIsGenerating(true)
-    setGenProgress(0)
+    setGenProgress(5)
     setGenStatus('Preparing...')
     setGenError(null)
     setGenResult(null)
@@ -468,6 +486,7 @@ function GenerateWorkspace() {
       let uploadedFilename = null
       if (currentWorkflow?.needsImage && selectedAsset) {
         setGenStatus('Uploading input...')
+        setGenProgress(10)
         let fileToUpload = null
 
         if (selectedAsset.type === 'video') {
@@ -488,6 +507,7 @@ function GenerateWorkspace() {
 
       // Load workflow JSON
       setGenStatus('Loading workflow...')
+      setGenProgress(20)
       let workflowJson = null
       const workflowMap = {
         'ltx2-t2v': '/workflows/video_ltx2_t2v.json',
@@ -506,6 +526,7 @@ function GenerateWorkspace() {
 
       // Modify workflow based on type
       setGenStatus('Configuring workflow...')
+      setGenProgress(30)
       const { modifyLTX2Workflow, modifyWAN22Workflow, modifyMultipleAnglesWorkflow, modifyInflationWorkflow, modifyMusicWorkflow } = await import('../services/comfyui')
 
       let modifiedWorkflow = null
@@ -529,7 +550,7 @@ function GenerateWorkspace() {
             width: resolution.width,
             height: resolution.height,
             frames: getFrameCount(),
-            fps: 16,
+            fps, // Use FPS from UI (24 or 30) – was hardcoded to 16
             seed,
           })
           break
@@ -564,6 +585,7 @@ function GenerateWorkspace() {
 
       // Queue the prompt
       setGenStatus('Queuing generation...')
+      setGenProgress(40)
       const promptId = await comfyui.queuePrompt(modifiedWorkflow)
       if (!promptId) throw new Error('Failed to queue prompt')
 
@@ -576,14 +598,20 @@ function GenerateWorkspace() {
       // Save result to assets
       if (result) {
         setGenStatus('Saving to project...')
+        setGenProgress(95)
         await saveGenerationResult(result, workflowId)
         setGenResult(result)
         setJustCompleted(true)
         setTimeout(() => setJustCompleted(false), 3000)
+        setGenStatus('Complete!')
+        setGenProgress(100)
+      } else {
+        // Generation completed in ComfyUI but we couldn't detect the output
+        console.error('[handleGenerate] pollForResult returned null - output not detected')
+        setGenError('Generation finished but the output could not be detected. Check the ComfyUI output folder manually. (Open browser console for debug info)')
+        setGenStatus('Output not found')
+        setGenProgress(0)
       }
-
-      setGenStatus('Complete!')
-      setGenProgress(100)
     } catch (err) {
       if (err.message !== 'Generation cancelled') {
         setGenError(err.message)
@@ -597,49 +625,176 @@ function GenerateWorkspace() {
   // Poll for result
   const pollForResult = async (promptId, wfId, onProgress) => {
     const maxPolls = 600 // 10 minutes at 1s interval
+
+    // Helper: extract filename from various ComfyUI API formats (old dict-based and new SavedResult)
+    const getFilename = (item) => item?.filename || item?.file || item?.name
+    const getSubfolder = (item) => item?.subfolder || item?.sub_folder || ''
+    const getOutputType = (item) => item?.type || item?.folder_type || 'output'
+
+    // Helper: check if a filename looks like a video file
+    const isVideoFilename = (fn) => typeof fn === 'string' && /\.(mp4|webm|gif|mov|avi|mkv)$/i.test(fn)
+    // Helper: check if a filename looks like an image file
+    const isImageFilename = (fn) => typeof fn === 'string' && /\.(png|jpg|jpeg|webp|bmp|tiff)$/i.test(fn)
+    // Helper: check if a filename looks like an audio file
+    const isAudioFilename = (fn) => typeof fn === 'string' && /\.(mp3|wav|ogg|flac|aac|m4a)$/i.test(fn)
+
+    // Helper: try to extract a media result from a single output item
+    const extractFromItem = (item) => {
+      const fn = getFilename(item)
+      if (!fn) return null
+      return { filename: fn, subfolder: getSubfolder(item), outputType: getOutputType(item) }
+    }
+
     for (let i = 0; i < maxPolls; i++) {
       await new Promise(r => setTimeout(r, 1000))
       onProgress(Math.min(90, (i / maxPolls) * 90))
 
       try {
         const history = await comfyui.getHistory(promptId)
-        const outputs = history?.[promptId]?.outputs
-        if (!outputs) continue
+        // ComfyUI may return { [promptId]: { outputs } } or (for /history/id) { outputs } at top level
+        const outputs = history?.[promptId]?.outputs ?? history?.outputs
+        if (!outputs || typeof outputs !== 'object') continue
 
-        // Check for video output (SaveVideo nodes)
-        for (const nodeId of ['75', '108']) {
-          const videoOut = outputs[nodeId]
-          if (videoOut?.videos?.[0]) {
-            const vid = videoOut.videos[0]
-            return { type: 'video', filename: vid.filename, subfolder: vid.subfolder || '', outputType: vid.type || 'output' }
+        // ── VIDEO detection: scan ALL nodes, ALL keys ──
+        // Check known video keys first (videos, gifs), then any array key with video-like filenames
+        for (const nodeId of Object.keys(outputs)) {
+          const nodeOut = outputs[nodeId]
+          if (!nodeOut || typeof nodeOut !== 'object') continue
+
+          // Check known video array keys
+          for (const key of ['videos', 'gifs', 'video']) {
+            const items = nodeOut[key]
+            if (Array.isArray(items) && items.length > 0) {
+              const info = extractFromItem(items[0])
+              if (info) {
+                console.log(`[pollForResult] Found video in node ${nodeId}.${key}:`, info)
+                return { type: 'video', ...info }
+              }
+            }
           }
-        }
 
-        // Check for image outputs (SaveImage nodes)
-        const imageNodes = ['9', '31', '34', '36', '38', '41', '43', '45', '47']
-        const images = []
-        for (const nodeId of imageNodes) {
-          const imgOut = outputs[nodeId]
-          if (imgOut?.images) {
-            for (const img of imgOut.images) {
-              images.push({ type: 'image', filename: img.filename, subfolder: img.subfolder || '', outputType: img.type || 'output' })
+          // Check ANY array-valued key for items with video-like filenames
+          for (const key of Object.keys(nodeOut)) {
+            if (['videos', 'gifs', 'video'].includes(key)) continue // already checked
+            const val = nodeOut[key]
+            if (Array.isArray(val) && val.length > 0) {
+              const info = extractFromItem(val[0])
+              if (info && isVideoFilename(info.filename)) {
+                console.log(`[pollForResult] Found video in node ${nodeId}.${key} (by extension):`, info)
+                return { type: 'video', ...info }
+              }
             }
           }
         }
-        if (images.length > 0) return { type: 'images', items: images }
 
-        // Check for audio output (SaveAudioMP3 node 107)
-        const audioOut = outputs['107']
-        if (audioOut?.audio) {
-          const aud = Array.isArray(audioOut.audio) ? audioOut.audio[0] : audioOut.audio
-          if (aud?.filename) {
-            return { type: 'audio', filename: aud.filename, subfolder: aud.subfolder || '', outputType: aud.type || 'output' }
+        // ── IMAGE detection: scan ALL nodes, ALL keys ──
+        const images = []
+        for (const nodeId of Object.keys(outputs)) {
+          const nodeOut = outputs[nodeId]
+          if (!nodeOut || typeof nodeOut !== 'object') continue
+
+          // Check known image key
+          if (Array.isArray(nodeOut.images)) {
+            for (const img of nodeOut.images) {
+              const info = extractFromItem(img)
+              if (info && !isVideoFilename(info.filename)) {
+                images.push({ type: 'image', ...info })
+              }
+            }
+          }
+
+          // Check any other array key with image-like filenames
+          for (const key of Object.keys(nodeOut)) {
+            if (key === 'images') continue
+            const val = nodeOut[key]
+            if (Array.isArray(val) && val.length > 0) {
+              for (const item of val) {
+                const info = extractFromItem(item)
+                if (info && isImageFilename(info.filename)) {
+                  images.push({ type: 'image', ...info })
+                }
+              }
+            }
+          }
+        }
+        if (images.length > 0) {
+          console.log(`[pollForResult] Found ${images.length} image(s):`, images)
+          return { type: 'images', items: images }
+        }
+
+        // ── AUDIO detection: scan ALL nodes, ALL keys ──
+        for (const nodeId of Object.keys(outputs)) {
+          const nodeOut = outputs[nodeId]
+          if (!nodeOut || typeof nodeOut !== 'object') continue
+
+          // Check known audio key
+          if (nodeOut.audio) {
+            const aud = Array.isArray(nodeOut.audio) ? nodeOut.audio[0] : nodeOut.audio
+            const info = extractFromItem(aud)
+            if (info) {
+              console.log(`[pollForResult] Found audio in node ${nodeId}:`, info)
+              return { type: 'audio', ...info }
+            }
+          }
+
+          // Check any array key with audio-like filenames
+          for (const key of Object.keys(nodeOut)) {
+            if (key === 'audio') continue
+            const val = nodeOut[key]
+            if (Array.isArray(val) && val.length > 0) {
+              const info = extractFromItem(val[0])
+              if (info && isAudioFilename(info.filename)) {
+                console.log(`[pollForResult] Found audio in node ${nodeId}.${key} (by extension):`, info)
+                return { type: 'audio', ...info }
+              }
+            }
           }
         }
 
-        // Check status for completion
-        const status = history?.[promptId]?.status
-        if (status?.completed) break
+        // Check status for completion - if completed but nothing found, log and keep trying briefly
+        const status = history?.[promptId]?.status ?? history?.status
+        if (status?.completed || status?.status_str === 'success') {
+          // Log the full outputs for debugging
+          console.warn('[pollForResult] Generation completed but no output detected. Full outputs:', JSON.stringify(outputs, null, 2))
+          console.warn('[pollForResult] Output node keys:', Object.keys(outputs))
+          for (const nodeId of Object.keys(outputs)) {
+            console.warn(`[pollForResult] Node ${nodeId} keys:`, Object.keys(outputs[nodeId] || {}))
+          }
+          // Give it a few more tries in case outputs are still being written
+          if (i < maxPolls - 5) {
+            onProgress(92)
+            await new Promise(r => setTimeout(r, 2000))
+            // Re-fetch and try once more
+            const retryHistory = await comfyui.getHistory(promptId)
+            const retryOutputs = retryHistory?.[promptId]?.outputs ?? retryHistory?.outputs
+            if (retryOutputs && typeof retryOutputs === 'object') {
+              // One final comprehensive scan - look for ANY item with a filename in ANY array
+              for (const nodeId of Object.keys(retryOutputs)) {
+                const nodeOut = retryOutputs[nodeId]
+                if (!nodeOut || typeof nodeOut !== 'object') continue
+                for (const key of Object.keys(nodeOut)) {
+                  const val = nodeOut[key]
+                  if (Array.isArray(val) && val.length > 0) {
+                    const info = extractFromItem(val[0])
+                    if (info) {
+                      console.log(`[pollForResult] Retry found result in node ${nodeId}.${key}:`, info)
+                      // Determine type by extension
+                      if (isVideoFilename(info.filename)) return { type: 'video', ...info }
+                      if (isAudioFilename(info.filename)) return { type: 'audio', ...info }
+                      if (isImageFilename(info.filename)) return { type: 'images', items: [{ type: 'image', ...info }] }
+                      // Unknown extension - assume video for video workflows
+                      if (wfId === 'ltx2-t2v' || wfId === 'wan22-i2v') return { type: 'video', ...info }
+                      return { type: 'images', items: [{ type: 'image', ...info }] }
+                    }
+                  }
+                }
+              }
+              console.error('[pollForResult] Retry also found nothing. Outputs:', JSON.stringify(retryOutputs, null, 2))
+            }
+            break // exit loop
+          }
+          break
+        }
 
       } catch (err) {
         console.warn('Poll error:', err)
@@ -737,6 +892,23 @@ function GenerateWorkspace() {
           <span className="text-[10px] text-sf-text-muted">{isConnected ? 'ComfyUI' : 'Offline'}</span>
         </div>
       </div>
+
+      {/* Sticky progress strip - always visible when generating */}
+      {showProgressStrip && (
+        <div className="flex-shrink-0 px-4 py-3 bg-sf-dark-900 border-b border-sf-dark-700">
+          <div className="flex items-center justify-between gap-4 mb-1.5">
+            <span className="text-xs text-sf-text-primary font-medium">{genStatus}</span>
+            <span className="text-xs text-sf-text-muted tabular-nums">{Math.round(effectiveProgress)}%</span>
+          </div>
+          <div className="h-2 bg-sf-dark-800 rounded-full overflow-hidden">
+            <div className="h-full bg-sf-accent transition-all duration-300" style={{ width: `${effectiveProgress}%` }} />
+          </div>
+          <div className="flex items-center gap-3 mt-1.5 text-[10px] text-sf-text-muted">
+            {currentNode && <span>Node: {currentNode}</span>}
+            {queueCount > 0 && <span>Queue: {queueCount} ahead</span>}
+          </div>
+        </div>
+      )}
 
       {/* Main 3-column layout */}
       <div className="flex-1 min-h-0 flex">
@@ -1005,17 +1177,18 @@ function GenerateWorkspace() {
             )}
           </div>
 
-          {/* Progress */}
+          {/* Progress (also in sticky strip above when generating) */}
           {(isGenerating || genProgress > 0) && (
             <div className="p-4 border-b border-sf-dark-700">
               <div className="flex items-center justify-between text-[10px] text-sf-text-muted mb-1">
                 <span>{genStatus}</span>
-                <span>{Math.round(genProgress)}%</span>
+                <span>{Math.round(effectiveProgress)}%</span>
               </div>
               <div className="h-1.5 bg-sf-dark-800 rounded-full overflow-hidden">
-                <div className="h-full bg-sf-accent transition-all" style={{ width: `${genProgress}%` }} />
+                <div className="h-full bg-sf-accent transition-all duration-300" style={{ width: `${effectiveProgress}%` }} />
               </div>
               {currentNode && <div className="mt-1 text-[9px] text-sf-text-muted">Node: {currentNode}</div>}
+              {queueCount > 0 && <div className="mt-0.5 text-[9px] text-sf-text-muted">Queue: {queueCount} ahead</div>}
             </div>
           )}
 

@@ -286,7 +286,7 @@ function AudioGenerateModal({ isOpen, onClose, initialType = 'music' }) {
         {/* Footer */}
         <div className="flex items-center justify-between p-4 border-t border-sf-dark-700 bg-sf-dark-800">
           <div className="text-xs text-sf-text-muted">
-            Audio will be added to the {audioType === 'voiceover' ? 'Voiceover' : audioType === 'sfx' ? 'SFX' : 'Music'} track
+            Audio will be added to the first audio track
           </div>
           <div className="flex items-center gap-3">
             <button

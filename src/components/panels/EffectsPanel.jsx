@@ -345,7 +345,7 @@ function EffectsPanel() {
         </div>
         
         {message && (
-          <div className="text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2">
+          <div className="text-[11px] text-sf-accent bg-sf-accent/10 border border-sf-accent/20 rounded-lg p-2">
             {message}
           </div>
         )}

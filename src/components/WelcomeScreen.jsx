@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { FolderOpen, Plus, Film, Clock, Monitor, AlertCircle, Loader2 } from 'lucide-react'
+import { FolderOpen, Plus, Film, Clock, Monitor, AlertCircle, Loader2, Trash2 } from 'lucide-react'
 import useProjectStore from '../stores/projectStore'
 import NewProjectDialog from './NewProjectDialog'
 
@@ -19,6 +19,7 @@ function WelcomeScreen() {
     selectDefaultProjectsLocation,
     openProjectFromPicker,
     openRecentProject,
+    removeRecentProject,
     clearError,
     getRecentProjectsList,
     isElectronMode,
@@ -221,32 +222,35 @@ function WelcomeScreen() {
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
               {recentProjectsList.map((project, index) => (
-                <button
+                <div
                   key={project.name + index}
-                  onClick={() => handleOpenRecent(project)}
-                  className="group bg-sf-dark-900 border border-sf-dark-700 rounded-xl overflow-hidden hover:border-sf-accent transition-all text-left"
+                  className="group relative bg-sf-dark-900 border border-sf-dark-700 rounded-xl overflow-hidden hover:border-sf-accent transition-all text-left"
                 >
-                  {/* Thumbnail */}
-                  <div className="aspect-video bg-sf-dark-800 relative overflow-hidden">
-                    {project.thumbnail ? (
-                      <img 
-                        src={project.thumbnail} 
-                        alt={project.name}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center">
-                        <Film className="w-8 h-8 text-sf-text-muted opacity-50" />
-                      </div>
-                    )}
-                    
-                    {/* Hover overlay */}
-                    <div className="absolute inset-0 bg-sf-accent/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                      <div className="w-10 h-10 bg-sf-accent rounded-full flex items-center justify-center">
-                        <FolderOpen className="w-5 h-5 text-white" />
+                  <button
+                    onClick={() => handleOpenRecent(project)}
+                    className="w-full text-left"
+                  >
+                    {/* Thumbnail */}
+                    <div className="aspect-video bg-sf-dark-800 relative overflow-hidden">
+                      {project.thumbnail ? (
+                        <img 
+                          src={project.thumbnail} 
+                          alt={project.name}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center">
+                          <Film className="w-8 h-8 text-sf-text-muted opacity-50" />
+                        </div>
+                      )}
+                      
+                      {/* Hover overlay */}
+                      <div className="absolute inset-0 bg-sf-accent/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                        <div className="w-10 h-10 bg-sf-accent rounded-full flex items-center justify-center">
+                          <FolderOpen className="w-5 h-5 text-white" />
+                        </div>
                       </div>
                     </div>
-                  </div>
                   
                   {/* Info */}
                   <div className="p-3">
@@ -266,7 +270,23 @@ function WelcomeScreen() {
                       )}
                     </div>
                   </div>
-                </button>
+                  </button>
+                  {/* Remove from recent */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      removeRecentProject(project)
+                      setRecentProjectsList((prev) =>
+                        prev.filter((p) => !(p.name === project.name && (p.path || '') === (project.path || '')))
+                      )
+                    }}
+                    className="absolute top-2 right-2 p-1.5 rounded-lg bg-sf-dark-900/90 hover:bg-sf-error/80 text-sf-text-muted hover:text-white opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                    title="Remove from recent projects"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               ))}
               
               {/* New Project Card */}

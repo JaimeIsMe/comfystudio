@@ -31,7 +31,7 @@ function App() {
   // Panel sizes (in pixels)
   const [leftPanelWidth, setLeftPanelWidth] = useState(280) // Content panel width (icon bar is 48px additional)
   const [inspectorWidth, setInspectorWidth] = useState(256) // Content panel width (icon bar is 48px additional)
-  const [timelineHeight, setTimelineHeight] = useState(240) // Includes transport controls + timeline
+  const [timelineHeight, setTimelineHeight] = useState(320) // Default: enough room for track headers; persisted in localStorage
 
   // Min/max constraints
   const ICON_BAR_WIDTH = 48 // Fixed icon toolbar width
@@ -41,6 +41,41 @@ function App() {
   const MAX_INSPECTOR = 400 // Content panel max
   const MIN_TIMELINE = 180 // Accounts for transport controls (40px) + minimum timeline
   const MAX_TIMELINE = 450
+
+  const LAYOUT_STORAGE_KEY = 'storyflow-editor-layout'
+
+  // Load persisted layout on mount (single read)
+  const [layoutLoaded, setLayoutLoaded] = useState(false)
+  useEffect(() => {
+    if (layoutLoaded) return
+    try {
+      const raw = localStorage.getItem(LAYOUT_STORAGE_KEY)
+      if (raw) {
+        const saved = JSON.parse(raw)
+        if (typeof saved.timelineHeight === 'number' && saved.timelineHeight >= MIN_TIMELINE && saved.timelineHeight <= MAX_TIMELINE) {
+          setTimelineHeight(saved.timelineHeight)
+        }
+        if (typeof saved.leftPanelWidth === 'number' && saved.leftPanelWidth >= MIN_LEFT_PANEL && saved.leftPanelWidth <= MAX_LEFT_PANEL) {
+          setLeftPanelWidth(saved.leftPanelWidth)
+        }
+        if (typeof saved.inspectorWidth === 'number' && saved.inspectorWidth >= MIN_INSPECTOR && saved.inspectorWidth <= MAX_INSPECTOR) {
+          setInspectorWidth(saved.inspectorWidth)
+        }
+        if (typeof saved.leftPanelExpanded === 'boolean') setLeftPanelExpanded(saved.leftPanelExpanded)
+        if (typeof saved.inspectorExpanded === 'boolean') setInspectorExpanded(saved.inspectorExpanded)
+      }
+    } catch (_) { /* ignore */ }
+    setLayoutLoaded(true)
+  }, [layoutLoaded])
+
+  const persistLayout = useCallback((updates) => {
+    try {
+      const raw = localStorage.getItem(LAYOUT_STORAGE_KEY)
+      const prev = raw ? JSON.parse(raw) : {}
+      const next = { ...prev, ...updates }
+      localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(next))
+    } catch (_) { /* ignore */ }
+  }, [])
 
   const isFullScreenTab = mainTab === 'export' || mainTab === 'generate' || mainTab === 'llm-assistant'
   // Editor layout insets (used for content when on Editor, and always for tab bar so it doesn't shift)
@@ -83,24 +118,40 @@ function App() {
 
   // Resize handlers
   const handleLeftPanelResize = useCallback((clientX) => {
-    // Account for the icon bar width when calculating content panel width
     const contentWidth = clientX - ICON_BAR_WIDTH
     const newWidth = Math.min(MAX_LEFT_PANEL, Math.max(MIN_LEFT_PANEL, contentWidth))
     setLeftPanelWidth(newWidth)
-  }, [])
+    persistLayout({ leftPanelWidth: newWidth })
+  }, [persistLayout])
 
   const handleInspectorResize = useCallback((clientX) => {
-    // Account for the icon bar width when calculating content panel width
     const contentWidth = window.innerWidth - clientX - ICON_BAR_WIDTH
     const newWidth = Math.min(MAX_INSPECTOR, Math.max(MIN_INSPECTOR, contentWidth))
     setInspectorWidth(newWidth)
-  }, [])
+    persistLayout({ inspectorWidth: newWidth })
+  }, [persistLayout])
 
   const handleTimelineResize = useCallback((clientY) => {
-    // Calculate from bottom - timeline is at the bottom of the viewport
     const newHeight = Math.min(MAX_TIMELINE, Math.max(MIN_TIMELINE, window.innerHeight - clientY))
     setTimelineHeight(newHeight)
-  }, [])
+    persistLayout({ timelineHeight: newHeight })
+  }, [persistLayout])
+
+  const handleToggleLeftPanelExpanded = useCallback(() => {
+    setLeftPanelExpanded(prev => {
+      const next = !prev
+      persistLayout({ leftPanelExpanded: next })
+      return next
+    })
+  }, [persistLayout])
+
+  const handleToggleInspectorExpanded = useCallback(() => {
+    setInspectorExpanded(prev => {
+      const next = !prev
+      persistLayout({ inspectorExpanded: next })
+      return next
+    })
+  }, [persistLayout])
 
   const openAudioModal = (type = 'music') => {
     setAudioModalType(type)
@@ -142,7 +193,7 @@ function App() {
                 >
                   <LeftPanel 
                     isExpanded={leftPanelExpanded}
-                    onToggleExpanded={() => setLeftPanelExpanded(!leftPanelExpanded)}
+                    onToggleExpanded={handleToggleLeftPanelExpanded}
                     activeTab={leftPanelTab}
                     onTabChange={setLeftPanelTab}
                     isFullHeight={true}
@@ -172,7 +223,7 @@ function App() {
                     >
                       <LeftPanel 
                         isExpanded={leftPanelExpanded}
-                        onToggleExpanded={() => setLeftPanelExpanded(!leftPanelExpanded)}
+                        onToggleExpanded={handleToggleLeftPanelExpanded}
                         activeTab={leftPanelTab}
                         onTabChange={setLeftPanelTab}
                         isFullHeight={false}
@@ -210,7 +261,7 @@ function App() {
                   <InspectorPanel 
                     selectedItem={selectedItem}
                     isExpanded={inspectorExpanded}
-                    onToggleExpanded={() => setInspectorExpanded(!inspectorExpanded)}
+                    onToggleExpanded={handleToggleInspectorExpanded}
                   />
                 </div>
               </div>

@@ -109,8 +109,6 @@ async function createWindow() {
     if (!loaded) {
       console.error('Could not connect to Vite dev server on any port')
     }
-    
-    mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
@@ -539,6 +537,7 @@ ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
     duration = null,
     videoCodec = 'h264',
     audioCodec = 'aac',
+    proresProfile = '3',
     useHardwareEncoder = false,
     nvencPreset = 'p5',
     preset = 'medium',
@@ -566,11 +565,22 @@ ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
     args.push('-t', String(duration))
   }
 
-  const normalizedCodec = format === 'webm' || videoCodec === 'vp9'
-    ? 'vp9'
-    : (videoCodec === 'h265' ? 'h265' : 'h264')
+  const isProRes = videoCodec === 'prores' || (format === 'mov' && options.proresProfile != null)
+  const normalizedCodec = isProRes
+    ? 'prores'
+    : (format === 'webm' || videoCodec === 'vp9'
+      ? 'vp9'
+      : (videoCodec === 'h265' ? 'h265' : 'h264'))
 
-  if (normalizedCodec === 'vp9') {
+  if (normalizedCodec === 'prores') {
+    const profileNum = Math.min(4, Math.max(0, parseInt(String(proresProfile), 10) || 3))
+    args.push(
+      '-c:v', 'prores_ks',
+      '-profile:v', String(profileNum),
+      '-pix_fmt', profileNum === 4 ? 'yuva444p10le' : 'yuv422p10le'
+    )
+    encoderUsed = 'prores_ks'
+  } else if (normalizedCodec === 'vp9') {
     const vp9SpeedMap = {
       ultrafast: 8,
       superfast: 7,

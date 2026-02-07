@@ -90,9 +90,9 @@ export const useTimelineStore = create(
   tracks: [
     { id: 'video-1', name: 'Video 1', type: 'video', muted: false, locked: false, visible: true },
     { id: 'video-2', name: 'Video 2', type: 'video', muted: false, locked: false, visible: true },
-    { id: 'music', name: 'Music', type: 'audio', muted: false, locked: false, visible: true },
-    { id: 'voiceover', name: 'Voiceover', type: 'audio', muted: false, locked: false, visible: true },
-    { id: 'sfx', name: 'SFX', type: 'audio', muted: false, locked: false, visible: true },
+    { id: 'audio-1', name: 'Audio 1', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
+    { id: 'audio-2', name: 'Audio 2', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
+    { id: 'audio-3', name: 'Audio 3', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
   ],
   
   // Clips on timeline
@@ -507,7 +507,7 @@ export const useTimelineStore = create(
       sourceDuration: duration,
       trimStart: 0,
       trimEnd: duration,
-      color: '#F59E0B', // Amber color for text clips
+      color: '#565C6B', // Muted blue for text clips
       type: 'text',
       url: null,
       thumbnail: null,
@@ -2477,9 +2477,9 @@ export const useTimelineStore = create(
       tracks: [
         { id: 'video-1', name: 'Video 1', type: 'video', muted: false, locked: false, visible: true },
         { id: 'video-2', name: 'Video 2', type: 'video', muted: false, locked: false, visible: true },
-        { id: 'music', name: 'Music', type: 'audio', muted: false, locked: false, visible: true },
-        { id: 'voiceover', name: 'Voiceover', type: 'audio', muted: false, locked: false, visible: true },
-        { id: 'sfx', name: 'SFX', type: 'audio', muted: false, locked: false, visible: true },
+        { id: 'audio-1', name: 'Audio 1', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
+        { id: 'audio-2', name: 'Audio 2', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
+        { id: 'audio-3', name: 'Audio 3', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
       ],
       clips: [],
       transitions: [],
@@ -2513,9 +2513,9 @@ export const useTimelineStore = create(
       tracks: timelineData.tracks || [
         { id: 'video-1', name: 'Video 1', type: 'video', muted: false, locked: false, visible: true },
         { id: 'video-2', name: 'Video 2', type: 'video', muted: false, locked: false, visible: true },
-        { id: 'music', name: 'Music', type: 'audio', muted: false, locked: false, visible: true },
-        { id: 'voiceover', name: 'Voiceover', type: 'audio', muted: false, locked: false, visible: true },
-        { id: 'sfx', name: 'SFX', type: 'audio', muted: false, locked: false, visible: true },
+        { id: 'audio-1', name: 'Audio 1', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
+        { id: 'audio-2', name: 'Audio 2', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
+        { id: 'audio-3', name: 'Audio 3', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
       ],
       clips: normalizedClips,
       transitions: timelineData.transitions || [],
@@ -2708,7 +2708,7 @@ function getVideoColor(index) {
     '#7a6a9e', // desaturated purple
     '#b06a8a', // desaturated pink
     '#4a8a7a', // desaturated green
-    '#b08a4a', // desaturated amber
+    '#6a7080', // desaturated blue
     '#b06a6a', // desaturated red
   ]
   return colors[index % colors.length]
@@ -2718,7 +2718,7 @@ function getVideoColor(index) {
 function getAudioColor(trackId) {
   const colors = {
     'music': '#4a8a6a', // desaturated green
-    'voiceover': '#b07a4a', // desaturated orange
+    'voiceover': '#565C6B', // muted blue
     'sfx': '#8a6a9a', // desaturated purple
   }
   return colors[trackId] || '#6B7280'

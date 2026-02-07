@@ -7,6 +7,7 @@ import exportTimeline from '../services/exporter'
 const EXPORT_FORMATS = [
   { id: 'mp4', label: 'MP4 (H.264/H.265)' },
   { id: 'webm', label: 'WebM (VP9)' },
+  { id: 'prores', label: 'MOV (ProRes)' },
   { id: 'gif', label: 'GIF (Preview - Soon)', disabled: true },
   { id: 'png-seq', label: 'PNG Sequence - Soon', disabled: true },
 ]
@@ -25,6 +26,9 @@ const VIDEO_CODECS = {
   webm: [
     { id: 'vp9', label: 'VP9' },
   ],
+  prores: [
+    { id: 'prores', label: 'ProRes' },
+  ],
 }
 
 const AUDIO_CODECS = {
@@ -33,6 +37,9 @@ const AUDIO_CODECS = {
   ],
   webm: [
     { id: 'opus', label: 'Opus' },
+  ],
+  prores: [
+    { id: 'aac', label: 'AAC' },
   ],
 }
 
@@ -84,6 +91,15 @@ const DEFAULT_CRF = {
   vp9: 32,
 }
 
+// FFmpeg prores_ks profile: 0=proxy, 1=lt, 2=standard, 3=hq, 4=4444
+const PRORES_PROFILES = [
+  { id: '0', label: 'Proxy (smallest)' },
+  { id: '1', label: 'LT' },
+  { id: '2', label: 'Standard' },
+  { id: '3', label: 'HQ' },
+  { id: '4', label: '4444 (alpha)' },
+]
+
 function ExportPanel() {
   const { currentProject, getCurrentTimelineSettings } = useProjectStore()
   const { duration, inPoint, outPoint, getTimelineEndTime, selectedClipIds, clips, transitions, tracks } = useTimelineStore()
@@ -96,6 +112,7 @@ function ExportPanel() {
     format: 'mp4',
     videoCodec: 'h264',
     audioCodec: 'aac',
+    proresProfile: '3',
     useHardwareEncoder: false,
     nvencPreset: 'p5',
     preset: 'medium',
@@ -121,7 +138,6 @@ function ExportPanel() {
   const [exportProgress, setExportProgress] = useState(0)
   const [exportError, setExportError] = useState(null)
   const [exportResult, setExportResult] = useState(null)
-  const [activeSection, setActiveSection] = useState('video')
   const [etaSeconds, setEtaSeconds] = useState(null)
   const [renderFps, setRenderFps] = useState(null)
   const exportStartRef = useRef(null)
@@ -201,7 +217,7 @@ function ExportPanel() {
         if (next.videoCodec && DEFAULT_CRF[next.videoCodec]) {
           next.crf = DEFAULT_CRF[next.videoCodec]
         }
-        if (value === 'webm') {
+        if (value === 'webm' || value === 'prores') {
           next.useHardwareEncoder = false
         }
       }
@@ -420,6 +436,7 @@ function ExportPanel() {
       format: jobSettings.format,
       videoCodec: jobSettings.videoCodec,
       audioCodec: jobSettings.audioCodec,
+      proresProfile: jobSettings.proresProfile,
       useHardwareEncoder: jobSettings.useHardwareEncoder,
       nvencPreset: jobSettings.nvencPreset,
       preset: jobSettings.preset,
@@ -553,24 +570,10 @@ function ExportPanel() {
             </button>
           </div>
           
-          <div className="mt-4 border-t border-sf-dark-700 pt-3">
-            <div className="flex items-center gap-2 mb-3">
-              {['video', 'audio', 'file'].map((section) => (
-                <button
-                  key={section}
-                  onClick={() => setActiveSection(section)}
-                  className={`px-3 py-1 text-xs rounded transition-colors ${
-                    activeSection === section
-                      ? 'bg-sf-accent text-white'
-                      : 'bg-sf-dark-800 text-sf-text-muted hover:text-sf-text-primary'
-                  }`}
-                >
-                  {section.charAt(0).toUpperCase() + section.slice(1)}
-                </button>
-              ))}
-            </div>
-            
-            {activeSection === 'video' && (
+          <div className="mt-4 border-t border-sf-dark-700 pt-3 space-y-6 max-h-[60vh] overflow-y-auto pr-1">
+            {/* Video */}
+            <div>
+              <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-3">Video</div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
                   <div className="flex items-center gap-2">
@@ -579,6 +582,7 @@ function ExportPanel() {
                       disabled={
                         settings.videoCodec === 'vp9' ||
                         settings.format === 'webm' ||
+                        settings.format === 'prores' ||
                         (nvencStatus.checked && !nvencStatus.available) ||
                         (settings.videoCodec === 'h265' && nvencStatus.checked && !nvencStatus.h265) ||
                         (settings.videoCodec === 'h264' && nvencStatus.checked && !nvencStatus.h264)
@@ -618,6 +622,22 @@ function ExportPanel() {
                   </select>
                 </div>
                 
+                {settings.format === 'prores' && (
+                  <div>
+                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">ProRes Profile</label>
+                    <select
+                      value={settings.proresProfile}
+                      onChange={(e) => handleSettingChange('proresProfile', e.target.value)}
+                      className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                    >
+                      {PRORES_PROFILES.map((p) => (
+                        <option key={p.id} value={p.id}>{p.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                
+                {settings.format !== 'prores' && (
                 <div>
                   <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Encoder Preset</label>
                   <select
@@ -630,8 +650,9 @@ function ExportPanel() {
                     ))}
                   </select>
                 </div>
+                )}
 
-                {settings.useHardwareEncoder && (
+                {settings.format !== 'prores' && settings.useHardwareEncoder && (
                   <div>
                     <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">NVENC Preset</label>
                     <select
@@ -646,6 +667,7 @@ function ExportPanel() {
                   </div>
                 )}
                 
+                {settings.format !== 'prores' && (
                 <div>
                   <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Quality Mode</label>
                   <select
@@ -658,7 +680,9 @@ function ExportPanel() {
                     ))}
                   </select>
                 </div>
+                )}
                 
+                {settings.format !== 'prores' && (
                 <div>
                   <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">
                     {settings.qualityMode === 'crf' ? 'CRF' : 'Bitrate (kbps)'}
@@ -675,31 +699,35 @@ function ExportPanel() {
                     className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
                   />
                 </div>
+                )}
                 
-                <div>
-                  <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Keyframes</label>
-                  <select
-                    value={settings.keyframeMode}
-                    onChange={(e) => handleSettingChange('keyframeMode', e.target.value)}
-                    className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
-                  >
-                    {KEYFRAME_MODES.map((mode) => (
-                      <option key={mode.id} value={mode.id}>{mode.label}</option>
-                    ))}
-                  </select>
-                </div>
-                
-                <div>
-                  <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Keyframe Interval</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={settings.keyframeInterval}
-                    onChange={(e) => handleSettingChange('keyframeInterval', Number(e.target.value))}
-                    disabled={settings.keyframeMode === 'auto'}
-                    className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary disabled:text-sf-text-muted disabled:opacity-60 focus:outline-none focus:border-sf-accent"
-                  />
-                </div>
+                {settings.format !== 'prores' && (
+                <>
+                  <div>
+                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Keyframes</label>
+                    <select
+                      value={settings.keyframeMode}
+                      onChange={(e) => handleSettingChange('keyframeMode', e.target.value)}
+                      className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                    >
+                      {KEYFRAME_MODES.map((mode) => (
+                        <option key={mode.id} value={mode.id}>{mode.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Keyframe Interval</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={settings.keyframeInterval}
+                      onChange={(e) => handleSettingChange('keyframeInterval', Number(e.target.value))}
+                      disabled={settings.keyframeMode === 'auto'}
+                      className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary disabled:text-sf-text-muted disabled:opacity-60 focus:outline-none focus:border-sf-accent"
+                    />
+                  </div>
+                </>
+                )}
                 
                 <div>
                   <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Resolution</label>
@@ -759,9 +787,11 @@ function ExportPanel() {
                   </div>
                 </div>
               </div>
-            )}
+            </div>
             
-            {activeSection === 'audio' && (
+            {/* Audio */}
+            <div>
+              <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-3">Audio</div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
                   <button
@@ -835,9 +865,11 @@ function ExportPanel() {
                   </div>
                 )}
               </div>
-            )}
+            </div>
             
-            {activeSection === 'file' && (
+            {/* File */}
+            <div>
+              <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-3">File</div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Range</label>
@@ -860,7 +892,7 @@ function ExportPanel() {
                   Output location will be chosen when export starts.
                 </div>
               </div>
-            )}
+            </div>
           </div>
           
           <div className="mt-4 flex items-center justify-end gap-2">

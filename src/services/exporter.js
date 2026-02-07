@@ -448,6 +448,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     filename = 'export',
     videoCodec = 'h264',
     audioCodec = 'aac',
+    proresProfile = '3',
     useHardwareEncoder = false,
     nvencPreset = 'p5',
     preset = 'medium',
@@ -477,7 +478,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   const framesFolder = await window.electronAPI.pathJoin(tempFolder, 'frames')
   await window.electronAPI.createDirectory(framesFolder)
   
-  const outputExtension = format === 'webm' ? 'webm' : 'mp4'
+  const outputExtension = format === 'webm' ? 'webm' : (format === 'prores' ? 'mov' : 'mp4')
   const defaultOutputPath = await window.electronAPI.pathJoin(
     outputFolder,
     `${filename}.${outputExtension}`
@@ -811,7 +812,22 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         try {
           const response = await fetch(asset.url)
           const arrayBuffer = await response.arrayBuffer()
-          const audioBuffer = await offlineContext.decodeAudioData(arrayBuffer)
+          let audioBuffer = await offlineContext.decodeAudioData(arrayBuffer)
+          
+          // Mono track: downmix stereo (or multi) to one channel so the track is truly mono
+          const isMonoTrack = track.channels === 'mono'
+          if (isMonoTrack && audioBuffer.numberOfChannels >= 2) {
+            const monoBuffer = offlineContext.createBuffer(1, audioBuffer.length, audioBuffer.sampleRate)
+            const left = audioBuffer.getChannelData(0)
+            const right = audioBuffer.getChannelData(1)
+            const mono = monoBuffer.getChannelData(0)
+            for (let i = 0; i < audioBuffer.length; i++) {
+              mono[i] = (left[i] + right[i]) / 2
+            }
+            audioBuffer = monoBuffer
+          } else if (isMonoTrack && audioBuffer.numberOfChannels === 1) {
+            // Already mono, use as-is (will play to both L/R of output)
+          }
           
           const source = offlineContext.createBufferSource()
           source.buffer = audioBuffer
@@ -845,6 +861,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     duration: totalDuration,
     videoCodec,
     audioCodec,
+    proresProfile: format === 'prores' ? proresProfile : undefined,
     useHardwareEncoder,
     nvencPreset,
     preset,

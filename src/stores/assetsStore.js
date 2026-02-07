@@ -209,6 +209,24 @@ export const useAssetsStore = create(
   },
 
   /**
+   * Move multiple assets to a folder
+   * @param {string[]} assetIds - Asset IDs to move
+   * @param {string|null} folderId - The folder ID (null = root)
+   */
+  moveAssetsToFolder: (assetIds, folderId) => {
+    if (!assetIds?.length) return
+    const idSet = new Set(assetIds)
+    set((state) => ({
+      assets: state.assets.map(a =>
+        idSet.has(a.id) ? { ...a, folderId } : a
+      ),
+      currentPreview: state.currentPreview && idSet.has(state.currentPreview.id)
+        ? { ...state.currentPreview, folderId }
+        : state.currentPreview
+    }))
+  },
+
+  /**
    * Add a new folder
    * @param {object} folder - Folder data { name, parentId }
    */

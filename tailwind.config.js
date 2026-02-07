@@ -18,9 +18,9 @@ export default {
           400: '#5c5c5c',      // Disabled/inactive text
         },
         'sf-accent': {
-          DEFAULT: '#e85d04',  // Resolve orange/red for playhead
-          hover: '#f77f00',    // Lighter on hover
-          muted: '#dc2f02',    // Darker variant
+          DEFAULT: '#565C6B',  // Muted blue (primary accent)
+          hover: '#6a7080',    // Lighter on hover
+          muted: '#4a5060',    // Darker variant
         },
         'sf-blue': {
           DEFAULT: '#5a7a9e',  // Desaturated blue for buttons (30% less saturation)
@@ -30,10 +30,10 @@ export default {
         'sf-clip': {
           video: '#3d7080',    // Desaturated teal for video clips (30% less saturation)
           audio: '#2d5f4a',    // Desaturated green for audio
-          text: '#a89030',     // Slightly desaturated amber for text clips
+          text: '#565C6B',     // Muted blue for text clips
         },
         'sf-success': '#22c55e',
-        'sf-warning': '#f77f00',
+        'sf-warning': '#565C6B',
         'sf-error': '#ef4444',
         'sf-text': {
           primary: '#e5e5e5',  // Slightly warmer white

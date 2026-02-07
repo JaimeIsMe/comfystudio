@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { 
   Volume2, VolumeX, Lock, Unlock, Eye, EyeOff, 
-  Plus, Music, Mic, Video, Type, Image as ImageIcon,
+  Plus, Video, Type, Image as ImageIcon,
   Sparkles, GripVertical, Magnet, ArrowRightLeft, Square, X, Check, Pencil,
   Undo2, Redo2, Diamond, Zap, AlertTriangle, Loader2, ChevronRight
 } from 'lucide-react'
@@ -24,11 +24,32 @@ function Timeline({ onOpenAudioGenerate }) {
   const [dragClip, setDragClip] = useState(null)
   const [dropTarget, setDropTarget] = useState(null)
   
-  // Track headers width (resizable)
-  const [trackHeadersWidth, setTrackHeadersWidth] = useState(144) // 144px = w-36 default
+  // Track headers width (resizable) — default wide enough to read labels; persisted
+  const TRACK_HEADERS_MIN = 100
+  const TRACK_HEADERS_MAX = 400
+  const TRACK_HEADERS_STORAGE_KEY = 'storyflow-timeline-track-headers-width'
+  const AUDIO_TRACK_HEIGHT_MONO = 40
+  const AUDIO_TRACK_HEIGHT_STEREO = 80
+  const getAudioTrackHeight = (track) => (track.channels === 'mono' ? AUDIO_TRACK_HEIGHT_MONO : AUDIO_TRACK_HEIGHT_STEREO)
+  const getAudioTrackOffset = (audioTracksList, index) => {
+    let y = 0
+    for (let i = 0; i < index; i++) y += getAudioTrackHeight(audioTracksList[i])
+    return y
+  }
+  const [trackHeadersWidth, setTrackHeadersWidth] = useState(() => {
+    try {
+      const w = localStorage.getItem(TRACK_HEADERS_STORAGE_KEY)
+      if (w != null) {
+        const n = parseInt(w, 10)
+        if (Number.isFinite(n) && n >= TRACK_HEADERS_MIN && n <= TRACK_HEADERS_MAX) return n
+      }
+    } catch (_) {}
+    return 208 // default wider so "Video 1", "AUDIO", icons and P are readable
+  })
   const [isResizingHeaders, setIsResizingHeaders] = useState(false)
   const resizeStartX = useRef(0)
   const resizeStartWidth = useRef(0)
+  const lastTrackHeadersWidthRef = useRef(null) // for persisting on resize end
   
   // Trimming state
   const [trimState, setTrimState] = useState(null) // { clipId, edge: 'left' | 'right', startX, startValue }
@@ -279,18 +300,24 @@ function Timeline({ onOpenAudioGenerate }) {
     
     const handleMouseMove = (e) => {
       const deltaX = e.clientX - resizeStartX.current
-      const newWidth = Math.max(100, Math.min(400, resizeStartWidth.current + deltaX))
+      const newWidth = Math.max(TRACK_HEADERS_MIN, Math.min(TRACK_HEADERS_MAX, resizeStartWidth.current + deltaX))
+      lastTrackHeadersWidthRef.current = newWidth
       setTrackHeadersWidth(newWidth)
     }
     
     const handleMouseUp = () => {
+      const widthToSave = lastTrackHeadersWidthRef.current
+      if (widthToSave != null) {
+        try {
+          localStorage.setItem(TRACK_HEADERS_STORAGE_KEY, String(widthToSave))
+        } catch (_) {}
+      }
       setIsResizingHeaders(false)
     }
     
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
     
-    // Add cursor style to body while resizing
     document.body.style.cursor = 'ew-resize'
     document.body.style.userSelect = 'none'
     
@@ -336,17 +363,13 @@ function Timeline({ onOpenAudioGenerate }) {
       const rulerHeight = 20
       const videoTrackHeight = 48
       const audioSectionHeight = 20
-      const audioTrackHeight = 40
       
       // Find clips that intersect with the marquee
       const clipsToSelect = []
       
       clips.forEach(clip => {
-        // Check time overlap
         const clipEnd = clip.startTime + clip.duration
         if (!(clip.startTime >= endTime || clipEnd <= startTime)) {
-          // Clip overlaps in time, now check vertical position
-          // Find track index and calculate Y position
           const track = tracks.find(t => t.id === clip.trackId)
           if (!track) return
           
@@ -358,22 +381,13 @@ function Timeline({ onOpenAudioGenerate }) {
             clipY += videoTrackIndex * videoTrackHeight
             const clipHeight = videoTrackHeight
             const clipBottom = clipY + clipHeight
-            
-            // Check vertical overlap
-            if (!(clipY >= bottom || clipBottom <= top)) {
-              clipsToSelect.push(clip.id)
-            }
+            if (!(clipY >= bottom || clipBottom <= top)) clipsToSelect.push(clip.id)
           } else {
-            // Audio track
             const audioTrackIndex = audioTracks.findIndex(t => t.id === clip.trackId)
-            clipY += videoTracks.length * videoTrackHeight + audioSectionHeight + audioTrackIndex * audioTrackHeight
-            const clipHeight = audioTrackHeight
+            clipY += videoTracks.length * videoTrackHeight + audioSectionHeight + getAudioTrackOffset(audioTracks, audioTrackIndex)
+            const clipHeight = getAudioTrackHeight(track)
             const clipBottom = clipY + clipHeight
-            
-            // Check vertical overlap
-            if (!(clipY >= bottom || clipBottom <= top)) {
-              clipsToSelect.push(clip.id)
-            }
+            if (!(clipY >= bottom || clipBottom <= top)) clipsToSelect.push(clip.id)
           }
         }
       })
@@ -1064,17 +1078,13 @@ function Timeline({ onOpenAudioGenerate }) {
         const relevantTracks = tracks.filter(t => t.type === trackType)
         const videoTrackHeight = 48
         const audioSectionHeight = 20
-        const audioTrackHeight = 40
         
-        // Start Y for video tracks is 0; for audio tracks it's after all video tracks + spacer
         let currentY = trackType === 'video' ? 0 : videoTracks.length * videoTrackHeight + audioSectionHeight
         
         for (const track of relevantTracks) {
-          const height = track.type === 'video' ? videoTrackHeight : audioTrackHeight
+          const height = track.type === 'video' ? videoTrackHeight : getAudioTrackHeight(track)
           if (relativeY >= currentY && relativeY < currentY + height) {
-            if (!track.locked) {
-              newTrackId = track.id
-            }
+            if (!track.locked) newTrackId = track.id
             break
           }
           currentY += height
@@ -1311,17 +1321,13 @@ function Timeline({ onOpenAudioGenerate }) {
   // Get track icon
   const getTrackIcon = (track) => {
     if (track.type === 'video') return <Video className="w-3 h-3" />
-    if (track.id === 'music') return <Music className="w-3 h-3" />
-    if (track.id === 'voiceover') return <Mic className="w-3 h-3" />
     return <Volume2 className="w-3 h-3" />
   }
 
   // Get track color class
   const getTrackColor = (track) => {
     if (track.type === 'video') return 'bg-sf-clip-video/30 text-[#5a909a]'
-    if (track.id === 'music') return 'bg-sf-clip-audio/30 text-[#4d8a70]'
-    if (track.id === 'voiceover') return 'bg-amber-700/30 text-amber-500/80'
-    return 'bg-neutral-600/30 text-neutral-400'
+    return 'bg-sf-clip-audio/30 text-[#4d8a70]'
   }
 
   // Check if track can be deleted (must have at least one of each type)
@@ -1378,7 +1384,8 @@ function Timeline({ onOpenAudioGenerate }) {
     
     // Calculate which index we're hovering over
     const tracksOfType = trackDragState.trackType === 'video' ? videoTracks : audioTracks
-    const trackHeight = trackDragState.trackType === 'video' ? 48 : 40 // h-12 = 48px, h-10 = 40px
+    const draggedTrack = tracksOfType.find(t => t.id === trackDragState.trackId)
+    const trackHeight = trackDragState.trackType === 'video' ? 48 : (draggedTrack ? getAudioTrackHeight(draggedTrack) : 40)
     const deltaY = e.clientY - trackDragState.startY
     const indexDelta = Math.round(deltaY / trackHeight)
     const newIndex = Math.max(0, Math.min(tracksOfType.length - 1, trackDragState.originalIndex + indexDelta))
@@ -1469,12 +1476,12 @@ function Timeline({ onOpenAudioGenerate }) {
           onClick={toggleRippleEdit}
           className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
             rippleEditMode 
-              ? 'bg-orange-500/20 text-orange-400 border border-orange-500/50' 
+              ? 'bg-sf-accent/20 text-sf-accent border border-sf-accent/50' 
               : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
           }`}
           title={`Ripple Edit ${rippleEditMode ? 'ON' : 'OFF'} (R to toggle) - Moving clips shifts subsequent clips`}
         >
-          <ArrowRightLeft className={`w-3 h-3 ${rippleEditMode ? 'text-orange-400' : ''}`} />
+          <ArrowRightLeft className={`w-3 h-3 ${rippleEditMode ? 'text-sf-accent' : ''}`} />
           Ripple
         </button>
         
@@ -1721,68 +1728,70 @@ function Timeline({ onOpenAudioGenerate }) {
             const isDragging = trackDragState?.trackId === track.id
             const isDropTarget = trackDragState?.trackType === 'audio' && trackDropTarget === index && !isDragging
             
+            const isStereo = track.type === 'audio' && track.channels !== 'mono'
+            const headerHeight = track.type === 'video' ? 48 : getAudioTrackHeight(track)
+            
             return (
             <div 
               key={track.id}
               onClick={() => setActiveTrack(track.id)}
               title={activeTrackId === track.id ? 'Active track — press X to split at playhead' : 'Click to set as active track (X cuts at playhead on this track)'}
-              className={`h-10 flex items-center px-2 gap-1 border-b border-sf-dark-700 hover:bg-sf-dark-800 transition-colors group/track cursor-pointer ${
+              className={`flex flex-col px-2 gap-0 border-b border-sf-dark-700 hover:bg-sf-dark-800 transition-colors group/track cursor-pointer ${
                 track.locked ? 'bg-sf-dark-800/50' : ''
               } ${isDragging ? 'opacity-50 bg-sf-dark-700' : ''} ${isDropTarget ? 'border-t-2 border-t-purple-500' : ''}`}
+              style={{ minHeight: headerHeight, height: headerHeight }}
             >
-              <div
-                className={`p-0.5 rounded hover:bg-sf-dark-600 ${track.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
-                onMouseDown={(e) => {
-                  e.stopPropagation()
-                  !track.locked && handleTrackDragStart(e, track, index)
-                }}
-              >
-                <GripVertical className={`w-3 h-3 ${track.locked ? 'text-sf-dark-600' : 'text-sf-dark-500'}`} />
-              </div>
-              {/* Track type box — red outline when active (Resolve style) */}
-              <div
-                className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${getTrackColor(track)} ${
-                  activeTrackId === track.id ? 'ring-2 ring-red-500 ring-offset-1 ring-offset-sf-dark-800' : ''
-                }`}
-              >
-                {getTrackIcon(track)}
-              </div>
-              
-              {/* Track name - editable */}
-              {renamingTrackId === track.id ? (
-                <div className="flex-1 flex items-center gap-1">
-                  <input
-                    type="text"
-                    value={renameValue}
-                    onChange={(e) => setRenameValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleFinishRename()
-                      if (e.key === 'Escape') handleCancelRename()
-                    }}
-                    autoFocus
-                    className="w-full bg-sf-dark-700 text-[11px] text-sf-text-primary px-1 py-0.5 rounded border border-sf-accent outline-none"
-                  />
-                  <button onClick={(e) => { e.stopPropagation(); handleFinishRename() }} className="p-0.5 hover:bg-sf-dark-600 rounded">
-                    <Check className="w-3 h-3 text-green-400" />
-                  </button>
-                  <button onClick={(e) => { e.stopPropagation(); handleCancelRename() }} className="p-0.5 hover:bg-sf-dark-600 rounded">
-                    <X className="w-3 h-3 text-sf-text-muted" />
-                  </button>
-                </div>
-              ) : (
-                <span 
-                  className="text-[11px] text-sf-text-primary flex-1 truncate cursor-pointer hover:text-sf-accent"
-                  onDoubleClick={(e) => { e.stopPropagation(); handleStartRename(track) }}
-                  title="Double-click to rename"
+              <div className="flex-1 flex items-center gap-1 min-h-0">
+                <div
+                  className={`p-0.5 rounded hover:bg-sf-dark-600 ${track.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
+                  onMouseDown={(e) => {
+                    e.stopPropagation()
+                    !track.locked && handleTrackDragStart(e, track, index)
+                  }}
                 >
-                  {track.name}
-                  {track.type === 'audio' && track.channels && (
-                    <span className="text-[9px] text-sf-text-muted ml-0.5">
-                      ({track.channels})
-                    </span>
-                  )}
-                </span>
-              )}
+                  <GripVertical className={`w-3 h-3 ${track.locked ? 'text-sf-dark-600' : 'text-sf-dark-500'}`} />
+                </div>
+                <div
+                  className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 ${getTrackColor(track)} ${
+                    activeTrackId === track.id ? 'ring-2 ring-red-500 ring-offset-1 ring-offset-sf-dark-800' : ''
+                  }`}
+                >
+                  {getTrackIcon(track)}
+                </div>
+                {renamingTrackId === track.id ? (
+                  <div className="flex-1 flex items-center gap-1">
+                    <input
+                      type="text"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleFinishRename()
+                        if (e.key === 'Escape') handleCancelRename()
+                      }}
+                      autoFocus
+                      className="w-full bg-sf-dark-700 text-[11px] text-sf-text-primary px-1 py-0.5 rounded border border-sf-accent outline-none"
+                    />
+                    <button onClick={(e) => { e.stopPropagation(); handleFinishRename() }} className="p-0.5 hover:bg-sf-dark-600 rounded">
+                      <Check className="w-3 h-3 text-green-400" />
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); handleCancelRename() }} className="p-0.5 hover:bg-sf-dark-600 rounded">
+                      <X className="w-3 h-3 text-sf-text-muted" />
+                    </button>
+                  </div>
+                ) : (
+                  <span 
+                    className="text-[11px] text-sf-text-primary flex-1 truncate cursor-pointer hover:text-sf-accent"
+                    onDoubleClick={(e) => { e.stopPropagation(); handleStartRename(track) }}
+                    title="Double-click to rename"
+                  >
+                    {track.name}
+                    {track.type === 'audio' && track.channels && (
+                      <span className="text-[9px] text-sf-text-muted ml-0.5">
+                        ({track.channels})
+                      </span>
+                    )}
+                  </span>
+                )}
               
               <div className="flex items-center gap-0.5">
                 {/* Rename button */}
@@ -1836,6 +1845,13 @@ function Timeline({ onOpenAudioGenerate }) {
                   P
                 </button>
               </div>
+              </div>
+              {isStereo && (
+                <div className="flex items-center justify-around text-[9px] text-sf-text-muted border-t border-sf-dark-700/80 flex-shrink-0 py-0.5">
+                  <span>L</span>
+                  <span>R</span>
+                </div>
+              )}
             </div>
           )})}
           </div>
@@ -1938,9 +1954,9 @@ function Timeline({ onOpenAudioGenerate }) {
                     {/* Text Clip Rendering */}
                     {isTextClip ? (
                       <>
-                        {/* Text clip background with amber color bar */}
+                        {/* Text clip background with accent color bar */}
                         <div 
-                          className="absolute inset-0 bg-gradient-to-b from-amber-900/80 to-amber-950/90"
+                          className="absolute inset-0 bg-gradient-to-b from-sf-accent/30 to-sf-accent-muted/40"
                           style={{ borderTop: `3px solid ${clip.color}` }}
                         />
                         
@@ -1950,7 +1966,7 @@ function Timeline({ onOpenAudioGenerate }) {
                             {/* Repeating "T" pattern to indicate text */}
                             <div className="flex flex-wrap gap-2 p-1">
                               {Array.from({ length: Math.ceil(clipWidth / 20) }).map((_, i) => (
-                                <Type key={i} className="w-4 h-4 text-amber-400" />
+                                <Type key={i} className="w-4 h-4 text-sf-accent" />
                               ))}
                             </div>
                           </div>
@@ -1959,7 +1975,7 @@ function Timeline({ onOpenAudioGenerate }) {
                         {/* Text preview */}
                         <div className="absolute inset-0 top-[3px] flex items-center justify-center px-2 overflow-hidden">
                           <span 
-                            className="text-[11px] text-amber-100 font-medium truncate"
+                            className="text-[11px] text-sf-text-primary font-medium truncate"
                             style={{
                               textShadow: '0 1px 2px rgba(0,0,0,0.5)',
                               fontFamily: clip.textProperties?.fontFamily || 'Inter'
@@ -1971,7 +1987,7 @@ function Timeline({ onOpenAudioGenerate }) {
                         
                         {/* Text icon badge - top left */}
                         <div className="absolute top-1 left-1 z-10 flex items-center gap-1">
-                          <div className="bg-amber-500/80 rounded px-1 py-0.5 flex items-center gap-0.5">
+                          <div className="bg-sf-accent/80 rounded px-1 py-0.5 flex items-center gap-0.5">
                             <Type className="w-2.5 h-2.5 text-white" />
                             <span className="text-[8px] text-white font-medium">TEXT</span>
                           </div>
@@ -2345,19 +2361,27 @@ function Timeline({ onOpenAudioGenerate }) {
           {/* Audio Tracks Content */}
           {audioTracks.map((track) => {
             const trackClips = clips.filter(c => c.trackId === track.id)
+            const isStereoContent = track.channels !== 'mono'
+            const contentHeight = getAudioTrackHeight(track)
             
             return (
               <div 
                 key={track.id}
-                className={`h-10 border-b border-sf-dark-700 relative ${
+                className={`border-b border-sf-dark-700 relative flex flex-col ${
                   track.muted ? 'opacity-40' : ''
                 } ${track.locked ? 'pointer-events-none opacity-50 bg-sf-dark-800' : ''} ${
                   dropTarget === track.id ? 'bg-sf-accent/10' : track.locked ? '' : 'bg-sf-dark-900'
                 }`}
+                style={{ height: contentHeight, minHeight: contentHeight }}
                 onDragOver={(e) => handleDragOver(e, track.id)}
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, track.id)}
               >
+                {isStereoContent && (
+                  <div className="absolute left-0 right-0 top-1/2 h-px bg-sf-dark-600 z-10 pointer-events-none flex items-center justify-center">
+                    <span className="text-[8px] text-sf-text-muted bg-sf-dark-900 px-1">L / R</span>
+                  </div>
+                )}
                 {trackClips.map((clip) => {
                   const clipWidth = clip.duration * pixelsPerSecond
                   // Generate deterministic waveform based on clip id
@@ -2559,14 +2583,14 @@ function Timeline({ onOpenAudioGenerate }) {
             </div>
           )}
           
-          {/* Playhead */}
+          {/* Playhead (30% thinner: w-0.5 → ~1.4px) */}
           <div
-            className={`absolute top-0 bottom-0 w-0.5 bg-sf-accent z-10 ${isScrubbing ? 'pointer-events-none' : ''}`}
-            style={{ left: `${playheadPosition * pixelsPerSecond}px` }}
+            className={`absolute top-0 bottom-0 bg-yellow-500 z-10 ${isScrubbing ? 'pointer-events-none' : ''}`}
+            style={{ left: `${playheadPosition * pixelsPerSecond}px`, width: '1.4px' }}
           >
             {/* Playhead handle (draggable) */}
             <div 
-              className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-4 h-3 bg-sf-accent cursor-ew-resize hover:bg-sf-accent-hover transition-colors"
+              className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-4 h-3 bg-yellow-500 cursor-ew-resize hover:bg-yellow-400 transition-colors"
               style={{ clipPath: 'polygon(50% 100%, 0 0, 100% 0)' }}
               onMouseDown={(e) => {
                 e.stopPropagation()
@@ -2579,19 +2603,21 @@ function Timeline({ onOpenAudioGenerate }) {
             {activeTrackId && (() => {
               const videoTrackHeight = 48
               const audioSectionHeight = 20
-              const audioTrackHeight = 40
               const timeRulerHeight = 20
               const notchHeight = 10
               const vi = videoTracks.findIndex(t => t.id === activeTrackId)
               const ai = audioTracks.findIndex(t => t.id === activeTrackId)
               let centerY = 0
               if (vi >= 0) centerY = timeRulerHeight + vi * videoTrackHeight + videoTrackHeight / 2
-              else if (ai >= 0) centerY = timeRulerHeight + videoTracks.length * videoTrackHeight + audioSectionHeight + ai * audioTrackHeight + audioTrackHeight / 2
+              else if (ai >= 0) {
+                const track = audioTracks[ai]
+                centerY = timeRulerHeight + videoTracks.length * videoTrackHeight + audioSectionHeight + getAudioTrackOffset(audioTracks, ai) + getAudioTrackHeight(track) / 2
+              }
               else return null
               const top = centerY - notchHeight / 2
               return (
                 <div
-                  className="absolute left-0 w-2 h-2.5 bg-sf-accent pointer-events-none"
+                  className="absolute left-0 w-2 h-2.5 bg-yellow-500 pointer-events-none"
                   style={{ top: `${top}px`, clipPath: 'polygon(0 50%, 100% 0, 100% 100%)' }}
                   title="Primary track"
                 />
@@ -2670,7 +2696,7 @@ function Timeline({ onOpenAudioGenerate }) {
             ) : (
               <div className="px-3 py-2 text-xs text-sf-text-muted">
                 <div className="flex items-center gap-2 mb-1">
-                  <AlertTriangle className="w-4 h-4 text-amber-500" />
+                  <AlertTriangle className="w-4 h-4 text-sf-accent" />
                   <span className="font-medium text-sf-text-primary">Insufficient Handles</span>
                 </div>
                 <p className="text-[10px] leading-tight">

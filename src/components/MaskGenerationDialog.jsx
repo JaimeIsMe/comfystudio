@@ -162,8 +162,8 @@ function MaskGenerationDialog({ asset, onClose, currentFolderId }) {
           
           {/* WebSocket Warning */}
           {isConnected && !wsConnected && (
-            <div className="p-3 bg-amber-500/20 border border-amber-500/50 rounded-lg">
-              <p className="text-xs text-amber-400">
+            <div className="p-3 bg-sf-accent/20 border border-sf-accent/50 rounded-lg">
+              <p className="text-xs text-sf-accent">
                 WebSocket not connected. Progress updates may be limited.
               </p>
             </div>

@@ -179,7 +179,9 @@ This enables workflows like:
 
 ## Timeline Features
 - **Multi-track**: Video tracks (add to top), Audio tracks (add to bottom)
-- **Track Headers**: Resizable by dragging right edge (100-400px)
+- **Audio track names**: Default "Audio 1", "Audio 2", "Audio 3" (user can rename); add track = "Audio 4", etc.
+- **Mono vs stereo**: Tracks have `channels: 'mono' | 'stereo'`. Stereo tracks render as double height with L/R bands; mono tracks single height. Export: mono tracks downmix to one channel; stereo preserved.
+- **Track Headers**: Resizable by dragging right edge (100-400px, default 208px)
 - **Vertical Scrolling**: Tracks scroll vertically with synced headers
 - **Clip Operations**: Drag, trim (head/tail), move, delete, split, duplicate
 - **Text Clips**: Amber-colored clips with text preview on timeline
@@ -332,8 +334,9 @@ Export full edits (cuts, transitions, masks, text, audio) to a video file.
 - Performance hints (NVENC availability, cached masks, resolution/FPS)
 
 **Video Settings:**
-- Formats: MP4 (H.264/H.265), WebM (VP9)
-- Encoders: software (x264/x265) or **NVIDIA NVENC**
+- Formats: MP4 (H.264/H.265), WebM (VP9), **MOV (ProRes)**
+- ProRes: Profile selector (Proxy, LT, Standard, HQ, 4444); output `.mov` via FFmpeg `prores_ks`
+- Encoders: software (x264/x265) or **NVIDIA NVENC** (not used for ProRes)
 - CRF or bitrate mode
 - Keyframe interval (auto/manual)
 - Presets + NVENC P1–P7
@@ -368,7 +371,9 @@ Export full edits (cuts, transitions, masks, text, audio) to a video file.
   - `sf-clip-text`: Desaturated amber for text clips (#a89030)
 - **Text colors**: `sf-text-primary` (#e5e5e5), `sf-text-secondary` (#a3a3a3), `sf-text-muted` (#737373)
 - **Persistence**: Zustand with `persist` middleware → localStorage
-- **Panel widths**: Left 220-500px, Right 200-400px, Timeline 180-450px
+- **Panel widths**: Left 200-450px, Right 200-400px, Timeline 180-450px (default 320px)
+- **Layout persistence**: Editor layout (timeline height, left/right panel width, expanded state) saved to `localStorage` key `storyflow-editor-layout` and restored on launch
+- **Track headers width**: Default 208px, resizable 100-400px; persisted in `storyflow-timeline-track-headers-width`
 - **Collapsible panels**: Icon bar always visible (48px each side)
 - **Full-height mode**: Left panel can expand to span entire height (Resolve-style)
 - **Draggable inputs**: Position X/Y, Anchor X/Y - click+drag to adjust, double-click to edit
@@ -854,8 +859,36 @@ clearClipRenderCaches(projectDir, clipId)
 - Added `clearDiskCacheUrl()` export to properly cleanup when cache is cleared
 - Files: `src/components/VideoLayerRenderer.jsx`, `src/components/InspectorPanel.jsx`
 
+**ProRes Import & Export (Feb 4, 2026):**
+- **Export**: Added format "MOV (ProRes)" with profile selector (Proxy, LT, Standard, HQ, 4444). Uses FFmpeg `prores_ks`, output `.mov`; audio AAC. No NVENC for ProRes.
+- **Import**: `.mov` already supported in Assets/dialog; ProRes-in-MOV imports like any video.
+- Files: `src/components/ExportPanel.jsx`, `src/services/exporter.js`, `electron/main.js`
 
+**Launch & Layout (Feb 4, 2026):**
+- **DevTools**: No longer open automatically on launch; still available via F12 or Ctrl+Shift+I.
+- **Layout persistence**: Timeline height, left/right panel width, and panel expanded state saved to `localStorage` (`storyflow-editor-layout`) and restored on next launch.
+- **Default timeline height**: 320px (was 240px) so track headers are visible without resizing.
+- **Track headers width**: Default 208px (was 144px); persisted in `storyflow-timeline-track-headers-width`.
+- Files: `electron/main.js`, `src/App.jsx`, `src/components/Timeline.jsx`
 
+**Audio Tracks & Mono/Stereo (Feb 4, 2026):**
+- Default audio tracks renamed to **Audio 1, Audio 2, Audio 3** (ids `audio-1`, `audio-2`, `audio-3`). User can rename as needed.
+- **Stereo tracks**: Shown as double height with L/R bands in timeline (header and content); same clip spans both.
+- **Mono tracks**: Single height; export downmixes stereo sources to mono for that track.
+- **Export**: Respects `track.channels` (mono = downmix, stereo = keep L/R).
+- Files: `src/stores/timelineStore.js`, `src/stores/projectStore.js`, `src/components/Timeline.jsx`, `src/services/exporter.js`
+
+**Generate Tab Progress (Feb 4, 2026):**
+- **Sticky progress strip** below the Generate header when generating: status text, progress bar, %, current node, queue count.
+- **Real ComfyUI progress**: Bar uses `progress` from useComfyUI when available (WebSocket); otherwise time-based estimate.
+- **Immediate feedback**: Progress starts at 5% and bumps at Upload (10%), Load workflow (20%), Configure (30%), Queue (40%).
+- Removed "WebSocket not connected - progress may be estimated" warning (generation still works via HTTP polling).
+- Files: `src/components/GenerateWorkspace.jsx`
+
+**Video Generation Import Fix (Feb 4, 2026):**
+- LTX2 and WAN 2.2 video outputs were not imported: code only checked `videos` and nodes 75/108. ComfyUI can return SaveVideo output under **`gifs`**.
+- **Fix**: Check both `videos` and `gifs` for video output; scan all output node IDs (not just 75, 108); support history response with `outputs` at top level (`history?.outputs` fallback).
+- Files: `src/components/GenerateWorkspace.jsx` (`pollForResult`)
 
 ### Electron Migration (Feb 4, 2026)
 

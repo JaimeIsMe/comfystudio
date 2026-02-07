@@ -35,9 +35,12 @@ function AssetsPanel() {
   // Mask generation state
   const [maskDialogAsset, setMaskDialogAsset] = useState(null) // Asset to generate mask for
   
-  // Selected asset tracking (for keyboard delete)
-  const [selectedAssetId, setSelectedAssetId] = useState(null)
+  // Selected assets (array for multi-select; used for delete and drag-to-folder)
+  const [selectedAssetIds, setSelectedAssetIds] = useState([])
+  const [dragOverFolderId, setDragOverFolderId] = useState(null) // 'root' | folderId for drop highlight
   const panelRef = useRef(null)
+
+  const ASSET_DRAG_TYPE = 'application/x-storyflow-asset-ids'
 
   // Get assets from store
   const { 
@@ -52,6 +55,7 @@ function AssetsPanel() {
     removeFolder,
     renameFolder,
     moveAssetToFolder,
+    moveAssetsToFolder,
     generateAssetSprite,
     getAssetSprite,
   } = useAssetsStore()
@@ -148,19 +152,23 @@ function AssetsPanel() {
     e.preventDefault()
     e.stopPropagation()
     setIsDragOver(false)
+    if (!e.currentTarget.contains(e.relatedTarget)) setDragOverFolderId(null)
   }
   
   const handleDrop = (e) => {
     e.preventDefault()
     e.stopPropagation()
     setIsDragOver(false)
-    
+    setDragOverFolderId(null)
+
+    // Ignore internal asset drag (handled by folder drop targets)
+    if (e.dataTransfer.types.includes(ASSET_DRAG_TYPE)) return
+
     const files = Array.from(e.dataTransfer.files || [])
     const validFiles = files.filter(f => {
       const ext = '.' + f.name.split('.').pop().toLowerCase()
       return ALL_SUPPORTED.includes(ext)
     })
-    
     if (validFiles.length > 0) {
       handleImport(validFiles)
     }
@@ -268,37 +276,56 @@ function AssetsPanel() {
     setPreview(asset)
   }
   
-  // Handle single-click to select and preview
-  const handleClick = (asset) => {
+  // Handle single-click to select and preview (with multi-select: Ctrl/Cmd toggle, Shift range)
+  const handleClick = (e, asset) => {
     if (timelineIsPlaying) {
       timelineTogglePlay()
     }
-    setSelectedAssetId(asset.id)
+    if (e?.ctrlKey || e?.metaKey) {
+      setSelectedAssetIds(prev =>
+        prev.includes(asset.id) ? prev.filter(id => id !== asset.id) : [...prev, asset.id]
+      )
+      setPreview(asset)
+      return
+    }
+    if (e?.shiftKey) {
+      const idx = filteredAssets.findIndex(a => a.id === asset.id)
+      const lastId = selectedAssetIds[selectedAssetIds.length - 1]
+      const lastIdx = filteredAssets.findIndex(a => a.id === lastId)
+      const from = lastIdx >= 0 ? Math.min(lastIdx, idx) : idx
+      const to = lastIdx >= 0 ? Math.max(lastIdx, idx) : idx
+      const rangeIds = filteredAssets.slice(from, to + 1).map(a => a.id)
+      setSelectedAssetIds(rangeIds)
+      setPreview(asset)
+      return
+    }
+    setSelectedAssetIds([asset.id])
     setPreview(asset)
   }
   
-  // Keyboard handler for Delete/Backspace
+  // Keyboard handler for Delete/Backspace (and Escape to clear selection)
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Only handle if this panel is focused (or a child is)
       if (!panelRef.current?.contains(document.activeElement) && document.activeElement !== panelRef.current) return
-      // Don't handle if editing a name or typing in an input
       if (editingId || document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
-      
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAssetId) {
+
+      if (e.key === 'Escape') {
+        setSelectedAssetIds([])
+        return
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAssetIds.length > 0) {
         e.preventDefault()
         e.stopPropagation()
-        if (confirm('Delete this asset?')) {
-          const deletedId = selectedAssetId
-          removeAsset(deletedId)
-          setSelectedAssetId(null)
+        const count = selectedAssetIds.length
+        if (confirm(count === 1 ? 'Delete this asset?' : `Delete ${count} selected assets?`)) {
+          selectedAssetIds.forEach(id => removeAsset(id))
+          setSelectedAssetIds([])
         }
       }
     }
-    
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedAssetId, editingId, removeAsset])
+  }, [selectedAssetIds, editingId, removeAsset])
   
   // Handle folder click
   const handleFolderClick = (folderId) => {
@@ -342,11 +369,29 @@ function AssetsPanel() {
     }
   }
   
-  // Handle context menu
+  // Handle context menu (on asset)
   const handleContextMenu = (e, assetId) => {
     e.preventDefault()
     e.stopPropagation()
     setContextMenu({ x: e.clientX, y: e.clientY, assetId })
+  }
+
+  // Handle context menu on empty area (right-click on background / empty spot)
+  const handleEmptyAreaContextMenu = (e) => {
+    if (e.target.closest('[data-is-asset], [data-is-folder]')) return
+    e.preventDefault()
+    e.stopPropagation()
+    setContextMenu({ x: e.clientX, y: e.clientY, assetId: null })
+  }
+
+  // Empty-area menu actions
+  const handleEmptyMenuNewFolder = () => {
+    setContextMenu(null)
+    setShowNewFolderInput(true)
+  }
+  const handleEmptyMenuImport = () => {
+    setContextMenu(null)
+    openFilePicker()
   }
   
   // Close context menu when clicking outside
@@ -357,10 +402,39 @@ function AssetsPanel() {
     return () => window.removeEventListener('click', handleClick)
   }, [contextMenu])
   
-  // Move asset to folder
-  const handleMoveToFolder = (assetId, folderId) => {
-    moveAssetToFolder(assetId, folderId)
+  // Move asset(s) to folder
+  const handleMoveToFolder = (assetIdOrIds, folderId) => {
+    const ids = Array.isArray(assetIdOrIds) ? assetIdOrIds : [assetIdOrIds]
+    if (ids.length > 1) moveAssetsToFolder(ids, folderId)
+    else moveAssetToFolder(ids[0], folderId)
     setContextMenu(null)
+    setSelectedAssetIds([])
+  }
+
+  // Drop target handlers for dragging assets onto folders
+  const handleFolderDragOver = (e, folderId) => {
+    if (!e.dataTransfer.types.includes(ASSET_DRAG_TYPE)) return
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'move'
+    setDragOverFolderId(folderId)
+  }
+  const handleFolderDragLeave = (e) => {
+    if (!e.currentTarget.contains(e.relatedTarget)) setDragOverFolderId(null)
+  }
+  const handleFolderDrop = (e, folderId) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOverFolderId(null)
+    const raw = e.dataTransfer.getData(ASSET_DRAG_TYPE)
+    if (!raw) return
+    try {
+      const assetIds = JSON.parse(raw)
+      if (Array.isArray(assetIds) && assetIds.length > 0) {
+        moveAssetsToFolder(assetIds, folderId)
+        setSelectedAssetIds([])
+      }
+    } catch (_) {}
   }
   
   // Focus new folder input when shown
@@ -471,9 +545,12 @@ function AssetsPanel() {
           <div className="flex items-center gap-1 text-[10px] overflow-x-auto">
             <button
               onClick={() => setCurrentFolderId(null)}
-              className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded hover:bg-sf-dark-700 transition-colors ${
+              onDragOver={(e) => handleFolderDragOver(e, 'root')}
+              onDragLeave={handleFolderDragLeave}
+              onDrop={(e) => handleFolderDrop(e, null)}
+              className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded transition-colors ${
                 !currentFolderId ? 'text-sf-accent' : 'text-sf-text-muted'
-              }`}
+              } ${dragOverFolderId === 'root' ? 'ring-1 ring-sf-accent bg-sf-accent/20' : 'hover:bg-sf-dark-700'}`}
             >
               <Home className="w-3 h-3" />
               <span>Root</span>
@@ -483,9 +560,12 @@ function AssetsPanel() {
                 <ChevronRight className="w-3 h-3 text-sf-text-muted" />
                 <button
                   onClick={() => setCurrentFolderId(folder.id)}
-                  className={`px-1.5 py-0.5 rounded hover:bg-sf-dark-700 transition-colors ${
+                  onDragOver={(e) => handleFolderDragOver(e, folder.id)}
+                  onDragLeave={handleFolderDragLeave}
+                  onDrop={(e) => handleFolderDrop(e, folder.id)}
+                  className={`px-1.5 py-0.5 rounded transition-colors ${
                     folder.id === currentFolderId ? 'text-sf-accent' : 'text-sf-text-muted'
-                  }`}
+                  } ${dragOverFolderId === folder.id ? 'ring-1 ring-sf-accent bg-sf-accent/20' : 'hover:bg-sf-dark-700'}`}
                 >
                   {folder.name}
                 </button>
@@ -538,6 +618,7 @@ function AssetsPanel() {
       {/* Assets Grid/List */}
       <div 
         className="flex-1 p-2 overflow-auto relative"
+        onContextMenu={handleEmptyAreaContextMenu}
         onDoubleClick={(e) => {
           // Double-click on empty area triggers import
           if (e.target === e.currentTarget || e.target.closest('.empty-state-container')) {
@@ -594,16 +675,22 @@ function AssetsPanel() {
             {subFolders.map((folder) => (
               <div
                 key={folder.id}
+                data-is-folder
                 onClick={() => handleFolderClick(folder.id)}
+                onDragOver={(e) => handleFolderDragOver(e, folder.id)}
+                onDragLeave={handleFolderDragLeave}
+                onDrop={(e) => handleFolderDrop(e, folder.id)}
                 onContextMenu={(e) => {
                   e.preventDefault()
                   if (confirm(`Delete folder "${folder.name}"?`)) {
                     removeFolder(folder.id)
                   }
                 }}
-                className="aspect-video bg-sf-dark-800 border border-sf-dark-600 rounded flex flex-col items-center justify-center cursor-pointer hover:border-sf-dark-500 transition-colors group"
+                className={`aspect-video bg-sf-dark-800 border rounded flex flex-col items-center justify-center cursor-pointer transition-colors group ${
+                  dragOverFolderId === folder.id ? 'border-sf-accent ring-2 ring-sf-accent ring-offset-1 ring-offset-sf-dark-900' : 'border-sf-dark-600 hover:border-sf-dark-500'
+                }`}
               >
-                <FolderOpen className={`${sizeConfig.iconSize} text-amber-400 mb-1`} />
+                <FolderOpen className={`${sizeConfig.iconSize} text-sf-accent mb-1`} />
                 <span className={`${sizeConfig.nameSize} text-sf-text-primary truncate max-w-full px-1`}>
                   {folder.name}
                 </span>
@@ -616,17 +703,20 @@ function AssetsPanel() {
             {/* Assets */}
             {filteredAssets.map((asset) => {
               const Icon = getIcon(asset.type)
-              const isSelected = selectedAssetId === asset.id || currentPreview?.id === asset.id
-              
+              const isSelected = selectedAssetIds.includes(asset.id) || currentPreview?.id === asset.id
+              const idsToMove = selectedAssetIds.includes(asset.id) ? selectedAssetIds : [asset.id]
+
               return (
                 <div
                   key={asset.id}
+                  data-is-asset
                   draggable
                   onDragStart={(e) => {
                     e.dataTransfer.setData('assetId', asset.id)
-                    e.dataTransfer.effectAllowed = 'copy'
+                    e.dataTransfer.setData(ASSET_DRAG_TYPE, JSON.stringify(idsToMove))
+                    e.dataTransfer.effectAllowed = 'move'
                   }}
-                  onClick={() => handleClick(asset)}
+                  onClick={(e) => handleClick(e, asset)}
                   onDoubleClick={() => handleDoubleClick(asset)}
                   onContextMenu={(e) => handleContextMenu(e, asset.id)}
                   className={`bg-sf-dark-800 border rounded overflow-hidden cursor-grab transition-all group ${
@@ -771,10 +861,16 @@ function AssetsPanel() {
             {subFolders.map((folder) => (
               <div 
                 key={folder.id}
+                data-is-folder
                 onClick={() => handleFolderClick(folder.id)}
-                className="flex items-center gap-2 p-1.5 rounded cursor-pointer hover:bg-sf-dark-800 transition-colors group"
+                onDragOver={(e) => handleFolderDragOver(e, folder.id)}
+                onDragLeave={handleFolderDragLeave}
+                onDrop={(e) => handleFolderDrop(e, folder.id)}
+                className={`flex items-center gap-2 p-1.5 rounded cursor-pointer transition-colors group ${
+                  dragOverFolderId === folder.id ? 'bg-sf-accent/20 ring-1 ring-sf-accent' : 'hover:bg-sf-dark-800'
+                }`}
               >
-                <FolderOpen className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                <FolderOpen className="w-3.5 h-3.5 text-sf-accent flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-[11px] text-sf-text-primary truncate">{folder.name}</p>
                   <p className="text-[9px] text-sf-text-muted">{assets.filter(a => a.folderId === folder.id).length} items</p>
@@ -796,17 +892,20 @@ function AssetsPanel() {
             {/* Assets */}
             {filteredAssets.map((asset) => {
               const Icon = getIcon(asset.type)
-              const isSelected = selectedAssetId === asset.id || currentPreview?.id === asset.id
-              
+              const isSelected = selectedAssetIds.includes(asset.id) || currentPreview?.id === asset.id
+              const idsToMove = selectedAssetIds.includes(asset.id) ? selectedAssetIds : [asset.id]
+
               return (
                 <div 
                   key={asset.id}
+                  data-is-asset
                   draggable
                   onDragStart={(e) => {
                     e.dataTransfer.setData('assetId', asset.id)
-                    e.dataTransfer.effectAllowed = 'copy'
+                    e.dataTransfer.setData(ASSET_DRAG_TYPE, JSON.stringify(idsToMove))
+                    e.dataTransfer.effectAllowed = 'move'
                   }}
-                  onClick={() => handleClick(asset)}
+                  onClick={(e) => handleClick(e, asset)}
                   onDoubleClick={() => handleDoubleClick(asset)}
                   onContextMenu={(e) => handleContextMenu(e, asset.id)}
                   className={`flex items-center gap-2 p-1.5 rounded cursor-pointer transition-colors group ${
@@ -881,6 +980,27 @@ function AssetsPanel() {
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >
+          {/* Empty area menu: New Folder + Import */}
+          {contextMenu.assetId == null ? (
+            <>
+              <button
+                onClick={handleEmptyMenuNewFolder}
+                className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+              >
+                <FolderPlus className="w-3 h-3 text-sf-accent" />
+                New Folder
+              </button>
+              <button
+                onClick={handleEmptyMenuImport}
+                disabled={!currentProjectHandle}
+                className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Upload className="w-3 h-3 text-sf-accent" />
+                Import
+              </button>
+            </>
+          ) : (
+            <>
           {/* Video/Image specific options */}
           {(() => {
             const asset = assets.find(a => a.id === contextMenu.assetId)
@@ -928,23 +1048,32 @@ function AssetsPanel() {
           <div className="px-3 py-1 text-[10px] text-sf-text-muted uppercase tracking-wider">
             Move to folder
           </div>
-          <button
-            onClick={() => handleMoveToFolder(contextMenu.assetId, null)}
-            className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
-          >
-            <Home className="w-3 h-3" />
-            Root
-          </button>
-          {(folders || []).map((folder) => (
-            <button
-              key={folder.id}
-              onClick={() => handleMoveToFolder(contextMenu.assetId, folder.id)}
-              className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
-            >
-              <FolderOpen className="w-3 h-3 text-amber-400" />
-              {folder.name}
-            </button>
-          ))}
+          {(() => {
+            const ids = selectedAssetIds.includes(contextMenu.assetId) ? selectedAssetIds : [contextMenu.assetId]
+            return (
+              <>
+                <button
+                  onClick={() => handleMoveToFolder(ids, null)}
+                  className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+                >
+                  <Home className="w-3 h-3" />
+                  Root
+                </button>
+                {(folders || []).map((folder) => (
+                  <button
+                    key={folder.id}
+                    onClick={() => handleMoveToFolder(ids, folder.id)}
+                    className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+                  >
+                    <FolderOpen className="w-3 h-3 text-sf-accent" />
+                    {folder.name}
+                  </button>
+                ))}
+              </>
+            )
+          })()}
+            </>
+          )}
         </div>
       )}
       

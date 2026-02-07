@@ -120,23 +120,43 @@ class LMStudioService {
 
   /**
    * Unload a model from memory
+   * Tries v1 POST first; if server doesn't support it (e.g. LM Studio < 0.4.0), throws a helpful error.
    * @param {string} instanceId - Model instance ID (usually same as model ID)
    */
   async unloadModel(instanceId) {
-    try {
-      const response = await fetch(`${this.baseUrl}/api/v1/models/unload`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({
-          instance_id: instanceId,
-        }),
-      })
+    const tryUnload = async (url, options) => {
+      const response = await fetch(url, options)
       if (!response.ok) {
         const errorText = await response.text()
-        throw new Error(`Failed to unload model: ${errorText}`)
+        return { ok: false, errorText }
       }
-      const data = await response.json()
-      return data
+      try {
+        return { ok: true, data: await response.json() }
+      } catch {
+        return { ok: true, data: {} }
+      }
+    }
+
+    try {
+      // LM Studio 0.4.0+ v1 API
+      let result = await tryUnload(`${this.baseUrl}/api/v1/models/unload`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({ instance_id: instanceId }),
+      })
+      if (result.ok) return result.data
+
+      const isUnsupported = result.errorText && (
+        result.errorText.includes('Unexpected endpoint or method') ||
+        result.errorText.includes('404') ||
+        result.errorText.includes('Not Found')
+      )
+      if (isUnsupported) {
+        throw new Error(
+          'Unload is not supported by your LM Studio version. Please update LM Studio to 0.4.0 or later (Settings → check for updates), or unload the model from the LM Studio app.'
+        )
+      }
+      throw new Error(`Failed to unload model: ${result.errorText}`)
     } catch (error) {
       console.error('Error unloading model:', error)
       throw error

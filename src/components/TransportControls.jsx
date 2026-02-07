@@ -80,12 +80,13 @@ function TransportControls() {
   const fps = timelineSettings?.fps || 24
   const frameStep = 1 / fps
 
-  // Format time as MM:SS:FF (timecode)
+  // Format time as HH:MM:SS:FF (hours:minutes:seconds:frames)
   const formatTimecode = (seconds) => {
-    const mins = Math.floor(seconds / 60)
+    const hours = Math.floor(seconds / 3600)
+    const mins = Math.floor((seconds % 3600) / 60)
     const secs = Math.floor(seconds % 60)
     const frames = Math.floor((seconds % 1) * fps)
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}:${frames.toString().padStart(2, '0')}`
+    return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}:${frames.toString().padStart(2, '0')}`
   }
   
   // Unified controls
@@ -285,7 +286,7 @@ function TransportControls() {
         {/* Playback Rate Indicator */}
         {shuttleMode && playbackRate !== 1 && (
           <div className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono ${
-            playbackRate < 0 ? 'bg-orange-500/20 text-orange-400' : 'bg-green-500/20 text-green-400'
+            playbackRate < 0 ? 'bg-sf-accent/20 text-sf-accent' : 'bg-green-500/20 text-green-400'
           }`}>
             {getPlaybackRateDisplay()}
           </div>

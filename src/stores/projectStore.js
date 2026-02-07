@@ -61,9 +61,9 @@ const createDefaultTimeline = (name = 'Timeline 1', id = null, settings = null) 
   tracks: [
     { id: 'video-1', name: 'Video 1', type: 'video', muted: false, locked: false, visible: true },
     { id: 'video-2', name: 'Video 2', type: 'video', muted: false, locked: false, visible: true },
-    { id: 'music', name: 'Music', type: 'audio', muted: false, locked: false, visible: true },
-    { id: 'voiceover', name: 'Voiceover', type: 'audio', muted: false, locked: false, visible: true },
-    { id: 'sfx', name: 'SFX', type: 'audio', muted: false, locked: false, visible: true },
+    { id: 'audio-1', name: 'Audio 1', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
+    { id: 'audio-2', name: 'Audio 2', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
+    { id: 'audio-3', name: 'Audio 3', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
   ],
   clips: [],
   transitions: [],
@@ -769,6 +769,18 @@ export const useProjectStore = create(
         }
       },
       
+      /**
+       * Remove a project from the recent list (does not delete the project from disk)
+       * @param {object} project - Recent project object with name and optional path
+       */
+      removeRecentProject: (project) => {
+        set((state) => ({
+          recentProjects: state.recentProjects.filter(
+            (p) => !(p.name === project.name && (p.path || '') === (project.path || ''))
+          ),
+        }))
+      },
+
       /**
        * Open a recent project by name or path
        * @param {object} recentProject - Recent project object with name and optional path
