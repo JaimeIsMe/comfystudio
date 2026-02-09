@@ -1,13 +1,16 @@
-import { Server, FolderOpen, Palette, Monitor, Save, ChevronDown, ChevronRight, HardDrive } from 'lucide-react'
-import { useState } from 'react'
+import { Server, FolderOpen, Palette, Monitor, Save, ChevronDown, ChevronRight, HardDrive, Film } from 'lucide-react'
+import { useState, useEffect } from 'react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../../stores/projectStore'
+import { getPexelsApiKey, setPexelsApiKey } from '../../services/pexelsSettings'
 
 function SettingsPanel() {
   const [comfyUrl, setComfyUrl] = useState('http://127.0.0.1:8188')
   const [outputPath, setOutputPath] = useState('C:\\Users\\...\\StoryFlow\\outputs')
   const [workflowPath, setWorkflowPath] = useState('C:\\Users\\...\\ComfyUI\\workflow_API')
   const [theme, setTheme] = useState('dark')
-  const [expandedSections, setExpandedSections] = useState(['connection', 'storage'])
+  const [pexelsApiKey, setPexelsApiKeyLocal] = useState('')
+  const [settingsSaved, setSettingsSaved] = useState(false)
+  const [expandedSections, setExpandedSections] = useState(['connection', 'storage', 'stock'])
   
   const { 
     defaultProjectsLocation, 
@@ -18,10 +21,24 @@ function SettingsPanel() {
     closeProject,
   } = useProjectStore()
 
+  useEffect(() => {
+    getPexelsApiKey().then(key => setPexelsApiKeyLocal(key || ''))
+  }, [])
+
   const toggleSection = (section) => {
     setExpandedSections(prev =>
       prev.includes(section) ? prev.filter(s => s !== section) : [...prev, section]
     )
+  }
+
+  const handleSavePexelsKey = () => {
+    setPexelsApiKey(pexelsApiKey.trim()).catch(console.error)
+  }
+
+  const handleSaveAllSettings = async () => {
+    await setPexelsApiKey(pexelsApiKey.trim())
+    setSettingsSaved(true)
+    setTimeout(() => setSettingsSaved(false), 2000)
   }
 
   const Section = ({ id, icon: Icon, title, children }) => {
@@ -104,6 +121,30 @@ function SettingsPanel() {
               >
                 <div className={`w-3 h-3 bg-white rounded-full transition-transform ${autoSaveEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
               </button>
+            </div>
+          </div>
+        </Section>
+
+        {/* Stock (Pexels) */}
+        <Section id="stock" icon={Film} title="Stock (Pexels)">
+          <div className="space-y-2">
+            <div>
+              <label className="block text-[10px] text-sf-text-muted mb-1">API Key</label>
+              <input
+                type="password"
+                value={pexelsApiKey}
+                onChange={(e) => setPexelsApiKeyLocal(e.target.value)}
+                onBlur={handleSavePexelsKey}
+                placeholder="Your Pexels API key"
+                className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-[11px] text-sf-text-primary placeholder-sf-text-muted focus:outline-none focus:border-sf-accent"
+              />
+              <p className="text-[9px] text-sf-text-muted mt-1">
+                Free at{' '}
+                <a href="https://www.pexels.com/api/" target="_blank" rel="noopener noreferrer" className="text-sf-accent hover:underline">
+                  pexels.com/api
+                </a>
+                . Used by the Stock tab to search photos and videos.
+              </p>
             </div>
           </div>
         </Section>
@@ -211,9 +252,12 @@ function SettingsPanel() {
 
       {/* Save Button */}
       <div className="p-2 border-t border-sf-dark-700">
-        <button className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-sf-accent hover:bg-sf-accent-hover rounded text-xs text-white transition-colors">
+        <button
+          onClick={handleSaveAllSettings}
+          className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-sf-accent hover:bg-sf-accent-hover rounded text-xs text-white transition-colors"
+        >
           <Save className="w-3.5 h-3.5" />
-          Save Settings
+          {settingsSaved ? 'Saved' : 'Save Settings'}
         </button>
       </div>
     </div>

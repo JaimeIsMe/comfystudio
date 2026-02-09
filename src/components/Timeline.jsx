@@ -630,6 +630,15 @@ function Timeline({ onOpenAudioGenerate }) {
     
     if ((isVideoAsset && isVideoTrack) || (!isVideoAsset && !isVideoTrack)) {
       addClip(trackId, asset, startTime, timelineFps)
+
+      // If this is a video asset with audio enabled, also add an audio clip
+      if (asset.type === 'video' && isVideoTrack && asset.audioEnabled !== false) {
+        const audioTrack = tracks.find(t => t.type === 'audio' && !t.locked)
+        if (audioTrack) {
+          const audioAsset = { ...asset, type: 'audio' }
+          addClip(audioTrack.id, audioAsset, startTime, timelineFps)
+        }
+      }
     }
   }
 

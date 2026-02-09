@@ -3,6 +3,7 @@ import TitleBar from './components/TitleBar'
 import ExportPanel from './components/ExportPanel'
 import GenerateWorkspace from './components/GenerateWorkspace'
 import LLMAssistantWorkspace from './components/LLMAssistantWorkspace'
+import StockPanel from './components/StockPanel'
 import LeftPanel from './components/LeftPanel'
 import PreviewPanel from './components/PreviewPanel'
 import Timeline from './components/Timeline'
@@ -77,7 +78,7 @@ function App() {
     } catch (_) { /* ignore */ }
   }, [])
 
-  const isFullScreenTab = mainTab === 'export' || mainTab === 'generate' || mainTab === 'llm-assistant'
+  const isFullScreenTab = mainTab === 'export' || mainTab === 'generate' || mainTab === 'llm-assistant' || mainTab === 'stock'
   // Editor layout insets (used for content when on Editor, and always for tab bar so it doesn't shift)
   const editorLeftInset = leftPanelExpanded ? ICON_BAR_WIDTH + leftPanelWidth : ICON_BAR_WIDTH
   const editorRightInset = inspectorExpanded ? ICON_BAR_WIDTH + inspectorWidth : ICON_BAR_WIDTH
@@ -178,6 +179,8 @@ function App() {
       <div className="flex-1 flex overflow-hidden min-h-0">
         {mainTab === 'export' ? (
           <ExportPanel />
+        ) : mainTab === 'stock' ? (
+          <StockPanel />
         ) : mainTab === 'generate' ? (
           <GenerateWorkspace />
         ) : mainTab === 'llm-assistant' ? (

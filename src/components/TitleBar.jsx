@@ -4,6 +4,7 @@ import { Minus, Square, X } from 'lucide-react'
 const TOP_TABS = [
   { id: 'editor', label: 'Editor' },
   { id: 'generate', label: 'Generate' },
+  { id: 'stock', label: 'Stock' },
   { id: 'llm-assistant', label: 'LLM Assistant' },
   { id: 'export', label: 'Export' },
 ]

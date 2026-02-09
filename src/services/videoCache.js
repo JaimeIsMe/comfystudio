@@ -206,10 +206,19 @@ class VideoCache {
     cached.lastUsed = Date.now()
 
     // Calculate the time within the source video (fps-aware)
-    const timeScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
+    const baseScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
       ? clip.timelineFps / clip.sourceFps
       : 1)
-    const sourceTime = (clip.trimStart || 0) + (timelineTime - clip.startTime) * timeScale
+    const speed = Number(clip.speed)
+    const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
+    const timeScale = baseScale * speedScale
+    const reverse = !!clip.reverse
+    const trimStart = clip.trimStart || 0
+    const rawTrimEnd = clip.trimEnd ?? clip.sourceDuration ?? trimStart
+    const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
+    const sourceTime = reverse
+      ? trimEnd - (timelineTime - clip.startTime) * timeScale
+      : trimStart + (timelineTime - clip.startTime) * timeScale
     const timeDiff = Math.abs(video.currentTime - sourceTime)
     
     // Use different thresholds for playing vs paused

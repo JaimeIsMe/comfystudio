@@ -1,4 +1,4 @@
-import { Upload, FolderOpen, Image, Video, Music, Search, Grid, List, Trash2, Edit3, Play, FileVideo, FileAudio, FileImage, Loader2, FolderPlus, ChevronRight, ChevronLeft, Home, Minus, Plus, MoreVertical, FolderInput, Wand2, Layers, Film } from 'lucide-react'
+import { Upload, FolderOpen, Image, Video, Music, Search, Grid, List, Trash2, Edit3, Play, FileVideo, FileAudio, FileImage, Loader2, FolderPlus, ChevronRight, ChevronLeft, Home, Minus, Plus, MoreVertical, FolderInput, Wand2, Layers, Film, VolumeX, Volume2 } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import useAssetsStore from '../../stores/assetsStore'
 import useProjectStore from '../../stores/projectStore'
@@ -58,9 +58,10 @@ function AssetsPanel() {
     moveAssetsToFolder,
     generateAssetSprite,
     getAssetSprite,
+    setAssetAudioEnabled,
   } = useAssetsStore()
   const { currentProjectHandle } = useProjectStore()
-  const { isPlaying: timelineIsPlaying, togglePlay: timelineTogglePlay } = useTimelineStore()
+  const { isPlaying: timelineIsPlaying, togglePlay: timelineTogglePlay, removeAudioClipsForAsset } = useTimelineStore()
   
   // Load thumbnail size from localStorage
   useEffect(() => {
@@ -313,7 +314,10 @@ function AssetsPanel() {
         setSelectedAssetIds([])
         return
       }
+      // Don't delete assets when timeline has selected clips — let the timeline handle Delete (clip removal)
+      const timelineSelectedClipIds = useTimelineStore.getState().selectedClipIds
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedAssetIds.length > 0) {
+        if (timelineSelectedClipIds?.length > 0) return
         e.preventDefault()
         e.stopPropagation()
         const count = selectedAssetIds.length
@@ -355,6 +359,18 @@ function AssetsPanel() {
     if (confirm('Delete this asset?')) {
       removeAsset(id)
     }
+  }
+
+  // Toggle audio on a video asset
+  const handleToggleVideoAudio = (assetId) => {
+    const asset = assets.find(a => a.id === assetId)
+    if (!asset || asset.type !== 'video') return
+    const nextEnabled = asset.audioEnabled === false
+    setAssetAudioEnabled(assetId, nextEnabled)
+    if (!nextEnabled) {
+      removeAudioClipsForAsset(assetId)
+    }
+    setContextMenu(null)
   }
   
   // Create new folder
@@ -714,7 +730,7 @@ function AssetsPanel() {
                   onDragStart={(e) => {
                     e.dataTransfer.setData('assetId', asset.id)
                     e.dataTransfer.setData(ASSET_DRAG_TYPE, JSON.stringify(idsToMove))
-                    e.dataTransfer.effectAllowed = 'move'
+                    e.dataTransfer.effectAllowed = 'copy'
                   }}
                   onClick={(e) => handleClick(e, asset)}
                   onDoubleClick={() => handleDoubleClick(asset)}
@@ -903,7 +919,7 @@ function AssetsPanel() {
                   onDragStart={(e) => {
                     e.dataTransfer.setData('assetId', asset.id)
                     e.dataTransfer.setData(ASSET_DRAG_TYPE, JSON.stringify(idsToMove))
-                    e.dataTransfer.effectAllowed = 'move'
+                    e.dataTransfer.effectAllowed = 'copy'
                   }}
                   onClick={(e) => handleClick(e, asset)}
                   onDoubleClick={() => handleDoubleClick(asset)}
@@ -1008,11 +1024,28 @@ function AssetsPanel() {
             const showThumbnails = asset && canGenerateThumbnails(asset)
             const hasSprite = asset?.sprite?.url
             const isGenerating = asset?.spriteGenerating
+            const showAudioToggle = asset?.type === 'video'
+            const isAudioDisabled = asset?.audioEnabled === false
             
-            if (!showMask && !showThumbnails) return null
+            if (!showMask && !showThumbnails && !showAudioToggle) return null
             
             return (
               <>
+                {/* Toggle audio on video */}
+                {showAudioToggle && (
+                  <button
+                    onClick={() => handleToggleVideoAudio(contextMenu.assetId)}
+                    className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+                  >
+                    {isAudioDisabled ? (
+                      <Volume2 className="w-3 h-3 text-sf-success" />
+                    ) : (
+                      <VolumeX className="w-3 h-3 text-sf-error" />
+                    )}
+                    {isAudioDisabled ? 'Restore audio on video' : 'Remove audio from video'}
+                  </button>
+                )}
+
                 {/* Generate Thumbnails - videos only */}
                 {showThumbnails && (
                   <button

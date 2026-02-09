@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
-  Sparkles, Video, Image as ImageIcon, Music, RefreshCw, Loader2, Check,
+  Sparkles, Video, Image as ImageIcon, Music, RefreshCw, Loader2,
   ChevronLeft, ChevronRight, Play, Pause, Upload, X, Film, Search,
   FolderOpen, Wand2, Volume2, Mic, Clock, Settings
 } from 'lucide-react'
@@ -33,6 +33,7 @@ const CATEGORY_ORDER = ['Shot', 'Movement', 'Angle', 'Lighting', 'Mood', 'Style'
 const WORKFLOWS = {
   video: [
     { id: 'ltx2-t2v', label: 'Text to Video (LTX2)', needsImage: false, description: 'Generate video from text prompt' },
+    { id: 'ltx2-i2v', label: 'Image to Video (LTX2)', needsImage: true, description: 'Animate an image into video with LTX2' },
     { id: 'wan22-i2v', label: 'Image to Video (WAN 2.2)', needsImage: true, description: 'Animate an image into video' },
   ],
   image: [
@@ -326,16 +327,15 @@ function GenerateWorkspace() {
   const [bpm, setBpm] = useState(persistedState?.bpm || 120)
   const [keyscale, setKeyscale] = useState(persistedState?.keyscale || 'C major')
 
-  // Generation state
-  const [isGenerating, setIsGenerating] = useState(false)
-  const [genProgress, setGenProgress] = useState(0)
-  const [genStatus, setGenStatus] = useState('')
-  const [genError, setGenError] = useState(null)
-  const [genResult, setGenResult] = useState(null)
-  const [justCompleted, setJustCompleted] = useState(false)
+  // Generation queue state
+  const [generationQueue, setGenerationQueue] = useState([])
+  const [activeJobId, setActiveJobId] = useState(null)
+  const processingRef = useRef(false)
+  const queueRef = useRef([])
+  const [formError, setFormError] = useState(null)
 
   // Hooks
-  const { isConnected, wsConnected, currentNode, progress, queueCount } = useComfyUI()
+  const { isConnected, wsConnected, queueCount } = useComfyUI()
   const { addAsset, generateName, assets } = useAssetsStore()
   const { currentProjectHandle } = useProjectStore()
 
@@ -401,6 +401,11 @@ function GenerateWorkspace() {
     keyscale,
   ])
 
+  // Keep queue ref in sync
+  useEffect(() => {
+    queueRef.current = generationQueue
+  }, [generationQueue])
+
   // Current workflow info
   const currentWorkflow = useMemo(() => {
     const list = WORKFLOWS[category] || []
@@ -424,15 +429,17 @@ function GenerateWorkspace() {
   // Frame count helper
   const getFrameCount = () => Math.round(duration * fps) + 1
 
-  // Effective progress: use ComfyUI real progress when available during "Generating...", else our genProgress
-  const effectiveProgress = (() => {
-    if (!isGenerating && genProgress <= 0) return 0
-    const comfyPercent = progress?.percent ?? (progress?.max > 0 ? Math.round((progress.value / progress.max) * 100) : null)
-    if (genStatus === 'Generating...' && comfyPercent != null && comfyPercent > 0) return Math.min(99, comfyPercent)
-    return genProgress
-  })()
-
-  const showProgressStrip = isGenerating || genProgress > 0
+  const queuedJobs = useMemo(
+    () => generationQueue.filter(j => j.status === 'queued'),
+    [generationQueue]
+  )
+  const activeJobs = useMemo(
+    () => generationQueue.filter(j => ['uploading', 'configuring', 'queuing', 'running', 'saving'].includes(j.status)),
+    [generationQueue]
+  )
+  const hasJobs = generationQueue.length > 0
+  const queuedCount = queuedJobs.length
+  const activeCount = activeJobs.length
 
   // Calculate aspect ratio mismatch warning
   const aspectRatioWarning = useMemo(() => {
@@ -466,160 +473,110 @@ function GenerateWorkspace() {
   }, [selectedAsset, resolution])
 
   // ============================================
-  // Generation handler
+  // Generation queue + handler
   // ============================================
-  const handleGenerate = async () => {
-    if (isGenerating) return
+  const updateJob = useCallback((jobId, updater) => {
+    setGenerationQueue(prev => prev.map(job => {
+      if (job.id !== jobId) return job
+      const updates = typeof updater === 'function' ? updater(job) : updater
+      return { ...job, ...updates }
+    }))
+  }, [])
+
+  const updateJobByPromptId = useCallback((promptId, updater) => {
+    if (!promptId) return
+    setGenerationQueue(prev => prev.map(job => {
+      if (job.promptId !== promptId) return job
+      const updates = typeof updater === 'function' ? updater(job) : updater
+      return { ...job, ...updates }
+    }))
+  }, [])
+
+  // Listen for ComfyUI progress events and map to jobs
+  useEffect(() => {
+    const handleProgress = (data) => {
+      if (!data?.promptId) return
+      const percent = data.max > 0 ? Math.round((data.value / data.max) * 100) : 0
+      updateJobByPromptId(data.promptId, (job) => {
+        if (job.status === 'done' || job.status === 'error') return job
+        return {
+          ...job,
+          status: job.status === 'queued' ? 'running' : job.status,
+          progress: Math.min(99, Math.max(job.progress || 0, percent))
+        }
+      })
+    }
+
+    const handleExecuting = (data) => {
+      if (!data?.promptId) return
+      updateJobByPromptId(data.promptId, { node: data.node })
+    }
+
+    const handleComplete = (data) => {
+      if (!data?.promptId) return
+      updateJobByPromptId(data.promptId, (job) => ({
+        ...job,
+        progress: Math.max(job.progress || 0, 100)
+      }))
+    }
+
+    comfyui.on('progress', handleProgress)
+    comfyui.on('executing', handleExecuting)
+    comfyui.on('complete', handleComplete)
+
+    return () => {
+      comfyui.off('progress', handleProgress)
+      comfyui.off('executing', handleExecuting)
+      comfyui.off('complete', handleComplete)
+    }
+  }, [updateJobByPromptId])
+
+  const enqueueJob = useCallback((job) => {
+    setGenerationQueue(prev => [...prev, job])
+  }, [])
+
+  const handleGenerate = () => {
+    if (!isConnected) return
     if (currentWorkflow?.needsImage && !selectedAsset) {
-      setGenError('Please select an input asset first')
+      setFormError('Please select an input asset first')
       return
     }
 
-    setIsGenerating(true)
-    setGenProgress(5)
-    setGenStatus('Preparing...')
-    setGenError(null)
-    setGenResult(null)
+    setFormError(null)
 
-    try {
-      // Upload image if needed
-      let uploadedFilename = null
-      if (currentWorkflow?.needsImage && selectedAsset) {
-        setGenStatus('Uploading input...')
-        setGenProgress(10)
-        let fileToUpload = null
-
-        if (selectedAsset.type === 'video') {
-          // Extract frame from video
-          fileToUpload = await extractFrameAsFile(selectedAsset.url, frameTime || 0, `frame_${Date.now()}.png`)
-        } else if (selectedAsset.type === 'image') {
-          // Fetch the image as a file
-          const resp = await fetch(selectedAsset.url)
-          const blob = await resp.blob()
-          fileToUpload = new File([blob], selectedAsset.name || `input_${Date.now()}.png`, { type: blob.type })
-        }
-
-        if (fileToUpload) {
-          const uploadResult = await comfyui.uploadFile(fileToUpload)
-          uploadedFilename = uploadResult?.name || fileToUpload.name
-        }
-      }
-
-      // Load workflow JSON
-      setGenStatus('Loading workflow...')
-      setGenProgress(20)
-      let workflowJson = null
-      const workflowMap = {
-        'ltx2-t2v': '/workflows/video_ltx2_t2v.json',
-        'wan22-i2v': '/workflows/video_wan2_2_14B_i2v.json',
-        'multi-angles': '/workflows/1_click_multiple_angles.json',
-        'image-edit': '/workflows/inflation.json',
-        'music-gen': '/workflows/music_generation.json',
-      }
-
-      const workflowPath = workflowMap[workflowId]
-      if (!workflowPath) throw new Error('Unknown workflow: ' + workflowId)
-
-      const resp = await fetch(workflowPath)
-      if (!resp.ok) throw new Error('Failed to load workflow file')
-      workflowJson = await resp.json()
-
-      // Modify workflow based on type
-      setGenStatus('Configuring workflow...')
-      setGenProgress(30)
-      const { modifyLTX2Workflow, modifyWAN22Workflow, modifyMultipleAnglesWorkflow, modifyInflationWorkflow, modifyMusicWorkflow } = await import('../services/comfyui')
-
-      let modifiedWorkflow = null
-      switch (workflowId) {
-        case 'ltx2-t2v':
-          modifiedWorkflow = modifyLTX2Workflow(workflowJson, {
-            prompt: fullPrompt,
-            negativePrompt,
-            width: resolution.width,
-            height: resolution.height,
-            frames: getFrameCount(),
-            seed,
-            fps,
-          })
-          break
-        case 'wan22-i2v':
-          modifiedWorkflow = modifyWAN22Workflow(workflowJson, {
-            prompt: fullPrompt,
-            negativePrompt,
-            inputImage: uploadedFilename,
-            width: resolution.width,
-            height: resolution.height,
-            frames: getFrameCount(),
-            fps, // Use FPS from UI (24 or 30) – was hardcoded to 16
-            seed,
-          })
-          break
-        case 'multi-angles':
-          modifiedWorkflow = modifyMultipleAnglesWorkflow(workflowJson, {
-            inputImage: uploadedFilename,
-            seed,
-          })
-          break
-        case 'image-edit':
-          modifiedWorkflow = modifyInflationWorkflow(workflowJson, {
-            prompt: fullPrompt,
-            inputImage: uploadedFilename,
-            seed,
-            steps: editSteps,
-            cfg: editCfg,
-          })
-          break
-        case 'music-gen':
-          modifiedWorkflow = modifyMusicWorkflow(workflowJson, {
-            tags: musicTags,
-            lyrics,
-            duration: musicDuration,
-            bpm,
-            seed,
-            keyscale,
-          })
-          break
-        default:
-          throw new Error('Unhandled workflow: ' + workflowId)
-      }
-
-      // Queue the prompt
-      setGenStatus('Queuing generation...')
-      setGenProgress(40)
-      const promptId = await comfyui.queuePrompt(modifiedWorkflow)
-      if (!promptId) throw new Error('Failed to queue prompt')
-
-      // Poll for completion
-      setGenStatus('Generating...')
-      const result = await pollForResult(promptId, workflowId, (p) => {
-        setGenProgress(p)
-      })
-
-      // Save result to assets
-      if (result) {
-        setGenStatus('Saving to project...')
-        setGenProgress(95)
-        await saveGenerationResult(result, workflowId)
-        setGenResult(result)
-        setJustCompleted(true)
-        setTimeout(() => setJustCompleted(false), 3000)
-        setGenStatus('Complete!')
-        setGenProgress(100)
-      } else {
-        // Generation completed in ComfyUI but we couldn't detect the output
-        console.error('[handleGenerate] pollForResult returned null - output not detected')
-        setGenError('Generation finished but the output could not be detected. Check the ComfyUI output folder manually. (Open browser console for debug info)')
-        setGenStatus('Output not found')
-        setGenProgress(0)
-      }
-    } catch (err) {
-      if (err.message !== 'Generation cancelled') {
-        setGenError(err.message)
-        setGenStatus('Failed')
-      }
-    } finally {
-      setIsGenerating(false)
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const job = {
+      id: jobId,
+      createdAt: Date.now(),
+      category,
+      workflowId,
+      workflowLabel: currentWorkflow?.label || workflowId,
+      needsImage: !!currentWorkflow?.needsImage,
+      prompt: fullPrompt,
+      negativePrompt,
+      tags: selectedTags,
+      seed,
+      duration,
+      fps,
+      resolution,
+      editSteps,
+      editCfg,
+      musicTags,
+      lyrics,
+      musicDuration,
+      bpm,
+      keyscale,
+      inputAssetId: selectedAsset?.id || null,
+      inputAssetName: selectedAsset?.name || '',
+      frameTime: frameTime || 0,
+      status: 'queued',
+      progress: 0,
+      promptId: null,
+      node: null,
+      error: null,
     }
+
+    enqueueJob(job)
   }
 
   // Poll for result
@@ -804,22 +761,47 @@ function GenerateWorkspace() {
   }
 
   // Save generation result to project assets
-  const saveGenerationResult = async (result, wfId) => {
+  const saveGenerationResult = async (result, wfId, job) => {
     if (!currentProjectHandle) return
 
-    const autoName = generateName(prompt || musicTags || wfId)
+    const jobPrompt = job?.prompt || ''
+    const jobTags = job?.musicTags || ''
+    const autoName = generateName(jobPrompt || jobTags || wfId)
+    const jobDuration = job?.duration
+    const jobFps = job?.fps
+    const jobResolution = job?.resolution
+    const jobSeed = job?.seed
 
     if (result.type === 'video') {
       try {
         const videoFile = await comfyui.downloadVideo(result.filename, result.subfolder, result.outputType)
         const assetInfo = await importAsset(currentProjectHandle, videoFile, 'video')
         const blobUrl = URL.createObjectURL(videoFile)
-        addAsset({ ...assetInfo, name: autoName, type: 'video', url: blobUrl, prompt, isImported: true, settings: { duration, fps, resolution: `${resolution.width}x${resolution.height}`, seed } })
+        addAsset({
+          ...assetInfo,
+          name: autoName,
+          type: 'video',
+          url: blobUrl,
+          prompt: jobPrompt,
+          isImported: true,
+          settings: {
+            duration: jobDuration,
+            fps: jobFps,
+            resolution: jobResolution ? `${jobResolution.width}x${jobResolution.height}` : undefined,
+            seed: jobSeed
+          }
+        })
       } catch (err) {
         console.error('Failed to save video:', err)
         // Fallback: use ComfyUI URL
         const url = comfyui.getMediaUrl(result.filename, result.subfolder, result.outputType)
-        addAsset({ name: autoName, type: 'video', url, prompt, settings: { duration, fps, seed } })
+        addAsset({
+          name: autoName,
+          type: 'video',
+          url,
+          prompt: jobPrompt,
+          settings: { duration: jobDuration, fps: jobFps, seed: jobSeed }
+        })
       }
     } else if (result.type === 'images') {
       for (const img of result.items) {
@@ -827,11 +809,11 @@ function GenerateWorkspace() {
           const imageFile = await comfyui.downloadImage(img.filename, img.subfolder, img.outputType)
           const assetInfo = await importAsset(currentProjectHandle, imageFile, 'images')
           const blobUrl = URL.createObjectURL(imageFile)
-          addAsset({ ...assetInfo, name: `${autoName}_${img.filename}`, type: 'image', url: blobUrl, prompt, isImported: true })
+          addAsset({ ...assetInfo, name: `${autoName}_${img.filename}`, type: 'image', url: blobUrl, prompt: jobPrompt, isImported: true })
         } catch (err) {
           console.warn('Failed to save image:', err)
           const url = comfyui.getMediaUrl(img.filename, img.subfolder, img.outputType)
-          addAsset({ name: `${autoName}_${img.filename}`, type: 'image', url, prompt })
+          addAsset({ name: `${autoName}_${img.filename}`, type: 'image', url, prompt: jobPrompt })
         }
       }
     } else if (result.type === 'audio') {
@@ -842,14 +824,204 @@ function GenerateWorkspace() {
         const file = new File([blob], result.filename, { type: 'audio/mpeg' })
         const assetInfo = await importAsset(currentProjectHandle, file, 'audio')
         const blobUrl = URL.createObjectURL(file)
-        addAsset({ ...assetInfo, name: autoName, type: 'audio', url: blobUrl, prompt: musicTags, isImported: true, settings: { duration: musicDuration, bpm, keyscale } })
+        addAsset({
+          ...assetInfo,
+          name: autoName,
+          type: 'audio',
+          url: blobUrl,
+          prompt: jobTags,
+          isImported: true,
+          settings: { duration: job?.musicDuration, bpm: job?.bpm, keyscale: job?.keyscale }
+        })
       } catch (err) {
         console.warn('Failed to save audio:', err)
         const url = comfyui.getMediaUrl(result.filename, result.subfolder, result.outputType)
-        addAsset({ name: autoName, type: 'audio', url, prompt: musicTags, settings: { duration: musicDuration, bpm } })
+        addAsset({ name: autoName, type: 'audio', url, prompt: jobTags, settings: { duration: job?.musicDuration, bpm: job?.bpm } })
       }
     }
   }
+
+  const runJob = useCallback(async (job) => {
+    updateJob(job.id, { status: 'uploading', progress: 5, error: null })
+
+    try {
+      // Upload image if needed
+      let uploadedFilename = null
+      if (job.needsImage) {
+        const inputAsset = assets.find(a => a.id === job.inputAssetId)
+        if (!inputAsset) {
+          throw new Error('Input asset not found')
+        }
+
+        let fileToUpload = null
+        if (inputAsset.type === 'video') {
+          fileToUpload = await extractFrameAsFile(inputAsset.url, job.frameTime || 0, `frame_${Date.now()}.png`)
+        } else if (inputAsset.type === 'image') {
+          const resp = await fetch(inputAsset.url)
+          const blob = await resp.blob()
+          fileToUpload = new File([blob], inputAsset.name || `input_${Date.now()}.png`, { type: blob.type })
+        }
+
+        if (!fileToUpload) {
+          throw new Error('Unsupported input asset')
+        }
+
+        const uploadResult = await comfyui.uploadFile(fileToUpload)
+        uploadedFilename = uploadResult?.name || fileToUpload.name
+      }
+
+      // Load workflow JSON
+      updateJob(job.id, { status: 'configuring', progress: 20 })
+      let workflowJson = null
+      const workflowMap = {
+        'ltx2-t2v': '/workflows/video_ltx2_t2v.json',
+        'ltx2-i2v': '/workflows/ltx2_Image_to_Video.json',
+        'wan22-i2v': '/workflows/video_wan2_2_14B_i2v.json',
+        'multi-angles': '/workflows/1_click_multiple_angles.json',
+        'image-edit': '/workflows/inflation.json',
+        'music-gen': '/workflows/music_generation.json',
+      }
+
+      const workflowPath = workflowMap[job.workflowId]
+      if (!workflowPath) throw new Error('Unknown workflow: ' + job.workflowId)
+
+      const resp = await fetch(workflowPath)
+      if (!resp.ok) throw new Error('Failed to load workflow file')
+      workflowJson = await resp.json()
+
+      // Modify workflow based on type
+      updateJob(job.id, { status: 'configuring', progress: 30 })
+      const {
+        modifyLTX2Workflow,
+        modifyLTX2I2VWorkflow,
+        modifyWAN22Workflow,
+        modifyMultipleAnglesWorkflow,
+        modifyInflationWorkflow,
+        modifyMusicWorkflow
+      } = await import('../services/comfyui')
+
+      let modifiedWorkflow = null
+      switch (job.workflowId) {
+        case 'ltx2-t2v':
+          modifiedWorkflow = modifyLTX2Workflow(workflowJson, {
+            prompt: job.prompt,
+            negativePrompt: job.negativePrompt,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            frames: Math.round(job.duration * job.fps) + 1,
+            seed: job.seed,
+            fps: job.fps,
+          })
+          break
+        case 'ltx2-i2v':
+          modifiedWorkflow = modifyLTX2I2VWorkflow(workflowJson, {
+            prompt: job.prompt,
+            negativePrompt: job.negativePrompt,
+            inputImage: uploadedFilename,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            frames: Math.round(job.duration * job.fps) + 1,
+            fps: job.fps,
+            seed: job.seed,
+          })
+          break
+        case 'wan22-i2v':
+          modifiedWorkflow = modifyWAN22Workflow(workflowJson, {
+            prompt: job.prompt,
+            negativePrompt: job.negativePrompt,
+            inputImage: uploadedFilename,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            frames: Math.round(job.duration * job.fps) + 1,
+            fps: job.fps,
+            seed: job.seed,
+          })
+          break
+        case 'multi-angles':
+          modifiedWorkflow = modifyMultipleAnglesWorkflow(workflowJson, {
+            inputImage: uploadedFilename,
+            seed: job.seed,
+          })
+          break
+        case 'image-edit':
+          modifiedWorkflow = modifyInflationWorkflow(workflowJson, {
+            prompt: job.prompt,
+            inputImage: uploadedFilename,
+            seed: job.seed,
+            steps: job.editSteps,
+            cfg: job.editCfg,
+          })
+          break
+        case 'music-gen':
+          modifiedWorkflow = modifyMusicWorkflow(workflowJson, {
+            tags: job.musicTags,
+            lyrics: job.lyrics,
+            duration: job.musicDuration,
+            bpm: job.bpm,
+            seed: job.seed,
+            keyscale: job.keyscale,
+          })
+          break
+        default:
+          throw new Error('Unhandled workflow: ' + job.workflowId)
+      }
+
+      // Queue the prompt
+      updateJob(job.id, { status: 'queuing', progress: 40 })
+      const promptId = await comfyui.queuePrompt(modifiedWorkflow)
+      if (!promptId) throw new Error('Failed to queue prompt')
+
+      updateJob(job.id, { status: 'running', progress: 45, promptId })
+
+      // Poll for completion
+      const result = await pollForResult(promptId, job.workflowId, (p) => {
+        updateJob(job.id, (prev) => ({
+          ...prev,
+          progress: Math.max(prev.progress || 0, p)
+        }))
+      })
+
+      // Save result to assets
+      if (result) {
+        updateJob(job.id, { status: 'saving', progress: 95 })
+        await saveGenerationResult(result, job.workflowId, job)
+        updateJob(job.id, { status: 'done', progress: 100 })
+      } else {
+        updateJob(job.id, {
+          status: 'error',
+          error: 'Generation finished but the output could not be detected',
+          progress: 0
+        })
+      }
+    } catch (err) {
+      updateJob(job.id, {
+        status: 'error',
+        error: err?.message || 'Generation failed',
+        progress: 0
+      })
+    }
+  }, [assets, updateJob, saveGenerationResult, pollForResult])
+
+  const processQueue = useCallback(async () => {
+    if (processingRef.current) return
+    const nextJob = queueRef.current.find(j => j.status === 'queued')
+    if (!nextJob) return
+
+    processingRef.current = true
+    setActiveJobId(nextJob.id)
+    await runJob(nextJob)
+    processingRef.current = false
+    setActiveJobId(null)
+
+    // Continue with next job if any
+    setTimeout(() => {
+      processQueue()
+    }, 0)
+  }, [runJob])
+
+  useEffect(() => {
+    processQueue()
+  }, [generationQueue, processQueue])
 
   const randomizeSeed = () => setSeed(Math.floor(Math.random() * 1000000000))
 
@@ -887,28 +1059,13 @@ function GenerateWorkspace() {
 
         {/* Connection status */}
         <div className="flex items-center gap-2">
-          {queueCount > 0 && <span className="text-[10px] text-sf-text-muted">Queue: {queueCount}</span>}
+          {activeCount > 0 && <span className="text-[10px] text-sf-text-muted">Running: {activeCount}</span>}
+          {queuedCount > 0 && <span className="text-[10px] text-sf-text-muted">Queued: {queuedCount}</span>}
+          {queueCount > 0 && <span className="text-[10px] text-sf-text-muted">ComfyUI Queue: {queueCount}</span>}
           <div className={`w-2 h-2 rounded-full ${isConnected ? (wsConnected ? 'bg-green-500' : 'bg-yellow-500') : 'bg-red-500'}`} title={isConnected ? (wsConnected ? 'Connected (WebSocket)' : 'Connected (HTTP)') : 'Disconnected'} />
           <span className="text-[10px] text-sf-text-muted">{isConnected ? 'ComfyUI' : 'Offline'}</span>
         </div>
       </div>
-
-      {/* Sticky progress strip - always visible when generating */}
-      {showProgressStrip && (
-        <div className="flex-shrink-0 px-4 py-3 bg-sf-dark-900 border-b border-sf-dark-700">
-          <div className="flex items-center justify-between gap-4 mb-1.5">
-            <span className="text-xs text-sf-text-primary font-medium">{genStatus}</span>
-            <span className="text-xs text-sf-text-muted tabular-nums">{Math.round(effectiveProgress)}%</span>
-          </div>
-          <div className="h-2 bg-sf-dark-800 rounded-full overflow-hidden">
-            <div className="h-full bg-sf-accent transition-all duration-300" style={{ width: `${effectiveProgress}%` }} />
-          </div>
-          <div className="flex items-center gap-3 mt-1.5 text-[10px] text-sf-text-muted">
-            {currentNode && <span>Node: {currentNode}</span>}
-            {queueCount > 0 && <span>Queue: {queueCount} ahead</span>}
-          </div>
-        </div>
-      )}
 
       {/* Main 3-column layout */}
       <div className="flex-1 min-h-0 flex">
@@ -1154,18 +1311,16 @@ function GenerateWorkspace() {
         {/* Right: Progress + Generate */}
         <div className="w-80 flex-shrink-0 border-l border-sf-dark-700 bg-sf-dark-900 flex flex-col">
           <div className="flex-shrink-0 p-4 border-b border-sf-dark-700">
-            <button onClick={handleGenerate} disabled={isGenerating || !isConnected}
+            <button
+              onClick={handleGenerate}
+              disabled={!isConnected}
               className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
-                isGenerating ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
-                : !isConnected ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                !isConnected ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
                 : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
               }`}
             >
-              {isGenerating ? (
-                <><Loader2 className="w-4 h-4 animate-spin" />Generating...</>
-              ) : (
-                <><Sparkles className="w-4 h-4" />Generate {category === 'video' ? 'Video' : category === 'image' ? 'Image' : 'Audio'}</>
-              )}
+              <Sparkles className="w-4 h-4" />
+              Queue {category === 'video' ? 'Video' : category === 'image' ? 'Image' : 'Audio'}
             </button>
 
             {!isConnected && (
@@ -1175,37 +1330,47 @@ function GenerateWorkspace() {
             {currentWorkflow?.needsImage && !selectedAsset && (
               <div className="mt-2 text-[10px] text-yellow-500 text-center">Select an input asset from the left panel</div>
             )}
+
+            {formError && (
+              <div className="mt-2 text-[10px] text-sf-error text-center">{formError}</div>
+            )}
           </div>
 
-          {/* Progress (also in sticky strip above when generating) */}
-          {(isGenerating || genProgress > 0) && (
-            <div className="p-4 border-b border-sf-dark-700">
-              <div className="flex items-center justify-between text-[10px] text-sf-text-muted mb-1">
-                <span>{genStatus}</span>
-                <span>{Math.round(effectiveProgress)}%</span>
-              </div>
-              <div className="h-1.5 bg-sf-dark-800 rounded-full overflow-hidden">
-                <div className="h-full bg-sf-accent transition-all duration-300" style={{ width: `${effectiveProgress}%` }} />
-              </div>
-              {currentNode && <div className="mt-1 text-[9px] text-sf-text-muted">Node: {currentNode}</div>}
-              {queueCount > 0 && <div className="mt-0.5 text-[9px] text-sf-text-muted">Queue: {queueCount} ahead</div>}
-            </div>
-          )}
-
-          {/* Error */}
-          {genError && (
-            <div className="p-4 border-b border-sf-dark-700">
-              <div className="text-[11px] text-sf-error">{genError}</div>
-            </div>
-          )}
-
-          {/* Success */}
-          {justCompleted && (
-            <div className="p-4 border-b border-sf-dark-700">
-              <div className="flex items-center gap-2 text-[11px] text-green-400">
-                <Check className="w-4 h-4" />
-                Generated! Check Assets panel.
-              </div>
+          {/* Queue list */}
+          {hasJobs && (
+            <div className="p-4 border-b border-sf-dark-700 space-y-3">
+              {generationQueue.map((job) => {
+                const percent = Math.round(job.progress || 0)
+                const statusLabel = job.status === 'queued' ? 'Queued'
+                  : job.status === 'uploading' ? 'Uploading input'
+                  : job.status === 'configuring' ? 'Configuring workflow'
+                  : job.status === 'queuing' ? 'Queued in ComfyUI'
+                  : job.status === 'running' ? 'Generating'
+                  : job.status === 'saving' ? 'Saving to project'
+                  : job.status === 'done' ? 'Complete'
+                  : job.status === 'error' ? 'Failed'
+                  : job.status
+                const title = `${job.workflowLabel || job.workflowId}${job.prompt ? ` — ${job.prompt}` : ''}`
+                return (
+                  <div key={job.id} className="bg-sf-dark-800 rounded-lg p-3 border border-sf-dark-700">
+                    <div className="flex items-center justify-between text-[10px] text-sf-text-muted mb-1">
+                      <span className="text-sf-text-primary truncate" title={title}>
+                        {job.workflowLabel || job.workflowId}
+                      </span>
+                      <span className="tabular-nums">{percent}%</span>
+                    </div>
+                    <div className="h-1.5 bg-sf-dark-900 rounded-full overflow-hidden">
+                      <div className="h-full bg-sf-accent transition-all duration-300" style={{ width: `${percent}%` }} />
+                    </div>
+                    <div className="mt-1 text-[9px] text-sf-text-muted">
+                      {statusLabel}{job.node ? ` · Node ${job.node}` : ''}
+                    </div>
+                    {job.error && (
+                      <div className="mt-1 text-[9px] text-sf-error">{job.error}</div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
 

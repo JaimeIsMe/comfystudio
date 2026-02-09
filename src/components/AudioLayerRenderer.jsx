@@ -70,22 +70,39 @@ function AudioLayerRenderer() {
         audioEl.src = asset.url
       }
       
-      // Calculate source time within the audio file
+      // Calculate source time within the audio file (with speed/reverse)
       const clipTime = playheadPosition - clip.startTime
-      const sourceTime = (clip.trimStart || 0) + clipTime
-      const maxTime = clip.sourceDuration || clip.trimEnd || clip.duration
-      const clampedTime = Math.max(0, Math.min(sourceTime, maxTime - 0.01))
+      const speed = Number(clip.speed)
+      const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
+      const reverse = !!clip.reverse
+      const trimStart = clip.trimStart || 0
+      const rawTrimEnd = clip.trimEnd ?? clip.sourceDuration ?? trimStart
+      const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
+      const minTime = Math.min(trimStart, trimEnd)
+      const maxTime = Math.max(trimStart, trimEnd)
+      const sourceTime = reverse
+        ? trimEnd - clipTime * speedScale
+        : trimStart + clipTime * speedScale
+      const clampedTime = Math.max(minTime, Math.min(sourceTime, maxTime - 0.01))
       
       // Check if we're within the clip's active range
       const clipEnd = clip.startTime + clip.duration
       const isWithinClip = playheadPosition >= clip.startTime && playheadPosition < clipEnd
       
       // Wait for audio to load before seeking if src changed
+      if (reverse) {
+        // Reverse audio not supported with HTMLAudioElement; keep silent
+        audioEl.pause()
+        return
+      }
+
+      const effectiveRate = playbackRate * speedScale
+
       if (srcChanged) {
         const onLoadedData = () => {
           if (isWithinClip && isPlaying) {
             audioEl.currentTime = clampedTime
-            audioEl.playbackRate = playbackRate
+            audioEl.playbackRate = effectiveRate
             audioEl.play().catch(err => {
               console.warn('Failed to play audio clip:', err)
             })
@@ -101,8 +118,8 @@ function AudioLayerRenderer() {
         }
         
         // Set playback rate
-        if (Math.abs(audioEl.playbackRate - playbackRate) > 0.01) {
-          audioEl.playbackRate = playbackRate
+        if (Math.abs(audioEl.playbackRate - effectiveRate) > 0.01) {
+          audioEl.playbackRate = effectiveRate
         }
         
         // Play/pause based on timeline state and clip boundaries

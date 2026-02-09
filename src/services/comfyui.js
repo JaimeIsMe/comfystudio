@@ -495,6 +495,55 @@ export function modifyLTX2Workflow(workflow, options = {}) {
 }
 
 /**
+ * Workflow modifier for LTX-2 Image-to-Video.
+ * Accepts same options as other i2v workflows. Node IDs may need to match your
+ * ltx2_Image_to_Video.json workflow (inspect the JSON and update below if needed).
+ */
+export function modifyLTX2I2VWorkflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    negativePrompt = 'blurry, low quality, still frame, watermark',
+    inputImage = '',
+    width = 1280,
+    height = 720,
+    frames = 121,
+    fps = 24,
+    seed = Math.floor(Math.random() * 1000000),
+  } = options;
+
+  const modified = JSON.parse(JSON.stringify(workflow));
+
+  // Patch any node that has these input names (works across different workflow layouts)
+  for (const nodeId of Object.keys(modified)) {
+    const node = modified[nodeId]
+    if (!node?.inputs) continue
+    const inputs = node.inputs
+    if (typeof inputs.image === 'string') inputs.image = inputImage
+    if (typeof inputs.width === 'number') inputs.width = width
+    if (typeof inputs.height === 'number') inputs.height = height
+    if (typeof inputs.noise_seed === 'number') inputs.noise_seed = seed
+    if (typeof inputs.fps === 'number') inputs.fps = fps
+    if (typeof inputs.value === 'number' && inputs.value > 50 && inputs.value < 500) inputs.value = frames
+    if (typeof inputs.length === 'number') inputs.length = frames
+  }
+
+  // Positive and negative prompt: first text node = prompt, second = negative
+  let textCount = 0
+  for (const nodeId of Object.keys(modified)) {
+    const node = modified[nodeId]
+    if (!node?.inputs || typeof node.inputs.text !== 'string') continue
+    textCount++
+    if (textCount === 1) node.inputs.text = prompt
+    else if (textCount === 2) {
+      node.inputs.text = negativePrompt
+      break
+    }
+  }
+
+  return modified;
+}
+
+/**
  * Workflow modifier for Mask Generation (SAM3 + MatAnyone)
  * 
  * Workflow nodes:

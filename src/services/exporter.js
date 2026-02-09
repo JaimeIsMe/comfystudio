@@ -625,17 +625,26 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         
         // Calculate source time matching preview logic
         const clipTime = time - clip.startTime
-        const timeScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
+        const baseScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
           ? clip.timelineFps / clip.sourceFps
           : 1)
+        const speed = Number(clip.speed)
+        const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
+        const timeScale = baseScale * speedScale
+        const reverse = !!clip.reverse
+        const trimStart = clip.trimStart || 0
+        const rawTrimEnd = clip.trimEnd ?? clip.sourceDuration ?? trimStart
+        const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
         const rawSourceTime = usingCachedRender
           ? clipTime
-          : (clip.trimStart || 0) + clipTime * timeScale
+          : (reverse
+            ? trimEnd - clipTime * timeScale
+            : trimStart + clipTime * timeScale)
         
         // Clamp to valid range (matching VideoLayerRenderer behavior)
         maxSourceTime = usingCachedRender 
           ? clip.duration 
-          : (clip.sourceDuration || clip.trimEnd || video.duration || (clip.duration * timeScale))
+          : (clip.sourceDuration || clip.trimEnd || video.duration || trimEnd)
         const clampedSourceTime = Math.max(0, Math.min(rawSourceTime, maxSourceTime - 0.001))
         sourceTime = clampedSourceTime
         videoElement = video

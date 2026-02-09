@@ -7,11 +7,11 @@ const MAX_HISTORY_SIZE = 50
 
 const getClipTimeScale = (clip) => {
   if (!clip) return 1
-  if (clip.sourceTimeScale) return clip.sourceTimeScale
-  if (clip.timelineFps && clip.sourceFps) {
-    return clip.timelineFps / clip.sourceFps
-  }
-  return 1
+  const baseScale = clip.sourceTimeScale
+    || (clip.timelineFps && clip.sourceFps ? clip.timelineFps / clip.sourceFps : 1)
+  const speed = Number(clip.speed)
+  const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
+  return baseScale * speedScale
 }
 
 const timelineToSourceTime = (clip, timelineSeconds) => {
@@ -31,19 +31,13 @@ const getClipTrimEnd = (clip) => {
 
 const normalizeClipTimebases = (clips, assets, timelineFps) => {
   if (!clips || clips.length === 0) return clips || []
-  if (!Number.isFinite(timelineFps) || timelineFps <= 0) return clips
 
   const assetsById = new Map((assets || []).map(asset => [asset.id, asset]))
 
   return clips.map((clip) => {
     if (!clip || clip.type !== 'video') return clip
-    if (clip.sourceTimeScale || clip.sourceFps || clip.timelineFps) return clip
 
     const asset = assetsById.get(clip.assetId)
-    const sourceFps = Number(asset?.settings?.fps ?? asset?.fps)
-    if (!Number.isFinite(sourceFps) || sourceFps <= 0) return clip
-
-    const timeScale = timelineFps / sourceFps
     const sourceDuration = clip.sourceDuration
       || asset?.settings?.duration
       || asset?.duration
@@ -51,17 +45,23 @@ const normalizeClipTimebases = (clips, assets, timelineFps) => {
     const trimStart = clip.trimStart || 0
     const trimEnd = clip.trimEnd ?? sourceDuration
     const sourceSpan = Math.max(0, Math.min(sourceDuration, trimEnd) - trimStart)
-    const newDuration = sourceSpan / timeScale
+    const sourceFps = Number(asset?.settings?.fps ?? asset?.fps)
+    const normalizedTimelineFps = Number(timelineFps)
+
+    const normalizedSpeed = Number.isFinite(Number(clip.speed)) && Number(clip.speed) > 0 ? Number(clip.speed) : 1
+    const normalizedReverse = Boolean(clip.reverse)
 
     return {
       ...clip,
       sourceDuration,
       trimStart,
       trimEnd: Math.min(trimEnd, sourceDuration),
-      duration: newDuration,
-      sourceFps,
-      timelineFps,
-      sourceTimeScale: timeScale,
+      duration: sourceSpan,
+      sourceFps: Number.isFinite(sourceFps) && sourceFps > 0 ? sourceFps : clip.sourceFps ?? null,
+      timelineFps: Number.isFinite(normalizedTimelineFps) && normalizedTimelineFps > 0 ? normalizedTimelineFps : clip.timelineFps ?? null,
+      sourceTimeScale: 1,
+      speed: normalizedSpeed,
+      reverse: normalizedReverse,
     }
   })
 }
@@ -385,9 +385,7 @@ export const useTimelineStore = create(
     const sourceDuration = isImage ? Infinity : (assetDuration || 5)
     const sourceFps = isVideo ? Number(asset.settings?.fps ?? asset.fps) : null
     const normalizedTimelineFps = Number(timelineFps)
-    const hasValidFps = Number.isFinite(sourceFps) && sourceFps > 0 && Number.isFinite(normalizedTimelineFps) && normalizedTimelineFps > 0
-    const sourceTimeScale = hasValidFps ? (normalizedTimelineFps / sourceFps) : 1
-    const defaultDuration = isImage ? 5 : (sourceDuration / sourceTimeScale) // Images default to 5s but can be extended
+    const defaultDuration = isImage ? 5 : sourceDuration // Keep video/audio duration in real seconds
     
     // Log a warning if we couldn't get the actual duration
     if (!isImage && !assetDuration) {
@@ -404,9 +402,11 @@ export const useTimelineStore = create(
       sourceDuration: sourceDuration, // Original media duration (Infinity for images)
       trimStart: 0, // In-point (seconds from source start)
       trimEnd: isImage ? defaultDuration : sourceDuration, // Out-point (for images, this can grow)
-      sourceFps: hasValidFps ? sourceFps : null,
-      timelineFps: hasValidFps ? normalizedTimelineFps : null,
-      sourceTimeScale: hasValidFps ? sourceTimeScale : 1,
+      sourceFps: Number.isFinite(sourceFps) && sourceFps > 0 ? sourceFps : null,
+      timelineFps: Number.isFinite(normalizedTimelineFps) && normalizedTimelineFps > 0 ? normalizedTimelineFps : null,
+      sourceTimeScale: 1,
+      speed: 1,
+      reverse: false,
       color: track.type === 'video' ? getVideoColor(state.clipCounter) : getAudioColor(track.id),
       type: asset.type,
       url: asset.url,
@@ -606,6 +606,27 @@ export const useTimelineStore = create(
     set((state) => ({
       clips: state.clips.filter(c => !state.selectedClipIds.includes(c.id)),
       selectedClipIds: []
+    }))
+  },
+
+  /**
+   * Remove audio clips that reference a specific asset
+   */
+  removeAudioClipsForAsset: (assetId) => {
+    const state = get()
+    const audioTrackIds = new Set(state.tracks.filter(t => t.type === 'audio').map(t => t.id))
+    const isAudioClipForAsset = (c) => c.assetId === assetId && audioTrackIds.has(c.trackId)
+    const nextClips = state.clips.filter(c => !isAudioClipForAsset(c))
+    if (nextClips.length === state.clips.length) return
+
+    // Save to history before modifying
+    get().saveToHistory()
+
+    const nextSelected = state.selectedClipIds.filter(id => nextClips.some(c => c.id === id))
+    set((prev) => ({
+      ...prev,
+      clips: nextClips,
+      selectedClipIds: nextSelected
     }))
   },
 
@@ -895,6 +916,81 @@ export const useTimelineStore = create(
           : clip
       )
     }))
+  },
+
+  /**
+   * Update clip playback speed (time stretch)
+   * @param {string} clipId - The clip to update
+   * @param {number} speed - Playback speed multiplier
+   * @param {boolean} saveHistory - Whether to save to history
+   */
+  updateClipSpeed: (clipId, speed, saveHistory = false) => {
+    const nextSpeed = Math.max(0.1, Math.min(8, Number(speed) || 1))
+    if (saveHistory) {
+      get().saveToHistory()
+    }
+
+    set((state) => {
+      const target = state.clips.find(c => c.id === clipId)
+      if (!target) return {}
+
+      const audioTrackIds = new Set(state.tracks.filter(t => t.type === 'audio').map(t => t.id))
+      const shouldSyncAudio = target.type === 'video'
+      const isLinkedAudio = (clip) => shouldSyncAudio && clip.assetId === target.assetId && audioTrackIds.has(clip.trackId)
+
+      const computeNext = (clip) => {
+        if (clip.type === 'image') return { ...clip, speed: 1 }
+
+        const currentSpeed = Number(clip.speed) > 0 ? Number(clip.speed) : 1
+        const trimStart = clip.trimStart || 0
+        const sourceDuration = Number.isFinite(clip.sourceDuration) ? clip.sourceDuration : null
+        const trimEnd = clip.trimEnd ?? sourceDuration ?? (trimStart + (clip.duration || 0) * currentSpeed)
+        const sourceSpan = Math.max(0.01, Math.min(sourceDuration ?? trimEnd, trimEnd) - trimStart)
+        const nextDuration = Math.max(0.1, sourceSpan / nextSpeed)
+
+        return {
+          ...clip,
+          speed: nextSpeed,
+          duration: nextDuration,
+          sourceTimeScale: 1,
+        }
+      }
+
+      return {
+        clips: state.clips.map(clip =>
+          (clip.id === clipId || isLinkedAudio(clip)) ? computeNext(clip) : clip
+        )
+      }
+    })
+  },
+
+  /**
+   * Update clip reverse playback
+   * @param {string} clipId - The clip to update
+   * @param {boolean} reverse - Whether to reverse playback
+   * @param {boolean} saveHistory - Whether to save to history
+   */
+  updateClipReverse: (clipId, reverse, saveHistory = true) => {
+    if (saveHistory) {
+      get().saveToHistory()
+    }
+
+    set((state) => {
+      const target = state.clips.find(c => c.id === clipId)
+      if (!target) return {}
+
+      const audioTrackIds = new Set(state.tracks.filter(t => t.type === 'audio').map(t => t.id))
+      const shouldSyncAudio = target.type === 'video'
+      const isLinkedAudio = (clip) => shouldSyncAudio && clip.assetId === target.assetId && audioTrackIds.has(clip.trackId)
+
+      return {
+        clips: state.clips.map(clip =>
+          (clip.id === clipId || isLinkedAudio(clip))
+            ? { ...clip, reverse: !!reverse }
+            : clip
+        )
+      }
+    })
   },
 
   /**

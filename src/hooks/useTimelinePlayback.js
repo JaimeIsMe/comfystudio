@@ -29,9 +29,16 @@ export function useTimelinePlayback() {
     const activeClip = getActiveClipAtTime(time)
     const transitionInfo = getTransitionAtTime(time)
     const endTime = getTimelineEndTime()
-    const timeScale = activeClip?.sourceTimeScale || (activeClip?.timelineFps && activeClip?.sourceFps
+    const baseScale = activeClip?.sourceTimeScale || (activeClip?.timelineFps && activeClip?.sourceFps
       ? activeClip.timelineFps / activeClip.sourceFps
       : 1)
+    const speed = Number(activeClip?.speed)
+    const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
+    const timeScale = baseScale * speedScale
+    const reverse = !!activeClip?.reverse
+    const trimStart = activeClip?.trimStart || 0
+    const rawTrimEnd = activeClip?.trimEnd ?? activeClip?.sourceDuration ?? trimStart
+    const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
     
     return {
       activeClip,
@@ -39,7 +46,9 @@ export function useTimelinePlayback() {
       endTime,
       // Calculate the time within the source video
       sourceTime: activeClip 
-        ? (activeClip.trimStart || 0) + (time - activeClip.startTime) * timeScale
+        ? (reverse
+          ? trimEnd - (time - activeClip.startTime) * timeScale
+          : trimStart + (time - activeClip.startTime) * timeScale)
         : 0
     }
   }, [getActiveClipAtTime, getTransitionAtTime, getTimelineEndTime])
@@ -147,10 +156,19 @@ export function useTimelinePlayback() {
   const syncVideoToTimeline = useCallback((videoRef, clip, currentTime) => {
     if (!videoRef || !clip) return
     
-    const timeScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
+    const baseScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
       ? clip.timelineFps / clip.sourceFps
       : 1)
-    const sourceTime = (clip.trimStart || 0) + (currentTime - clip.startTime) * timeScale
+    const speed = Number(clip.speed)
+    const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
+    const timeScale = baseScale * speedScale
+    const reverse = !!clip.reverse
+    const trimStart = clip.trimStart || 0
+    const rawTrimEnd = clip.trimEnd ?? clip.sourceDuration ?? trimStart
+    const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
+    const sourceTime = reverse
+      ? trimEnd - (currentTime - clip.startTime) * timeScale
+      : trimStart + (currentTime - clip.startTime) * timeScale
     
     // Only seek if difference is significant (> 0.1s) to avoid constant seeking
     if (Math.abs(videoRef.currentTime - sourceTime) > 0.1) {
@@ -174,3 +192,6 @@ export function useTimelinePlayback() {
 }
 
 export default useTimelinePlayback
+
+
+

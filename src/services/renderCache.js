@@ -272,9 +272,16 @@ class RenderCacheService {
       const sourceFrameRate = fps // Timeline FPS
       const totalFrames = Math.ceil(clipDuration * sourceFrameRate)
       const frameInterval = 1 / sourceFrameRate
-      const timeScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
+      const baseScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
         ? clip.timelineFps / clip.sourceFps
         : 1)
+      const speed = Number(clip.speed)
+      const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
+      const timeScale = baseScale * speedScale
+      const reverse = !!clip.reverse
+      const trimStart = clip.trimStart || 0
+      const rawTrimEnd = clip.trimEnd ?? clip.sourceDuration ?? trimStart
+      const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
 
       // Notify rendering start
       this.notifyListeners(clip.id, { status: 'rendering', progress: 10 })
@@ -291,7 +298,9 @@ class RenderCacheService {
 
         // Calculate time in source video
         const clipTime = frameIndex * frameInterval
-        const sourceTime = (clip.trimStart || 0) + clipTime * timeScale
+        const sourceTime = reverse
+          ? trimEnd - clipTime * timeScale
+          : trimStart + clipTime * timeScale
 
         // Seek video to frame
         video.currentTime = sourceTime

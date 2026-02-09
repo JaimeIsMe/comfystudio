@@ -193,6 +193,20 @@ export const useAssetsStore = create(
   },
 
   /**
+   * Enable/disable audio for a video asset
+   */
+  setAssetAudioEnabled: (id, enabled) => {
+    set((state) => ({
+      assets: state.assets.map(a =>
+        a.id === id ? { ...a, audioEnabled: enabled } : a
+      ),
+      currentPreview: state.currentPreview?.id === id
+        ? { ...state.currentPreview, audioEnabled: enabled }
+        : state.currentPreview
+    }))
+  },
+
+  /**
    * Move an asset to a folder
    * @param {string} assetId - The asset ID
    * @param {string|null} folderId - The folder ID (null = root)
@@ -310,9 +324,11 @@ export const useAssetsStore = create(
   /**
    * Load assets from project data
    * @param {Array} projectAssets - Assets from project file
-   * @param {FileSystemDirectoryHandle} projectHandle - The project directory handle for regenerating URLs
+   * @param {FileSystemDirectoryHandle|string} projectHandle - The project directory handle for regenerating URLs
+   * @param {Array} [projectFolders] - Folders from project file (optional; if omitted, folders are cleared)
+   * @param {number} [projectFolderCounter] - Folder counter from project file (optional)
    */
-  loadFromProject: async (projectAssets, projectHandle) => {
+  loadFromProject: async (projectAssets, projectHandle, projectFolders, projectFolderCounter) => {
     // Clear existing assets first
     get().clearProject()
     
@@ -346,10 +362,18 @@ export const useAssetsStore = create(
       }
     }
     
-    set({
+    const nextState = {
       assets: assetsWithUrls,
       assetCounter: (projectAssets?.length || 0) + 1,
-    })
+    }
+    // Restore folder structure from project file so folders persist across sessions
+    if (Array.isArray(projectFolders)) {
+      nextState.folders = projectFolders
+    }
+    if (typeof projectFolderCounter === 'number' && projectFolderCounter >= 0) {
+      nextState.folderCounter = projectFolderCounter
+    }
+    set(nextState)
   },
 
   /**

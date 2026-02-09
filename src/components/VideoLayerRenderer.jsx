@@ -208,10 +208,19 @@ function useMaskEffectStyle(clip, playheadPosition, isCachedRender = false) {
     if (maskAsset.maskFrames && maskAsset.maskFrames.length > 1) {
       // Calculate which frame to use based on SOURCE time (trim-aware)
       const clipTime = playheadPosition - clip.startTime
-      const timeScale = clip?.sourceTimeScale || (clip?.timelineFps && clip?.sourceFps
+      const rawTimeScale = clip?.sourceTimeScale || (clip?.timelineFps && clip?.sourceFps
         ? clip.timelineFps / clip.sourceFps
         : 1)
-      const sourceTime = (clip.trimStart || 0) + clipTime * timeScale
+      const speed = Number(clip?.speed)
+      const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
+      const timeScale = rawTimeScale * speedScale
+      const reverse = !!clip?.reverse
+      const trimStart = clip.trimStart || 0
+      const rawTrimEnd = clip.trimEnd ?? sourceDuration ?? trimStart
+      const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
+      const sourceTime = reverse
+        ? trimEnd - clipTime * timeScale
+        : trimStart + clipTime * timeScale
       const sourceProgress = sourceDuration > 0
         ? Math.max(0, Math.min(1, sourceTime / sourceDuration))
         : 0
@@ -317,10 +326,20 @@ const VideoLayer = memo(function VideoLayer({
   const rawTimeScale = clip?.sourceTimeScale || (clip?.timelineFps && clip?.sourceFps
     ? clip.timelineFps / clip.sourceFps
     : 1)
-  const timeScale = isCachedRender ? 1 : rawTimeScale
+  const speed = Number(clip?.speed)
+  const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
+  const timeScale = isCachedRender ? 1 : rawTimeScale * speedScale
+  const reverse = !!clip?.reverse
+  const trimStart = clip?.trimStart || 0
+  const rawTrimEnd = clip?.trimEnd ?? clip?.sourceDuration ?? (trimStart + (clip?.duration || 0) * timeScale)
+  const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
+  const minTime = Math.min(trimStart, trimEnd)
+  const maxTime = Math.max(trimStart, trimEnd)
   
   // Calculate source time for sprite frame lookup
-  const sourceTime = (clip?.trimStart || 0) + clipTime * timeScale
+  const sourceTime = reverse
+    ? trimEnd - clipTime * timeScale
+    : trimStart + clipTime * timeScale
   
   // Get animated transform (with keyframes applied)
   const animatedTransform = useMemo(() => {
@@ -430,9 +449,10 @@ const VideoLayer = memo(function VideoLayer({
       // Seek immediately when video has enough data
       const onLoadedData = () => {
         if (clip) {
-          const sourceTime = (clip.trimStart || 0) + clipTime * timeScale
-          const maxTime = clip.sourceDuration || clip.trimEnd || (clip.duration * timeScale)
-          const clampedTime = Math.max(0, Math.min(sourceTime, maxTime - 0.01))
+          const sourceTime = reverse
+            ? trimEnd - clipTime * timeScale
+            : trimStart + clipTime * timeScale
+          const clampedTime = Math.max(minTime, Math.min(sourceTime, maxTime - 0.01))
           video.currentTime = clampedTime
         }
         setIsReady(true)
@@ -445,9 +465,10 @@ const VideoLayer = memo(function VideoLayer({
       video.addEventListener('loadeddata', onLoadedData)
     } else if (clip && video.readyState >= 2) {
       // Same src, ensure correct position
-      const sourceTime = (clip.trimStart || 0) + clipTime * timeScale
-      const maxTime = clip.sourceDuration || clip.trimEnd || (clip.duration * timeScale)
-      const clampedTime = Math.max(0, Math.min(sourceTime, maxTime - 0.01))
+      const sourceTime = reverse
+        ? trimEnd - clipTime * timeScale
+        : trimStart + clipTime * timeScale
+      const clampedTime = Math.max(minTime, Math.min(sourceTime, maxTime - 0.01))
       const timeDiff = Math.abs(video.currentTime - clampedTime)
       if (timeDiff > 0.02) {
         video.currentTime = clampedTime
@@ -484,9 +505,10 @@ const VideoLayer = memo(function VideoLayer({
         // Force a final precise seek when scrubbing stops
         if (videoRef.current && clip) {
           const currentPlayhead = useTimelineStore.getState().playheadPosition
-          const sourceTime = (clip.trimStart || 0) + (currentPlayhead - clip.startTime) * timeScale
-          const maxTime = clip.sourceDuration || clip.trimEnd || (clip.duration * timeScale)
-          const clampedTime = Math.max(0, Math.min(sourceTime, maxTime))
+          const sourceTime = reverse
+            ? trimEnd - (currentPlayhead - clip.startTime) * timeScale
+            : trimStart + (currentPlayhead - clip.startTime) * timeScale
+          const clampedTime = Math.max(minTime, Math.min(sourceTime, maxTime))
           videoRef.current.currentTime = clampedTime
         }
       }, 150)
@@ -511,11 +533,12 @@ const VideoLayer = memo(function VideoLayer({
     if (!videoRef.current || !clip) return
     
     const video = videoRef.current
-    const sourceTime = (clip.trimStart || 0) + clipTime * timeScale
+    const sourceTime = reverse
+      ? trimEnd - clipTime * timeScale
+      : trimStart + clipTime * timeScale
     
     // Clamp sourceTime to valid range
-    const maxTime = clip.sourceDuration || clip.trimEnd || (clip.duration * timeScale)
-    const clampedTime = Math.max(0, Math.min(sourceTime, maxTime - 0.01)) // Stay slightly before end
+    const clampedTime = Math.max(minTime, Math.min(sourceTime, maxTime - 0.01)) // Stay slightly before end
     
     // Calculate time difference
     const timeDiff = Math.abs(video.currentTime - clampedTime)
@@ -529,34 +552,46 @@ const VideoLayer = memo(function VideoLayer({
         ? 0.25
         : (speedMismatch ? 0.5 : 0.15)
       
-      if (timeDiff > driftThreshold) {
-        video.currentTime = clampedTime
-        lastSyncTime.current = playheadPosition
-      }
-      
-      // Ensure playback rate matches clip time scale
-      if (Number.isFinite(timeScale) && timeScale > 0 && Math.abs(video.playbackRate - timeScale) > 0.001) {
-        video.playbackRate = timeScale
-      }
+      if (reverse) {
+        // Reverse playback: seek-only (no native reverse playback)
+        if (timeDiff > 0.02) {
+          video.currentTime = clampedTime
+          lastSyncTime.current = playheadPosition
+        }
+        if (!video.paused) {
+          video.pause()
+        }
+      } else {
+        if (timeDiff > driftThreshold) {
+          video.currentTime = clampedTime
+          lastSyncTime.current = playheadPosition
+        }
+        
+        // Ensure playback rate matches clip time scale
+        const playbackSpeed = Math.max(0.01, Math.abs(timeScale))
+        if (Number.isFinite(playbackSpeed) && Math.abs(video.playbackRate - playbackSpeed) > 0.001) {
+          video.playbackRate = playbackSpeed
+        }
 
-      // Start playing if paused and ready (don't wait for canplay - seek immediately)
-      if (video.paused) {
-        if (video.readyState >= 2) {
-          // Video has enough data to play - seek first, then play
-          if (timeDiff > 0.02) {
-            video.currentTime = clampedTime
-          }
-          video.play().catch(() => {})
-        } else if (video.readyState >= 1) {
-          // Video has metadata - seek immediately, play when ready
-          if (timeDiff > 0.02) {
-            video.currentTime = clampedTime
-          }
-          const onCanPlay = () => {
+        // Start playing if paused and ready (don't wait for canplay - seek immediately)
+        if (video.paused) {
+          if (video.readyState >= 2) {
+            // Video has enough data to play - seek first, then play
+            if (timeDiff > 0.02) {
+              video.currentTime = clampedTime
+            }
             video.play().catch(() => {})
-            video.removeEventListener('canplay', onCanPlay)
+          } else if (video.readyState >= 1) {
+            // Video has metadata - seek immediately, play when ready
+            if (timeDiff > 0.02) {
+              video.currentTime = clampedTime
+            }
+            const onCanPlay = () => {
+              video.play().catch(() => {})
+              video.removeEventListener('canplay', onCanPlay)
+            }
+            video.addEventListener('canplay', onCanPlay)
           }
-          video.addEventListener('canplay', onCanPlay)
         }
       }
     } else if (isScrubbing.current) {
@@ -608,8 +643,8 @@ const VideoLayer = memo(function VideoLayer({
   // Use animated transform instead of base transform
   const transformStyle = buildVideoTransform(animatedTransform)
   
-  // First layer (bottom) can have audio in single-layer mode
-  const shouldMute = layerIndex > 0 || totalLayers > 1
+  // Timeline video layers should never play audio (audio is handled by AudioLayerRenderer)
+  const shouldMute = true
 
   return (
     <>
@@ -1028,12 +1063,22 @@ function VideoLayerRenderer({
         const clipWithUrl = { ...clip, url: clip?.url }
         const cachedVideo = videoCache.getVideoElement(clipWithUrl)
         if (cachedVideo && cachedVideo.readyState >= 1) {
-          const timeScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
+          const baseScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
             ? clip.timelineFps / clip.sourceFps
             : 1)
-          const sourceTime = (clip.trimStart || 0) + (playheadPosition - clip.startTime) * timeScale
-          const maxTime = clip.sourceDuration || clip.trimEnd || (clip.duration * timeScale)
-          const clampedTime = Math.max(0, Math.min(sourceTime, maxTime - 0.01))
+          const speed = Number(clip.speed)
+          const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
+          const timeScale = baseScale * speedScale
+          const reverse = !!clip.reverse
+          const trimStart = clip.trimStart || 0
+          const rawTrimEnd = clip.trimEnd ?? clip.sourceDuration ?? (trimStart + (clip.duration || 0) * timeScale)
+          const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
+          const minTime = Math.min(trimStart, trimEnd)
+          const maxTime = Math.max(trimStart, trimEnd)
+          const sourceTime = reverse
+            ? trimEnd - (playheadPosition - clip.startTime) * timeScale
+            : trimStart + (playheadPosition - clip.startTime) * timeScale
+          const clampedTime = Math.max(minTime, Math.min(sourceTime, maxTime - 0.01))
           cachedVideo.currentTime = clampedTime
         }
       })

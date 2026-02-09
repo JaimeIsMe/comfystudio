@@ -239,6 +239,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     updateTextProperties,
     removeClip,
     resizeClip,
+    updateClipSpeed,
+    updateClipReverse,
     toggleKeyframe,
     setKeyframe,
     // Effects
@@ -942,6 +944,48 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 </div>
               </div>
             </div>
+
+            {(selectedClip.type === 'video' || selectedClip.type === 'audio') && (
+              <div className="space-y-2">
+                <div>
+                  <label className="text-[9px] text-sf-text-muted block mb-1">Speed</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min="0.25"
+                      max="4"
+                      step="0.25"
+                      value={Number.isFinite(Number(selectedClip.speed)) ? Number(selectedClip.speed) : 1}
+                      onChange={(e) => updateClipSpeed(selectedClip.id, parseFloat(e.target.value) || 1, false)}
+                      onMouseUp={(e) => updateClipSpeed(selectedClip.id, parseFloat(e.target.value) || 1, true)}
+                      className="flex-1"
+                    />
+                    <input
+                      type="number"
+                      min="0.25"
+                      max="4"
+                      step="0.25"
+                      value={(Number.isFinite(Number(selectedClip.speed)) ? Number(selectedClip.speed) : 1).toFixed(2)}
+                      onChange={(e) => updateClipSpeed(selectedClip.id, parseFloat(e.target.value) || 1, false)}
+                      onBlur={(e) => updateClipSpeed(selectedClip.id, parseFloat(e.target.value) || 1, true)}
+                      className="w-16 bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                    />
+                    <span className="text-[9px] text-sf-text-muted">x</span>
+                  </div>
+                </div>
+
+                {selectedClip.type === 'video' && (
+                  <label className="flex items-center gap-2 text-[9px] text-sf-text-muted">
+                    <input
+                      type="checkbox"
+                      checked={!!selectedClip.reverse}
+                      onChange={(e) => updateClipReverse(selectedClip.id, e.target.checked, true)}
+                    />
+                    Reverse
+                  </label>
+                )}
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               <div>
