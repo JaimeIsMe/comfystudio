@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1" />
+  <title>ComfyStudio</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: #0a0a0b;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    .splash-image {
+      max-width: 90%;
+      max-height: 85vh;
+      object-fit: contain;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+    .splash-title {
+      margin-top: 1.5rem;
+      color: #a3a3a3;
+      font-size: 0.9rem;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+    }
+  </style>
+</head>
+<body>
+  <img
+    class="splash-image"
+    src="splash.png"
+    alt="ComfyStudio"
+    onerror="this.onerror=null; this.src='splash.jpg'"
+  />
+  <div class="splash-title">ComfyStudio — AI Animatic Studio</div>
+</body>
+</html>

@@ -77,7 +77,7 @@ function WelcomeScreen() {
             <div className="w-16 h-16 bg-sf-accent rounded-2xl flex items-center justify-center mx-auto mb-4">
               <Film className="w-8 h-8 text-white" />
             </div>
-            <h1 className="text-2xl font-bold text-sf-text-primary mb-2">Welcome to StoryFlow</h1>
+            <h1 className="text-2xl font-bold text-sf-text-primary mb-2">Welcome to ComfyStudio</h1>
             <p className="text-sf-text-muted text-sm">AI-Powered Video Editing Studio</p>
           </div>
           
@@ -89,7 +89,7 @@ function WelcomeScreen() {
                 <div>
                   <p className="text-sm text-sf-text-primary font-medium">Browser Not Supported</p>
                   <p className="text-xs text-sf-text-muted mt-1">
-                    StoryFlow requires the File System Access API. Please use Google Chrome or Microsoft Edge.
+                    ComfyStudio requires the File System Access API. Please use Google Chrome or Microsoft Edge.
                   </p>
                 </div>
               </div>
@@ -100,7 +100,7 @@ function WelcomeScreen() {
           <div className="bg-sf-dark-900 border border-sf-dark-700 rounded-xl p-6">
             <h2 className="text-lg font-semibold text-sf-text-primary mb-2">Set Up Your Workspace</h2>
             <p className="text-sm text-sf-text-muted mb-6">
-              Choose a folder where your StoryFlow projects will be saved. Each project will have its own subfolder with all assets organized inside.
+              Choose a folder where your ComfyStudio projects will be saved. Each project will have its own subfolder with all assets organized inside.
             </p>
             
             {/* Current Location Display */}
@@ -157,7 +157,7 @@ function WelcomeScreen() {
             <Film className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-sf-text-primary">StoryFlow</h1>
+            <h1 className="text-xl font-bold text-sf-text-primary">ComfyStudio</h1>
             <p className="text-xs text-sf-text-muted">AI-Powered Video Editing</p>
           </div>
         </div>

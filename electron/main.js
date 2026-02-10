@@ -9,7 +9,10 @@ const ffprobePath = ffprobeStatic?.path || ffprobeStatic
 
 const isDev = process.env.NODE_ENV !== 'production'
 
+const SPLASH_DURATION_MS = 3000
+
 let mainWindow = null
+let splashWindow = null
 
 // ============================================
 // Window Controls
@@ -51,8 +54,8 @@ ipcMain.handle('window:toggleFullScreen', () => {
 
 // Register custom protocol for serving local files
 function registerFileProtocol() {
-  protocol.handle('storyflow', async (request) => {
-    const url = request.url.replace('storyflow://', '')
+  protocol.handle('comfystudio', async (request) => {
+    const url = request.url.replace('comfystudio://', '')
     const filePath = decodeURIComponent(url)
     
     try {
@@ -64,6 +67,30 @@ function registerFileProtocol() {
       console.error('Protocol error:', err)
       return new Response('File not found', { status: 404 })
     }
+  })
+}
+
+function createSplashWindow() {
+  const splashPath = isDev
+    ? path.join(__dirname, '../public/splash.html')
+    : path.join(__dirname, '../dist/splash.html')
+  splashWindow = new BrowserWindow({
+    width: 800,
+    height: 520,
+    backgroundColor: '#0a0a0b',
+    frame: false,
+    transparent: false,
+    center: true,
+    resizable: false,
+    alwaysOnTop: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  })
+  splashWindow.loadFile(splashPath)
+  splashWindow.on('closed', () => {
+    splashWindow = null
   })
 }
 
@@ -412,9 +439,9 @@ ipcMain.handle('path:getAppPath', (event, name) => {
 // ============================================
 
 ipcMain.handle('media:getFileUrl', (event, filePath) => {
-  // Convert file path to storyflow:// protocol URL
+  // Convert file path to comfystudio:// protocol URL
   const encodedPath = encodeURIComponent(filePath)
-  return `storyflow://${encodedPath}`
+  return `comfystudio://${encodedPath}`
 })
 
 ipcMain.handle('media:getFileUrlDirect', (event, filePath) => {
@@ -790,7 +817,14 @@ ipcMain.handle('export:checkNvenc', async () => {
 
 app.whenReady().then(() => {
   registerFileProtocol()
-  createWindow()
+  createSplashWindow()
+  setTimeout(() => {
+    createWindow()
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.close()
+      splashWindow = null
+    }
+  }, SPLASH_DURATION_MS)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -2775,7 +2775,7 @@ export const useTimelineStore = create(
   }
     }),
     {
-      name: 'storyflow-timeline', // localStorage key
+      name: 'comfystudio-timeline', // localStorage key
       partialize: (state) => ({
         // Only persist these fields (exclude transient UI state)
         duration: state.duration,

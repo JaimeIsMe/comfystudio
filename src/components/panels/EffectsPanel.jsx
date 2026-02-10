@@ -146,7 +146,7 @@ function EffectsPanel() {
   
   const handleDragStart = (e, transitionType) => {
     const payload = { type: transitionType, duration: durationSeconds }
-    e.dataTransfer.setData('application/x-storyflow-transition', JSON.stringify(payload))
+    e.dataTransfer.setData('application/x-comfystudio-transition', JSON.stringify(payload))
     e.dataTransfer.effectAllowed = 'copy'
   }
   

@@ -41,7 +41,7 @@ function AssetsPanel() {
   const [dragOverFolderId, setDragOverFolderId] = useState(null) // 'root' | folderId for drop highlight
   const panelRef = useRef(null)
 
-  const ASSET_DRAG_TYPE = 'application/x-storyflow-asset-ids'
+  const ASSET_DRAG_TYPE = 'application/x-comfystudio-asset-ids'
 
   // Get assets from store
   const { 

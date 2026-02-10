@@ -43,7 +43,7 @@ function App() {
   const MIN_TIMELINE = 180 // Accounts for transport controls (40px) + minimum timeline
   const MAX_TIMELINE = 450
 
-  const LAYOUT_STORAGE_KEY = 'storyflow-editor-layout'
+  const LAYOUT_STORAGE_KEY = 'comfystudio-editor-layout'
 
   // Load persisted layout on mount (single read)
   const [layoutLoaded, setLayoutLoaded] = useState(false)

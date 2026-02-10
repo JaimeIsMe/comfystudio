@@ -27,7 +27,7 @@ function Timeline({ onOpenAudioGenerate }) {
   // Track headers width (resizable) — default wide enough to read labels; persisted
   const TRACK_HEADERS_MIN = 100
   const TRACK_HEADERS_MAX = 400
-  const TRACK_HEADERS_STORAGE_KEY = 'storyflow-timeline-track-headers-width'
+  const TRACK_HEADERS_STORAGE_KEY = 'comfystudio-timeline-track-headers-width'
   const AUDIO_TRACK_HEIGHT_MONO = 40
   const AUDIO_TRACK_HEIGHT_STEREO = 80
   const getAudioTrackHeight = (track) => (track.channels === 'mono' ? AUDIO_TRACK_HEIGHT_MONO : AUDIO_TRACK_HEIGHT_STEREO)
@@ -1168,7 +1168,7 @@ function Timeline({ onOpenAudioGenerate }) {
   }
   
   const parseTransitionDrop = (e) => {
-    const raw = e.dataTransfer.getData('application/x-storyflow-transition')
+    const raw = e.dataTransfer.getData('application/x-comfystudio-transition')
     if (!raw) return null
     try {
       return JSON.parse(raw)

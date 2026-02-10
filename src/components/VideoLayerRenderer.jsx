@@ -472,7 +472,7 @@ const VideoLayer = memo(function VideoLayer({
     videoElementRef.current = cachedVideo
     setIsReady(cachedVideo.readyState >= 2)
 
-    if (typeof localStorage !== 'undefined' && localStorage.getItem('storyflow-debug-playback') === '1') {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('comfystudio-debug-playback') === '1') {
       console.log('[PlaybackCache] VideoLayer attached:', { clipId: clip?.id, readyState: cachedVideo.readyState, srcHint: (clipUrl || '').slice(0, 50) + '...' })
     }
 
@@ -550,7 +550,7 @@ const VideoLayer = memo(function VideoLayer({
     
     // Calculate time difference
     const timeDiff = Math.abs(video.currentTime - clampedTime)
-    const debugPlayback = typeof localStorage !== 'undefined' && localStorage.getItem('storyflow-debug-playback') === '1'
+    const debugPlayback = typeof localStorage !== 'undefined' && localStorage.getItem('comfystudio-debug-playback') === '1'
 
     // Use different sync strategies for playing vs paused vs scrubbing
     if (isPlaying) {

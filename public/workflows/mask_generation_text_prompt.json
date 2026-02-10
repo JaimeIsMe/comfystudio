@@ -35,7 +35,7 @@
   },
   "5": {
     "inputs": {
-      "filename_prefix": "StoryFlowMask",
+      "filename_prefix": "ComfyStudioMask",
       "images": [
         "4",
         0

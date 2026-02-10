@@ -5,7 +5,7 @@ import { getPexelsApiKey, setPexelsApiKey } from '../../services/pexelsSettings'
 
 function SettingsPanel() {
   const [comfyUrl, setComfyUrl] = useState('http://127.0.0.1:8188')
-  const [outputPath, setOutputPath] = useState('C:\\Users\\...\\StoryFlow\\outputs')
+  const [outputPath, setOutputPath] = useState('C:\\Users\\...\\ComfyStudio\\outputs')
   const [workflowPath, setWorkflowPath] = useState('C:\\Users\\...\\ComfyUI\\workflow_API')
   const [theme, setTheme] = useState('dark')
   const [pexelsApiKey, setPexelsApiKeyLocal] = useState('')
