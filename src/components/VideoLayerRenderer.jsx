@@ -134,16 +134,22 @@ function useDiskCacheLoader(clip) {
  * Now also handles loading stale cache URLs from disk
  */
 function useClipUrl(clip) {
-  const getAssetUrl = useAssetsStore(state => state.getAssetUrl)
-  
+  // Subscribe to this asset's URL so we re-render when playback cache is set (getAssetUrl alone doesn't trigger re-render)
+  const assetUrl = useAssetsStore(state => {
+    if (!clip?.assetId) return null
+    const asset = state.assets.find(a => a.id === clip.assetId)
+    if (!asset) return null
+    return asset.playbackCacheUrl || asset.url || null
+  })
+
   // This hook will trigger loading from disk if needed and return the loaded URL
   const diskLoadedUrl = useDiskCacheLoader(clip)
-  
+
   return useMemo(() => {
     if (!clip) return { url: null, isCached: false }
     // For text clips, there's no URL
     if (clip.type === 'text') return { url: null, isCached: false }
-    
+
     // Check if we have a valid cached render
     // Priority: diskLoadedUrl (freshly loaded) > clip.cacheUrl (from store)
     if (clip.cacheStatus === 'cached') {
@@ -160,15 +166,14 @@ function useClipUrl(clip) {
         return { url: clip.cacheUrl, isCached: true }
       }
     }
-    
-    // Try to get URL from assets store (will have regenerated URL after refresh)
-    if (clip.assetId) {
-      const assetUrl = getAssetUrl(clip.assetId)
-      if (assetUrl) return { url: assetUrl, isCached: false }
+
+    // Use URL from assets store (includes playback cache when ready — subscription above ensures we re-render when it's set)
+    if (clip.assetId && assetUrl) {
+      return { url: assetUrl, isCached: false }
     }
     // Fallback to clip's stored URL (may be stale after refresh)
     return { url: clip.url, isCached: false }
-  }, [clip, clip?.assetId, clip?.cacheStatus, clip?.cacheUrl, clip?.id, diskLoadedUrl, getAssetUrl])
+  }, [clip, clip?.assetId, clip?.cacheStatus, clip?.cacheUrl, clip?.id, diskLoadedUrl, assetUrl])
 }
 
 /**
@@ -290,8 +295,10 @@ const VideoLayer = memo(function VideoLayer({
   getClipTransform,
   isInTransition = false, // Whether this clip is part of a transition
 }) {
-  const videoRef = useRef(null)
+  const containerRef = useRef(null)   // Container we attach the cached video element to
+  const videoElementRef = useRef(null) // Cached video element we display (avoids black flash at cuts)
   const holdFrameRef = useRef(null) // Canvas to hold last frame during src changes
+  const lastPlaybackDebugRef = useRef(0) // Throttle playback debug logs
   const [isReady, setIsReady] = useState(false)
   const [showHoldFrame, setShowHoldFrame] = useState(false)
   const [showSprite, setShowSprite] = useState(false)
@@ -355,7 +362,7 @@ const VideoLayer = memo(function VideoLayer({
   }, [spriteData, sourceTime])
 
   const updateSpriteContainerSize = useCallback(() => {
-    const el = videoRef.current
+    const el = containerRef.current
     if (!el) return
     const rect = el.getBoundingClientRect()
     if (!rect.width || !rect.height) return
@@ -371,7 +378,7 @@ const VideoLayer = memo(function VideoLayer({
     let rafId
 
     const tryAttach = () => {
-      const el = videoRef.current
+      const el = containerRef.current
       if (!el) {
         rafId = requestAnimationFrame(tryAttach)
         return
@@ -413,68 +420,69 @@ const VideoLayer = memo(function VideoLayer({
     }
   }, [spriteInfo, spriteContainerSize])
   
-  // Get cached video element on mount and pre-seek for transitions
-  // Capture hold frame before src changes to prevent black flicker
+  // Attach the cache's video element to our container so we show the preloaded element at cuts (no black flash)
   useEffect(() => {
-    if (!clipUrl || !videoRef.current) return
-    
-    const video = videoRef.current
-    
-    // Check if src is actually changing
-    const srcChanging = lastClipUrlRef.current && lastClipUrlRef.current !== clipUrl
-    
-    if (srcChanging) {
-      // Capture current frame to hold frame canvas before src changes
-      if (video.readyState >= 2 && video.videoWidth > 0 && holdFrameRef.current) {
-        const canvas = holdFrameRef.current
-        canvas.width = video.videoWidth
-        canvas.height = video.videoHeight
-        const ctx = canvas.getContext('2d')
-        ctx.drawImage(video, 0, 0)
-        setShowHoldFrame(true)
-      }
-    }
-    
-    lastClipUrlRef.current = clipUrl
-    
-    // Get or create cached video for this clip
+    if (!clipUrl || !clip || !containerRef.current) return
+
     const clipWithUrl = { ...clip, url: clipUrl }
     const cachedVideo = videoCache.getVideoElement(clipWithUrl)
-    
-    // Only change src if it's actually different
-    if (video.src !== clipUrl) {
-      video.src = clipUrl
-      setIsReady(false)
-      
-      // Seek immediately when video has enough data
-      const onLoadedData = () => {
-        if (clip) {
-          const sourceTime = reverse
-            ? trimEnd - clipTime * timeScale
-            : trimStart + clipTime * timeScale
-          const clampedTime = Math.max(minTime, Math.min(sourceTime, maxTime - 0.01))
-          video.currentTime = clampedTime
-        }
-        setIsReady(true)
-        // Hide hold frame now that new video has a frame
-        requestAnimationFrame(() => {
-          setShowHoldFrame(false)
-        })
-        video.removeEventListener('loadeddata', onLoadedData)
-      }
-      video.addEventListener('loadeddata', onLoadedData)
-    } else if (clip && video.readyState >= 2) {
-      // Same src, ensure correct position
-      const sourceTime = reverse
-        ? trimEnd - clipTime * timeScale
-        : trimStart + clipTime * timeScale
-      const clampedTime = Math.max(minTime, Math.min(sourceTime, maxTime - 0.01))
-      const timeDiff = Math.abs(video.currentTime - clampedTime)
-      if (timeDiff > 0.02) {
-        video.currentTime = clampedTime
-      }
+
+    const container = containerRef.current
+    if (cachedVideo.parentNode !== container) {
+      container.appendChild(cachedVideo)
     }
-  }, [clipUrl, clip?.id, isCachedRender, isInTransition, clip, clipTime, timeScale])
+
+    // Style the video to fill the container (cache already set muted, playsInline, etc.)
+    Object.assign(cachedVideo.style, {
+      objectFit: 'contain',
+      width: '100%',
+      height: '100%',
+      display: 'block',
+      position: 'absolute',
+      top: 0,
+      left: 0,
+    })
+
+    // Pre-seek to current frame so first paint is correct (critical for cuts)
+    const sourceTime = reverse
+      ? trimEnd - clipTime * timeScale
+      : trimStart + clipTime * timeScale
+    const clampedTime = Math.max(minTime, Math.min(sourceTime, maxTime - 0.01))
+    if (cachedVideo.readyState >= 1) {
+      cachedVideo.currentTime = clampedTime
+    } else {
+      const onLoadedData = () => {
+        cachedVideo.currentTime = clampedTime
+        cachedVideo.removeEventListener('loadeddata', onLoadedData)
+      }
+      cachedVideo.addEventListener('loadeddata', onLoadedData)
+    }
+
+    // When this is the playback-cache file, wait for canplay before we consider it ready (avoids black on play)
+    const isPlaybackCacheUrl = clipUrl && (String(clipUrl).includes('playback_') && String(clipUrl).includes('cache'))
+    if (isPlaybackCacheUrl && cachedVideo.readyState < 2) {
+      const onCanPlay = () => {
+        cachedVideo.currentTime = clampedTime
+        setIsReady(true)
+        cachedVideo.removeEventListener('canplay', onCanPlay)
+      }
+      cachedVideo.addEventListener('canplay', onCanPlay)
+    }
+
+    videoElementRef.current = cachedVideo
+    setIsReady(cachedVideo.readyState >= 2)
+
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('storyflow-debug-playback') === '1') {
+      console.log('[PlaybackCache] VideoLayer attached:', { clipId: clip?.id, readyState: cachedVideo.readyState, srcHint: (clipUrl || '').slice(0, 50) + '...' })
+    }
+
+    return () => {
+      if (cachedVideo.parentNode) {
+        cachedVideo.parentNode.removeChild(cachedVideo)
+      }
+      videoElementRef.current = null
+    }
+  }, [clipUrl, clip?.id, clip, clipTime, timeScale, reverse, trimStart, trimEnd, minTime, maxTime])
 
   // Detect scrubbing (rapid playhead changes while paused)
   useEffect(() => {
@@ -503,13 +511,14 @@ const VideoLayer = memo(function VideoLayer({
         isScrubbing.current = false
         setShowSprite(false)
         // Force a final precise seek when scrubbing stops
-        if (videoRef.current && clip) {
+        const video = videoElementRef.current
+        if (video && clip) {
           const currentPlayhead = useTimelineStore.getState().playheadPosition
           const sourceTime = reverse
             ? trimEnd - (currentPlayhead - clip.startTime) * timeScale
             : trimStart + (currentPlayhead - clip.startTime) * timeScale
           const clampedTime = Math.max(minTime, Math.min(sourceTime, maxTime))
-          videoRef.current.currentTime = clampedTime
+          video.currentTime = clampedTime
         }
       }, 150)
     }
@@ -530,9 +539,8 @@ const VideoLayer = memo(function VideoLayer({
 
   // Sync video playback with timeline
   useEffect(() => {
-    if (!videoRef.current || !clip) return
-    
-    const video = videoRef.current
+    const video = videoElementRef.current
+    if (!video || !clip) return
     const sourceTime = reverse
       ? trimEnd - clipTime * timeScale
       : trimStart + clipTime * timeScale
@@ -542,9 +550,19 @@ const VideoLayer = memo(function VideoLayer({
     
     // Calculate time difference
     const timeDiff = Math.abs(video.currentTime - clampedTime)
-    
+    const debugPlayback = typeof localStorage !== 'undefined' && localStorage.getItem('storyflow-debug-playback') === '1'
+
     // Use different sync strategies for playing vs paused vs scrubbing
     if (isPlaying) {
+      // Debug: log when playing but video not ready (common cause of black during play)
+      if (debugPlayback && video.readyState < 2) {
+        const now = Date.now()
+        if (now - lastPlaybackDebugRef.current > 1000) {
+          lastPlaybackDebugRef.current = now
+          console.warn('[PlaybackCache] Playing but video not ready — can cause black:', { clipId: clip.id, readyState: video.readyState, networkState: video.networkState })
+        }
+      }
+
       // When playing: Let the video play naturally, only correct large drifts
       // During transitions, use a larger threshold to avoid fighting between two videos
       const speedMismatch = Math.abs(timeScale - 1) > 0.001
@@ -563,6 +581,10 @@ const VideoLayer = memo(function VideoLayer({
         }
       } else {
         if (timeDiff > driftThreshold) {
+          if (debugPlayback && Date.now() - lastPlaybackDebugRef.current > 1000) {
+            lastPlaybackDebugRef.current = Date.now()
+            console.log('[PlaybackCache] Seek during playback (drift correction):', { clipId: clip.id, timeDiff: timeDiff.toFixed(2), clampedTime: clampedTime.toFixed(2) })
+          }
           video.currentTime = clampedTime
           lastSyncTime.current = playheadPosition
         }
@@ -629,53 +651,28 @@ const VideoLayer = memo(function VideoLayer({
     }
   }, [clip, clipTime, playheadPosition, isPlaying, spriteData, isInTransition, timeScale, useSpriteScrub])
 
-  // Handle video ready state
-  const handleCanPlay = useCallback(() => {
-    setIsReady(true)
-  }, [])
-
-  const handleWaiting = useCallback(() => {
-    setIsReady(false)
-  }, [])
-
   if (!clip) return null
 
   // Use animated transform instead of base transform
   const transformStyle = buildVideoTransform(animatedTransform)
-  
-  // Timeline video layers should never play audio (audio is handled by AudioLayerRenderer)
-  const shouldMute = true
 
   return (
     <>
-      {/* Video element (hidden during sprite scrubbing) */}
-      <video
-        ref={videoRef}
+      {/* Container for cached video element (displaying cache = no black flash at cuts) */}
+      <div
+        ref={containerRef}
         className="bg-transparent w-full h-full"
         style={{
-          objectFit: 'contain', // Maintain aspect ratio, letterbox if needed (no stretching/squeezing)
-          display: 'block',
           position: layerIndex === 0 ? 'relative' : 'absolute',
           top: 0,
           left: 0,
+          right: 0,
+          bottom: 0,
           zIndex: layerIndex + 1,
-          // Hide video when showing sprite or hold frame
           opacity: (showSprite && spriteInfo) || showHoldFrame ? 0 : 1,
-          // Apply animated clip transforms
           ...transformStyle,
-          // Apply mask effect styles
           ...maskStyles,
         }}
-        muted={shouldMute}
-        loop={false}
-        playsInline
-        preload="auto"
-        onCanPlay={handleCanPlay}
-        onCanPlayThrough={handleCanPlay}
-        onWaiting={handleWaiting}
-        onContextMenu={(e) => e.preventDefault()}
-        controlsList="nodownload nofullscreen noremoteplayback"
-        disablePictureInPicture
       />
       
       {/* Hold frame canvas - shows last frame during video src transition to prevent black flicker */}

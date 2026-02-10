@@ -745,10 +745,9 @@ function PreviewPanel() {
   // Handle keyboard events for spacebar and ctrl
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Don't capture Space when typing in input fields
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) {
-        return
-      }
+      // Don't capture when typing in inputs (use activeElement so prompt/search work)
+      const active = document.activeElement
+      if (active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable)) return
       
       if (e.code === 'Space' && !e.repeat) {
         e.preventDefault()

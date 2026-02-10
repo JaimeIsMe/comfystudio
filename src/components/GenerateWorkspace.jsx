@@ -8,7 +8,8 @@ import useComfyUI from '../hooks/useComfyUI'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 import { comfyui } from '../services/comfyui'
-import { importAsset } from '../services/fileSystem'
+import { importAsset, isElectron } from '../services/fileSystem'
+import { enqueuePlaybackTranscode } from '../services/playbackCache'
 
 // ============================================
 // Cinematography Tags (reused from GeneratePanel)
@@ -777,7 +778,7 @@ function GenerateWorkspace() {
         const videoFile = await comfyui.downloadVideo(result.filename, result.subfolder, result.outputType)
         const assetInfo = await importAsset(currentProjectHandle, videoFile, 'video')
         const blobUrl = URL.createObjectURL(videoFile)
-        addAsset({
+        const newAsset = addAsset({
           ...assetInfo,
           name: autoName,
           type: 'video',
@@ -791,6 +792,9 @@ function GenerateWorkspace() {
             seed: jobSeed
           }
         })
+        if (isElectron() && currentProjectHandle && newAsset?.absolutePath) {
+          enqueuePlaybackTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
+        }
       } catch (err) {
         console.error('Failed to save video:', err)
         // Fallback: use ComfyUI URL

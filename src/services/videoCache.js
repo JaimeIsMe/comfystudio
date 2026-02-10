@@ -34,6 +34,15 @@ class VideoCache {
   }
 
   /**
+   * Cache key for a clip: use a separate entry for playback-cache URL so we don't reuse
+   * an element that had its src switched (avoids black playback when cache becomes ready).
+   */
+  _cacheKey(clip) {
+    const isPlaybackCache = clip?.url && (clip.url.includes('cache/playback_') || (clip.url.includes('playback_') && clip.url.includes('cache')))
+    return clip.id + (isPlaybackCache ? '|pb' : '')
+  }
+
+  /**
    * Get or create a video element for a clip
    * @param {object} clip - The clip object
    * @param {boolean} preload - Whether this is a preload request
@@ -42,21 +51,21 @@ class VideoCache {
   getVideoElement(clip, preload = false) {
     if (!clip || !clip.url) return null
 
-    const cacheKey = clip.id
-    
+    const cacheKey = this._cacheKey(clip)
+
     // Check if already cached
     if (this.cache.has(cacheKey)) {
       const cached = this.cache.get(cacheKey)
       cached.lastUsed = Date.now()
-      
-      // Update URL if changed
+
+      // Same URL: reuse. Different URL: don't swap src on same element (we use a different cache key for playback cache now)
       if (cached.url !== clip.url) {
         cached.videoElement.src = clip.url
         cached.url = clip.url
         cached.ready = false
         this._loadVideo(cached)
       }
-      
+
       return cached.videoElement
     }
 
@@ -75,6 +84,7 @@ class VideoCache {
       videoElement,
       url: clip.url,
       clipId: clip.id,
+      baseClipId: clip.id, // For lookup when key is clipId|pb
       lastUsed: Date.now(),
       ready: false,
       loading: false,
@@ -124,13 +134,17 @@ class VideoCache {
     video.load()
   }
 
+  _getEntry(clipId) {
+    return this.cache.get(clipId) || this.cache.get(clipId + '|pb')
+  }
+
   /**
    * Check if a clip's video is ready to play
    * @param {string} clipId - The clip ID
    * @returns {boolean} Whether the video is ready
    */
   isReady(clipId) {
-    const cached = this.cache.get(clipId)
+    const cached = this._getEntry(clipId)
     return cached?.ready ?? false
   }
 
@@ -199,7 +213,7 @@ class VideoCache {
    * @returns {HTMLVideoElement|null} The synced video element
    */
   syncVideo(clipId, clip, timelineTime, isPlaying) {
-    const cached = this.cache.get(clipId)
+    const cached = this._getEntry(clipId)
     if (!cached || !cached.videoElement) return null
 
     const video = cached.videoElement
@@ -252,8 +266,7 @@ class VideoCache {
    */
   setActive(clipId, unmute = false) {
     this.activeElements.add(clipId)
-    
-    const cached = this.cache.get(clipId)
+    const cached = this._getEntry(clipId)
     if (cached?.videoElement) {
       cached.videoElement.muted = !unmute
     }
@@ -265,8 +278,7 @@ class VideoCache {
    */
   setInactive(clipId) {
     this.activeElements.delete(clipId)
-    
-    const cached = this.cache.get(clipId)
+    const cached = this._getEntry(clipId)
     if (cached?.videoElement) {
       cached.videoElement.muted = true
       cached.videoElement.pause()
@@ -290,9 +302,9 @@ class VideoCache {
   _evictIfNeeded() {
     if (this.cache.size <= MAX_CACHE_SIZE) return
 
-    // Sort by lastUsed, oldest first
+    // Sort by lastUsed, oldest first; don't evict entries whose base clip is active
     const entries = [...this.cache.entries()]
-      .filter(([key]) => !this.activeElements.has(key)) // Don't evict active elements
+      .filter(([, entry]) => !this.activeElements.has(entry.baseClipId))
       .sort((a, b) => a[1].lastUsed - b[1].lastUsed)
 
     // Evict oldest entries until we're under the limit

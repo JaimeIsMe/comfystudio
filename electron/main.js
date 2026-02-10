@@ -702,6 +702,56 @@ ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
   })
 })
 
+// ============================================
+// Playback cache (Flame-style: transcode for smooth playback)
+// ============================================
+ipcMain.handle('playback:transcode', async (event, { inputPath, outputPath }) => {
+  if (!ffmpegPath) {
+    return { success: false, error: 'FFmpeg binary not available.' }
+  }
+  if (!inputPath || !outputPath) {
+    return { success: false, error: 'Missing inputPath or outputPath.' }
+  }
+
+  // Same dimensions, H.264, keyframe every 6 frames, no B-frames = easy decode
+  const args = [
+    '-y',
+    '-i', inputPath,
+    '-c:v', 'libx264',
+    '-preset', 'fast',
+    '-crf', '23',
+    '-g', '6',
+    '-keyint_min', '6',
+    '-bf', '0',
+    '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
+    '-c:a', 'aac',
+    '-b:a', '192k',
+    outputPath
+  ]
+
+  return await new Promise((resolve) => {
+    const ffmpeg = spawn(ffmpegPath, args, { windowsHide: true })
+    let stderr = ''
+
+    ffmpeg.stderr.on('data', (data) => {
+      stderr += data.toString()
+    })
+
+    ffmpeg.on('error', (err) => {
+      resolve({ success: false, error: err.message })
+    })
+
+    ffmpeg.on('close', (code) => {
+      if (code === 0) {
+        resolve({ success: true })
+      } else {
+        resolve({ success: false, error: stderr || `FFmpeg exited with code ${code}` })
+      }
+    })
+  })
+})
+
 ipcMain.handle('export:checkNvenc', async () => {
   if (!ffmpegPath) {
     return { available: false, h264: false, h265: false, error: 'FFmpeg binary not available.' }

@@ -143,8 +143,9 @@ function TransportControls() {
   // JKL Shuttle keyboard handlers
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Don't trigger if typing in input
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      // Don't trigger when typing in inputs (use activeElement so we don't steal keys from prompt/search etc.)
+      const active = document.activeElement
+      if (active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable)) return
       
       // JKL Controls
       if (e.key === 'j' || e.key === 'J') {

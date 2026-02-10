@@ -350,7 +350,16 @@ export const useAssetsStore = create(
           } else if (hasPath) {
             url = await getProjectFileUrl(projectHandle, asset.path)
           }
-          assetsWithUrls.push({ ...asset, url })
+          // Regenerate playback cache URL if we have a cached transcode
+          let playbackCacheUrl = null
+          if (asset.playbackCachePath) {
+            try {
+              playbackCacheUrl = await getProjectFileUrl(projectHandle, asset.playbackCachePath)
+            } catch (e) {
+              console.warn(`Could not load playback cache for ${asset.name}:`, e)
+            }
+          }
+          assetsWithUrls.push({ ...asset, url, playbackCacheUrl: playbackCacheUrl ?? undefined })
         } catch (err) {
           console.warn(`Could not load asset ${asset.name}:`, err)
           // Keep asset but mark URL as null
@@ -386,6 +395,7 @@ export const useAssetsStore = create(
       ...asset,
       // Don't save blob URLs - they're session-specific
       url: asset.isImported ? null : asset.url, // Keep URL for AI assets (they're external)
+      playbackCacheUrl: undefined, // Session-only; path is persisted
     }))
   },
 
@@ -530,14 +540,48 @@ export const useAssetsStore = create(
   },
 
   /**
-   * Get the current valid URL for an asset
-   * This is used by clips to get the latest URL (in case it was regenerated after page refresh)
+   * Get the current valid URL for an asset (prefers playback cache when ready for smooth timeline playback)
    * @param {string} assetId - The asset ID
    * @returns {string|null} - The current URL or null
    */
   getAssetUrl: (assetId) => {
     const asset = get().assets.find(a => a.id === assetId)
-    return asset?.url || null
+    if (!asset) return null
+    // Use playback cache URL when available (Flame-style: optimized for playback)
+    const useCache = !!asset.playbackCacheUrl
+    const url = useCache ? asset.playbackCacheUrl : (asset.url || null)
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('storyflow-debug-playback') === '1' && asset.type === 'video') {
+      console.log('[PlaybackCache] getAssetUrl:', { assetId, useCache, urlHint: url ? (url.startsWith('file:') ? 'file:// (cache or original)' : url.slice(0, 50) + '...') : 'null' })
+    }
+    return url
+  },
+
+  /**
+   * Set playback cache path and URL for an asset (after transcode completes)
+   */
+  setPlaybackCache: (assetId, playbackCachePath, playbackCacheUrl) => {
+    set((state) => ({
+      assets: state.assets.map(a =>
+        a.id === assetId ? { ...a, playbackCachePath, playbackCacheUrl } : a
+      ),
+      currentPreview: state.currentPreview?.id === assetId
+        ? { ...state.currentPreview, playbackCachePath, playbackCacheUrl }
+        : state.currentPreview,
+    }))
+  },
+
+  /**
+   * Set playback cache status for UI (encoding | ready | failed)
+   */
+  setPlaybackCacheStatus: (assetId, status) => {
+    set((state) => ({
+      assets: state.assets.map(a =>
+        a.id === assetId ? { ...a, playbackCacheStatus: status } : a
+      ),
+      currentPreview: state.currentPreview?.id === assetId
+        ? { ...state.currentPreview, playbackCacheStatus: status }
+        : state.currentPreview,
+    }))
   },
 
   /**

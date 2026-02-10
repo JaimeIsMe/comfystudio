@@ -4,6 +4,7 @@ import useAssetsStore from '../../stores/assetsStore'
 import useProjectStore from '../../stores/projectStore'
 import useTimelineStore from '../../stores/timelineStore'
 import { importAsset, isElectron } from '../../services/fileSystem'
+import { enqueuePlaybackTranscode } from '../../services/playbackCache'
 import MaskGenerationDialog from '../MaskGenerationDialog'
 
 // Thumbnail size presets (xs = extra small for denser grid)
@@ -118,6 +119,11 @@ function AssetsPanel() {
             fps: assetInfo.fps,
           },
         })
+        
+        // Flame-style: transcode video for smooth playback (Electron only)
+        if (category === 'video' && isElectron() && currentProjectHandle && newAsset?.absolutePath) {
+          enqueuePlaybackTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
+        }
         
         // Auto-generate thumbnail sprites for videos in background
         if (category === 'video' && assetInfo.duration > 0.5 && newAsset) {
@@ -308,7 +314,8 @@ function AssetsPanel() {
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (!panelRef.current?.contains(document.activeElement) && document.activeElement !== panelRef.current) return
-      if (editingId || document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return
+      const active = document.activeElement
+      if (editingId || (active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable))) return
 
       if (e.key === 'Escape') {
         setSelectedAssetIds([])

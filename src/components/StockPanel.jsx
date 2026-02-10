@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { Search, Video, Image as ImageIcon, Download, Loader2, ExternalLink, AlertCircle, Play, X } from 'lucide-react'
 import useProjectStore from '../stores/projectStore'
 import useAssetsStore from '../stores/assetsStore'
-import { importAsset } from '../services/fileSystem'
+import { importAsset, isElectron } from '../services/fileSystem'
+import { enqueuePlaybackTranscode } from '../services/playbackCache'
 import { getPexelsApiKey } from '../services/pexelsSettings'
 
 const PEXELS_PHOTOS_URL = 'https://api.pexels.com/v1/search'
@@ -161,7 +162,7 @@ function StockPanel() {
         const best = item.video_files?.find(f => f.quality === 'hd' && f.file_type === 'video/mp4')
           || item.video_files?.find(f => f.quality === 'hd')
           || item.video_files?.[0]
-        addAsset({
+        const newAsset = addAsset({
           ...assetInfo,
           name: assetInfo.name || `Pexels_${item.id}`,
           type: 'video',
@@ -170,6 +171,9 @@ function StockPanel() {
           isImported: true,
           settings: { duration: item.duration, fps: best?.fps },
         })
+        if (isElectron() && currentProjectHandle && newAsset?.absolutePath) {
+          enqueuePlaybackTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
+        }
       }
     } catch (err) {
       setError(err.message || 'Failed to add to project')

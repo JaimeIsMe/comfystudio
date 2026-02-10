@@ -418,8 +418,9 @@ function Timeline({ onOpenAudioGenerate }) {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Don't trigger if user is typing in an input
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      // Don't trigger when typing in inputs (use activeElement so prompt/search fields work)
+      const active = document.activeElement
+      if (active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable)) return
       
       // Spacebar - enable panning mode (but don't prevent default if not in timeline)
       if (e.code === 'Space' && !e.repeat) {

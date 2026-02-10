@@ -3,6 +3,8 @@
 ## Overview
 AI-powered video editing app with DaVinci Resolve-style UI. Integrates with ComfyUI for AI video generation.
 
+*For new chats: this file is the main project reference; see "Key Files" and "Recent Changes Log" for where to look.*
+
 | Aspect | Details |
 |--------|---------|
 | **Type** | React + Vite + Tailwind CSS web app |
@@ -168,12 +170,13 @@ This enables workflows like:
 | `src/components/VideoLayerRenderer.jsx` | Video + text layer rendering with preloading |
 | `src/components/InspectorPanel.jsx` | Clip transform/crop controls, draggable number inputs |
 | `src/components/TransportControls.jsx` | JKL shuttle, I/O points, playback modes |
-| `src/components/GeneratePanel.jsx` | AI video generation UI (Video + Audio tabs) |
+| `src/components/GenerateWorkspace.jsx` | Generate tab: workflow list, job queue, progress, result import |
+| `src/components/GeneratePanel.jsx` | Legacy AI video generation UI (Video + Audio tabs) |
 | `src/components/LeftPanel.jsx` | Tabbed left panel container |
 | `src/components/panels/TextPanel.jsx` | Text clip creation with styling |
 | `src/hooks/useTimelinePlayback.js` | Timeline playback loop with loop modes |
 | `src/hooks/useSnapping.js` | Clip snapping logic |
-| `src/services/comfyui.js` | ComfyUI API service |
+| `src/services/comfyui.js` | ComfyUI API; workflow modifiers (LTX2 t2v/i2v, WAN22 i2v, multi-angles, inflation, music, mask) |
 | `src/services/exporter.js` | Timeline export renderer + audio mix + FFmpeg handoff |
 | `src/services/videoCache.js` | Video element pooling and preloading |
 
@@ -189,7 +192,7 @@ This enables workflows like:
 - **Multi-select**: Shift+click, Ctrl+click, Ctrl+A, Alt+drag marquee
 - **Ripple Edit**: Toggle with `R` key
 - **Roll Edit**: Drag between adjacent clips
-- **Undo/Redo**: Ctrl+Z / Ctrl+Shift+Z (50 states)
+- **Undo/Redo**: Ctrl+Z / Ctrl+Shift+Z (50 states); Delete prioritizes timeline clip selection over Assets panel (so clip delete is undoable)
 - **Transitions**: 9 types (dissolve, fade, wipe, slide)
 - **I/O Points**: `I` and `O` keys for three-point editing
 
@@ -266,9 +269,9 @@ When a clip is selected:
 | `Alt+X` | Clear In/Out |
 | `S` | Toggle snapping |
 | `R` | Toggle ripple edit |
-| `Ctrl+Z` | Undo |
+| `Ctrl+Z` | Undo (timeline; e.g. undo clip delete) |
 | `Ctrl+Shift+Z` | Redo |
-| `Delete` | Delete selected clips |
+| `Delete` | Delete: timeline clips if any selected, else selected assets in Assets panel |
 | `Escape` | Clear selection |
 | `Ctrl+A` | Select all clips |
 | `Alt+Drag` | Marquee selection (timeline) |
@@ -276,13 +279,17 @@ When a clip is selected:
 | `Ctrl+Scroll` | Zoom (preview & timeline) |
 | `Shift+Scroll` | Horizontal scroll (timeline) |
 
-## Generate Panel Features
-- **Video Tab**: Prompt/negative prompt with cinematography tags (10 categories)
-- **Audio Tab**: Music, SFX, Voice generation (placeholder)
-- Resolution: 1920x1080, 1280x720, etc.
-- Duration: 2s, 3s, 5s, 8s
-- Frame rate: 24fps, 30fps
-- Seed with randomize
+## Generate Tab (GenerateWorkspace)
+The **Generate** tab offers workflow-based generation with a job queue and progress.
+
+**Workflows (by category):**
+- **Video**: Text to Video (LTX2), **Image to Video (LTX2)**, Image to Video (WAN 2.2)
+- **Image**: Multiple Angles (8 camera angles), Image Edit (inflate/modify)
+- **Audio**: Music Generation (tags + lyrics)
+
+**Workflow files** (in `public/workflows/`): `video_ltx2_t2v.json`, `ltx2_Image_to_Video.json`, `video_wan2_2_14B_i2v.json`, `1_click_multiple_angles.json`, `inflation.json`, `music_generation.json`.
+
+**Features:** Prompt/negative prompt, cinematography tags (10 categories), resolution/duration/FPS/seed, input asset picker for image-based workflows, job queue with progress and result import to Assets.
 
 ## Text Panel Features
 - Text content textarea
@@ -465,6 +472,24 @@ clearAllKeyframes(clipId)
 ---
 
 ## Recent Changes Log
+
+### Delete/Undo Fix + LTX2 Image to Video (Feb 6, 2026)
+
+**Delete key behavior:**
+- When the timeline has selected clips, **Delete** now removes those clips (not assets).
+- Assets panel only handles Delete when focus is in the panel *and* the timeline has no selected clips.
+- Fixes the case where selecting an asset then a timeline clip and pressing Delete was deleting the asset instead of the clip.
+
+**Undo (Ctrl+Z):**
+- Timeline clip deletion is correctly undone because Delete now targets clips and `removeSelectedClips()` uses `saveToHistory()`.
+
+**Files:** `src/components/panels/AssetsPanel.jsx` (check `useTimelineStore.getState().selectedClipIds.length` before handling Delete).
+
+**LTX2 Image to Video workflow:**
+- New option in Generate tab → Video: **Image to Video (LTX2)** (`ltx2-i2v`).
+- Requires an input image; uses workflow file `public/workflows/ltx2_Image_to_Video.json`.
+- Modifier: `modifyLTX2I2VWorkflow()` in `src/services/comfyui.js` (patches image, prompt, negative prompt, resolution, frames, fps, seed).
+- **Files:** `src/components/GenerateWorkspace.jsx` (WORKFLOWS, workflowMap, runner case), `src/services/comfyui.js` (new modifier).
 
 ### Export Pipeline + NVENC + Queue (Feb 2026)
 

@@ -83,6 +83,7 @@ export const createProjectFolder = async (baseDir, projectName) => {
     await window.electronAPI.createDirectory(await window.electronAPI.pathJoin(projectPath, 'assets', 'images'))
     await window.electronAPI.createDirectory(await window.electronAPI.pathJoin(projectPath, 'renders'))
     await window.electronAPI.createDirectory(await window.electronAPI.pathJoin(projectPath, 'autosave'))
+    await window.electronAPI.createDirectory(await window.electronAPI.pathJoin(projectPath, 'cache'))
     
     return projectPath
   }

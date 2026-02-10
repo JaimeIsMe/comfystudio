@@ -105,6 +105,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<{available: boolean, h264: boolean, h265: boolean, error?: string}>}
    */
   checkNvenc: () => ipcRenderer.invoke('export:checkNvenc'),
+
+  /**
+   * Transcode video for playback cache (same resolution, H.264, keyframe every 6, no B-frames)
+   * @param {{ inputPath: string, outputPath: string }}
+   * @returns {Promise<{ success: boolean, error?: string }>}
+   */
+  transcodeForPlayback: (options) => ipcRenderer.invoke('playback:transcode', options),
   
   /**
    * Delete a file
