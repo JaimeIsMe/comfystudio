@@ -1,4 +1,4 @@
-# StoryFlow - AI-Powered Animatic Studio
+# ComfyStudio - AI-Powered Animatic Studio
 
 An AI-powered animatic and pre-visualization tool for film, animation, and advertising pre-production. Built to integrate with ComfyUI for AI image and video generation.
 
@@ -42,7 +42,7 @@ npm run electron:dev
 ### Project Structure
 
 ```
-storyflow/
+comfystudio/
 ├── electron/           # Electron main process
 │   ├── main.js        # Main window setup
 │   └── preload.js     # Context bridge

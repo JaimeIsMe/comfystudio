@@ -481,11 +481,11 @@ export function useComfyUI() {
         extension = '.png';
         mimeType = 'image/png';
         
-        filename = `storyflow_input_${Date.now()}${extension}`;
+        filename = `comfystudio_input_${Date.now()}${extension}`;
         console.log('Converted to PNG. Creating file:', filename);
         file = new File([pngBlob], filename, { type: mimeType });
       } else {
-        filename = `storyflow_input_${Date.now()}${extension}`;
+        filename = `comfystudio_input_${Date.now()}${extension}`;
         console.log('Creating file with extension:', extension, 'mimeType:', mimeType);
         file = new File([blob], filename, { type: mimeType });
       }
@@ -507,7 +507,7 @@ export function useComfyUI() {
       const baseWorkflow = cachedWorkflows['mask-generation'];
       
       // Step 4: Modify workflow with our parameters
-      const outputPrefix = `StoryFlowMask_${Date.now()}`;
+      const outputPrefix = `ComfyStudioMask_${Date.now()}`;
       const workflow = modifyMaskWorkflow(baseWorkflow, {
         inputFilename: uploadResult.name,
         textPrompt: textPrompt,

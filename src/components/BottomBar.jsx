@@ -80,14 +80,14 @@ function BottomBar({ onOpenSettings, projectName }) {
         {projectName || 'Untitled'}
       </div>
       <Separator />
-      {/* StoryFlow - dropdown: Leave, Settings, Project Selection, Save Project (with dividers) */}
+      {/* ComfyStudio - dropdown: Leave, Settings, Project Selection, Save Project (with dividers) */}
       <div className="relative" ref={menuRef}>
         <button
           onClick={() => setMenuOpen((o) => !o)}
           className="flex items-center gap-2 px-2 py-1 rounded text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-800 transition-colors"
-          title="StoryFlow"
+          title="ComfyStudio"
         >
-          <span className="text-[11px] font-semibold text-sf-text-primary">StoryFlow</span>
+          <span className="text-[11px] font-semibold text-sf-text-primary">ComfyStudio</span>
         </button>
 
         {menuOpen && (

@@ -103,8 +103,11 @@ export const createProjectFolder = async (baseDir, projectName) => {
   return projectDir
 }
 
+const PROJECT_FILENAME = 'project.comfystudio'
+const PROJECT_FILENAME_LEGACY = 'project.storyflow'
+
 /**
- * Save project data to .storyflow file
+ * Save project data to .comfystudio file
  * @param {string|FileSystemDirectoryHandle} projectDir - The project directory
  * @param {object} projectData - The project data to save
  */
@@ -116,7 +119,7 @@ export const saveProject = async (projectDir, projectData) => {
   }
   
   if (isElectron()) {
-    const filePath = await window.electronAPI.pathJoin(projectDir, 'project.storyflow')
+    const filePath = await window.electronAPI.pathJoin(projectDir, PROJECT_FILENAME)
     const result = await window.electronAPI.writeFile(filePath, JSON.stringify(dataWithMeta, null, 2))
     if (!result.success) {
       throw new Error(result.error)
@@ -125,7 +128,7 @@ export const saveProject = async (projectDir, projectData) => {
   }
   
   // Web fallback
-  const fileHandle = await projectDir.getFileHandle('project.storyflow', { create: true })
+  const fileHandle = await projectDir.getFileHandle(PROJECT_FILENAME, { create: true })
   const writable = await fileHandle.createWritable()
   await writable.write(JSON.stringify(dataWithMeta, null, 2))
   await writable.close()
@@ -152,67 +155,87 @@ const parseProjectJson = (rawText, sourceLabel) => {
 }
 
 /**
- * Load project data from .storyflow file
+ * Load project data from .comfystudio file (or legacy .storyflow)
  * @param {string|FileSystemDirectoryHandle} projectDir - The project directory
  * @returns {Promise<object|null>} - The project data or null if not found
  */
 export const loadProject = async (projectDir) => {
   if (isElectron()) {
-    const filePath = await window.electronAPI.pathJoin(projectDir, 'project.storyflow')
-    const exists = await window.electronAPI.exists(filePath)
-    if (!exists) {
-      throw new Error('Project file not found. This folder does not contain project.storyflow — the project may have been moved or the path is wrong. Try opening the project folder with "Open project".')
+    const basePath = projectDir
+    const primaryPath = await window.electronAPI.pathJoin(basePath, PROJECT_FILENAME)
+    const legacyPath = await window.electronAPI.pathJoin(basePath, PROJECT_FILENAME_LEGACY)
+    const primaryExists = await window.electronAPI.exists(primaryPath)
+    const legacyExists = await window.electronAPI.exists(legacyPath)
+    const filePath = primaryExists ? primaryPath : legacyExists ? legacyPath : null
+    if (!filePath) {
+      throw new Error(`Project file not found. This folder does not contain ${PROJECT_FILENAME} or ${PROJECT_FILENAME_LEGACY} — the project may have been moved or the path is wrong. Try opening the project folder with "Open project".`)
     }
-    
     const result = await window.electronAPI.readFile(filePath, { encoding: 'utf8' })
     if (!result.success) {
       throw new Error(result.error || 'Could not read project file')
     }
     const projectData = parseProjectJson(result.data, filePath)
     if (!projectData) {
-      throw new Error('Project file is empty or invalid (corrupted JSON). The project.storyflow file may be damaged.')
+      throw new Error(`Project file is empty or invalid (corrupted JSON). The ${filePath.endsWith(PROJECT_FILENAME_LEGACY) ? PROJECT_FILENAME_LEGACY : PROJECT_FILENAME} file may be damaged.`)
     }
     return projectData
   }
   
-  // Web fallback
-  try {
-    const fileHandle = await projectDir.getFileHandle('project.storyflow')
+  // Web fallback: try comfystudio first, then legacy storyflow
+  const tryLoad = async (filename) => {
+    const fileHandle = await projectDir.getFileHandle(filename)
     const file = await fileHandle.getFile()
-    const text = await file.text()
-    const projectData = parseProjectJson(text, 'project.storyflow')
-    if (!projectData) {
-      throw new Error('Project file is empty or invalid (corrupted JSON). The project.storyflow file may be damaged.')
-    }
-    return projectData
-  } catch (err) {
-    if (err.name === 'NotFoundError') {
-      throw new Error('Project file not found. This folder does not contain project.storyflow.')
-    }
-    if (err.message && err.message.startsWith('Project file')) {
-      throw err
-    }
-    throw err
+    return await file.text()
   }
+  let text
+  let sourceLabel = PROJECT_FILENAME
+  try {
+    text = await tryLoad(PROJECT_FILENAME)
+  } catch (e1) {
+    if (e1.name === 'NotFoundError') {
+      try {
+        text = await tryLoad(PROJECT_FILENAME_LEGACY)
+        sourceLabel = PROJECT_FILENAME_LEGACY
+      } catch (e2) {
+        if (e2.name === 'NotFoundError') {
+          throw new Error(`Project file not found. This folder does not contain ${PROJECT_FILENAME} or ${PROJECT_FILENAME_LEGACY}.`)
+        }
+        throw e2
+      }
+    } else {
+      throw e1
+    }
+  }
+  const projectData = parseProjectJson(text, sourceLabel)
+  if (!projectData) {
+    throw new Error(`Project file is empty or invalid (corrupted JSON). The ${sourceLabel} file may be damaged.`)
+  }
+  return projectData
 }
 
 /**
- * Check if a directory is a valid StoryFlow project
+ * Check if a directory is a valid ComfyStudio project
  * @param {string|FileSystemDirectoryHandle} dir - Directory to check
  * @returns {Promise<boolean>}
  */
 export const isValidProject = async (dir) => {
   if (isElectron()) {
-    const filePath = await window.electronAPI.pathJoin(dir, 'project.storyflow')
-    return await window.electronAPI.exists(filePath)
+    const primaryPath = await window.electronAPI.pathJoin(dir, PROJECT_FILENAME)
+    const legacyPath = await window.electronAPI.pathJoin(dir, PROJECT_FILENAME_LEGACY)
+    return (await window.electronAPI.exists(primaryPath)) || (await window.electronAPI.exists(legacyPath))
   }
   
   // Web fallback
   try {
-    await dir.getFileHandle('project.storyflow')
+    await dir.getFileHandle(PROJECT_FILENAME)
     return true
   } catch {
-    return false
+    try {
+      await dir.getFileHandle(PROJECT_FILENAME_LEGACY)
+      return true
+    } catch {
+      return false
+    }
   }
 }
 
@@ -699,7 +722,7 @@ export const deleteProjectFile = async (projectDir, relativePath) => {
 // Directory Handle Storage (Web only - not needed in Electron)
 // ============================================
 
-const DB_NAME = 'storyflow-handles'
+const DB_NAME = 'comfystudio-handles'
 const DB_VERSION = 1
 const STORE_NAME = 'directory-handles'
 

@@ -82,7 +82,7 @@ export async function enqueuePlaybackTranscode(projectDir, assetId, sourcePath) 
     useAssetsStore.getState().setPlaybackCache?.(assetId, result.relativePath, url)
     useAssetsStore.getState().setPlaybackCacheStatus?.(assetId, 'ready')
     console.log('[PlaybackCache] Ready — using cached file for playback:', { assetId, path: result.relativePath })
-    if (typeof localStorage !== 'undefined' && localStorage.getItem('storyflow-debug-playback') === '1') {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('comfystudio-debug-playback') === '1') {
       console.log('[PlaybackCache] (debug) URL:', url?.slice?.(0, 70) + '...')
     }
   } catch (err) {

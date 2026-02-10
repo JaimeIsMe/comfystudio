@@ -23,7 +23,7 @@ class ComfyUIService {
   }
 
   generateClientId() {
-    return 'storyflow-' + Math.random().toString(36).substring(2, 15);
+    return 'comfystudio-' + Math.random().toString(36).substring(2, 15);
   }
 
   /**
@@ -559,7 +559,7 @@ export function modifyMaskWorkflow(workflow, options = {}) {
   const {
     inputFilename = '',       // The uploaded filename in ComfyUI
     textPrompt = '',          // What to segment (e.g., "person on the left")
-    outputPrefix = 'StoryFlowMask',  // Output filename prefix
+    outputPrefix = 'ComfyStudioMask',  // Output filename prefix
     scoreThreshold = 0.04,    // Detection sensitivity (lower = more sensitive)
     frameIdx = 0,             // Which frame to use for initial detection
   } = options;
@@ -632,7 +632,7 @@ export function modifyWAN22Workflow(workflow, options = {}) {
   }
   // Output prefix (node 108)
   if (modified['108']) {
-    modified['108'].inputs.filename_prefix = 'video/StoryFlow_wan'
+    modified['108'].inputs.filename_prefix = 'video/ComfyStudio_wan'
   }
 
   return modified
@@ -701,11 +701,11 @@ export function modifyMultipleAnglesWorkflow(workflow, options = {}) {
     }
   }
 
-  // Update save prefixes to StoryFlow
+  // Update save prefixes to ComfyStudio
   const saveNodes = { '31': 'close_up', '34': 'wide_shot', '36': '45_right', '38': '90_right', '47': '90_left', '41': 'aerial_view', '43': 'low_angle', '45': '45_left' }
   for (const [nodeId, suffix] of Object.entries(saveNodes)) {
     if (modified[nodeId]) {
-      modified[nodeId].inputs.filename_prefix = `StoryFlow-${suffix}`
+      modified[nodeId].inputs.filename_prefix = `ComfyStudio-${suffix}`
     }
   }
 
@@ -742,7 +742,7 @@ export function modifyInflationWorkflow(workflow, options = {}) {
   }
   // Output prefix (node 9)
   if (modified['9']) {
-    modified['9'].inputs.filename_prefix = 'StoryFlow_edit'
+    modified['9'].inputs.filename_prefix = 'ComfyStudio_edit'
   }
 
   return modified
@@ -786,7 +786,7 @@ export function modifyMusicWorkflow(workflow, options = {}) {
   }
   // Output prefix (node 107)
   if (modified['107']) {
-    modified['107'].inputs.filename_prefix = 'audio/StoryFlow'
+    modified['107'].inputs.filename_prefix = 'audio/ComfyStudio'
   }
 
   return modified

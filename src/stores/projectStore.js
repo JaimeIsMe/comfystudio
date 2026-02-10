@@ -869,7 +869,7 @@ export const useProjectStore = create(
       },
     }),
     {
-      name: 'storyflow-project', // localStorage key
+      name: 'comfystudio-project', // localStorage key
       partialize: (state) => ({
         // Only persist these fields
         recentProjects: state.recentProjects,

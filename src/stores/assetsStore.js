@@ -550,7 +550,7 @@ export const useAssetsStore = create(
     // Use playback cache URL when available (Flame-style: optimized for playback)
     const useCache = !!asset.playbackCacheUrl
     const url = useCache ? asset.playbackCacheUrl : (asset.url || null)
-    if (typeof localStorage !== 'undefined' && localStorage.getItem('storyflow-debug-playback') === '1' && asset.type === 'video') {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('comfystudio-debug-playback') === '1' && asset.type === 'video') {
       console.log('[PlaybackCache] getAssetUrl:', { assetId, useCache, urlHint: url ? (url.startsWith('file:') ? 'file:// (cache or original)' : url.slice(0, 50) + '...') : 'null' })
     }
     return url
@@ -670,7 +670,7 @@ export const useAssetsStore = create(
   }
     }),
     {
-      name: 'storyflow-assets', // localStorage key
+      name: 'comfystudio-assets', // localStorage key
       partialize: (state) => ({
         // Only persist these fields (exclude transient playback state)
         assets: state.assets,

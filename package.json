@@ -1,5 +1,5 @@
 {
-  "name": "storyflow",
+  "name": "comfystudio",
   "version": "0.1.0",
   "description": "AI-Powered Animatic Studio for Pre-Production",
   "main": "electron/main.js",
@@ -49,8 +49,8 @@
     "wait-on": "^7.2.0"
   },
   "build": {
-    "appId": "com.storyflow.app",
-    "productName": "StoryFlow",
+    "appId": "com.comfystudio.app",
+    "productName": "ComfyStudio",
     "copyright": "Copyright © 2024-2026",
     "directories": {
       "output": "release",

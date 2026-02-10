@@ -211,7 +211,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ============================================
   
   /**
-   * Get a URL for a local file (using storyflow:// protocol)
+   * Get a URL for a local file (using comfystudio:// protocol)
    * @param {string} filePath 
    * @returns {Promise<string>}
    */

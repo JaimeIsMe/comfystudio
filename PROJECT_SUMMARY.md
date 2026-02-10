@@ -1,4 +1,4 @@
-# StoryFlow - AI Animatic Studio
+# ComfyStudio - AI Animatic Studio
 
 ## Overview
 AI-powered video editing app with DaVinci Resolve-style UI. Integrates with ComfyUI for AI video generation.
@@ -19,12 +19,14 @@ npm run dev
 ```
 Opens at `http://localhost:5173`
 
+**Splash screen:** Place your splash image at **`public/splash.png`** (or `public/splash.jpg`). It is shown for 3 seconds when starting the Electron app (`npm run electron:dev` or the built app) before the main window opens. Subtitle on splash: "ComfyStudio — AI Animatic Studio".
+
 ## Layout Structure
 
 ### Normal Mode (Contracted Left Panel)
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  [🏠] StoryFlow │ Project Name │ [💾]    Title Bar      │
+│  [🏠] ComfyStudio │ Project Name │ [💾]    Title Bar      │
 ├──┬──────────┬─────────────────────────┬──────────────┬──┤
 │I │  Left    │                         │   Inspector  │I │
 │C │  Panel   │        Preview          │   Panel      │C │
@@ -48,7 +50,7 @@ Opens at `http://localhost:5173`
 ### Expanded Mode (Full Height Left Panel - Resolve-style)
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  [🏠] StoryFlow │ Project Name │ [💾]    Title Bar      │
+│  [🏠] ComfyStudio │ Project Name │ [💾]    Title Bar      │
 ├──┬──────────┬─────────────────────────┬──────────────┬──┤
 │I │  Left    │                         │   Inspector  │I │
 │C │  Panel   │        Preview          │   Panel      │C │
@@ -83,11 +85,12 @@ On first launch, users are prompted to select a **Projects Folder**. All project
 ### Project Folder Structure
 ```
 MyProject/
-├── project.storyflow          # JSON (timeline, assets, settings)
+├── project.comfystudio        # JSON (timeline, assets, settings)
 ├── assets/
 │   ├── video/                 # Imported videos
 │   ├── audio/                 # Audio files
 │   └── images/                # Images
+├── cache/                     # Playback cache (transcoded for smooth playback) + render cache for effects
 ├── renders/                   # Exported videos
 └── autosave/                  # Auto-save backups
 ```
@@ -179,6 +182,7 @@ This enables workflows like:
 | `src/services/comfyui.js` | ComfyUI API; workflow modifiers (LTX2 t2v/i2v, WAN22 i2v, multi-angles, inflation, music, mask) |
 | `src/services/exporter.js` | Timeline export renderer + audio mix + FFmpeg handoff |
 | `src/services/videoCache.js` | Video element pooling and preloading |
+| `src/services/playbackCache.js` | Flame-style playback cache: transcode on import for smooth timeline playback (Electron) |
 
 ## Timeline Features
 - **Multi-track**: Video tracks (add to top), Audio tracks (add to bottom)
@@ -309,7 +313,8 @@ The **Generate** tab offers workflow-based generation with a job queue and progr
 - Pan: Space+Drag
 - Fullscreen mode
 - Multi-layer video + text compositing
-- Video preloading/caching for seamless clip transitions
+- Video preloading/caching for seamless clip transitions; **no black flash at cuts** (display uses cache's preloaded video element)
+- **Playback cache (Flame-style)**: Video imported (AI Generate, Assets, Stock/Pexels) is transcoded in background to H.264, keyframe every 6, no B-frames; timeline uses cached file when ready for smooth playback. Cache lives in `project/cache/playback_<assetId>.mp4`. Electron only; run with `npm run electron:dev`.
 - Video clips maintain aspect ratio (letterbox/pillarbox, no stretching)
 
 ### Safe Guides & Letterbox
@@ -379,8 +384,8 @@ Export full edits (cuts, transitions, masks, text, audio) to a video file.
 - **Text colors**: `sf-text-primary` (#e5e5e5), `sf-text-secondary` (#a3a3a3), `sf-text-muted` (#737373)
 - **Persistence**: Zustand with `persist` middleware → localStorage
 - **Panel widths**: Left 200-450px, Right 200-400px, Timeline 180-450px (default 320px)
-- **Layout persistence**: Editor layout (timeline height, left/right panel width, expanded state) saved to `localStorage` key `storyflow-editor-layout` and restored on launch
-- **Track headers width**: Default 208px, resizable 100-400px; persisted in `storyflow-timeline-track-headers-width`
+- **Layout persistence**: Editor layout (timeline height, left/right panel width, expanded state) saved to `localStorage` key `comfystudio-editor-layout` and restored on launch
+- **Track headers width**: Default 208px, resizable 100-400px; persisted in `comfystudio-timeline-track-headers-width`
 - **Collapsible panels**: Icon bar always visible (48px each side)
 - **Full-height mode**: Left panel can expand to span entire height (Resolve-style)
 - **Draggable inputs**: Position X/Y, Anchor X/Y - click+drag to adjust, double-click to edit
@@ -472,6 +477,23 @@ clearAllKeyframes(clipId)
 ---
 
 ## Recent Changes Log
+
+### Black Flash Fix, Playback Cache, Input Focus (Feb 2026)
+
+**No black flash at cuts:**
+- Preview now uses the **cached video element** for display instead of a new `<video>` per layer. At cuts the preloaded, pre-seeked element is shown immediately.
+- VideoLayer attaches the cache's element to a container; sync/playback use that same element.
+
+**Playback cache (Flame-style):**
+- On import (AI Generate, Assets panel, Stock/Pexels), video is transcoded in background to playback-optimized format (same resolution, H.264, keyframe every 6, no B-frames). Stored in `project/cache/playback_<assetId>.mp4`.
+- `getAssetUrl(assetId)` prefers `asset.playbackCacheUrl` when set; `useClipUrl` subscribes to the asset's URL so the timeline re-renders when cache becomes ready.
+- Video cache uses a dedicated key for playback-cache URL (`clipId|pb`) so we don't reuse an element that had its `src` switched (avoids black on play). Playback-cache element waits for `canplay` before considered ready.
+- **Files:** `src/services/playbackCache.js` (new), `electron/main.js` (IPC `playback:transcode`), `electron/preload.js`, `src/stores/assetsStore.js` (playbackCachePath/Url, setPlaybackCache, loadFromProject restores cache URL), `src/components/VideoLayerRenderer.jsx` (useClipUrl subscribes to asset URL), `src/services/videoCache.js` (_cacheKey, _getEntry, baseClipId), `src/services/fileSystem.js` (cache folder in createProjectFolder), GenerateWorkspace/AssetsPanel/StockPanel (enqueuePlaybackTranscode after add video asset).
+- Console: `[PlaybackCache] Transcoding...` and `[PlaybackCache] Ready - using cached file for playback`. Optional debug: `localStorage.setItem('comfystudio-debug-playback', '1')`.
+
+**Keyboard / input focus:**
+- Global shortcuts (J/K/L, I/O, S, R, Delete, Space, etc.) now skip when `document.activeElement` is INPUT, TEXTAREA, SELECT, or contentEditable. Fixes typing in prompt fields and Stock search bar.
+- **Files:** `TransportControls.jsx`, `Timeline.jsx`, `PreviewPanel.jsx`, `AssetsPanel.jsx`.
 
 ### Delete/Undo Fix + LTX2 Image to Video (Feb 6, 2026)
 
@@ -801,7 +823,7 @@ When clips have effects (like masks), real-time compositing can cause desync. Th
 **Cache File Storage:**
 ```
 MyProject/
-├── project.storyflow
+├── project.comfystudio
 ├── assets/
 ├── cache/                          # NEW - Render cache folder
 │   ├── clip-123_1234567890.webm   # Cached video with effects
@@ -891,9 +913,9 @@ clearClipRenderCaches(projectDir, clipId)
 
 **Launch & Layout (Feb 4, 2026):**
 - **DevTools**: No longer open automatically on launch; still available via F12 or Ctrl+Shift+I.
-- **Layout persistence**: Timeline height, left/right panel width, and panel expanded state saved to `localStorage` (`storyflow-editor-layout`) and restored on next launch.
+- **Layout persistence**: Timeline height, left/right panel width, and panel expanded state saved to `localStorage` (`comfystudio-editor-layout`) and restored on next launch.
 - **Default timeline height**: 320px (was 240px) so track headers are visible without resizing.
-- **Track headers width**: Default 208px (was 144px); persisted in `storyflow-timeline-track-headers-width`.
+- **Track headers width**: Default 208px (was 144px); persisted in `comfystudio-timeline-track-headers-width`.
 - Files: `electron/main.js`, `src/App.jsx`, `src/components/Timeline.jsx`
 
 **Audio Tracks & Mono/Stereo (Feb 4, 2026):**
@@ -1010,7 +1032,7 @@ Added filmstrip-style thumbnail sprite generation for instant scrubbing performa
 **Project Folder Structure Update:**
 ```
 MyProject/
-├── project.storyflow
+├── project.comfystudio
 ├── assets/
 ├── cache/
 ├── thumbnails/              # NEW - Sprite storage
