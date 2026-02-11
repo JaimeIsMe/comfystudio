@@ -3,6 +3,9 @@ import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 
 const DEFAULT_SAMPLE_RATE = 44100
+const AUDIO_FETCH_TIMEOUT_MS = 15000
+const AUDIO_DECODE_TIMEOUT_MS = 30000
+const AUDIO_MIX_TIMEOUT_MS = 120000
 
 const EXPORT_STATUS = {
   preparing: 'Preparing export...',
@@ -13,6 +16,26 @@ const EXPORT_STATUS = {
 }
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
+
+const withTimeout = (promise, timeoutMs, label = 'Operation') => {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs))
+  ])
+}
+
+const fetchWithTimeout = async (url, timeoutMs) => {
+  if (typeof AbortController === 'undefined') {
+    return await withTimeout(fetch(url), timeoutMs, 'Audio fetch')
+  }
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { signal: controller.signal })
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
 
 const waitForEvent = (target, eventName) => new Promise((resolve, reject) => {
   const onSuccess = () => {
@@ -30,6 +53,28 @@ const waitForEvent = (target, eventName) => new Promise((resolve, reject) => {
   target.addEventListener(eventName, onSuccess, { once: true })
   target.addEventListener('error', onError, { once: true })
 })
+
+/** Yield to the event loop so the UI can repaint and avoid the window going black during export */
+const yieldToMain = () => new Promise(resolve => requestAnimationFrame(resolve))
+
+/** Stronger yield: give the event loop a full time slice (helps prevent renderer crash under heavy export) */
+const yieldToEventLoop = () => new Promise(resolve => setTimeout(resolve, 0))
+
+const isElectron = () => typeof window !== 'undefined' && window.electronAPI != null
+
+/** Resolve asset to a stable file:// URL for export when in Electron to avoid blob URL invalidation / OOM */
+async function getExportAssetUrl(asset, projectHandle) {
+  if (!asset?.url) return null
+  if (isElectron() && projectHandle && asset.path) {
+    try {
+      const filePath = await window.electronAPI.pathJoin(projectHandle, asset.path)
+      return await window.electronAPI.getFileUrlDirect(filePath)
+    } catch (e) {
+      console.warn('Export: could not resolve file URL for asset, using blob:', asset.name, e)
+    }
+  }
+  return asset.url
+}
 
 const loadImage = async (url) => {
   const img = new Image()
@@ -479,24 +524,24 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   await window.electronAPI.createDirectory(framesFolder)
   
   const outputExtension = format === 'webm' ? 'webm' : (format === 'prores' ? 'mov' : 'mp4')
-  const defaultOutputPath = await window.electronAPI.pathJoin(
-    outputFolder,
-    `${filename}.${outputExtension}`
-  )
-  
-  const saveDialog = await window.electronAPI.saveFileDialog({
-    title: 'Export Timeline',
-    defaultPath: defaultOutputPath,
-    filters: [
-      { name: outputExtension.toUpperCase(), extensions: [outputExtension] },
-    ],
-  })
-  
-  if (!saveDialog) {
-    throw new Error('Export cancelled')
+  let outputPath = options.outputPath
+  if (!outputPath) {
+    const defaultOutputPath = await window.electronAPI.pathJoin(
+      outputFolder,
+      `${filename}.${outputExtension}`
+    )
+    const saveDialog = await window.electronAPI.saveFileDialog({
+      title: 'Export Timeline',
+      defaultPath: defaultOutputPath,
+      filters: [
+        { name: outputExtension.toUpperCase(), extensions: [outputExtension] },
+      ],
+    })
+    if (!saveDialog) {
+      throw new Error('Export cancelled')
+    }
+    outputPath = saveDialog
   }
-  
-  const outputPath = saveDialog
   const framePattern = await window.electronAPI.pathJoin(framesFolder, 'frame_%06d.png')
   const audioPath = await window.electronAPI.pathJoin(tempFolder, 'audio.wav')
   
@@ -538,21 +583,25 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     }
   }
   
+  const projectHandle = projectState.currentProjectHandle
+  const resolvedAssetUrls = new Map()
   for (const clip of [...videoClips, ...imageClips]) {
     const asset = assetsState.getAssetById(clip.assetId)
     if (!asset?.url) continue
+    const resolvedUrl = await getExportAssetUrl(asset, projectHandle)
+    if (!resolvedUrl) continue
+    resolvedAssetUrls.set(clip.assetId, resolvedUrl)
     if (clip.type === 'video') {
       const overrideUrl = cachedVideoSources.get(clip.id)
-      const sourceUrl = overrideUrl || asset.url
+      const sourceUrl = overrideUrl || resolvedUrl
       if (!sourceUrl) continue
       if (!videoElements.has(sourceUrl)) {
         const video = await loadVideo(sourceUrl)
         videoElements.set(sourceUrl, video)
       }
     } else if (clip.type === 'image') {
-      const sourceUrl = asset.url
-      if (!imageElements.has(sourceUrl)) {
-        imageElements.set(sourceUrl, await loadImage(sourceUrl))
+      if (!imageElements.has(resolvedUrl)) {
+        imageElements.set(resolvedUrl, await loadImage(resolvedUrl))
       }
     }
   }
@@ -581,6 +630,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   const halfFrame = frameDuration / 2
 
   for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
+    await yieldToMain()
     const targetTime = rangeStart + frameIndex * frameDuration + halfFrame
     const safeEnd = Math.max(rangeStart, rangeEnd - halfFrame)
     const time = Math.min(targetTime, safeEnd)
@@ -619,7 +669,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       let shouldBlend = false
       
       if (clip.type === 'video') {
-        const sourceUrl = cachedSourceUrl || asset?.url
+        const sourceUrl = cachedSourceUrl || resolvedAssetUrls.get(clip.assetId) || asset?.url
         const video = sourceUrl ? videoElements.get(sourceUrl) : null
         if (!video) continue
         
@@ -659,7 +709,8 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         sourceHeight = video.videoHeight || sourceHeight
         drawSource = video
       } else if (clip.type === 'image') {
-        const image = asset?.url ? imageElements.get(asset.url) : null
+        const imageUrl = resolvedAssetUrls.get(clip.assetId) || asset?.url
+        const image = imageUrl ? imageElements.get(imageUrl) : null
         if (!image) continue
         sourceWidth = image.naturalWidth || sourceWidth
         sourceHeight = image.naturalHeight || sourceHeight
@@ -798,11 +849,19 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         totalFrames
       })
     }
+    if (frameIndex > 0 && frameIndex % 10 === 0) {
+      await yieldToEventLoop()
+    }
   }
   
   let audioFilePath = null
   if (includeAudio) {
-    onProgress({ status: EXPORT_STATUS.audio, progress: 80 })
+    const audioStartTime = Date.now()
+    const updateAudioStatus = (message, progress = 80) => {
+      const elapsed = ((Date.now() - audioStartTime) / 1000).toFixed(1)
+      onProgress({ status: `Mixing audio (${elapsed}s) • ${message}`, progress })
+    }
+    updateAudioStatus('Preparing audio clips', 80)
     const audioClips = timelineState.clips.filter(clip => clip.type === 'audio')
     const activeTracks = timelineState.tracks.filter(t => t.type === 'audio' && t.visible && !t.muted)
     
@@ -812,16 +871,23 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       const channelCount = audioChannels || 2
       const offlineContext = new OfflineAudioContext(channelCount, totalSamples, sampleRate)
       
-      for (const clip of audioClips) {
+      for (let index = 0; index < audioClips.length; index++) {
+        const clip = audioClips[index]
         const track = timelineState.tracks.find(t => t.id === clip.trackId)
         if (!track || track.muted || !track.visible) continue
         const asset = assetsState.getAssetById(clip.assetId)
         if (!asset?.url) continue
-        
+        const audioUrl = await getExportAssetUrl(asset, projectHandle) || asset.url
         try {
-          const response = await fetch(asset.url)
-          const arrayBuffer = await response.arrayBuffer()
-          let audioBuffer = await offlineContext.decodeAudioData(arrayBuffer)
+          updateAudioStatus(`Loading clip ${index + 1}/${audioClips.length}: ${asset.name || asset.id}`, 81)
+          const response = await fetchWithTimeout(audioUrl, AUDIO_FETCH_TIMEOUT_MS)
+          const arrayBuffer = await withTimeout(response.arrayBuffer(), AUDIO_FETCH_TIMEOUT_MS, 'Audio buffer')
+          updateAudioStatus(`Decoding clip ${index + 1}/${audioClips.length}`, 82)
+          let audioBuffer = await withTimeout(
+            offlineContext.decodeAudioData(arrayBuffer),
+            AUDIO_DECODE_TIMEOUT_MS,
+            'Audio decode'
+          )
           
           // Mono track: downmix stereo (or multi) to one channel so the track is truly mono
           const isMonoTrack = track.channels === 'mono'
@@ -849,18 +915,42 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
           source.start(startOffset, sourceOffset, playDuration)
         } catch (err) {
           console.warn('Failed to decode audio clip for export:', err)
+          updateAudioStatus(`Failed clip ${index + 1}/${audioClips.length} (skipped)`, 82)
         }
+        await yieldToEventLoop()
       }
-      
-      const mixedBuffer = await offlineContext.startRendering()
-      const wavData = audioBufferToWav(mixedBuffer)
-      await window.electronAPI.writeFileFromArrayBuffer(audioPath, wavData)
-      audioFilePath = audioPath
+
+      let renderHeartbeat = null
+      try {
+        updateAudioStatus('Rendering offline mix…', 86)
+        renderHeartbeat = setInterval(() => {
+          updateAudioStatus('Rendering offline mix…', 86)
+        }, 5000)
+        const mixedBuffer = await withTimeout(
+          offlineContext.startRendering(),
+          AUDIO_MIX_TIMEOUT_MS,
+          'Audio mix'
+        )
+        if (renderHeartbeat) clearInterval(renderHeartbeat)
+        updateAudioStatus('Writing WAV…', 88)
+        const wavData = audioBufferToWav(mixedBuffer)
+        await window.electronAPI.writeFileFromArrayBuffer(audioPath, wavData)
+        audioFilePath = audioPath
+        updateAudioStatus('Audio mix complete', 89)
+      } catch (err) {
+        if (renderHeartbeat) clearInterval(renderHeartbeat)
+        console.warn('Audio mix failed or timed out, exporting video only:', err)
+        onProgress({ status: 'Audio mix failed — exporting video only', progress: 85 })
+        audioFilePath = null
+      }
+    } else {
+      updateAudioStatus('No audio clips to mix', 85)
     }
   }
   
   onProgress({ status: EXPORT_STATUS.encoding, progress: 90 })
-  
+  await yieldToMain()
+
   const encodeResult = await window.electronAPI.encodeVideo({
     framePattern,
     fps,

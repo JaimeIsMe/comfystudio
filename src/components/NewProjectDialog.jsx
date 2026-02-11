@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { X, Film, Monitor, Gauge, Loader2 } from 'lucide-react'
+import { X, Loader2 } from 'lucide-react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../stores/projectStore'
 
 function NewProjectDialog({ isOpen, onClose }) {
@@ -81,12 +81,7 @@ function NewProjectDialog({ isOpen, onClose }) {
       <div className="bg-sf-dark-900 border border-sf-dark-700 rounded-xl w-full max-w-md mx-4 overflow-hidden shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-sf-dark-700">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-sf-accent rounded-lg flex items-center justify-center">
-              <Film className="w-4 h-4 text-white" />
-            </div>
-            <h2 className="text-lg font-semibold text-sf-text-primary">New Project</h2>
-          </div>
+          <h2 className="text-lg font-semibold text-sf-text-primary">New Project</h2>
           <button
             onClick={handleClose}
             disabled={isCreating}
@@ -129,7 +124,6 @@ function NewProjectDialog({ isOpen, onClose }) {
           {/* Resolution */}
           <div>
             <label className="block text-sm font-medium text-sf-text-primary mb-2">
-              <Monitor className="w-4 h-4 inline mr-2" />
               Resolution
             </label>
             
@@ -207,7 +201,6 @@ function NewProjectDialog({ isOpen, onClose }) {
           {/* Frame Rate */}
           <div>
             <label className="block text-sm font-medium text-sf-text-primary mb-2">
-              <Gauge className="w-4 h-4 inline mr-2" />
               Frame Rate
             </label>
             <div className="grid grid-cols-3 gap-2">

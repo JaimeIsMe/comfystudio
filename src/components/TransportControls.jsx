@@ -191,6 +191,21 @@ function TransportControls() {
         clearInOutPoints()
       }
       
+      // Enter = Play (start playback; only when not already playing)
+      if (e.key === 'Enter' && !e.repeat) {
+        if (hasContent && !isPlaying) {
+          e.preventDefault()
+          togglePlay()
+        }
+      }
+      
+      // Space = Stop (pause playback)
+      if (e.code === 'Space' && !e.repeat) {
+        if (hasContent && isPlaying) {
+          togglePlay()
+        }
+      }
+      
       // Left/Right Arrow keys for frame-by-frame navigation
       if (e.key === 'ArrowLeft') {
         e.preventDefault()
@@ -216,7 +231,7 @@ function TransportControls() {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
     }
-  }, [isKHeld, shuttleReverse, shuttlePause, shuttleForward, shuttleSlow, setInPoint, setOutPoint, clearInOutPoints, frameBack, frameForward])
+  }, [isKHeld, hasContent, isPlaying, togglePlay, shuttleReverse, shuttlePause, shuttleForward, shuttleSlow, setInPoint, setOutPoint, clearInOutPoints, frameBack, frameForward])
 
   // Format playback rate display
   const getPlaybackRateDisplay = () => {
@@ -375,7 +390,7 @@ function TransportControls() {
                 : 'bg-sf-dark-600 cursor-not-allowed'
             }`}
             disabled={!hasContent}
-            title={`${isPlaying ? 'Pause' : 'Play'} (Space) • Right-click for playback mode`}
+            title={`${isPlaying ? 'Pause' : 'Play'} • Enter = Play, Space = Stop • Right-click for playback mode`}
           >
             {isPlaying ? (
               <Pause className="w-4 h-4 text-white" />

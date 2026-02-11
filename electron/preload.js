@@ -100,6 +100,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   encodeVideo: (options) => ipcRenderer.invoke('export:encodeVideo', options),
 
+  // Export worker (run export in separate window so main UI stays responsive)
+  runExportInWorker: (payload) => ipcRenderer.invoke('export:runInWorker', payload),
+  onExportProgress: (cb) => {
+    ipcRenderer.on('export:progress', (_, data) => cb(data))
+  },
+  onExportComplete: (cb) => {
+    ipcRenderer.on('export:complete', (_, data) => cb(data))
+  },
+  onExportError: (cb) => {
+    ipcRenderer.on('export:error', (_, err) => cb(err))
+  },
+  onExportJob: (cb) => {
+    ipcRenderer.once('export:job', (_, job) => cb(job))
+  },
+  sendExportWorkerReady: () => ipcRenderer.send('export:workerReady'),
+  sendExportProgress: (data) => ipcRenderer.send('export:progress', data),
+  sendExportComplete: (data) => ipcRenderer.send('export:complete', data),
+  sendExportError: (err) => ipcRenderer.send('export:error', err),
+
   /**
    * Check if FFmpeg supports NVIDIA NVENC encoders
    * @returns {Promise<{available: boolean, h264: boolean, h265: boolean, error?: string}>}
