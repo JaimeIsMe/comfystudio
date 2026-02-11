@@ -5,7 +5,7 @@ const TOP_TABS = [
   { id: 'editor', label: 'Editor' },
   { id: 'generate', label: 'Generate' },
   { id: 'stock', label: 'Stock' },
-  { id: 'llm-assistant', label: 'LLM Assistant' },
+  { id: 'llm-assistant', label: 'LLM' },
   { id: 'export', label: 'Export' },
 ]
 

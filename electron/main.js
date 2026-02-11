@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, protocol, net } = require('electron
 const path = require('path')
 const fs = require('fs').promises
 const fsSync = require('fs')
+const http = require('http')
 const { spawn } = require('child_process')
 const ffmpegPath = require('ffmpeg-static')
 const ffprobeStatic = require('ffprobe-static')
@@ -9,10 +10,63 @@ const ffprobePath = ffprobeStatic?.path || ffprobeStatic
 
 const isDev = process.env.NODE_ENV !== 'production'
 
-const SPLASH_DURATION_MS = 3000
+const SPLASH_MIN_DURATION_MS = 4500  // Minimum time splash is visible (Resolve-style)
+const COMFYUI_CHECK_MS = 2500        // Max wait for ComfyUI
+const STEP_DELAY_MS = 400            // Delay between status messages
 
 let mainWindow = null
 let splashWindow = null
+let exportWorkerWindow = null
+
+function setSplashStatus(text) {
+  if (!splashWindow || splashWindow.isDestroyed()) return
+  const escaped = JSON.stringify(String(text))
+  splashWindow.webContents.executeJavaScript(`document.getElementById('splash-status').textContent = ${escaped}`).catch(() => {})
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function checkComfyUIRunning() {
+  return new Promise((resolve) => {
+    const req = http.get('http://127.0.0.1:8188/', (res) => {
+      resolve(res.statusCode === 200 || (res.statusCode >= 200 && res.statusCode < 400))
+    })
+    req.on('error', () => resolve(false))
+    req.setTimeout(COMFYUI_CHECK_MS, () => {
+      req.destroy()
+      resolve(false)
+    })
+  })
+}
+
+async function runStartupChecks() {
+  const start = Date.now()
+  if (!splashWindow || splashWindow.isDestroyed()) return
+
+  setSplashStatus('Checking ComfyUI…')
+  const comfyOk = await checkComfyUIRunning()
+  if (comfyOk) {
+    setSplashStatus('ComfyUI connected')
+  } else {
+    setSplashStatus('ComfyUI not detected (start it for AI generation)')
+  }
+  await delay(STEP_DELAY_MS)
+
+  setSplashStatus('Loading project page…')
+  await delay(STEP_DELAY_MS)
+  setSplashStatus('Loading media page…')
+  await delay(STEP_DELAY_MS)
+  setSplashStatus('Loading workspace…')
+  await delay(STEP_DELAY_MS)
+
+  const elapsed = Date.now() - start
+  const remaining = Math.max(0, SPLASH_MIN_DURATION_MS - elapsed)
+  if (remaining > 0) {
+    await delay(remaining)
+  }
+}
 
 // ============================================
 // Window Controls
@@ -74,9 +128,14 @@ function createSplashWindow() {
   const splashPath = isDev
     ? path.join(__dirname, '../public/splash.html')
     : path.join(__dirname, '../dist/splash.html')
+  // Match your splash image aspect ratio (1632×656); extra height for status bar
+  const SPLASH_ASPECT = 1632 / 656
+  const splashWidth = 1200
+  const statusBarHeight = 44
+  const splashHeight = Math.round(splashWidth / SPLASH_ASPECT) + statusBarHeight
   splashWindow = new BrowserWindow({
-    width: 800,
-    height: 520,
+    width: splashWidth,
+    height: splashHeight,
     backgroundColor: '#0a0a0b',
     frame: false,
     transparent: false,
@@ -92,6 +151,7 @@ function createSplashWindow() {
   splashWindow.on('closed', () => {
     splashWindow = null
   })
+  return splashWindow
 }
 
 async function createWindow() {
@@ -554,6 +614,77 @@ ipcMain.handle('settings:delete', async (event, key) => {
 // ============================================
 // Export Operations
 // ============================================
+
+ipcMain.handle('export:runInWorker', async (event, payload) => {
+  if (exportWorkerWindow && !exportWorkerWindow.isDestroyed()) {
+    return { success: false, error: 'Export already in progress' }
+  }
+  const workerUrl = isDev
+    ? `http://localhost:5173?export=worker`
+    : `file://${path.join(__dirname, '../dist/index.html')}?export=worker`
+  exportWorkerWindow = new BrowserWindow({
+    width: 400,
+    height: 200,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
+      // Allow loading file:// URLs for video/image elements during export (otherwise "Media load rejected by URL safety check")
+      webSecurity: false,
+    },
+  })
+  const workerContents = exportWorkerWindow.webContents
+  const forwardToMain = (channel, data) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(channel, data)
+    }
+  }
+  const onProgress = (event, data) => {
+    if (event.sender === workerContents) forwardToMain('export:progress', data)
+  }
+  const onComplete = (event, data) => {
+    if (event.sender === workerContents) {
+      forwardToMain('export:complete', data)
+      if (exportWorkerWindow && !exportWorkerWindow.isDestroyed()) {
+        exportWorkerWindow.close()
+        exportWorkerWindow = null
+      }
+    }
+  }
+  const onError = (event, err) => {
+    if (event.sender === workerContents) {
+      console.error('[Export] Worker reported error:', err, typeof err)
+      forwardToMain('export:error', err)
+      if (exportWorkerWindow && !exportWorkerWindow.isDestroyed()) {
+        exportWorkerWindow.close()
+        exportWorkerWindow = null
+      }
+    }
+  }
+  ipcMain.on('export:progress', onProgress)
+  ipcMain.on('export:complete', onComplete)
+  ipcMain.on('export:error', onError)
+  const sendJob = () => {
+    if (exportWorkerWindow && !exportWorkerWindow.isDestroyed()) {
+      exportWorkerWindow.webContents.send('export:job', payload)
+    }
+  }
+  ipcMain.once('export:workerReady', (event) => {
+    if (event.sender === workerContents) sendJob()
+  })
+  exportWorkerWindow.on('closed', () => {
+    ipcMain.removeListener('export:progress', onProgress)
+    ipcMain.removeListener('export:complete', onComplete)
+    ipcMain.removeListener('export:error', onError)
+  })
+  exportWorkerWindow.on('closed', () => {
+    exportWorkerWindow = null
+  })
+  await exportWorkerWindow.loadURL(workerUrl)
+  return { started: true }
+})
+
 ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
   const {
     framePattern,
@@ -817,14 +948,25 @@ ipcMain.handle('export:checkNvenc', async () => {
 
 app.whenReady().then(() => {
   registerFileProtocol()
-  createSplashWindow()
-  setTimeout(() => {
-    createWindow()
-    if (splashWindow && !splashWindow.isDestroyed()) {
-      splashWindow.close()
-      splashWindow = null
-    }
-  }, SPLASH_DURATION_MS)
+  const splash = createSplashWindow()
+  splash.webContents.once('did-finish-load', () => {
+    runStartupChecks()
+      .then(() => {
+        createWindow()
+        if (splashWindow && !splashWindow.isDestroyed()) {
+          splashWindow.close()
+          splashWindow = null
+        }
+      })
+      .catch((err) => {
+        console.error('Startup checks failed:', err)
+        createWindow()
+        if (splashWindow && !splashWindow.isDestroyed()) {
+          splashWindow.close()
+          splashWindow = null
+        }
+      })
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

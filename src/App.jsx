@@ -275,11 +275,27 @@ function App() {
                 onResize={handleTimelineResize}
               />
               
-              {/* Bottom Section - Transport Controls + Timeline */}
-              <div style={{ height: timelineHeight }} className="flex-shrink-0 w-full flex flex-col">
-                {/* Transport Controls - Anchored to top of timeline section */}
-                <TransportControls />
-                {/* Timeline - Takes remaining space */}
+              {/* Bottom Section - Transport (centered to viewer) + Timeline */}
+              <div style={{ height: timelineHeight }} className="flex-shrink-0 w-full flex flex-col min-h-0">
+                {/* Transport row - same columns as Preview row so play button is centered under viewer */}
+                <div className="flex-shrink-0 w-full flex min-h-0">
+                  {!leftPanelFullHeight && (
+                    <div
+                      style={{ width: leftPanelExpanded ? ICON_BAR_WIDTH + leftPanelWidth : ICON_BAR_WIDTH }}
+                      className="flex-shrink-0 transition-[width] duration-200 ease-out"
+                      aria-hidden
+                    />
+                  )}
+                  <div className="flex-1 min-w-0 flex items-center justify-center">
+                    <TransportControls />
+                  </div>
+                  <div
+                    style={{ width: inspectorExpanded ? inspectorWidth + ICON_BAR_WIDTH : ICON_BAR_WIDTH }}
+                    className="flex-shrink-0 transition-[width] duration-200 ease-out"
+                    aria-hidden
+                  />
+                </div>
+                {/* Timeline - takes remaining height */}
                 <div className="flex-1 min-h-0">
                   <Timeline onOpenAudioGenerate={openAudioModal} />
                 </div>

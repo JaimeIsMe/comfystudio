@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Plus, Trash2, Play, Settings, Film, Clock } from 'lucide-react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../stores/projectStore'
 import useTimelineStore from '../stores/timelineStore'
+import useAssetsStore from '../stores/assetsStore'
 import exportTimeline from '../services/exporter'
 
 const EXPORT_FORMATS = [
@@ -101,8 +102,9 @@ const PRORES_PROFILES = [
 ]
 
 function ExportPanel() {
-  const { currentProject, getCurrentTimelineSettings } = useProjectStore()
+  const { currentProject, currentProjectHandle, getCurrentTimelineSettings } = useProjectStore()
   const { duration, inPoint, outPoint, getTimelineEndTime, selectedClipIds, clips, transitions, tracks } = useTimelineStore()
+  const { assets } = useAssetsStore()
   
   const projectName = currentProject?.name || 'Untitled'
   const defaultFilename = `${projectName}_export`
@@ -194,7 +196,41 @@ function ExportPanel() {
       cancelled = true
     }
   }, [])
-  
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.electronAPI?.onExportProgress) return
+    const onProgress = (data) => {
+      setExportStatus(data.status || '')
+      if (typeof data.progress === 'number') setExportProgress(data.progress)
+      if (exportStartRef.current && data.frame != null && data.totalFrames != null) {
+        const now = Date.now()
+        if (!renderStartRef.current) renderStartRef.current = now
+        const elapsed = (now - renderStartRef.current) / 1000
+        if (elapsed > 0) {
+          setRenderFps(data.frame / elapsed)
+          setEtaSeconds(Math.max(0, data.totalFrames - data.frame) / (data.frame / elapsed))
+        }
+      }
+    }
+    const onComplete = (data) => {
+      console.log('[ExportPanel] Worker export complete', data)
+      setExportResult(data)
+      setExportStatus('Export complete')
+      setExportProgress(100)
+      setIsExporting(false)
+    }
+    const onError = (err) => {
+      const msg = typeof err === 'string' ? err : (err?.message ?? (err && typeof err === 'object' && err.constructor?.name === 'Event' ? `Export error (${err.type})` : String(err)))
+      console.error('[ExportPanel] Worker export error', err, '-> displayed:', msg)
+      setExportError(msg || 'Export failed')
+      setExportStatus('Export failed')
+      setIsExporting(false)
+    }
+    window.electronAPI.onExportProgress(onProgress)
+    window.electronAPI.onExportComplete(onComplete)
+    window.electronAPI.onExportError(onError)
+  }, [])
+
   const timelineRangeLabel = useMemo(() => {
     if (settings.range === 'inout' && inPoint !== null && outPoint !== null) {
       return `${Math.max(0, inPoint).toFixed(2)}s → ${Math.max(inPoint, outPoint).toFixed(2)}s`
@@ -418,7 +454,7 @@ function ExportPanel() {
         throw new Error('NVENC is not supported by your FFmpeg build.')
       }
     }
-    
+
     exportStartRef.current = Date.now()
     renderStartRef.current = null
     setEtaSeconds(null)
@@ -426,12 +462,11 @@ function ExportPanel() {
     setExportError(null)
     setExportResult(null)
     setIsExporting(true)
-    
+
     const { width, height } = resolveResolution()
     const fps = resolveFps()
     const range = resolveRange()
-    
-    const result = await exportTimeline({
+    const options = {
       filename: jobSettings.filename?.trim() || defaultFilename,
       format: jobSettings.format,
       videoCodec: jobSettings.videoCodec,
@@ -455,7 +490,52 @@ function ExportPanel() {
       audioChannels: Number(jobSettings.audioChannels),
       useCachedRenders: jobSettings.useCachedRenders,
       fastSeek: jobSettings.fastSeek,
-    }, (progress) => {
+    }
+
+    if (window.electronAPI?.runExportInWorker && typeof currentProjectHandle === 'string') {
+      try {
+        const outputExtension = jobSettings.format === 'webm' ? 'webm' : (jobSettings.format === 'prores' ? 'mov' : 'mp4')
+        const outputFolder = await window.electronAPI.pathJoin(currentProjectHandle, 'renders')
+        await window.electronAPI.createDirectory(outputFolder)
+        const defaultPath = await window.electronAPI.pathJoin(outputFolder, `${options.filename}.${outputExtension}`)
+        const outputPath = await window.electronAPI.saveFileDialog({
+          title: 'Export Timeline',
+          defaultPath,
+          filters: [{ name: outputExtension.toUpperCase(), extensions: [outputExtension] }],
+        })
+        if (!outputPath) {
+          setIsExporting(false)
+          throw new Error('Export cancelled')
+        }
+        const state = {
+          timeline: { clips, tracks, transitions },
+          assets: assets.map((a) => ({
+            id: a.id,
+            path: a.path,
+            type: a.type,
+            name: a.name,
+            isImported: a.isImported,
+            settings: a.settings,
+            duration: a.duration,
+            maskFrames: a.maskFrames?.map((f) => ({ ...f, url: undefined })),
+          })),
+        }
+        await window.electronAPI.runExportInWorker({
+          projectPath: currentProjectHandle,
+          outputPath,
+          options: { ...options, outputPath },
+          state,
+        })
+        return
+      } catch (err) {
+        setExportError(err?.message || 'Export failed')
+        setExportStatus('Export failed')
+        setIsExporting(false)
+        throw err
+      }
+    }
+
+    const result = await exportTimeline(options, (progress) => {
       setExportStatus(labelOverride ? `${labelOverride} • ${progress.status || ''}`.trim() : (progress.status || ''))
       if (typeof progress.progress === 'number') {
         setExportProgress(progress.progress)
@@ -517,13 +597,13 @@ function ExportPanel() {
       {/* Content */}
       <div className="flex-1 min-h-0 grid grid-cols-12 gap-4 p-4">
         {/* Settings */}
-        <div className="col-span-7 bg-sf-dark-900 border border-sf-dark-700 rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-4">
+        <div className="col-span-7 flex flex-col min-h-0 bg-sf-dark-900 border border-sf-dark-700 rounded-lg p-3">
+          <div className="flex items-center gap-2 mb-3 shrink-0">
             <Settings className="w-4 h-4 text-sf-text-muted" />
             <span className="text-xs font-semibold text-sf-text-primary uppercase tracking-wider">Export Settings</span>
           </div>
           
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-3 shrink-0">
             <div>
               <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Filename</label>
               <input
@@ -547,9 +627,28 @@ function ExportPanel() {
                 ))}
               </select>
             </div>
+
+            <div>
+              <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Range</label>
+              <select
+                value={settings.range}
+                onChange={(e) => handleSettingChange('range', e.target.value)}
+                className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+              >
+                {RANGE_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>{preset.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-end">
+              <p className="text-[10px] text-sf-text-muted flex items-center gap-1">
+                <Clock className="w-3 h-3" /> {timelineRangeLabel}
+              </p>
+            </div>
           </div>
+          <p className="mt-1 text-[10px] text-sf-text-muted shrink-0">Output location will be chosen when export starts.</p>
           
-          <div className="mt-3 flex items-center gap-2 text-[10px] text-sf-text-muted">
+          <div className="mt-2 flex items-center gap-2 text-[10px] text-sf-text-muted shrink-0">
             <span className="uppercase tracking-wider">Render</span>
             <button
               onClick={() => handleSettingChange('renderMode', 'single')}
@@ -570,11 +669,11 @@ function ExportPanel() {
             </button>
           </div>
           
-          <div className="mt-4 border-t border-sf-dark-700 pt-3 space-y-6 max-h-[60vh] overflow-y-auto pr-1">
+          <div className="mt-3 border-t border-sf-dark-700 pt-2 flex-1 min-h-0 overflow-y-auto pr-1 space-y-4">
             {/* Video */}
             <div>
-              <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-3">Video</div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">Video</div>
+              <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
                   <div className="flex items-center gap-2">
                     <button
@@ -791,8 +890,8 @@ function ExportPanel() {
             
             {/* Audio */}
             <div>
-              <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-3">Audio</div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">Audio</div>
+              <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
                   <button
                     onClick={() => handleSettingChange('includeAudio', !settings.includeAudio)}
@@ -867,35 +966,9 @@ function ExportPanel() {
               </div>
             </div>
             
-            {/* File */}
-            <div>
-              <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-3">File</div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Range</label>
-                  <select
-                    value={settings.range}
-                    onChange={(e) => handleSettingChange('range', e.target.value)}
-                    className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
-                  >
-                    {RANGE_PRESETS.map((preset) => (
-                      <option key={preset.id} value={preset.id}>{preset.label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="flex items-end">
-                  <p className="text-[10px] text-sf-text-muted flex items-center gap-1">
-                    <Clock className="w-3 h-3" /> {timelineRangeLabel}
-                  </p>
-                </div>
-                <div className="col-span-2 text-[10px] text-sf-text-muted">
-                  Output location will be chosen when export starts.
-                </div>
-              </div>
-            </div>
           </div>
           
-          <div className="mt-4 flex items-center justify-end gap-2">
+          <div className="mt-3 flex items-center justify-end gap-2 shrink-0">
             <button
               onClick={handleAddToQueue}
               className="px-3 py-1.5 text-xs rounded bg-sf-dark-700 text-sf-text-primary hover:bg-sf-dark-600 transition-colors flex items-center gap-1.5"
@@ -918,7 +991,7 @@ function ExportPanel() {
           </div>
 
           {(isExporting || exportProgress > 0) && (
-            <div className="mt-4">
+            <div className="mt-3 shrink-0">
               <div className="flex items-center justify-between text-[10px] text-sf-text-muted mb-1">
                 <span>{exportStatus || 'Exporting...'}</span>
                 <span>{Math.round(exportProgress)}% • ETA {formatDuration(etaSeconds)}</span>
@@ -938,13 +1011,13 @@ function ExportPanel() {
           )}
           
           {exportError && (
-            <div className="mt-3 text-[11px] text-sf-error">
+            <div className="mt-2 shrink-0 text-[11px] text-sf-error">
               {exportError}
             </div>
           )}
           
           {exportResult?.outputPath && !exportError && (
-            <div className="mt-3 text-[11px] text-sf-text-secondary">
+            <div className="mt-2 shrink-0 text-[11px] text-sf-text-secondary">
               Saved to: {exportResult.outputPath}
               {exportResult.encoderUsed && (
                 <div>Encoder: {exportResult.encoderUsed}</div>
@@ -953,11 +1026,11 @@ function ExportPanel() {
           )}
           
           {performanceHints.length > 0 && (
-            <div className="mt-4 border-t border-sf-dark-700 pt-3">
-              <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">Performance hints</div>
-              <div className="space-y-1">
+            <div className="mt-3 border-t border-sf-dark-700 pt-2 shrink-0 max-h-24 overflow-y-auto">
+              <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-1">Performance hints</div>
+              <div className="space-y-0.5">
                 {performanceHints.map((hint) => (
-                  <div key={hint} className="text-[11px] text-sf-text-muted">
+                  <div key={hint} className="text-[10px] text-sf-text-muted">
                     • {hint}
                   </div>
                 ))}

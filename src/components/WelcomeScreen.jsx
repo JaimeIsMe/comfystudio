@@ -72,13 +72,9 @@ function WelcomeScreen() {
     return (
       <div className="h-screen bg-sf-dark-950 flex items-center justify-center">
         <div className="max-w-md w-full mx-4">
-          {/* Logo/Branding */}
+          {/* Branding */}
           <div className="text-center mb-8">
-            <div className="w-16 h-16 bg-sf-accent rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <Film className="w-8 h-8 text-white" />
-            </div>
-            <h1 className="text-2xl font-bold text-sf-text-primary mb-2">Welcome to ComfyStudio</h1>
-            <p className="text-sf-text-muted text-sm">AI-Powered Video Editing Studio</p>
+            <h1 className="text-4xl font-bold text-sf-text-primary">ComfyStudio</h1>
           </div>
           
           {/* Browser Support Warning - only show in web mode */}
@@ -98,9 +94,9 @@ function WelcomeScreen() {
           
           {/* Setup Card */}
           <div className="bg-sf-dark-900 border border-sf-dark-700 rounded-xl p-6">
-            <h2 className="text-lg font-semibold text-sf-text-primary mb-2">Set Up Your Workspace</h2>
+            <h2 className="text-lg font-semibold text-sf-text-primary mb-2 text-center">Set Up Your Workspace</h2>
             <p className="text-sm text-sf-text-muted mb-6">
-              Choose a folder where your ComfyStudio projects will be saved. Each project will have its own subfolder with all assets organized inside.
+              Choose a folder where your ComfyStudio projects and media will be stored. Each project will have its own subfolder with all assets and imported media organized inside.
             </p>
             
             {/* Current Location Display */}
@@ -124,11 +120,11 @@ function WelcomeScreen() {
               </div>
             )}
             
-            {/* Action Button */}
+            {/* Action Button - simple outlined style */}
             <button
               onClick={selectDefaultProjectsLocation}
               disabled={(!isBrowserSupported && !isElectronMode()) || isLoading}
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-sf-blue hover:bg-sf-blue-hover disabled:bg-sf-dark-700 disabled:cursor-not-allowed rounded-lg text-white font-medium transition-colors"
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-sf-dark-800 hover:bg-sf-dark-700 border border-sf-dark-500 disabled:bg-sf-dark-700 disabled:border-sf-dark-600 disabled:cursor-not-allowed rounded-lg text-sf-text-secondary font-medium transition-colors"
             >
               {isLoading ? (
                 <Loader2 className="w-5 h-5 animate-spin" />
@@ -152,27 +148,19 @@ function WelcomeScreen() {
     <div className="h-screen bg-sf-dark-950 flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between px-8 py-6 border-b border-sf-dark-800">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-sf-accent rounded-xl flex items-center justify-center">
-            <Film className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-sf-text-primary">ComfyStudio</h1>
-            <p className="text-xs text-sf-text-muted">AI-Powered Video Editing</p>
-          </div>
-        </div>
+        <h1 className="text-xl font-bold text-sf-text-primary">ComfyStudio</h1>
         
         <div className="flex items-center gap-3">
           <button
             onClick={openProjectFromPicker}
-            className="flex items-center gap-2 px-4 py-2 bg-sf-dark-800 hover:bg-sf-dark-700 border border-sf-dark-600 rounded-lg text-sm text-sf-text-primary transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-sf-dark-800 hover:bg-sf-dark-700 border border-sf-dark-500 rounded-lg text-sm text-sf-text-secondary font-medium transition-colors"
           >
             <FolderOpen className="w-4 h-4" />
             Open Project
           </button>
           <button
             onClick={() => setShowNewProjectDialog(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-sf-blue hover:bg-sf-blue-hover rounded-lg text-sm text-white font-medium transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-sf-dark-800 hover:bg-sf-dark-700 border border-sf-dark-500 rounded-lg text-sm text-sf-text-secondary font-medium transition-colors"
           >
             <Plus className="w-4 h-4" />
             New Project
@@ -208,12 +196,11 @@ function WelcomeScreen() {
             </div>
           ) : recentProjectsList.length === 0 ? (
             <div className="bg-sf-dark-900 border border-sf-dark-700 rounded-xl p-12 text-center">
-              <Film className="w-12 h-12 text-sf-text-muted mx-auto mb-4 opacity-50" />
               <p className="text-sf-text-primary font-medium mb-2">No recent projects</p>
               <p className="text-sm text-sf-text-muted mb-6">Create your first project to get started</p>
               <button
                 onClick={() => setShowNewProjectDialog(true)}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-sf-blue hover:bg-sf-blue-hover rounded-lg text-sm text-white font-medium transition-colors"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-sf-dark-800 hover:bg-sf-dark-700 border border-sf-dark-500 rounded-lg text-sm text-sf-text-secondary font-medium transition-colors"
               >
                 <Plus className="w-4 h-4" />
                 New Project
@@ -306,7 +293,7 @@ function WelcomeScreen() {
         {/* Projects Location Info */}
         <div className="text-center text-xs text-sf-text-muted">
           <p>
-            Projects are saved to: <span className="text-sf-text-secondary">{defaultProjectsLocation || 'Not set'}</span>
+            Projects and media are saved to: <span className="text-sf-text-secondary">{defaultProjectsLocation || 'Not set'}</span>
             {' '}
             <button 
               onClick={selectDefaultProjectsLocation}

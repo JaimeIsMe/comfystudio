@@ -2350,15 +2350,6 @@ function Timeline({ onOpenAudioGenerate }) {
                     </div>
                   )
                 })}
-                
-                {/* Empty track hint */}
-                {trackClips.length === 0 && (
-                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <span className="text-[10px] text-sf-text-muted">
-                      Drag video from Assets here
-                    </span>
-                  </div>
-                )}
               </div>
             )
           })}
