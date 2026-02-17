@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { 
   Move, RotateCw, Maximize2, Clock, Layers, Volume2, 
   ChevronDown, ChevronRight, ChevronLeft, Sparkles, Film,
-  Zap, Eye, SlidersHorizontal,
+  Zap, Eye, SlidersHorizontal, CircleDot,
   FlipHorizontal, FlipVertical, Link, Unlink, Crop,
   Anchor, RotateCcw, Type, AlignLeft, AlignCenter, AlignRight,
   AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd,
@@ -14,9 +14,20 @@ import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 import renderCacheService from '../services/renderCache'
-import { saveRenderCache, deleteRenderCache } from '../services/fileSystem'
+import { saveRenderCache, deleteRenderCache, writeGeneratedOverlayToProject, isElectron } from '../services/fileSystem'
 import { getKeyframeAtTime, getAnimatedTransform, EASING_OPTIONS } from '../utils/keyframes'
+import { TEXT_ANIMATION_PRESETS, TEXT_ANIMATION_MODE_OPTIONS } from '../utils/textAnimationPresets'
 import { clearDiskCacheUrl } from './VideoLayerRenderer'
+import { FRAME_RATE, TRANSITION_TYPES, TRANSITION_DEFAULT_SETTINGS } from '../constants/transitions'
+import {
+  DEFAULT_LETTERBOX_ASPECT,
+  LETTERBOX_ASPECT_PRESETS,
+  resolveLetterboxAspect,
+  getLetterboxContentRect,
+  generateLetterboxOverlayBlob,
+} from '../utils/overlayGenerators'
+
+const TRANSITION_DEFAULT_DURATION_KEY = 'comfystudio-transition-default-duration-frames'
 
 // Draggable number input component - click and drag to change value
 function DraggableNumberInput({ value, onChange, onCommit, min, max, step = 1, sensitivity = 0.5, suffix = '', className = '' }) {
@@ -223,20 +234,30 @@ function KeyframeButton({ clipId, property, clip, playheadPosition }) {
 }
 
 function InspectorPanel({ isExpanded, onToggleExpanded }) {
-  const [expandedSections, setExpandedSections] = useState(['transform', 'crop', 'timing', 'effects', 'text', 'style'])
+  const [expandedSections, setExpandedSections] = useState(['transform', 'crop', 'timing', 'effects', 'text', 'style', 'animation'])
   const [showMaskPicker, setShowMaskPicker] = useState(false)
   const [renderProgress, setRenderProgress] = useState(null) // { status, progress, error }
   const [isRendering, setIsRendering] = useState(false)
+  const [textAnimationMode, setTextAnimationMode] = useState('inOut')
+  const [letterboxAspectPreset, setLetterboxAspectPreset] = useState(String(DEFAULT_LETTERBOX_ASPECT))
+  const [letterboxCustomAspect, setLetterboxCustomAspect] = useState(String(DEFAULT_LETTERBOX_ASPECT))
+  const [letterboxBarColor, setLetterboxBarColor] = useState('#000000')
+  const [isUpdatingLetterbox, setIsUpdatingLetterbox] = useState(false)
+  const [letterboxUpdateError, setLetterboxUpdateError] = useState(null)
   
   // Get selected clip from timeline store
   const { 
     selectedClipIds, 
+    selectedTransitionId,
     clips, 
     tracks,
+    transitions,
     playheadPosition,
     updateClipTransform, 
     resetClipTransform,
     updateTextProperties,
+    applyTextAnimationPreset,
+    clearTextAnimationPreset,
     removeClip,
     resizeClip,
     updateClipSpeed,
@@ -250,6 +271,11 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     toggleEffect,
     addMaskEffect,
     getClipEffects,
+    updateTransition,
+    setTransitionAlignment,
+    removeTransition,
+    getMaxTransitionDurationForAlignment,
+    getMaxEdgeTransitionDuration,
     // Cache
     setCacheStatus,
     setCacheUrl,
@@ -259,12 +285,23 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   } = useTimelineStore()
   
   // Get assets store functions (needed for render cache)
-  const { assets, getAssetById, getAllMasks } = useAssetsStore()
+  const { assets, getAssetById, getAllMasks, updateAsset } = useAssetsStore()
   
   // Get the first selected clip (for now, single selection for inspector)
   const selectedClip = selectedClipIds.length > 0 
     ? clips.find(c => c.id === selectedClipIds[0]) 
     : null
+  const selectedTransition = selectedTransitionId
+    ? transitions.find(t => t.id === selectedTransitionId) || null
+    : null
+
+  useEffect(() => {
+    if (!selectedClip || selectedClip.type !== 'text') return
+    const mode = selectedClip?.titleAnimation?.mode
+    if (mode === 'in' || mode === 'out' || mode === 'inOut') {
+      setTextAnimationMode(mode)
+    }
+  }, [selectedClip?.id, selectedClip?.type, selectedClip?.titleAnimation?.mode])
 
   // If a mask picker request comes in for this clip, open inspector + effects
   useEffect(() => {
@@ -304,8 +341,30 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
       rotation: 0, anchorX: 50, anchorY: 50, opacity: 100,
       flipH: false, flipV: false,
       cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0,
+      blendMode: 'normal',
+      blur: 0,
     }
   }, [selectedClip])
+
+  // Blend mode options (CSS mix-blend-mode values)
+  const BLEND_MODES = [
+    { value: 'normal', label: 'Normal' },
+    { value: 'multiply', label: 'Multiply' },
+    { value: 'screen', label: 'Screen' },
+    { value: 'overlay', label: 'Overlay' },
+    { value: 'darken', label: 'Darken' },
+    { value: 'lighten', label: 'Lighten' },
+    { value: 'color-dodge', label: 'Color Dodge' },
+    { value: 'color-burn', label: 'Color Burn' },
+    { value: 'hard-light', label: 'Hard Light' },
+    { value: 'soft-light', label: 'Soft Light' },
+    { value: 'difference', label: 'Difference' },
+    { value: 'exclusion', label: 'Exclusion' },
+    { value: 'hue', label: 'Hue' },
+    { value: 'saturation', label: 'Saturation' },
+    { value: 'color', label: 'Color' },
+    { value: 'luminosity', label: 'Luminosity' },
+  ]
   
   const transform = getTransform()
   
@@ -350,6 +409,22 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     if (!selectedClip) return
     updateClipTransform(selectedClip.id, { [key]: value }, true)
   }, [selectedClip, updateClipTransform])
+
+  // Reset individual slider to default on double-click
+  const handleSliderReset = useCallback((property, defaultValue) => {
+    if (!selectedClip) return
+    const isScale = property === 'scaleX' || property === 'scaleY'
+    const isLinked = transform?.scaleLinked && isScale
+    const updates = isScale && isLinked
+      ? { scaleX: 100, scaleY: 100 }
+      : { [property]: defaultValue }
+    for (const key of Object.keys(updates)) {
+      if (propertyHasKeyframes(key)) {
+        setKeyframe(selectedClip.id, key, clipTime, updates[key])
+      }
+    }
+    updateClipTransform(selectedClip.id, updates, true)
+  }, [selectedClip, transform?.scaleLinked, propertyHasKeyframes, setKeyframe, clipTime, updateClipTransform])
   
   // Reset all transform
   const handleResetTransform = useCallback(() => {
@@ -623,6 +698,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                     value={animatedTransform?.scaleX ?? transform.scaleX}
                     onChange={(e) => handleTransformChange('scaleX', parseInt(e.target.value))}
                     onMouseUp={(e) => handleTransformCommit('scaleX', parseInt(e.target.value))}
+                    onDoubleClick={() => handleSliderReset('scaleX', 100)}
+                    title="Double-click to reset to 100%"
                     className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
                   />
                 </div>
@@ -641,6 +718,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                       value={transform.scaleX}
                       onChange={(e) => handleTransformChange('scaleX', parseInt(e.target.value))}
                       onMouseUp={(e) => handleTransformCommit('scaleX', parseInt(e.target.value))}
+                      onDoubleClick={() => handleSliderReset('scaleX', 100)}
+                      title="Double-click to reset to 100%"
                       className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
                     />
                   </div>
@@ -656,6 +735,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                       value={transform.scaleY}
                       onChange={(e) => handleTransformChange('scaleY', parseInt(e.target.value))}
                       onMouseUp={(e) => handleTransformCommit('scaleY', parseInt(e.target.value))}
+                      onDoubleClick={() => handleSliderReset('scaleY', 100)}
+                      title="Double-click to reset to 100%"
                       className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
                     />
                   </div>
@@ -693,6 +774,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 value={animatedTransform?.rotation ?? transform.rotation}
                 onChange={(e) => handleTransformChange('rotation', parseInt(e.target.value))}
                 onMouseUp={(e) => handleTransformCommit('rotation', parseInt(e.target.value))}
+                onDoubleClick={() => handleSliderReset('rotation', 0)}
+                title="Double-click to reset to 0°"
                 className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
             </div>
@@ -749,9 +832,64 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 value={animatedTransform?.opacity ?? transform.opacity}
                 onChange={(e) => handleTransformChange('opacity', parseInt(e.target.value))}
                 onMouseUp={(e) => handleTransformCommit('opacity', parseInt(e.target.value))}
+                onDoubleClick={() => handleSliderReset('opacity', 100)}
+                title="Double-click to reset to 100%"
                 className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
             </div>
+
+            {/* Blur (video / image / text only) */}
+            {(selectedClip?.type === 'video' || selectedClip?.type === 'image' || selectedClip?.type === 'text') && (
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-[10px] text-sf-text-muted flex items-center gap-1">
+                    <CircleDot className="w-3 h-3" /> Blur
+                  </label>
+                  <div className="flex items-center gap-1">
+                    <KeyframeButton 
+                      clipId={selectedClip?.id} 
+                      property="blur" 
+                      clip={selectedClip}
+                      playheadPosition={playheadPosition}
+                    />
+                    <span className="text-[10px] text-sf-text-secondary">{(animatedTransform?.blur ?? transform.blur ?? 0).toFixed(1)}px</span>
+                  </div>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="50"
+                  step="0.25"
+                  value={animatedTransform?.blur ?? transform.blur ?? 0}
+                  onChange={(e) => handleTransformChange('blur', parseFloat(e.target.value))}
+                  onMouseUp={(e) => handleTransformCommit('blur', parseFloat(e.target.value))}
+                  onDoubleClick={() => handleSliderReset('blur', 0)}
+                  title="Double-click to reset to 0px"
+                  className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+                />
+              </div>
+            )}
+
+            {/* Blend Mode (video / image / text only) */}
+            {(selectedClip?.type === 'video' || selectedClip?.type === 'image' || selectedClip?.type === 'text') && (
+              <div>
+                <label className="text-[10px] text-sf-text-muted block mb-1">
+                  Blend Mode
+                </label>
+                <select
+                  value={transform.blendMode ?? 'normal'}
+                  onChange={(e) => {
+                    handleTransformChange('blendMode', e.target.value)
+                    handleTransformCommit('blendMode', e.target.value)
+                  }}
+                  className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                >
+                  {BLEND_MODES.map(({ value, label }) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {/* Anchor Point */}
             <div>
@@ -846,6 +984,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                   value={transform.cropTop}
                   onChange={(e) => handleTransformChange('cropTop', parseInt(e.target.value))}
                   onMouseUp={(e) => handleTransformCommit('cropTop', parseInt(e.target.value))}
+                  onDoubleClick={() => { handleTransformChange('cropTop', 0); handleTransformCommit('cropTop', 0) }}
+                  title="Double-click to reset to 0"
                   className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
                 />
               </div>
@@ -861,6 +1001,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                   value={transform.cropBottom}
                   onChange={(e) => handleTransformChange('cropBottom', parseInt(e.target.value))}
                   onMouseUp={(e) => handleTransformCommit('cropBottom', parseInt(e.target.value))}
+                  onDoubleClick={() => { handleTransformChange('cropBottom', 0); handleTransformCommit('cropBottom', 0) }}
+                  title="Double-click to reset to 0"
                   className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
                 />
               </div>
@@ -876,6 +1018,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                   value={transform.cropLeft}
                   onChange={(e) => handleTransformChange('cropLeft', parseInt(e.target.value))}
                   onMouseUp={(e) => handleTransformCommit('cropLeft', parseInt(e.target.value))}
+                  onDoubleClick={() => { handleTransformChange('cropLeft', 0); handleTransformCommit('cropLeft', 0) }}
+                  title="Double-click to reset to 0"
                   className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
                 />
               </div>
@@ -891,6 +1035,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                   value={transform.cropRight}
                   onChange={(e) => handleTransformChange('cropRight', parseInt(e.target.value))}
                   onMouseUp={(e) => handleTransformCommit('cropRight', parseInt(e.target.value))}
+                  onDoubleClick={() => { handleTransformChange('cropRight', 0); handleTransformCommit('cropRight', 0) }}
+                  title="Double-click to reset to 0"
                   className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
                 />
               </div>
@@ -934,10 +1080,13 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 <div className="flex items-center">
                   <input
                     type="number"
-                    step="0.1"
-                    min="0.1"
-                    value={selectedClip.duration?.toFixed(2)}
-                    onChange={(e) => resizeClip(selectedClip.id, parseFloat(e.target.value) || 0.5)}
+                    step="0.01"
+                    min="0.04"
+                    value={selectedClip.duration?.toFixed(3)}
+                    onChange={(e) => {
+                      const parsed = parseFloat(e.target.value)
+                      if (Number.isFinite(parsed)) resizeClip(selectedClip.id, parsed)
+                    }}
                     className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
                   />
                   <span className="ml-1 text-[9px] text-sf-text-muted">s</span>
@@ -1018,7 +1167,12 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
             </div>
 
             <div className="text-[9px] text-sf-text-muted">
-              Source Duration: {selectedClip.sourceDuration?.toFixed(2)}s
+              Source Duration:{' '}
+              {selectedClip.type === 'image' || selectedClip.sourceDuration === Infinity || selectedClip.sourceDuration === 'Infinity'
+                ? 'Infinity'
+                : (Number.isFinite(Number(selectedClip.sourceDuration)) && Number(selectedClip.sourceDuration) > 0
+                    ? `${Number(selectedClip.sourceDuration).toFixed(2)}s`
+                    : 'Unknown')}
             </div>
           </div>
         )}
@@ -1274,6 +1428,16 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     updateTextProperties(selectedClip.id, { [key]: value }, true)
   }, [selectedClip, updateTextProperties])
 
+  const handleApplyTextAnimationPreset = useCallback((presetId) => {
+    if (!selectedClip || selectedClip.type !== 'text') return
+    applyTextAnimationPreset(selectedClip.id, presetId, textAnimationMode)
+  }, [selectedClip, applyTextAnimationPreset, textAnimationMode])
+
+  const handleClearTextAnimationPreset = useCallback(() => {
+    if (!selectedClip || selectedClip.type !== 'text') return
+    clearTextAnimationPreset(selectedClip.id)
+  }, [selectedClip, clearTextAnimationPreset])
+
   // Get text properties with defaults
   const getTextProps = useCallback(() => {
     if (!selectedClip || selectedClip.type !== 'text') return null
@@ -1306,6 +1470,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     if (!selectedClip || !transform) return null
     const textProps = getTextProps()
     if (!textProps) return null
+    const activeAnimationPresetId = selectedClip?.titleAnimation?.presetId || 'none'
     
     return (
       <>
@@ -1545,6 +1710,65 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
           </div>
         )}
 
+        {/* Title Animation Section */}
+        {renderSectionHeader('animation', 'Animation', Sparkles)}
+        {expandedSections.includes('animation') && (
+          <div className="p-3 space-y-3 border-b border-sf-dark-700">
+            <div>
+              <label className="text-[10px] text-sf-text-muted uppercase tracking-wider block mb-1.5">Mode</label>
+              <div className="grid grid-cols-3 gap-1">
+                {TEXT_ANIMATION_MODE_OPTIONS.map((option) => (
+                  <button
+                    key={option.id}
+                    onClick={() => setTextAnimationMode(option.id)}
+                    className={`py-1 rounded text-[10px] transition-colors ${
+                      textAnimationMode === option.id
+                        ? 'bg-sf-accent text-white'
+                        : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] text-sf-text-muted uppercase tracking-wider block mb-1.5">Presets</label>
+              <div className="grid grid-cols-2 gap-1">
+                <button
+                  onClick={handleClearTextAnimationPreset}
+                  className={`px-2 py-1 rounded text-[10px] transition-colors ${
+                    activeAnimationPresetId === 'none'
+                      ? 'bg-sf-accent text-white'
+                      : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+                  }`}
+                >
+                  None
+                </button>
+                {TEXT_ANIMATION_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    onClick={() => handleApplyTextAnimationPreset(preset.id)}
+                    className={`px-2 py-1 rounded text-[10px] transition-colors ${
+                      activeAnimationPresetId === preset.id
+                        ? 'bg-sf-accent text-white'
+                        : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+                    }`}
+                    title={`Apply ${preset.name}`}
+                  >
+                    {preset.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <p className="text-[10px] text-sf-text-muted">
+              Presets add keyframes for position, scale, rotation, and opacity.
+            </p>
+          </div>
+        )}
+
         {/* Transform Section (shared with video) */}
         {renderSectionHeader('transform', 'Transform', Move)}
         {expandedSections.includes('transform') && (
@@ -1559,7 +1783,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                   <label className="text-[9px] text-sf-text-muted block mb-0.5">X</label>
                   <div className="flex items-center">
                     <DraggableNumberInput
-                      value={transform.positionX}
+                      value={animatedTransform?.positionX ?? transform.positionX}
                       onChange={(val) => handleTransformChange('positionX', val)}
                       onCommit={(val) => handleTransformCommit('positionX', val)}
                       step={1}
@@ -1572,7 +1796,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                   <label className="text-[9px] text-sf-text-muted block mb-0.5">Y</label>
                   <div className="flex items-center">
                     <DraggableNumberInput
-                      value={transform.positionY}
+                      value={animatedTransform?.positionY ?? transform.positionY}
                       onChange={(val) => handleTransformChange('positionY', val)}
                       onCommit={(val) => handleTransformCommit('positionY', val)}
                       step={1}
@@ -1590,15 +1814,17 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 <label className="text-[10px] text-sf-text-muted flex items-center gap-1">
                   <Maximize2 className="w-3 h-3" /> Scale
                 </label>
-                <span className="text-[10px] text-sf-text-secondary">{transform.scaleX}%</span>
+                <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedTransform?.scaleX ?? transform.scaleX)}%</span>
               </div>
               <input
                 type="range"
                 min="10"
                 max="400"
-                value={transform.scaleX}
+                value={animatedTransform?.scaleX ?? transform.scaleX}
                 onChange={(e) => handleTransformChange('scaleX', parseInt(e.target.value))}
                 onMouseUp={(e) => handleTransformCommit('scaleX', parseInt(e.target.value))}
+                onDoubleClick={() => handleSliderReset('scaleX', 100)}
+                title="Double-click to reset to 100%"
                 className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
             </div>
@@ -1609,15 +1835,17 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 <label className="text-[10px] text-sf-text-muted flex items-center gap-1">
                   <RotateCw className="w-3 h-3" /> Rotation
                 </label>
-                <span className="text-[10px] text-sf-text-secondary">{transform.rotation}°</span>
+                <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedTransform?.rotation ?? transform.rotation)}°</span>
               </div>
               <input
                 type="range"
                 min="-180"
                 max="180"
-                value={transform.rotation}
+                value={animatedTransform?.rotation ?? transform.rotation}
                 onChange={(e) => handleTransformChange('rotation', parseInt(e.target.value))}
                 onMouseUp={(e) => handleTransformCommit('rotation', parseInt(e.target.value))}
+                onDoubleClick={() => handleSliderReset('rotation', 0)}
+                title="Double-click to reset to 0°"
                 className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
             </div>
@@ -1628,17 +1856,60 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 <label className="text-[10px] text-sf-text-muted flex items-center gap-1">
                   <Eye className="w-3 h-3" /> Opacity
                 </label>
-                <span className="text-[10px] text-sf-text-secondary">{transform.opacity}%</span>
+                <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedTransform?.opacity ?? transform.opacity)}%</span>
               </div>
               <input
                 type="range"
                 min="0"
                 max="100"
-                value={transform.opacity}
+                value={animatedTransform?.opacity ?? transform.opacity}
                 onChange={(e) => handleTransformChange('opacity', parseInt(e.target.value))}
                 onMouseUp={(e) => handleTransformCommit('opacity', parseInt(e.target.value))}
+                onDoubleClick={() => handleSliderReset('opacity', 100)}
+                title="Double-click to reset to 100%"
                 className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
+            </div>
+
+            {/* Blur */}
+            <div>
+              <div className="flex justify-between mb-1">
+                <label className="text-[10px] text-sf-text-muted flex items-center gap-1">
+                  <CircleDot className="w-3 h-3" /> Blur
+                </label>
+                <span className="text-[10px] text-sf-text-secondary">{(animatedTransform?.blur ?? transform.blur ?? 0).toFixed(1)}px</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="50"
+                step="0.25"
+                value={animatedTransform?.blur ?? transform.blur ?? 0}
+                onChange={(e) => handleTransformChange('blur', parseFloat(e.target.value))}
+                onMouseUp={(e) => handleTransformCommit('blur', parseFloat(e.target.value))}
+                onDoubleClick={() => handleSliderReset('blur', 0)}
+                title="Double-click to reset to 0px"
+                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+              />
+            </div>
+
+            {/* Blend Mode */}
+            <div>
+              <label className="text-[10px] text-sf-text-muted block mb-1">
+                Blend Mode
+              </label>
+              <select
+                value={transform.blendMode ?? 'normal'}
+                onChange={(e) => {
+                  handleTransformChange('blendMode', e.target.value)
+                  handleTransformCommit('blendMode', e.target.value)
+                }}
+                className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+              >
+                {BLEND_MODES.map(({ value, label }) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
             </div>
           </div>
         )}
@@ -1667,10 +1938,13 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 <div className="flex items-center">
                   <input
                     type="number"
-                    step="0.1"
-                    min="0.1"
-                    value={selectedClip.duration?.toFixed(2)}
-                    onChange={(e) => resizeClip(selectedClip.id, parseFloat(e.target.value) || 0.5)}
+                    step="0.01"
+                    min="0.04"
+                    value={selectedClip.duration?.toFixed(3)}
+                    onChange={(e) => {
+                      const parsed = parseFloat(e.target.value)
+                      if (Number.isFinite(parsed)) resizeClip(selectedClip.id, parsed)
+                    }}
                     className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
                   />
                   <span className="ml-1 text-[9px] text-sf-text-muted">s</span>
@@ -1778,6 +2052,134 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
 
   // Get current preview from assets store (assets, getAssetById, getAllMasks already destructured above)
   const { currentPreview, previewMode } = useAssetsStore()
+  const isCurrentPreviewLetterbox = currentPreview?.settings?.overlayKind === 'letterbox'
+  const resolvedLetterboxAspect = useMemo(
+    () => resolveLetterboxAspect(letterboxAspectPreset, letterboxCustomAspect, DEFAULT_LETTERBOX_ASPECT),
+    [letterboxAspectPreset, letterboxCustomAspect]
+  )
+  const hasValidLetterboxAspect = Number.isFinite(resolvedLetterboxAspect) && resolvedLetterboxAspect > 0
+  const letterboxPreviewDimensions = useMemo(() => {
+    if (!isCurrentPreviewLetterbox) return { width: 1920, height: 1080 }
+    const width = Math.max(1, Math.round(Number(currentPreview?.settings?.width ?? currentPreview?.width ?? 1920) || 1920))
+    const height = Math.max(1, Math.round(Number(currentPreview?.settings?.height ?? currentPreview?.height ?? 1080) || 1080))
+    return { width, height }
+  }, [isCurrentPreviewLetterbox, currentPreview?.settings?.width, currentPreview?.settings?.height, currentPreview?.width, currentPreview?.height])
+  const letterboxPreviewBars = useMemo(() => {
+    if (!hasValidLetterboxAspect) return null
+    const rect = getLetterboxContentRect(
+      letterboxPreviewDimensions.width,
+      letterboxPreviewDimensions.height,
+      resolvedLetterboxAspect
+    )
+    return {
+      topPct: (rect.offsetY / letterboxPreviewDimensions.height) * 100,
+      bottomPct: ((letterboxPreviewDimensions.height - (rect.offsetY + rect.height)) / letterboxPreviewDimensions.height) * 100,
+      leftPct: (rect.offsetX / letterboxPreviewDimensions.width) * 100,
+      rightPct: ((letterboxPreviewDimensions.width - (rect.offsetX + rect.width)) / letterboxPreviewDimensions.width) * 100,
+    }
+  }, [letterboxPreviewDimensions.width, letterboxPreviewDimensions.height, resolvedLetterboxAspect, hasValidLetterboxAspect])
+
+  useEffect(() => {
+    if (!isCurrentPreviewLetterbox) return
+    const settings = currentPreview?.settings || {}
+    const targetAspect = resolveLetterboxAspect(
+      String(settings.aspectPreset || settings.targetAspect || DEFAULT_LETTERBOX_ASPECT),
+      settings.customAspect,
+      DEFAULT_LETTERBOX_ASPECT
+    )
+    const explicitPreset = String(settings.aspectPreset || '')
+    const knownPreset = LETTERBOX_ASPECT_PRESETS.find((preset) => preset.id === explicitPreset)
+    const approxPreset = LETTERBOX_ASPECT_PRESETS.find(
+      (preset) => preset.value != null && Math.abs(Number(preset.value) - Number(targetAspect)) < 0.005
+    )
+    const nextPreset = knownPreset
+      ? knownPreset.id
+      : (approxPreset?.id || 'custom')
+
+    setLetterboxAspectPreset(nextPreset)
+    setLetterboxCustomAspect(String(settings.customAspect || targetAspect.toFixed(2)))
+    setLetterboxBarColor(settings.barColor || '#000000')
+    setLetterboxUpdateError(null)
+  }, [
+    isCurrentPreviewLetterbox,
+    currentPreview?.id,
+    currentPreview?.settings?.targetAspect,
+    currentPreview?.settings?.aspectPreset,
+    currentPreview?.settings?.customAspect,
+    currentPreview?.settings?.barColor,
+  ])
+
+  const handleApplyLetterboxOverlay = useCallback(async () => {
+    if (!currentPreview || currentPreview.settings?.overlayKind !== 'letterbox') return
+    if (!hasValidLetterboxAspect) {
+      setLetterboxUpdateError('Enter a valid aspect ratio greater than 0.')
+      return
+    }
+
+    const width = letterboxPreviewDimensions.width
+    const height = letterboxPreviewDimensions.height
+    const nextSettings = {
+      ...(currentPreview.settings || {}),
+      width,
+      height,
+      overlayKind: 'letterbox',
+      targetAspect: resolvedLetterboxAspect,
+      aspectPreset: letterboxAspectPreset,
+      customAspect: letterboxAspectPreset === 'custom' ? letterboxCustomAspect : null,
+      barColor: letterboxBarColor,
+    }
+
+    setLetterboxUpdateError(null)
+    setIsUpdatingLetterbox(true)
+    try {
+      const blob = await generateLetterboxOverlayBlob(width, height, resolvedLetterboxAspect, letterboxBarColor)
+      if (isElectron() && typeof currentProjectHandle === 'string' && currentProjectHandle) {
+        const persisted = await writeGeneratedOverlayToProject(
+          currentProjectHandle,
+          blob,
+          currentPreview.name || `Letterbox ${resolvedLetterboxAspect.toFixed(2)}:1`,
+          'image',
+          nextSettings
+        )
+        updateAsset(currentPreview.id, {
+          ...persisted,
+          settings: nextSettings,
+          width,
+          height,
+          type: 'image',
+        })
+      } else {
+        const url = URL.createObjectURL(blob)
+        updateAsset(currentPreview.id, {
+          url,
+          mimeType: 'image/png',
+          size: blob.size,
+          isImported: false,
+          path: null,
+          absolutePath: null,
+          settings: nextSettings,
+          width,
+          height,
+          type: 'image',
+        })
+      }
+    } catch (err) {
+      setLetterboxUpdateError(err?.message || 'Could not update letterbox overlay.')
+    } finally {
+      setIsUpdatingLetterbox(false)
+    }
+  }, [
+    currentPreview,
+    hasValidLetterboxAspect,
+    letterboxPreviewDimensions.width,
+    letterboxPreviewDimensions.height,
+    resolvedLetterboxAspect,
+    letterboxAspectPreset,
+    letterboxCustomAspect,
+    letterboxBarColor,
+    currentProjectHandle,
+    updateAsset,
+  ])
   
   // Get available mask assets for the effect picker
   const availableMasks = useMemo(() => {
@@ -1933,6 +2335,104 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
             )}
           </div>
         </div>
+
+        {/* Letterbox Overlay Controls */}
+        {asset.settings?.overlayKind === 'letterbox' && (
+          <div className="p-3 border-b border-sf-dark-700 space-y-3">
+            <h4 className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-1">Letterbox Overlay</h4>
+            <p className="text-[11px] text-sf-text-muted">
+              Update ratio and bar color, then re-generate this overlay.
+            </p>
+
+            <div>
+              <label className="text-[10px] text-sf-text-muted block mb-1">Aspect ratio</label>
+              <select
+                value={letterboxAspectPreset}
+                onChange={(e) => setLetterboxAspectPreset(e.target.value)}
+                className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+              >
+                {LETTERBOX_ASPECT_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>{preset.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {letterboxAspectPreset === 'custom' && (
+              <div>
+                <label className="text-[10px] text-sf-text-muted block mb-1">Custom ratio (W:H)</label>
+                <input
+                  type="number"
+                  min={0.1}
+                  max={10}
+                  step={0.01}
+                  value={letterboxCustomAspect}
+                  onChange={(e) => setLetterboxCustomAspect(e.target.value)}
+                  className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                />
+              </div>
+            )}
+
+            <div>
+              <label className="text-[10px] text-sf-text-muted block mb-1">Bar color</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={letterboxBarColor}
+                  onChange={(e) => setLetterboxBarColor(e.target.value)}
+                  className="w-10 h-8 rounded border border-sf-dark-600 cursor-pointer bg-transparent"
+                />
+                <input
+                  type="text"
+                  value={letterboxBarColor}
+                  onChange={(e) => setLetterboxBarColor(e.target.value)}
+                  className="flex-1 bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary font-mono focus:outline-none focus:border-sf-accent"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] text-sf-text-muted block mb-1">Preview</label>
+              <div
+                className="relative w-full rounded border border-sf-dark-600 overflow-hidden bg-sf-dark-900"
+                style={{ aspectRatio: `${letterboxPreviewDimensions.width} / ${letterboxPreviewDimensions.height}` }}
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-sf-accent/30 via-sf-dark-700 to-purple-500/25" />
+                {letterboxPreviewBars && (
+                  <>
+                    {letterboxPreviewBars.topPct > 0.001 && (
+                      <div className="absolute left-0 right-0 top-0" style={{ height: `${letterboxPreviewBars.topPct}%`, backgroundColor: letterboxBarColor }} />
+                    )}
+                    {letterboxPreviewBars.bottomPct > 0.001 && (
+                      <div className="absolute left-0 right-0 bottom-0" style={{ height: `${letterboxPreviewBars.bottomPct}%`, backgroundColor: letterboxBarColor }} />
+                    )}
+                    {letterboxPreviewBars.leftPct > 0.001 && (
+                      <div className="absolute top-0 bottom-0 left-0" style={{ width: `${letterboxPreviewBars.leftPct}%`, backgroundColor: letterboxBarColor }} />
+                    )}
+                    {letterboxPreviewBars.rightPct > 0.001 && (
+                      <div className="absolute top-0 bottom-0 right-0" style={{ width: `${letterboxPreviewBars.rightPct}%`, backgroundColor: letterboxBarColor }} />
+                    )}
+                  </>
+                )}
+                <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/60 text-[10px] text-white">
+                  {hasValidLetterboxAspect ? `${resolvedLetterboxAspect.toFixed(2)}:1` : 'Invalid ratio'}
+                </div>
+              </div>
+            </div>
+
+            {letterboxUpdateError && (
+              <p className="text-[11px] text-sf-error">{letterboxUpdateError}</p>
+            )}
+
+            <button
+              type="button"
+              onClick={() => { void handleApplyLetterboxOverlay() }}
+              disabled={isUpdatingLetterbox || !hasValidLetterboxAspect}
+              className="w-full px-3 py-1.5 text-xs text-white rounded bg-sf-accent hover:bg-sf-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isUpdatingLetterbox ? 'Updating overlay…' : 'Update Letterbox Overlay'}
+            </button>
+          </div>
+        )}
         
         {/* Metadata Section */}
         <div className="p-3 border-b border-sf-dark-700">
@@ -2015,6 +2515,197 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     )
   }
   
+  // Resolve-style transition inspector
+  const renderTransitionInspector = () => {
+    if (!selectedTransition) return null
+
+    const transitionMeta = TRANSITION_TYPES.find(t => t.id === selectedTransition.type)
+    const alignment = selectedTransition?.settings?.alignment || 'center'
+    const durationFrames = Math.max(1, Math.round((selectedTransition.duration || 0.5) * FRAME_RATE))
+    const maxDurationSeconds = selectedTransition.kind === 'between'
+      ? getMaxTransitionDurationForAlignment(
+          selectedTransition.clipAId,
+          selectedTransition.clipBId,
+          alignment,
+          selectedTransition.id
+        )
+      : getMaxEdgeTransitionDuration(selectedTransition.clipId)
+    const maxFrames = Math.max(1, Math.floor((maxDurationSeconds || selectedTransition.duration || 0.5) * FRAME_RATE))
+    const settings = selectedTransition.settings || {}
+    const supportsZoom = selectedTransition.type === 'zoom-in' || selectedTransition.type === 'zoom-out'
+    const supportsBlur = selectedTransition.type === 'blur'
+    const transitionKindLabel = selectedTransition.kind === 'between'
+      ? 'Between Clips'
+      : `Edge (${selectedTransition.edge === 'in' ? 'In' : 'Out'})`
+
+    const handleTypeChange = (nextType) => {
+      updateTransition(selectedTransition.id, {
+        type: nextType,
+        settings: TRANSITION_DEFAULT_SETTINGS[nextType] || {},
+      })
+    }
+
+    const handleDurationFramesChange = (nextFrames) => {
+      const frames = Math.max(1, Math.min(maxFrames, Number(nextFrames) || 1))
+      updateTransition(selectedTransition.id, { duration: frames / FRAME_RATE })
+    }
+
+    const handleSettingChange = (key, value) => {
+      updateTransition(selectedTransition.id, { settings: { [key]: value } })
+    }
+
+    const handleSetDefaultDuration = () => {
+      try {
+        localStorage.setItem(TRANSITION_DEFAULT_DURATION_KEY, String(durationFrames))
+        window.dispatchEvent(new CustomEvent('comfystudio-transition-default-duration-changed', { detail: durationFrames }))
+      } catch (_) {}
+    }
+
+    return (
+      <div className="p-3 space-y-3">
+        <div className="bg-sf-dark-800 border border-sf-dark-600 rounded-lg p-3">
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-sm font-medium text-sf-text-primary">
+              Transition - {transitionMeta?.name || selectedTransition.type}
+            </h3>
+            <span className="text-[10px] px-2 py-0.5 rounded bg-sf-dark-700 text-sf-text-muted">
+              {transitionKindLabel}
+            </span>
+          </div>
+          <p className="text-[11px] text-sf-text-muted">
+            Select the transition segment on the timeline to edit its settings.
+          </p>
+        </div>
+
+        <div className="bg-sf-dark-800 border border-sf-dark-600 rounded-lg p-3 space-y-3">
+          <div>
+            <label className="block text-[11px] text-sf-text-muted mb-1">Transition Type</label>
+            <select
+              value={selectedTransition.type}
+              onChange={(e) => handleTypeChange(e.target.value)}
+              className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+            >
+              {TRANSITION_TYPES.map(type => (
+                <option key={type.id} value={type.id}>
+                  {type.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-[11px] text-sf-text-muted">Duration</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                max={maxFrames}
+                value={durationFrames}
+                onChange={(e) => handleDurationFramesChange(e.target.value)}
+                className="w-20 bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+              />
+              <span className="text-xs text-sf-text-secondary">frames</span>
+              <span className="text-xs text-sf-text-muted">
+                {(durationFrames / FRAME_RATE).toFixed(2)}s
+              </span>
+            </div>
+            <div className="text-[10px] text-sf-text-muted">
+              Max available: {maxFrames}f
+            </div>
+            <button
+              onClick={handleSetDefaultDuration}
+              className="mt-1 w-full px-2 py-1 rounded border border-sf-dark-600 bg-sf-dark-700 hover:bg-sf-dark-600 text-[10px] text-sf-text-secondary transition-colors"
+            >
+              Set as Default Duration
+            </button>
+          </div>
+
+          {selectedTransition.kind === 'between' && (
+            <div>
+              <label className="block text-[11px] text-sf-text-muted mb-1">Alignment</label>
+              <div className="grid grid-cols-3 gap-1">
+                <button
+                  onClick={() => setTransitionAlignment(selectedTransition.id, 'start')}
+                  className={`px-2 py-1 rounded text-[10px] transition-colors ${
+                    alignment === 'start'
+                      ? 'bg-sf-accent/20 text-sf-accent border border-sf-accent/30'
+                      : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+                  }`}
+                >
+                  Start
+                </button>
+                <button
+                  onClick={() => setTransitionAlignment(selectedTransition.id, 'center')}
+                  className={`px-2 py-1 rounded text-[10px] transition-colors ${
+                    alignment === 'center'
+                      ? 'bg-sf-accent/20 text-sf-accent border border-sf-accent/30'
+                      : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+                  }`}
+                >
+                  Center
+                </button>
+                <button
+                  onClick={() => setTransitionAlignment(selectedTransition.id, 'end')}
+                  className={`px-2 py-1 rounded text-[10px] transition-colors ${
+                    alignment === 'end'
+                      ? 'bg-sf-accent/20 text-sf-accent border border-sf-accent/30'
+                      : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+                  }`}
+                >
+                  End
+                </button>
+              </div>
+            </div>
+          )}
+
+          {supportsZoom && (
+            <div className="flex items-center gap-2">
+              <label className="text-[11px] text-sf-text-muted w-24">Zoom Amount</label>
+              <input
+                type="range"
+                min={0.02}
+                max={0.3}
+                step={0.01}
+                value={settings.zoomAmount ?? 0.1}
+                onChange={(e) => handleSettingChange('zoomAmount', Number(e.target.value))}
+                className="flex-1"
+              />
+              <span className="text-[10px] text-sf-text-muted w-10 text-right">
+                {(settings.zoomAmount ?? 0.1).toFixed(2)}
+              </span>
+            </div>
+          )}
+
+          {supportsBlur && (
+            <div className="flex items-center gap-2">
+              <label className="text-[11px] text-sf-text-muted w-24">Blur Amount</label>
+              <input
+                type="range"
+                min={0}
+                max={20}
+                step={1}
+                value={settings.blurAmount ?? 8}
+                onChange={(e) => handleSettingChange('blurAmount', Number(e.target.value))}
+                className="flex-1"
+              />
+              <span className="text-[10px] text-sf-text-muted w-10 text-right">
+                {Math.round(settings.blurAmount ?? 8)}px
+              </span>
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={() => removeTransition(selectedTransition.id)}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-sf-error/20 border border-sf-error/30 hover:bg-sf-error/30 text-sf-error rounded text-xs transition-colors"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          Remove Transition
+        </button>
+      </div>
+    )
+  }
+
   // Empty state
   const renderEmptyState = () => {
     // If an asset is being previewed, show its info instead
@@ -2027,7 +2718,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
         <Layers className="w-10 h-10 text-sf-dark-600 mb-3" />
         <h3 className="text-sm font-medium text-sf-text-primary mb-1">No Selection</h3>
         <p className="text-xs text-sf-text-muted">
-          Select a clip on the timeline to view and edit its properties
+          Select a clip or transition on the timeline to edit its properties
         </p>
       </div>
     )
@@ -2048,6 +2739,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
 
   // Content to render
   const renderContent = () => {
+    // Transition selection has priority (Resolve-style)
+    if (selectedTransition) return renderTransitionInspector()
+
     // No selection
     if (selectedClipIds.length === 0) return renderEmptyState()
     
