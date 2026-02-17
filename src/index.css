@@ -40,6 +40,22 @@ body {
   background: #4a4a4a;
 }
 
+/* Hide number input spinners - use double-click to type instead */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* Hide scrollbar on synced track content (right side) — scrollbar lives on the left headers only */
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* Prevent text selection on UI elements */
 .no-select {
   user-select: none;

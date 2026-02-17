@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
 import { 
   Volume2, VolumeX, Lock, Unlock, Eye, EyeOff, 
   Plus, Video, Type, Image as ImageIcon,
   Sparkles, GripVertical, Magnet, ArrowRightLeft, Square, X, Check, Pencil,
-  Undo2, Redo2, Diamond, Zap, AlertTriangle, Loader2, ChevronRight
+  Undo2, Redo2, Diamond, Zap, AlertTriangle, Loader2, ChevronRight, Maximize2, Flag
 } from 'lucide-react'
 import useTimelineStore from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
@@ -15,6 +15,260 @@ import { useSnapping, SNAP_TYPES } from '../hooks/useSnapping'
 import { getAllKeyframeTimes } from '../utils/keyframes'
 import { TRANSITION_TYPES, TRANSITION_DURATIONS, FRAME_RATE } from '../constants/transitions'
 import MasterAudioMeter from './AudioMeter'
+
+const TRANSITION_DEFAULT_DURATION_KEY = 'comfystudio-transition-default-duration-frames'
+const DEFAULT_WAVEFORM_SAMPLES = 4096
+
+// Resolve-style audio track/waveform colors
+const AUDIO_TRACK_BG = '#2d4038'
+const AUDIO_WAVEFORM_FILL = '#7eb8a8'
+const AUDIO_WAVEFORM_CENTER_LINE = 'rgba(255,255,255,0.35)'
+const AUDIO_CLIP_ACCENT = '#4a6b5c'
+const ADJACENT_CLIP_UI_GAP_SECONDS = 0.5
+const ROLL_EDIT_MAX_GAP_SECONDS = 1 / FRAME_RATE
+const AUDIO_WAVEFORM_CACHE = new Map()
+const AUDIO_WAVEFORM_PENDING = new Map()
+let audioWaveformContext = null
+
+const getAudioWaveformContext = () => {
+  if (typeof window === 'undefined') return null
+  if (audioWaveformContext) return audioWaveformContext
+  const Ctx = window.AudioContext || window.webkitAudioContext
+  if (!Ctx) return null
+  audioWaveformContext = new Ctx()
+  return audioWaveformContext
+}
+
+const buildWaveformPeaks = (audioBuffer, sampleCount = DEFAULT_WAVEFORM_SAMPLES) => {
+  const channelCount = Math.max(1, audioBuffer.numberOfChannels || 1)
+  const totalSamples = Math.max(1, audioBuffer.length || 1)
+  const buckets = Math.max(32, sampleCount)
+  const bucketSize = Math.max(1, Math.floor(totalSamples / buckets))
+  const peaks = new Float32Array(buckets)
+
+  for (let i = 0; i < buckets; i++) {
+    const start = i * bucketSize
+    const end = i === buckets - 1 ? totalSamples : Math.min(totalSamples, start + bucketSize)
+    const span = Math.max(1, end - start)
+    const stride = Math.max(1, Math.floor(span / 64))
+    let peak = 0
+
+    for (let channel = 0; channel < channelCount; channel++) {
+      const data = audioBuffer.getChannelData(channel)
+      for (let s = start; s < end; s += stride) {
+        const amp = Math.abs(data[s] || 0)
+        if (amp > peak) peak = amp
+      }
+    }
+    peaks[i] = peak
+  }
+
+  let maxPeak = 0
+  for (let i = 0; i < peaks.length; i++) {
+    if (peaks[i] > maxPeak) maxPeak = peaks[i]
+  }
+  if (maxPeak > 0) {
+    for (let i = 0; i < peaks.length; i++) {
+      peaks[i] = peaks[i] / maxPeak
+    }
+  }
+
+  return peaks
+}
+
+const isNativeMediaUrl = (url) => /^file:\/\//i.test(url) || /^comfystudio:\/\//i.test(url)
+
+const getAudioWaveformData = async (url, sampleCount = DEFAULT_WAVEFORM_SAMPLES) => {
+  if (!url) return null
+  const key = `${url}|${sampleCount}`
+  if (AUDIO_WAVEFORM_CACHE.has(key)) return AUDIO_WAVEFORM_CACHE.get(key)
+  if (AUDIO_WAVEFORM_PENDING.has(key)) return AUDIO_WAVEFORM_PENDING.get(key)
+
+  const loadPromise = (async () => {
+    const isElectronRuntime = typeof window !== 'undefined' && window.electronAPI?.isElectron === true
+    // In Electron, decode in the main process (ffmpeg) to avoid renderer crashes.
+    if (isElectronRuntime && typeof window.electronAPI?.getAudioWaveform === 'function' && isNativeMediaUrl(url)) {
+      const result = await window.electronAPI.getAudioWaveform(url, { sampleCount })
+      if (result?.success && Array.isArray(result.peaks)) {
+        return {
+          peaks: result.peaks,
+          duration: Number(result.duration) || 0
+        }
+      }
+      throw new Error(result?.error || 'Failed to extract waveform in main process')
+    }
+
+    // Safety: avoid heavyweight decode path in Electron renderer for non-file URLs.
+    if (isElectronRuntime) {
+      return null
+    }
+
+    const ctx = getAudioWaveformContext()
+    if (!ctx) throw new Error('Web Audio API is not available')
+    const response = await fetch(url)
+    if (!response.ok) throw new Error(`Failed to load audio: ${response.status}`)
+    const arrayBuffer = await response.arrayBuffer()
+    const audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0))
+    const peaks = buildWaveformPeaks(audioBuffer, sampleCount)
+    return { peaks, duration: audioBuffer.duration || 0 }
+  })().then((result) => {
+    AUDIO_WAVEFORM_PENDING.delete(key)
+    if (result) AUDIO_WAVEFORM_CACHE.set(key, result)
+    return result
+  }).catch((error) => {
+    AUDIO_WAVEFORM_PENDING.delete(key)
+    throw error
+  })
+
+  AUDIO_WAVEFORM_PENDING.set(key, loadPromise)
+  return loadPromise
+}
+
+// Pixel count for canvas waveform: one sample per pixel up to 2x display width (Resolve-like resolution)
+function getWaveformPixelCount(clipWidthPx) {
+  return Math.min(2048, Math.max(64, Math.round(clipWidthPx)))
+}
+
+function AudioWaveformBars({ clip, clipWidth, clipUrl }) {
+  const [waveform, setWaveform] = useState(null)
+  const [containerSize, setContainerSize] = useState({ w: 0, h: 0 })
+  const containerRef = useRef(null)
+  const canvasRef = useRef(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    if (!clipUrl) {
+      setWaveform(null)
+      return () => { cancelled = true }
+    }
+
+    getAudioWaveformData(clipUrl)
+      .then((data) => {
+        if (!cancelled) setWaveform(data)
+      })
+      .catch(() => {
+        if (!cancelled) setWaveform(null)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [clipUrl])
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const update = () => setContainerSize({ w: el.offsetWidth, h: el.offsetHeight })
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [clipWidth])
+
+  const pixelCount = getWaveformPixelCount(clipWidth)
+  const amplitudePixels = useMemo(() => {
+    if (!waveform?.peaks?.length) return null
+
+    const peaks = waveform.peaks
+    const sourceDurationFromClip = Number(clip.sourceDuration)
+    const sourceDuration = Number.isFinite(sourceDurationFromClip) && sourceDurationFromClip > 0
+      ? sourceDurationFromClip
+      : Math.max(0.001, Number(waveform.duration) || 0.001)
+    const trimStart = Math.max(0, Number(clip.trimStart) || 0)
+    const rawTrimEnd = clip.trimEnd !== undefined && clip.trimEnd !== null
+      ? Number(clip.trimEnd)
+      : sourceDuration
+    const trimEnd = Math.max(trimStart + 0.0001, Math.min(sourceDuration, Number.isFinite(rawTrimEnd) ? rawTrimEnd : sourceDuration))
+    const sourceSpan = Math.max(0.0001, trimEnd - trimStart)
+    const isReverse = Boolean(clip.reverse)
+
+    const out = new Array(pixelCount)
+    for (let i = 0; i < pixelCount; i++) {
+      const progress = pixelCount <= 1 ? 0.5 : i / (pixelCount - 1)
+      const sourceTime = isReverse
+        ? trimEnd - (progress * sourceSpan)
+        : trimStart + (progress * sourceSpan)
+      const normalized = Math.max(0, Math.min(0.999999, sourceTime / sourceDuration))
+      const exact = normalized * (peaks.length - 1)
+      const leftIndex = Math.floor(exact)
+      const rightIndex = Math.min(peaks.length - 1, leftIndex + 1)
+      const mix = exact - leftIndex
+      const left = peaks[leftIndex] || 0
+      const right = peaks[rightIndex] || 0
+      const sample = left * (1 - mix) + right * mix
+      const smoothed = (sample + (peaks[leftIndex - 1] ?? left) + (peaks[rightIndex + 1] ?? right)) / 3
+      out[i] = Math.max(0.04, Math.min(1, smoothed))
+    }
+    return out
+  }, [waveform, clip.sourceDuration, clip.trimStart, clip.trimEnd, clip.reverse, pixelCount])
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current
+    const w = containerSize.w
+    const h = containerSize.h
+    if (!canvas || w <= 0 || h <= 0) return
+
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = w * dpr
+    canvas.height = h * dpr
+    canvas.style.width = `${w}px`
+    canvas.style.height = `${h}px`
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    ctx.scale(dpr, dpr)
+
+    ctx.fillStyle = AUDIO_TRACK_BG
+    ctx.fillRect(0, 0, w, h)
+
+    const centerY = h / 2
+    const halfH = (h / 2) * 0.88
+    const n = amplitudePixels ? amplitudePixels.length : 0
+
+    if (n > 0) {
+      ctx.fillStyle = AUDIO_WAVEFORM_FILL
+      ctx.beginPath()
+      ctx.moveTo(0, centerY)
+      for (let i = 0; i < n; i++) {
+        const x = (i / (n - 1 || 1)) * w
+        const amp = amplitudePixels[i] ?? 0.1
+        const y = centerY - amp * halfH
+        ctx.lineTo(x, y)
+      }
+      ctx.lineTo(w, centerY)
+      for (let i = n - 1; i >= 0; i--) {
+        const x = (i / (n - 1 || 1)) * w
+        const amp = amplitudePixels[i] ?? 0.1
+        const y = centerY + amp * halfH
+        ctx.lineTo(x, y)
+      }
+      ctx.closePath()
+      ctx.fill()
+    }
+
+    ctx.strokeStyle = AUDIO_WAVEFORM_CENTER_LINE
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(0, centerY)
+    ctx.lineTo(w, centerY)
+    ctx.stroke()
+  }, [containerSize, amplitudePixels])
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute inset-0 top-[3px] overflow-hidden"
+      style={{ backgroundColor: AUDIO_TRACK_BG }}
+    >
+      <canvas
+        ref={canvasRef}
+        className="block w-full h-full"
+        style={{ display: 'block', width: '100%', height: '100%' }}
+      />
+    </div>
+  )
+}
 
 function Timeline({ onOpenAudioGenerate }) {
   const timelineRef = useRef(null)
@@ -28,14 +282,12 @@ function Timeline({ onOpenAudioGenerate }) {
   const TRACK_HEADERS_MIN = 100
   const TRACK_HEADERS_MAX = 400
   const TRACK_HEADERS_STORAGE_KEY = 'comfystudio-timeline-track-headers-width'
-  const AUDIO_TRACK_HEIGHT_MONO = 40
-  const AUDIO_TRACK_HEIGHT_STEREO = 80
-  const getAudioTrackHeight = (track) => (track.channels === 'mono' ? AUDIO_TRACK_HEIGHT_MONO : AUDIO_TRACK_HEIGHT_STEREO)
-  const getAudioTrackOffset = (audioTracksList, index) => {
-    let y = 0
-    for (let i = 0; i < index; i++) y += getAudioTrackHeight(audioTracksList[i])
-    return y
-  }
+  const VIDEO_TRACK_HEIGHT_DEFAULT = 48
+  const AUDIO_TRACK_HEIGHT_MONO_DEFAULT = 40
+  const AUDIO_TRACK_HEIGHT_STEREO_DEFAULT = 80
+  const TRACK_HEIGHT_MIN = 32
+  const TRACK_HEIGHT_MAX = 220
+  const TRACK_HEIGHTS_STORAGE_KEY = 'comfystudio-timeline-track-heights-v1'
   const [trackHeadersWidth, setTrackHeadersWidth] = useState(() => {
     try {
       const w = localStorage.getItem(TRACK_HEADERS_STORAGE_KEY)
@@ -50,17 +302,55 @@ function Timeline({ onOpenAudioGenerate }) {
   const resizeStartX = useRef(0)
   const resizeStartWidth = useRef(0)
   const lastTrackHeadersWidthRef = useRef(null) // for persisting on resize end
+  const [trackHeights, setTrackHeights] = useState(() => {
+    try {
+      const raw = localStorage.getItem(TRACK_HEIGHTS_STORAGE_KEY)
+      const parsed = raw ? JSON.parse(raw) : {}
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch (_) {
+      return {}
+    }
+  })
+
+  const getDefaultTrackHeight = (track) => {
+    if (!track) return VIDEO_TRACK_HEIGHT_DEFAULT
+    if (track.type === 'video') return VIDEO_TRACK_HEIGHT_DEFAULT
+    return track.channels === 'mono' ? AUDIO_TRACK_HEIGHT_MONO_DEFAULT : AUDIO_TRACK_HEIGHT_STEREO_DEFAULT
+  }
+
+  const getTrackHeight = (track) => {
+    const fallback = getDefaultTrackHeight(track)
+    const custom = Number(trackHeights?.[track?.id])
+    const raw = Number.isFinite(custom) ? custom : fallback
+    return Math.max(TRACK_HEIGHT_MIN, Math.min(TRACK_HEIGHT_MAX, raw))
+  }
+
+  const getTrackOffset = (tracksList, index) => {
+    let y = 0
+    for (let i = 0; i < index; i++) y += getTrackHeight(tracksList[i])
+    return y
+  }
   
   // Trimming state
   const [trimState, setTrimState] = useState(null) // { clipId, edge: 'left' | 'right', startX, startValue }
+  const [slipState, setSlipState] = useState(null) // { clipId, startX, startTrimStart, startTrimEnd, timeScale, minSourceDelta, maxSourceDelta }
 
   const getTimeScale = (clip) => {
     if (!clip) return 1
-    if (clip.sourceTimeScale) return clip.sourceTimeScale
-    if (clip.timelineFps && clip.sourceFps) {
-      return clip.timelineFps / clip.sourceFps
-    }
-    return 1
+    const baseScale = clip.sourceTimeScale
+      || (clip.timelineFps && clip.sourceFps ? clip.timelineFps / clip.sourceFps : 1)
+    const speed = Number(clip.speed)
+    const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
+    return baseScale * speedScale
+  }
+
+  const getSourceDuration = (clip) => {
+    if (!clip) return Infinity
+    const raw = clip.sourceDuration
+    if (raw === Infinity || raw === 'Infinity') return Infinity
+    if (raw === null || raw === undefined || raw === '') return Infinity
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : Infinity
   }
   
   // Scrubbing state (for dragging playhead)
@@ -74,6 +364,14 @@ function Timeline({ onOpenAudioGenerate }) {
   
   // Transition type menu state
   const [transitionMenu, setTransitionMenu] = useState(null) // { x, y, clipA, clipB }
+  const [defaultTransitionFrames, setDefaultTransitionFrames] = useState(() => {
+    try {
+      const raw = localStorage.getItem(TRANSITION_DEFAULT_DURATION_KEY)
+      const parsed = Number(raw)
+      if (Number.isFinite(parsed) && parsed >= 1) return Math.round(parsed)
+    } catch (_) {}
+    return TRANSITION_DURATIONS[1]?.frames || 12
+  })
   
   // Transition drag/drop state
   const [transitionDropTarget, setTransitionDropTarget] = useState(null) // `${clipAId}-${clipBId}`
@@ -82,7 +380,7 @@ function Timeline({ onOpenAudioGenerate }) {
   const [transitionDragState, setTransitionDragState] = useState(null) // { transitionId, startX, startDuration }
   
   // Roll edit state (dragging between two adjacent clips)
-  const [rollEditState, setRollEditState] = useState(null) // { clipAId, clipBId, startX, originalEditPoint }
+  const [rollEditState, setRollEditState] = useState(null) // { clipAId, clipBId, startX, originalEditPoint, clipAOriginalDuration, clipBOriginalStart, clipBOriginalDuration, clipAOriginalTrimStart, clipASourceDuration, clipATimeScale, clipBOriginalTrimStart, clipBOriginalTrimEnd, clipBTimeScale }
   
   // Spacebar panning state
   const [isPanning, setIsPanning] = useState(false)
@@ -102,6 +400,7 @@ function Timeline({ onOpenAudioGenerate }) {
   // Track reorder drag state
   const [trackDragState, setTrackDragState] = useState(null) // { trackId, trackType, startY, originalIndex }
   const [trackDropTarget, setTrackDropTarget] = useState(null) // index within type group
+  const [trackResizeState, setTrackResizeState] = useState(null) // { trackId, startY, startHeight }
   
   // Timeline store
   const {
@@ -112,6 +411,7 @@ function Timeline({ onOpenAudioGenerate }) {
     clips,
     transitions,
     selectedClipIds,
+    selectedTransitionId,
     activeTrackId,
     setActiveTrack,
     snappingEnabled,
@@ -119,11 +419,15 @@ function Timeline({ onOpenAudioGenerate }) {
     rippleEditMode,
     inPoint,
     outPoint,
+    markers,
+    selectedMarkerId,
     addClip,
+    addTextClip,
     removeClip,
     removeSelectedClips,
     moveClip,
     moveSelectedClips,
+    setSelectedClipsStartTimes,
     resizeClip,
     updateClipTrim,
     selectClip,
@@ -137,6 +441,7 @@ function Timeline({ onOpenAudioGenerate }) {
     addTransition,
     removeTransition,
     updateTransition,
+    selectTransition,
     getMaxTransitionDuration,
     addMaskEffect,
     toggleSnapping,
@@ -152,7 +457,13 @@ function Timeline({ onOpenAudioGenerate }) {
     canRedo,
     saveToHistory,
     clearClipCache,
-    requestMaskPicker
+    requestMaskPicker,
+    copySelectedClips,
+    pasteClipsAtPlayhead,
+    copiedClips,
+    addMarker,
+    removeMarker,
+    selectMarker,
   } = useTimelineStore()
 
   const { currentProjectHandle, getCurrentTimelineSettings } = useProjectStore()
@@ -175,7 +486,7 @@ function Timeline({ onOpenAudioGenerate }) {
   const { snapClipPosition, snapTrim, pixelsPerSecond: snapPixelsPerSecond } = useSnapping()
 
   // Assets store for drag & drop and preview mode
-  const { assets, currentPreview, setPreview, setPreviewMode, getAssetUrl, isPlaying: assetIsPlaying, setIsPlaying: setAssetIsPlaying } = useAssetsStore()
+  const { assets, currentPreview, setPreview, setPreviewMode, getAssetUrl, getAssetById, isPlaying: assetIsPlaying, setIsPlaying: setAssetIsPlaying } = useAssetsStore()
 
   const availableMasks = useMemo(() => {
     return assets.filter(a => a.type === 'mask')
@@ -194,8 +505,93 @@ function Timeline({ onOpenAudioGenerate }) {
     return clip.url
   }
 
+  // Resolve-like transition pane preview (left/right clip contributions).
+  const renderTransitionPreviewPane = (clip, side = 'left') => {
+    const url = getClipUrl(clip)
+    const objectPosition = side === 'left' ? 'right center' : 'left center'
+
+    if (clip?.type === 'text') {
+      return (
+        <div className="absolute inset-0 bg-sf-accent/20 flex items-center justify-center">
+          <Type className="w-3 h-3 text-white/70" />
+        </div>
+      )
+    }
+
+    if (!url) {
+      return <div className="absolute inset-0 bg-sf-dark-700/70" />
+    }
+
+    if (clip?.type === 'image') {
+      return (
+        <img
+          src={url}
+          alt={clip?.name || 'Transition preview'}
+          className="absolute inset-0 w-full h-full object-cover opacity-80 pointer-events-none"
+          style={{ objectPosition }}
+          draggable={false}
+          onContextMenu={(e) => e.preventDefault()}
+        />
+      )
+    }
+
+    return (
+      <video
+        src={url}
+        className="absolute inset-0 w-full h-full object-cover opacity-80 pointer-events-none"
+        muted
+        style={{ objectPosition }}
+        onContextMenu={(e) => e.preventDefault()}
+      />
+    )
+  }
+
   // Pixels per second based on zoom
   const pixelsPerSecond = zoom / 5
+
+  // Zoom with playhead as pivot so the timeline zooms into/out of the playhead position
+  const applyZoomWithPlayheadPivot = (newZoomValue) => {
+    const clamped = Math.max(20, Math.min(2000, newZoomValue))
+    if (clamped === zoom) return
+    if (!timelineRef.current) {
+      setZoom(clamped)
+      return
+    }
+    const scrollLeft = timelineRef.current.scrollLeft
+    const playheadViewportX = playheadPosition * pixelsPerSecond - scrollLeft
+    setZoom(clamped)
+    const newPixelsPerSecond = clamped / 5
+    requestAnimationFrame(() => {
+      if (timelineRef.current) {
+        const el = timelineRef.current
+        const newScrollLeft = playheadPosition * newPixelsPerSecond - playheadViewportX
+        el.scrollLeft = Math.max(0, Math.min(newScrollLeft, el.scrollWidth - el.clientWidth))
+      }
+    })
+  }
+
+  // Frame all: fit full timeline or all clips in view
+  const handleFrameAll = () => {
+    if (!timelineRef.current) return
+    const visibleWidth = timelineRef.current.clientWidth
+    if (visibleWidth <= 0) return
+    let startTime = 0
+    let endTime = duration
+    if (clips.length > 0) {
+      startTime = Math.min(...clips.map(c => c.startTime))
+      endTime = Math.max(...clips.map(c => c.startTime + c.duration))
+    }
+    const timeSpan = Math.max(0.5, endTime - startTime)
+    const padding = 0.95
+    const newZoom = Math.max(20, Math.min(2000, (5 * visibleWidth * padding) / timeSpan))
+    setZoom(newZoom)
+    const newPixelsPerSecond = newZoom / 5
+    requestAnimationFrame(() => {
+      if (timelineRef.current) {
+        timelineRef.current.scrollLeft = Math.max(0, startTime * newPixelsPerSecond)
+      }
+    })
+  }
 
   // Filtered tracks by type (moved up for use in effects)
   const videoTracks = tracks.filter(t => t.type === 'video')
@@ -213,7 +609,7 @@ function Timeline({ onOpenAudioGenerate }) {
   // Handle playhead scrubbing - start on mousedown
   const handleTimelineMouseDown = (e) => {
     // Don't start scrubbing if clicking on a clip or trim handle
-    if (e.target.closest('[data-clip]') || e.target.closest('[data-trim-handle]')) {
+    if (e.target.closest('[data-clip]') || e.target.closest('[data-trim-handle]') || e.target.closest('[data-marker-handle]')) {
       return
     }
     
@@ -361,8 +757,8 @@ function Timeline({ onOpenAudioGenerate }) {
       
       // Account for ruler height and track positions
       const rulerHeight = 20
-      const videoTrackHeight = 48
       const audioSectionHeight = 20
+      const totalVideoTracksHeight = videoTracks.reduce((sum, track) => sum + getTrackHeight(track), 0)
       
       // Find clips that intersect with the marquee
       const clipsToSelect = []
@@ -378,14 +774,14 @@ function Timeline({ onOpenAudioGenerate }) {
           
           if (trackType === 'video') {
             const videoTrackIndex = videoTracks.findIndex(t => t.id === clip.trackId)
-            clipY += videoTrackIndex * videoTrackHeight
-            const clipHeight = videoTrackHeight
+            clipY += getTrackOffset(videoTracks, videoTrackIndex)
+            const clipHeight = getTrackHeight(track)
             const clipBottom = clipY + clipHeight
             if (!(clipY >= bottom || clipBottom <= top)) clipsToSelect.push(clip.id)
           } else {
             const audioTrackIndex = audioTracks.findIndex(t => t.id === clip.trackId)
-            clipY += videoTracks.length * videoTrackHeight + audioSectionHeight + getAudioTrackOffset(audioTracks, audioTrackIndex)
-            const clipHeight = getAudioTrackHeight(track)
+            clipY += totalVideoTracksHeight + audioSectionHeight + getTrackOffset(audioTracks, audioTrackIndex)
+            const clipHeight = getTrackHeight(track)
             const clipBottom = clipY + clipHeight
             if (!(clipY >= bottom || clipBottom <= top)) clipsToSelect.push(clip.id)
           }
@@ -451,16 +847,31 @@ function Timeline({ onOpenAudioGenerate }) {
         e.preventDefault()
         toggleRippleEdit()
       }
-      
-      // Delete/Backspace - delete selected clips
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedClipIds.length > 0) {
+
+      // M key - add timeline marker at playhead
+      if ((e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault()
-        removeSelectedClips()
+        addMarker(playheadPosition)
+      }
+      
+      // Delete/Backspace - delete selected clips, otherwise selected transition/marker
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedClipIds.length > 0) {
+          e.preventDefault()
+          removeSelectedClips()
+        } else if (selectedTransitionId) {
+          e.preventDefault()
+          removeTransition(selectedTransitionId)
+        } else if (selectedMarkerId) {
+          e.preventDefault()
+          removeMarker(selectedMarkerId)
+        }
       }
       
       // Escape - clear selection
       if (e.key === 'Escape') {
         clearSelection()
+        selectMarker(null)
       }
       
       // Ctrl/Cmd + A - select all clips
@@ -468,6 +879,22 @@ function Timeline({ onOpenAudioGenerate }) {
         e.preventDefault()
         const allClipIds = clips.map(c => c.id)
         useTimelineStore.getState().selectClips(allClipIds)
+      }
+
+      // Ctrl/Cmd + C - copy selected clips
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+        if (selectedClipIds.length > 0) {
+          e.preventDefault()
+          copySelectedClips()
+        }
+      }
+
+      // Ctrl/Cmd + V - paste at playhead on active track
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+        if (activeTrackId && copiedClips.length > 0) {
+          e.preventDefault()
+          pasteClipsAtPlayhead(activeTrackId, playheadPosition, assets)
+        }
       }
       
       // X - split at playhead on active track only (seamless: second clip continues from cut in source)
@@ -482,15 +909,23 @@ function Timeline({ onOpenAudioGenerate }) {
           saveToHistory()
           const splitTime = playheadPosition - clip.startTime
           const remainder = clip.duration - splitTime
-          // Source time at the cut (so second clip continues from here — no repeat/slip)
-          const sourceTimeAtCut = (clip.trimStart || 0) + splitTime * getTimeScale(clip)
           resizeClip(clip.id, splitTime)
-          const asset = assets.find(a => a.id === clip.assetId)
-          if (asset) {
-            const newClip = addClip(clip.trackId, asset, playheadPosition, timelineFps)
-            if (newClip) {
-              updateClipTrim(newClip.id, { trimStart: sourceTimeAtCut })
-              resizeClip(newClip.id, remainder)
+          if (clip.type === 'text') {
+            // Text clips: add second clip with same text properties
+            const textOptions = { ...(clip.textProperties || {}), duration: remainder }
+            addTextClip(clip.trackId, textOptions, playheadPosition)
+          } else {
+            // Video/audio: second clip continues from cut in source (pass duration/trim so resolveOverlaps doesn't push following clips)
+            const timeScale = getTimeScale(clip)
+            const sourceTimeAtCut = (clip.trimStart || 0) + splitTime * timeScale
+            const sourceTrimEnd = sourceTimeAtCut + remainder * timeScale
+            const asset = assets.find(a => a.id === clip.assetId)
+            if (asset) {
+              addClip(clip.trackId, asset, playheadPosition, timelineFps, {
+                duration: remainder,
+                trimStart: sourceTimeAtCut,
+                trimEnd: sourceTrimEnd,
+              })
             }
           }
         }
@@ -512,7 +947,7 @@ function Timeline({ onOpenAudioGenerate }) {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
     }
-  }, [toggleSnapping, toggleRippleEdit, selectedClipIds, removeSelectedClips, clearSelection, clips, undo, redo, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, updateClipTrim, assets, timelineFps])
+  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedTransitionId, selectedMarkerId, removeSelectedClips, removeTransition, removeMarker, clearSelection, selectMarker, clips, undo, redo, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips])
 
   // Handle spacebar panning
   useEffect(() => {
@@ -621,8 +1056,37 @@ function Timeline({ onOpenAudioGenerate }) {
     const x = e.clientX - rect.left + scrollLeft
     const startTime = Math.max(0, x / pixelsPerSecond)
     
-    // Check if asset type matches track type
-    const track = tracks.find(t => t.id === trackId)
+    let targetTrackId = trackId
+    const isOverlayAsset = asset.type === 'image' && Boolean(asset?.settings?.overlayKind)
+
+    // Overlay assets should live on an overlay-friendly track (empty or overlay-only)
+    // to avoid overwriting primary footage on a content track.
+    if (isOverlayAsset) {
+      const videoTracks = tracks.filter(t => t.type === 'video' && !t.locked)
+      const isOverlayClip = (clip) => {
+        if (clip.type !== 'image') return false
+        const clipAsset = assets.find(a => a.id === clip.assetId)
+        return Boolean(clipAsset?.settings?.overlayKind)
+      }
+
+      const reusableOverlayTrack = videoTracks.find((trackCandidate) => {
+        const clipsOnTrack = clips.filter(c => c.trackId === trackCandidate.id)
+        return clipsOnTrack.length === 0 || clipsOnTrack.every(isOverlayClip)
+      })
+
+      if (reusableOverlayTrack) {
+        targetTrackId = reusableOverlayTrack.id
+      } else {
+        const newTrack = addTrack('video')
+        if (newTrack?.id) {
+          targetTrackId = newTrack.id
+        }
+      }
+    }
+
+    // Check if asset type matches target track type
+    const latestTracks = useTimelineStore.getState().tracks
+    const track = latestTracks.find(t => t.id === targetTrackId) || tracks.find(t => t.id === targetTrackId)
     if (!track) return
     
     // Video assets go on video tracks, audio on audio tracks
@@ -630,7 +1094,11 @@ function Timeline({ onOpenAudioGenerate }) {
     const isVideoTrack = track.type === 'video'
     
     if ((isVideoAsset && isVideoTrack) || (!isVideoAsset && !isVideoTrack)) {
-      addClip(trackId, asset, startTime, timelineFps)
+      addClip(targetTrackId, asset, startTime, timelineFps)
+      setPreviewMode('timeline')
+      if (assetIsPlaying) {
+        setAssetIsPlaying(false)
+      }
 
       // If this is a video asset with audio enabled, also add an audio clip
       if (asset.type === 'video' && isVideoTrack && asset.audioEnabled !== false) {
@@ -751,19 +1219,26 @@ function Timeline({ onOpenAudioGenerate }) {
         }
         break
       case 'split':
-        // Split clip at playhead (seamless: second clip continues from cut in source)
+        // Split clip at playhead (seamless: second clip continues from cut in source; text = duplicate props)
         if (playheadPosition > clip.startTime && playheadPosition < clip.startTime + clip.duration) {
           const splitTime = playheadPosition - clip.startTime
           const remainder = clip.duration - splitTime
-          const sourceTimeAtCut = (clip.trimStart || 0) + splitTime * getTimeScale(clip)
           saveToHistory()
           resizeClip(clip.id, splitTime)
-          const asset = assets.find(a => a.id === clip.assetId)
-          if (asset) {
-            const newClip = addClip(clip.trackId, asset, playheadPosition, timelineFps)
-            if (newClip) {
-              updateClipTrim(newClip.id, { trimStart: sourceTimeAtCut })
-              resizeClip(newClip.id, remainder)
+          if (clip.type === 'text') {
+            const textOptions = { ...(clip.textProperties || {}), duration: remainder }
+            addTextClip(clip.trackId, textOptions, playheadPosition)
+          } else {
+            const timeScale = getTimeScale(clip)
+            const sourceTimeAtCut = (clip.trimStart || 0) + splitTime * timeScale
+            const sourceTrimEnd = sourceTimeAtCut + remainder * timeScale
+            const asset = assets.find(a => a.id === clip.assetId)
+            if (asset) {
+              addClip(clip.trackId, asset, playheadPosition, timelineFps, {
+                duration: remainder,
+                trimStart: sourceTimeAtCut,
+                trimEnd: sourceTrimEnd,
+              })
             }
           }
         }
@@ -827,6 +1302,14 @@ function Timeline({ onOpenAudioGenerate }) {
     
     const clip = clips.find(c => c.id === clipId)
     if (!clip) return
+
+    // Trimming must be exclusive: cancel any in-flight drag/edit gesture to avoid
+    // multiple mousemove handlers fighting and moving neighboring clips.
+    if (clipDragState) setClipDragState(null)
+    if (transitionDragState) setTransitionDragState(null)
+    if (rollEditState) setRollEditState(null)
+    if (slipState) setSlipState(null)
+    clearActiveSnap()
     
     // Save to history before trimming starts
     saveToHistory()
@@ -878,7 +1361,8 @@ function Timeline({ onOpenAudioGenerate }) {
         // When shortening the head (dragging right), we're hiding footage from the start
         
         let newStartTime = Math.max(0, trimState.startTime + deltaTime)
-        const maxStartTime = trimState.startTime + trimState.startDuration - 0.5 // Keep min 0.5s
+        const minClipDurationSec = 1 / (timelineFps || 24)
+        const maxStartTime = trimState.startTime + trimState.startDuration - minClipDurationSec
         newStartTime = Math.min(newStartTime, maxStartTime)
         
         // Calculate how much we're trying to change the head position
@@ -971,22 +1455,38 @@ function Timeline({ onOpenAudioGenerate }) {
           clearActiveSnap()
         }
         
-        let newDuration = Math.max(0.5, newEndTime - trimState.startTime)
+        const minClipDurationSec = 1 / (timelineFps || 24)
+        let newDuration = Math.max(minClipDurationSec, newEndTime - trimState.startTime)
         
         // Don't exceed source duration if we have it
         // The maximum duration is limited by how much source footage is available
         // from the current trimStart to the end of the source
-        const sourceDuration = clip.sourceDuration || Infinity
-        const currentTrimStart = clip.trimStart || 0
-        const maxPossibleDuration = (sourceDuration - currentTrimStart) / timeScale
-        newDuration = Math.min(newDuration, maxPossibleDuration)
+        const currentTrimStart = trimState.startTrimStart
+        const rawSourceDuration = clip.sourceDuration
+        const parsedSourceDuration = rawSourceDuration === Infinity || rawSourceDuration === 'Infinity'
+          ? Infinity
+          : (rawSourceDuration === null || rawSourceDuration === undefined || rawSourceDuration === ''
+              ? null
+              : Number(rawSourceDuration))
+        const sourceDuration = parsedSourceDuration === Infinity || clip.type === 'image'
+          ? Infinity
+          : ((Number.isFinite(parsedSourceDuration) && parsedSourceDuration > 0)
+              ? parsedSourceDuration
+              : trimState.startTrimEnd)
+        if (Number.isFinite(sourceDuration)) {
+          const maxPossibleDuration = (sourceDuration - currentTrimStart) / timeScale
+          newDuration = Math.max(0.01, Math.min(newDuration, maxPossibleDuration))
+        }
         
         // Calculate the new trimEnd (where in the source footage the clip ends)
-        const newTrimEnd = currentTrimStart + (newDuration * timeScale)
+        const unclampedTrimEnd = currentTrimStart + (newDuration * timeScale)
+        const newTrimEnd = Number.isFinite(sourceDuration)
+          ? Math.min(unclampedTrimEnd, sourceDuration)
+          : unclampedTrimEnd
         
         updateClipTrim(trimState.clipId, {
           duration: newDuration,
-          trimEnd: Math.min(newTrimEnd, sourceDuration)
+          trimEnd: newTrimEnd
         })
       }
     }
@@ -1008,12 +1508,53 @@ function Timeline({ onOpenAudioGenerate }) {
   // Handle clip drag start (mousedown on clip body, not trim handles)
   const handleClipDragStart = (e, clip) => {
     // Don't start drag if clicking on trim handles or delete button
-    if (e.target.closest('[data-trim-handle]') || e.target.closest('button')) {
+    if (trimState || slipState || e.target.closest('[data-trim-handle]') || e.target.closest('button')) {
       return
     }
     
     e.stopPropagation()
     e.preventDefault()
+
+    const sourceDuration = getSourceDuration(clip)
+    const canSlip = e.altKey
+      && (clip.type === 'video' || clip.type === 'audio')
+      && Number.isFinite(sourceDuration)
+    if (canSlip) {
+      if (clipDragState) setClipDragState(null)
+      if (transitionDragState) setTransitionDragState(null)
+      if (rollEditState) setRollEditState(null)
+      clearActiveSnap()
+      saveToHistory()
+
+      const timeScale = Math.max(0.0001, getTimeScale(clip))
+      const startTrimStart = Math.max(0, Number(clip.trimStart) || 0)
+      const computedTrimEnd = startTrimStart + clip.duration * timeScale
+      const explicitTrimEnd = Number(clip.trimEnd)
+      const baseTrimEnd = Number.isFinite(explicitTrimEnd) ? explicitTrimEnd : computedTrimEnd
+      const startTrimEnd = Math.max(
+        startTrimStart + 0.0001,
+        Math.min(sourceDuration, baseTrimEnd)
+      )
+      const minSourceDelta = -startTrimStart
+      const maxSourceDelta = Number.isFinite(sourceDuration)
+        ? (sourceDuration - startTrimEnd)
+        : Infinity
+
+      setSlipState({
+        clipId: clip.id,
+        startX: e.clientX,
+        startTrimStart,
+        startTrimEnd,
+        timeScale,
+        minSourceDelta,
+        maxSourceDelta: Math.max(minSourceDelta, maxSourceDelta),
+      })
+
+      if (!selectedClipIds.includes(clip.id)) {
+        selectClip(clip.id)
+      }
+      return
+    }
     
     // Store original positions of all selected clips for multi-drag
     const clipsToMove = selectedClipIds.includes(clip.id) 
@@ -1037,10 +1578,46 @@ function Timeline({ onOpenAudioGenerate }) {
     }
   }
 
+  // Handle slip edit (Alt+drag on clip body)
+  useEffect(() => {
+    if (!slipState || trimState) return
+
+    const handleMouseMove = (e) => {
+      const deltaX = e.clientX - slipState.startX
+      const deltaTime = deltaX / pixelsPerSecond
+      const fps = timelineFps || 24
+      const quantizedDeltaTime = Math.round(deltaTime * fps) / fps
+      const proposedSourceDelta = quantizedDeltaTime * slipState.timeScale
+      const boundedSourceDelta = Math.max(
+        slipState.minSourceDelta,
+        Math.min(proposedSourceDelta, slipState.maxSourceDelta)
+      )
+
+      const newTrimStart = slipState.startTrimStart + boundedSourceDelta
+      const newTrimEnd = slipState.startTrimEnd + boundedSourceDelta
+      updateClipTrim(slipState.clipId, {
+        trimStart: Math.max(0, newTrimStart),
+        trimEnd: Math.max(newTrimStart + 0.0001, newTrimEnd),
+      })
+    }
+
+    const handleMouseUp = () => {
+      setSlipState(null)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [slipState, trimState, pixelsPerSecond, timelineFps, updateClipTrim])
+
   // Handle clip dragging (mousemove when dragging a clip)
   // Supports moving multiple selected clips together
   useEffect(() => {
-    if (!clipDragState) return
+    if (!clipDragState || trimState || slipState) return
     
     const handleMouseMove = (e) => {
       const deltaX = e.clientX - clipDragState.startX
@@ -1079,20 +1656,21 @@ function Timeline({ onOpenAudioGenerate }) {
       let newTrackId = clipDragState.originalTrackId
       const isDraggingMultiple = selectedClipIds.includes(clipDragState.clipId) && selectedClipIds.length > 1
       
-      // Use track content ref for Y (scrollable area where tracks live); layout: video tracks (h-12), spacer (h-5), audio tracks (h-10)
+      // Use track content ref for Y (scrollable area where tracks live)
       if (!isDraggingMultiple && trackContentRef.current) {
         const contentRect = trackContentRef.current.getBoundingClientRect()
         const relativeY = e.clientY - contentRect.top + trackContentRef.current.scrollTop
         
-        const trackType = clip.type || 'video'
+        // Image and text clips go on video tracks; only video/audio clips have matching track types
+        const trackType = (clip.type === 'image' || clip.type === 'text') ? 'video' : (clip.type || 'video')
         const relevantTracks = tracks.filter(t => t.type === trackType)
-        const videoTrackHeight = 48
         const audioSectionHeight = 20
+        const totalVideoTracksHeight = videoTracks.reduce((sum, track) => sum + getTrackHeight(track), 0)
         
-        let currentY = trackType === 'video' ? 0 : videoTracks.length * videoTrackHeight + audioSectionHeight
+        let currentY = trackType === 'video' ? 0 : totalVideoTracksHeight + audioSectionHeight
         
         for (const track of relevantTracks) {
-          const height = track.type === 'video' ? videoTrackHeight : getAudioTrackHeight(track)
+          const height = getTrackHeight(track)
           if (relativeY >= currentY && relativeY < currentY + height) {
             if (!track.locked) newTrackId = track.id
             break
@@ -1103,9 +1681,19 @@ function Timeline({ onOpenAudioGenerate }) {
       
       // Update clip position(s) - don't resolve overlaps during drag, only on mouse up
       if (isDraggingMultiple) {
-        // Move all selected clips together by the same delta (no overlap resolution yet)
-        moveSelectedClips(finalDeltaTime - (clipDragState.lastDeltaTime || 0), null, false)
-        setClipDragState(prev => ({ ...prev, lastDeltaTime: finalDeltaTime, currentTrackId: newTrackId }))
+        // Set all selected clips to original + total delta; keep group in sequence at timeline start
+        const proposed = clipDragState.originalPositions.map(({ id, startTime }) => ({
+          id,
+          startTime: startTime + finalDeltaTime
+        }))
+        const minStart = Math.min(...proposed.map((p) => p.startTime))
+        const shift = minStart < 0 ? -minStart : 0
+        const updates = proposed.map(({ id, startTime }) => ({
+          id,
+          startTime: Math.max(0, startTime + shift)
+        }))
+        setSelectedClipsStartTimes(updates)
+        setClipDragState(prev => ({ ...prev, currentTrackId: newTrackId }))
       } else {
         // Move single clip (no overlap resolution yet)
         moveClip(clipDragState.clipId, newTrackId, proposedStartTime, false)
@@ -1141,7 +1729,7 @@ function Timeline({ onOpenAudioGenerate }) {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [clipDragState, clips, pixelsPerSecond, tracks, videoTracks, moveClip, moveSelectedClips, selectedClipIds, snapClipPosition, setActiveSnapTime, clearActiveSnap])
+  }, [clipDragState, trimState, slipState, clips, pixelsPerSecond, tracks, videoTracks, moveClip, moveSelectedClips, setSelectedClipsStartTimes, selectedClipIds, snapClipPosition, setActiveSnapTime, clearActiveSnap])
 
   // Handle adding transition between adjacent clips - show type menu
   const handleAddTransition = (e, clipA, clipB) => {
@@ -1177,12 +1765,17 @@ function Timeline({ onOpenAudioGenerate }) {
     }
   }
   
-  // Calculate which duration options are available based on handles
-  const getAvailableDurations = () => {
-    if (!transitionMenu) return []
-    const maxDuration = getMaxTransitionDuration(transitionMenu.clipA.id, transitionMenu.clipB.id)
-    return TRANSITION_DURATIONS.filter(d => d.seconds <= maxDuration)
-  }
+  // Keep timeline transition menu in sync with global default duration.
+  useEffect(() => {
+    const handler = (e) => {
+      const next = Number(e?.detail)
+      if (Number.isFinite(next) && next >= 1) {
+        setDefaultTransitionFrames(Math.round(next))
+      }
+    }
+    window.addEventListener('comfystudio-transition-default-duration-changed', handler)
+    return () => window.removeEventListener('comfystudio-transition-default-duration-changed', handler)
+  }, [])
   
   // Close transition menu when clicking outside
   useEffect(() => {
@@ -1204,20 +1797,21 @@ function Timeline({ onOpenAudioGenerate }) {
 
   // Handle transition duration dragging
   useEffect(() => {
-    if (!transitionDragState) return
+    if (!transitionDragState || trimState || slipState) return
     
     const handleMouseMove = (e) => {
       const deltaX = e.clientX - transitionDragState.startX
-      // Duration changes by drag amount (2 pixels = 0.1 seconds)
-      const deltaDuration = deltaX / 20
+      // 1:1 with mouse: duration change in seconds = pixels moved / pixels per second
+      const deltaDuration = deltaX / pixelsPerSecond
+      const minDuration = 1 / FRAME_RATE
       
       let newDuration
       if (transitionDragState.edge === 'left') {
         // Left edge: decreasing duration
-        newDuration = Math.max(0.1, Math.min(3, transitionDragState.startDuration - deltaDuration))
+        newDuration = Math.max(minDuration, transitionDragState.startDuration - deltaDuration)
       } else {
         // Right edge: increasing duration
-        newDuration = Math.max(0.1, Math.min(3, transitionDragState.startDuration + deltaDuration))
+        newDuration = Math.max(minDuration, transitionDragState.startDuration + deltaDuration)
       }
       
       updateTransition(transitionDragState.transitionId, { duration: parseFloat(newDuration.toFixed(2)) })
@@ -1234,51 +1828,59 @@ function Timeline({ onOpenAudioGenerate }) {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [transitionDragState, updateTransition])
+  }, [transitionDragState, trimState, slipState, pixelsPerSecond, updateTransition])
 
   // Handle roll edit (dragging between two adjacent clips)
   useEffect(() => {
-    if (!rollEditState) return
+    if (!rollEditState || trimState || slipState) return
     
     const handleMouseMove = (e) => {
       const deltaX = e.clientX - rollEditState.startX
-      const deltaTime = deltaX / pixelsPerSecond
-      
-      // Calculate new edit point
-      let newEditPoint = rollEditState.originalEditPoint + deltaTime
-      
-      // Constraints:
-      // 1. clipA must have at least 0.5s duration
-      const clipAMinEnd = (rollEditState.originalEditPoint - rollEditState.clipAOriginalDuration) + 0.5
-      // 2. clipB must have at least 0.5s duration  
-      const clipBMaxStart = rollEditState.clipBOriginalStart + rollEditState.clipBOriginalDuration - 0.5
-      // 3. Don't go past clipA's source duration (if available)
-      const clipA = clips.find(c => c.id === rollEditState.clipAId)
-      const clipAMaxEnd = clipA?.sourceDuration 
-        ? (rollEditState.originalEditPoint - rollEditState.clipAOriginalDuration) + clipA.sourceDuration
-        : Infinity
-      // 4. Don't go past clipB's trim start (can't reveal content before the source)
-      const clipB = clips.find(c => c.id === rollEditState.clipBId)
-      const clipBMinStart = clipB?.trimStart 
-        ? rollEditState.clipBOriginalStart - clipB.trimStart
-        : 0
-      
-      // Apply constraints
-      newEditPoint = Math.max(newEditPoint, clipAMinEnd)
-      newEditPoint = Math.min(newEditPoint, clipBMaxStart)
-      newEditPoint = Math.min(newEditPoint, clipAMaxEnd)
-      newEditPoint = Math.max(newEditPoint, clipBMinStart)
-      
-      // Calculate new values
-      const actualDelta = newEditPoint - rollEditState.originalEditPoint
+      const proposedDelta = deltaX / pixelsPerSecond
+      const fps = timelineFps || 24
+      const minDuration = 1 / fps
+      const clipATimeScale = Math.max(0.0001, Number(rollEditState.clipATimeScale) || 1)
+      const clipBTimeScale = Math.max(0.0001, Number(rollEditState.clipBTimeScale) || 1)
+
+      // Duration constraints: both clips keep at least minDuration.
+      const minDeltaFromClipA = minDuration - rollEditState.clipAOriginalDuration
+      const maxDeltaFromClipB = rollEditState.clipBOriginalDuration - minDuration
+
+      // Media handle constraints:
+      // - Clip A can only roll right while it still has tail handle.
+      // - Clip B can only roll left while it still has head handle.
+      let maxDeltaFromClipAHandles = Infinity
+      if (Number.isFinite(Number(rollEditState.clipASourceDuration))) {
+        const maxClipADuration = (Number(rollEditState.clipASourceDuration) - rollEditState.clipAOriginalTrimStart) / clipATimeScale
+        maxDeltaFromClipAHandles = maxClipADuration - rollEditState.clipAOriginalDuration
+      }
+      const minDeltaFromClipBHandles = -(rollEditState.clipBOriginalTrimStart / clipBTimeScale)
+
+      let minDelta = Math.max(minDeltaFromClipA, minDeltaFromClipBHandles)
+      let maxDelta = Math.min(maxDeltaFromClipB, maxDeltaFromClipAHandles)
+      if (maxDelta < minDelta) {
+        const pinned = (minDelta + maxDelta) / 2
+        minDelta = pinned
+        maxDelta = pinned
+      }
+
+      const actualDelta = Math.max(minDelta, Math.min(proposedDelta, maxDelta))
       const newClipADuration = rollEditState.clipAOriginalDuration + actualDelta
       const newClipBStart = rollEditState.clipBOriginalStart + actualDelta
-      const newClipBDuration = rollEditState.clipBOriginalDuration - actualDelta
+      const newClipBTrimStart = Math.max(0, rollEditState.clipBOriginalTrimStart + actualDelta * clipBTimeScale)
       
-      // Update both clips
-      resizeClip(rollEditState.clipAId, newClipADuration)
-      moveClip(rollEditState.clipBId, clipB?.trackId, newClipBStart, false)
-      resizeClip(rollEditState.clipBId, newClipBDuration)
+      // Rolling edit semantics:
+      // - Clip A tail: adjust out-point (duration/trimEnd)
+      // - Clip B head: adjust in-point (startTime/trimStart), keeping trimEnd fixed
+      updateClipTrim(rollEditState.clipAId, {
+        duration: newClipADuration,
+        trimStart: rollEditState.clipAOriginalTrimStart,
+      })
+      updateClipTrim(rollEditState.clipBId, {
+        startTime: newClipBStart,
+        trimStart: newClipBTrimStart,
+        trimEnd: rollEditState.clipBOriginalTrimEnd,
+      })
     }
     
     const handleMouseUp = () => {
@@ -1292,7 +1894,7 @@ function Timeline({ onOpenAudioGenerate }) {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [rollEditState, clips, pixelsPerSecond, resizeClip, moveClip])
+  }, [rollEditState, trimState, slipState, pixelsPerSecond, timelineFps, updateClipTrim])
 
   // Get transition between two clips (if exists)
   const getTransitionBetween = (clipAId, clipBId) => {
@@ -1315,14 +1917,14 @@ function Timeline({ onOpenAudioGenerate }) {
       const clipB = trackClips[i + 1]
       const clipAEnd = clipA.startTime + clipA.duration
       
-      // Check if clips are adjacent (within 0.5s gap) OR overlapping (transition exists)
+      // Check if clips are adjacent (small gap) OR overlapping (transition exists)
       const gap = clipB.startTime - clipAEnd
       const isOverlapping = clipB.startTime < clipAEnd
       
-      if (isOverlapping || Math.abs(gap) < 0.5) {
+      if (isOverlapping || Math.abs(gap) < ADJACENT_CLIP_UI_GAP_SECONDS) {
         // Check if there's a transition between these clips
         const transition = getTransitionBetween(clipA.id, clipB.id)
-        pairs.push({ clipA, clipB, transition, isOverlapping })
+        pairs.push({ clipA, clipB, transition, isOverlapping, gap })
       }
     }
     return pairs
@@ -1389,13 +1991,23 @@ function Timeline({ onOpenAudioGenerate }) {
     setTrackDropTarget(indexInGroup)
   }
 
+  const handleTrackResizeStart = (e, track) => {
+    e.stopPropagation()
+    e.preventDefault()
+    setTrackResizeState({
+      trackId: track.id,
+      startY: e.clientY,
+      startHeight: getTrackHeight(track)
+    })
+  }
+
   const handleTrackDragMove = (e) => {
     if (!trackDragState) return
     
     // Calculate which index we're hovering over
     const tracksOfType = trackDragState.trackType === 'video' ? videoTracks : audioTracks
     const draggedTrack = tracksOfType.find(t => t.id === trackDragState.trackId)
-    const trackHeight = trackDragState.trackType === 'video' ? 48 : (draggedTrack ? getAudioTrackHeight(draggedTrack) : 40)
+    const trackHeight = draggedTrack ? getTrackHeight(draggedTrack) : VIDEO_TRACK_HEIGHT_DEFAULT
     const deltaY = e.clientY - trackDragState.startY
     const indexDelta = Math.round(deltaY / trackHeight)
     const newIndex = Math.max(0, Math.min(tracksOfType.length - 1, trackDragState.originalIndex + indexDelta))
@@ -1429,12 +2041,98 @@ function Timeline({ onOpenAudioGenerate }) {
     }
   }, [trackDragState, trackDropTarget])
 
-  // Generate time markers
-  const timeMarkers = []
-  const markerInterval = zoom > 100 ? 5 : 10
-  for (let i = 0; i <= duration; i += markerInterval) {
-    timeMarkers.push(i)
+  // Persist custom track heights
+  useEffect(() => {
+    try {
+      localStorage.setItem(TRACK_HEIGHTS_STORAGE_KEY, JSON.stringify(trackHeights))
+    } catch (_) {}
+  }, [trackHeights])
+
+  // Drop stale track height entries when tracks are removed.
+  useEffect(() => {
+    setTrackHeights((prev) => {
+      const next = {}
+      const validIds = new Set(tracks.map(t => t.id))
+      let changed = false
+      Object.entries(prev || {}).forEach(([trackId, height]) => {
+        if (validIds.has(trackId)) {
+          next[trackId] = height
+        } else {
+          changed = true
+        }
+      })
+      return changed ? next : prev
+    })
+  }, [tracks])
+
+  // Track height resize drag listeners
+  useEffect(() => {
+    if (!trackResizeState) return
+
+    const handleMouseMove = (e) => {
+      const deltaY = e.clientY - trackResizeState.startY
+      const nextHeight = Math.max(
+        TRACK_HEIGHT_MIN,
+        Math.min(TRACK_HEIGHT_MAX, Math.round(trackResizeState.startHeight + deltaY))
+      )
+      setTrackHeights(prev => ({
+        ...(prev || {}),
+        [trackResizeState.trackId]: nextHeight
+      }))
+    }
+
+    const handleMouseUp = () => {
+      setTrackResizeState(null)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [trackResizeState])
+
+  const timecodeFps = Number.isFinite(Number(timelineFps)) && Number(timelineFps) > 0
+    ? Number(timelineFps)
+    : FRAME_RATE
+
+  const formatTimelineTimecode = (seconds) => {
+    const fps = Math.max(1, Math.round(timecodeFps))
+    const totalFrames = Math.max(0, Math.floor((seconds || 0) * fps))
+    const frames = totalFrames % fps
+    const totalSeconds = Math.floor(totalFrames / fps)
+    const ss = totalSeconds % 60
+    const mm = Math.floor(totalSeconds / 60) % 60
+    const hh = Math.floor(totalSeconds / 3600)
+    const pad2 = (n) => String(n).padStart(2, '0')
+    return `${pad2(hh)}:${pad2(mm)}:${pad2(ss)}:${pad2(frames)}`
   }
+
+  const getMajorRulerStep = (pixelsPerSec) => {
+    // Keep labels readable while allowing finer granularity at high zoom.
+    const candidates = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
+    const minSpacingPx = 95
+    return candidates.find(step => step * pixelsPerSec >= minSpacingPx) || candidates[candidates.length - 1]
+  }
+
+  const rulerTicks = useMemo(() => {
+    const majorStep = getMajorRulerStep(pixelsPerSecond)
+    const minorDivisions = majorStep >= 60 ? 6 : (majorStep >= 10 ? 5 : (majorStep >= 1 ? 4 : 5))
+    const minorStep = majorStep / minorDivisions
+    const major = []
+    const minor = []
+    const maxSteps = Math.ceil(duration / minorStep)
+
+    for (let i = 0; i <= maxSteps; i++) {
+      const time = Number((i * minorStep).toFixed(6))
+      if (time > duration + 1e-6) break
+      if (i % minorDivisions === 0) major.push(time)
+      else minor.push(time)
+    }
+
+    return { major, minor, majorStep, minorStep }
+  }, [duration, pixelsPerSecond])
 
   return (
     <div className="h-full bg-sf-dark-900 border-t border-sf-dark-700 flex flex-col">
@@ -1465,6 +2163,23 @@ function Timeline({ onOpenAudioGenerate }) {
             <Plus className="w-3 h-3" />
             Stereo
           </button>
+          <button
+            onClick={() => addMarker(playheadPosition)}
+            className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
+            title="Add timeline marker at playhead (M)"
+          >
+            <Flag className="w-3 h-3 text-yellow-400" />
+            Marker
+          </button>
+          {selectedMarkerId && (
+            <button
+              onClick={() => removeMarker(selectedMarkerId)}
+              className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-error/30 rounded text-[10px] text-sf-text-secondary transition-colors"
+              title="Remove selected marker"
+            >
+              <X className="w-3 h-3 text-sf-error" />
+            </button>
+          )}
         </div>
         
         {/* Snapping Toggle */}
@@ -1536,9 +2251,16 @@ function Timeline({ onOpenAudioGenerate }) {
         
         {/* Info & Zoom */}
         <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={handleFrameAll}
+            className="p-1.5 hover:bg-sf-dark-600 rounded text-sf-text-muted"
+            title="Frame all – fit timeline or all clips in view"
+          >
+            <Maximize2 className="w-3.5 h-3.5" />
+          </button>
           <div className="flex items-center gap-1">
             <button
-              onClick={() => setZoom(Math.max(20, zoom - 50))}
+              onClick={() => applyZoomWithPlayheadPivot(zoom - 50)}
               className="p-0.5 hover:bg-sf-dark-600 rounded text-sf-text-muted"
               title="Zoom Out"
             >
@@ -1549,11 +2271,11 @@ function Timeline({ onOpenAudioGenerate }) {
               min="20"
               max="2000"
               value={zoom}
-              onChange={(e) => setZoom(parseInt(e.target.value))}
+              onChange={(e) => applyZoomWithPlayheadPivot(parseInt(e.target.value, 10))}
               className="w-24 h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
             />
             <button
-              onClick={() => setZoom(Math.min(2000, zoom + 50))}
+              onClick={() => applyZoomWithPlayheadPivot(zoom + 50)}
               className="p-0.5 hover:bg-sf-dark-600 rounded text-sf-text-muted"
               title="Zoom In"
             >
@@ -1563,7 +2285,7 @@ function Timeline({ onOpenAudioGenerate }) {
           </div>
           
           {/* Hints */}
-          <span className="text-[9px] text-sf-text-muted">Ctrl+Scroll=Zoom | Space+Drag=Pan | Alt+Drag=Marquee</span>
+          <span className="text-[9px] text-sf-text-muted">Ctrl+Scroll=Zoom | Space+Drag=Pan | Alt+Drag(empty)=Marquee | Alt+Drag(clip)=Slip | M=Marker</span>
         </div>
       </div>
 
@@ -1607,15 +2329,17 @@ function Timeline({ onOpenAudioGenerate }) {
           {videoTracks.map((track, index) => {
             const isDragging = trackDragState?.trackId === track.id
             const isDropTarget = trackDragState?.trackType === 'video' && trackDropTarget === index && !isDragging
+            const headerHeight = getTrackHeight(track)
             
             return (
             <div 
               key={track.id}
               onClick={() => setActiveTrack(track.id)}
               title={activeTrackId === track.id ? 'Active track — press X to split at playhead' : 'Click to set as active track (X cuts at playhead on this track)'}
-              className={`h-12 flex items-center px-2 gap-1 border-b border-sf-dark-700 hover:bg-sf-dark-800 transition-colors group/track cursor-pointer ${
+              className={`relative flex items-center px-2 gap-1 border-b border-sf-dark-700 hover:bg-sf-dark-800 transition-colors group/track cursor-pointer ${
                 track.locked ? 'bg-sf-dark-800/50' : ''
               } ${isDragging ? 'opacity-50 bg-sf-dark-700' : ''} ${isDropTarget ? 'border-t-2 border-t-purple-500' : ''}`}
+              style={{ minHeight: headerHeight, height: headerHeight }}
             >
               <div
                 className={`p-0.5 rounded hover:bg-sf-dark-600 ${track.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
@@ -1718,6 +2442,14 @@ function Timeline({ onOpenAudioGenerate }) {
                   P
                 </button>
               </div>
+              {/* Drag bottom edge to resize track vertically */}
+              <div
+                className="absolute bottom-0 left-0 right-0 h-1.5 cursor-ns-resize z-30 group/track-resize"
+                onMouseDown={(e) => handleTrackResizeStart(e, track)}
+                title="Drag to resize track height"
+              >
+                <div className="absolute left-7 right-2 top-1/2 -translate-y-1/2 h-px bg-white/0 group-hover/track-resize:bg-white/35 transition-colors" />
+              </div>
             </div>
           )})}
           
@@ -1739,14 +2471,14 @@ function Timeline({ onOpenAudioGenerate }) {
             const isDropTarget = trackDragState?.trackType === 'audio' && trackDropTarget === index && !isDragging
             
             const isStereo = track.type === 'audio' && track.channels !== 'mono'
-            const headerHeight = track.type === 'video' ? 48 : getAudioTrackHeight(track)
+            const headerHeight = getTrackHeight(track)
             
             return (
             <div 
               key={track.id}
               onClick={() => setActiveTrack(track.id)}
               title={activeTrackId === track.id ? 'Active track — press X to split at playhead' : 'Click to set as active track (X cuts at playhead on this track)'}
-              className={`flex flex-col px-2 gap-0 border-b border-sf-dark-700 hover:bg-sf-dark-800 transition-colors group/track cursor-pointer ${
+              className={`relative flex flex-col px-2 gap-0 border-b border-sf-dark-700 hover:bg-sf-dark-800 transition-colors group/track cursor-pointer ${
                 track.locked ? 'bg-sf-dark-800/50' : ''
               } ${isDragging ? 'opacity-50 bg-sf-dark-700' : ''} ${isDropTarget ? 'border-t-2 border-t-purple-500' : ''}`}
               style={{ minHeight: headerHeight, height: headerHeight }}
@@ -1862,6 +2594,14 @@ function Timeline({ onOpenAudioGenerate }) {
                   <span>R</span>
                 </div>
               )}
+              {/* Drag bottom edge to resize track vertically */}
+              <div
+                className="absolute bottom-0 left-0 right-0 h-1.5 cursor-ns-resize z-30 group/track-resize"
+                onMouseDown={(e) => handleTrackResizeStart(e, track)}
+                title="Drag to resize track height"
+              >
+                <div className="absolute left-7 right-2 top-1/2 -translate-y-1/2 h-px bg-white/0 group-hover/track-resize:bg-white/35 transition-colors" />
+              </div>
             </div>
           )})}
           </div>
@@ -1870,7 +2610,7 @@ function Timeline({ onOpenAudioGenerate }) {
         {/* Track Content Area */}
         <div 
           ref={timelineRef}
-          className={`flex-1 overflow-x-auto overflow-y-hidden relative bg-sf-dark-900 flex flex-col ${
+          className={`flex-1 min-h-0 overflow-x-auto overflow-y-hidden relative bg-sf-dark-900 flex flex-col ${
             isPanning ? 'cursor-grabbing select-none' : 
             isSpaceHeld ? 'cursor-grab' : 
             isScrubbing ? 'cursor-ew-resize select-none' : ''
@@ -1879,25 +2619,53 @@ function Timeline({ onOpenAudioGenerate }) {
           onWheel={handleWheel}
         >
           {/* Inner container that stretches to fill available space */}
-          <div className="min-w-full flex flex-col flex-1" style={{ width: `max(100%, ${duration * pixelsPerSecond}px)` }}>
-            {/* Time Ruler - Fixed at top */}
-            <div className="h-5 flex-shrink-0 bg-sf-dark-800 border-b border-sf-dark-700 flex items-end relative">
-            {timeMarkers.map((time) => (
-              <div
-                key={time}
-                className="absolute bottom-0 text-[10px] text-sf-text-muted"
-                style={{ left: `${time * pixelsPerSecond}px` }}
-              >
-                <div className="h-2 w-px bg-sf-dark-600 mb-0.5" />
-                <span className="ml-1">{time}s</span>
+          <div className="min-w-full flex flex-col flex-1 min-h-0" style={{ width: `max(100%, ${duration * pixelsPerSecond}px)` }}>
+            {/* Time Ruler - professional timecode style */}
+            <div
+              className="h-5 flex-shrink-0 bg-gradient-to-b from-sf-dark-800 to-sf-dark-900 border-b border-sf-dark-700 relative select-none"
+              onDoubleClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                const time = getTimeFromMouseEvent(e)
+                addMarker(time)
+                setPlayheadPosition(time)
+              }}
+              title="Double-click to add marker"
+            >
+              {/* Minor ticks */}
+              {rulerTicks.minor.map((time) => (
+                <div
+                  key={`minor-${time}`}
+                  className="absolute bottom-0 w-px h-1.5 bg-sf-dark-600/80 pointer-events-none"
+                  style={{ left: `${time * pixelsPerSecond}px` }}
+                />
+              ))}
+
+              {/* Major ticks + timecode labels */}
+              {rulerTicks.major.map((time) => (
+                <div
+                  key={`major-${time}`}
+                  className="absolute top-0 bottom-0 pointer-events-none"
+                  style={{ left: `${time * pixelsPerSecond}px` }}
+                >
+                  <div className="absolute bottom-0 w-px h-2.5 bg-sf-dark-500/95" />
+                  <span className="absolute top-0.5 left-1 text-[9px] text-sf-text-muted font-mono tracking-tight whitespace-nowrap">
+                    {formatTimelineTimecode(time)}
+                  </span>
+                </div>
+              ))}
+
+              {/* FPS indicator on far right */}
+              <div className="absolute top-0.5 right-1 text-[8px] text-sf-text-muted/80 font-mono pointer-events-none">
+                {Math.round(timecodeFps)} fps
               </div>
-            ))}
-          </div>
+            </div>
 
           {/* Scrollable tracks container */}
           <div 
             ref={trackContentRef}
-            className="flex-1 overflow-y-auto overflow-x-hidden"
+            className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden hide-scrollbar"
+            style={{ scrollbarWidth: 'none' }}
             onScroll={(e) => {
               // Sync scroll with track headers
               if (trackHeadersRef.current) {
@@ -1908,15 +2676,17 @@ function Timeline({ onOpenAudioGenerate }) {
           {/* Video Tracks Content */}
           {videoTracks.map((track) => {
             const trackClips = clips.filter(c => c.trackId === track.id)
+            const contentHeight = getTrackHeight(track)
             
             return (
               <div 
                 key={track.id}
-                className={`h-12 border-b border-sf-dark-700 relative ${
+                className={`border-b border-sf-dark-700 relative ${
                   !track.visible ? 'opacity-40' : ''
                 } ${track.locked ? 'pointer-events-none opacity-50 bg-sf-dark-800' : ''} ${
                   dropTarget === track.id ? 'bg-sf-accent/10' : track.locked ? '' : 'bg-sf-dark-900'
                 }`}
+                style={{ minHeight: contentHeight, height: contentHeight }}
                 onDragOver={(e) => handleDragOver(e, track.id)}
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, track.id)}
@@ -1937,6 +2707,8 @@ function Timeline({ onOpenAudioGenerate }) {
                     className={`absolute top-0.5 bottom-0.5 rounded-sm cursor-grab group overflow-hidden ${
                       selectedClipIds.includes(clip.id) ? 'ring-2 ring-white ring-offset-1 ring-offset-sf-dark-900' : ''
                     } ${trimState?.clipId === clip.id ? 'ring-2 ring-sf-accent' : ''} ${
+                      slipState?.clipId === clip.id ? 'ring-2 ring-yellow-400 cursor-ew-resize z-30' : ''
+                    } ${
                       clipDragState && (clipDragState.clipId === clip.id || (selectedClipIds.includes(clip.id) && selectedClipIds.includes(clipDragState.clipId)))
                         ? 'ring-2 ring-sf-accent cursor-grabbing z-30' : ''
                     }`}
@@ -2052,32 +2824,42 @@ function Timeline({ onOpenAudioGenerate }) {
                           </div>
                         )}
                         
-                        {/* Gradient overlay for text readability */}
+                        {/* Gradient overlay for top badges readability */}
                         <div className="absolute inset-x-0 top-[3px] h-6 bg-gradient-to-b from-black/60 to-transparent pointer-events-none" />
                         
-                        {/* Image badge - top left */}
+                        {/* Image badge + AI/IMP tag - top left */}
                         <div className="absolute top-1 left-1 z-10 flex items-center gap-1">
                           <div className="bg-purple-500/80 rounded px-1 py-0.5 flex items-center gap-0.5">
                             <ImageIcon className="w-2.5 h-2.5 text-white" />
                             <span className="text-[8px] text-white font-medium">IMG</span>
                           </div>
+                          {clip.assetId && (() => {
+                            const asset = getAssetById(clip.assetId)
+                            if (!asset) return null
+                            return (
+                              <div className={`rounded px-1 py-0.5 text-[8px] text-white font-medium ${asset.isImported ? 'bg-sf-dark-700/90' : 'bg-sf-accent/90'}`} title={asset.isImported ? 'Imported' : 'AI Generated'}>
+                                {asset.isImported ? 'IMP' : 'AI'}
+                              </div>
+                            )
+                          })()}
                         </div>
                         
-                        {/* Clip label */}
-                        <div className="absolute top-1 left-12 right-6 z-10">
-                          <span className="text-[10px] text-white font-medium truncate block drop-shadow-md">
+                        {/* Bottom name strip (Resolve-style) */}
+                        <div className="absolute inset-x-0 bottom-0 h-[14px] bg-[#3a6584]/95 border-t border-black/45 pointer-events-none" />
+                        <div className="absolute bottom-[1px] left-1.5 right-12 z-10">
+                          <span className="text-[10px] text-white/95 font-medium truncate block leading-none drop-shadow-sm">
                             {clip.name}
                           </span>
                         </div>
-                        
+
                         {/* Duration badge - bottom right */}
-                        <div className="absolute bottom-1 right-1 px-1 py-0.5 bg-black/60 rounded text-[8px] text-white/90 font-mono">
+                        <div className="absolute bottom-[1px] right-1 px-1 py-0 rounded bg-black/55 text-[8px] text-white/90 font-mono leading-none">
                           {clip.duration.toFixed(1)}s
                         </div>
                         
                         {/* Keyframe markers */}
                         {clip.keyframes && Object.keys(clip.keyframes).length > 0 && (
-                          <div className="absolute bottom-[3px] left-0 right-0 h-2 pointer-events-none">
+                          <div className="absolute bottom-[15px] left-0 right-0 h-2 pointer-events-none">
                             {getAllKeyframeTimes(clip.keyframes).map((kf, i) => (
                               <div
                                 key={`kf-${i}-${kf.time}`}
@@ -2126,14 +2908,20 @@ function Timeline({ onOpenAudioGenerate }) {
                           </div>
                         )}
                         
-                        {/* Gradient overlay for text readability */}
+                        {/* Gradient overlay for top badges readability */}
                         <div className="absolute inset-x-0 top-[3px] h-6 bg-gradient-to-b from-black/60 to-transparent pointer-events-none" />
                         
-                        {/* Clip label - top left */}
-                        <div className="absolute top-1 left-1.5 right-6 z-10">
-                          <span className="text-[10px] text-white font-medium truncate block drop-shadow-md">
-                            {clip.name}
-                          </span>
+                        {/* AI/IMP tag - top left */}
+                        <div className="absolute top-1 left-1.5 right-6 z-10 flex items-center gap-1.5 flex-wrap">
+                          {clip.assetId && (() => {
+                            const asset = getAssetById(clip.assetId)
+                            if (!asset) return null
+                            return (
+                              <div className={`rounded px-1 py-0.5 text-[8px] text-white font-medium flex-shrink-0 ${asset.isImported ? 'bg-sf-dark-700/90' : 'bg-sf-accent/90'}`} title={asset.isImported ? 'Imported' : 'AI Generated'}>
+                                {asset.isImported ? 'IMP' : 'AI'}
+                              </div>
+                            )
+                          })()}
                         </div>
                         
                         {/* Effects/Cache indicator - top right area */}
@@ -2162,14 +2950,22 @@ function Timeline({ onOpenAudioGenerate }) {
                           </div>
                         )}
                         
+                        {/* Bottom name strip (Resolve-style) */}
+                        <div className="absolute inset-x-0 bottom-0 h-[14px] bg-[#3a6584]/95 border-t border-black/45 pointer-events-none" />
+                        <div className="absolute bottom-[1px] left-1.5 right-12 z-10">
+                          <span className="text-[10px] text-white/95 font-medium truncate block leading-none drop-shadow-sm">
+                            {clip.name}
+                          </span>
+                        </div>
+
                         {/* Duration badge - bottom right */}
-                        <div className="absolute bottom-1 right-1 px-1 py-0.5 bg-black/60 rounded text-[8px] text-white/90 font-mono">
+                        <div className="absolute bottom-[1px] right-1 px-1 py-0 rounded bg-black/55 text-[8px] text-white/90 font-mono leading-none">
                           {clip.duration.toFixed(1)}s
                         </div>
                         
                         {/* Keyframe markers */}
                         {clip.keyframes && Object.keys(clip.keyframes).length > 0 && (
-                          <div className="absolute bottom-[3px] left-0 right-0 h-2 pointer-events-none">
+                          <div className="absolute bottom-[15px] left-0 right-0 h-2 pointer-events-none">
                             {getAllKeyframeTimes(clip.keyframes).map((kf, i) => (
                               <div
                                 key={`kf-${i}-${kf.time}`}
@@ -2214,66 +3010,132 @@ function Timeline({ onOpenAudioGenerate }) {
                 })}
                 
                 {/* Roll edit zones and transition buttons/overlays between adjacent clips */}
-                {getAdjacentClips(track.id).map(({ clipA, clipB, transition, isOverlapping }) => {
+                {getAdjacentClips(track.id).map(({ clipA, clipB, transition, isOverlapping, gap }) => {
                   const clipAEnd = clipA.startTime + clipA.duration
+                  const canRollEdit = isOverlapping || Math.abs(gap) <= ROLL_EDIT_MAX_GAP_SECONDS
                   
                   if (transition && isOverlapping) {
-                    // Show transition overlay zone for overlapping clips
+                    // Resolve-like transition tile over the overlap area.
                     const overlapStart = clipB.startTime
                     const overlapEnd = clipAEnd
                     const overlapWidth = (overlapEnd - overlapStart) * pixelsPerSecond
                     const overlapX = overlapStart * pixelsPerSecond
-                    const centerX = overlapX + overlapWidth / 2
-                    
+                    const isSelected = selectedTransitionId === transition.id
+                    const transitionMeta = TRANSITION_TYPES.find(t => t.id === transition.type)
+                    const transitionName = transitionMeta?.name || transition.type
+                    const transitionFrames = Math.round(transition.duration * FRAME_RATE)
+
                     return (
                       <div
                         key={`transition-${clipA.id}-${clipB.id}`}
-                        className="absolute top-0 bottom-0 z-25 pointer-events-none"
+                        className={`absolute top-0 bottom-[14px] z-25 pointer-events-auto cursor-pointer group/trans ${
+                          isSelected ? 'ring-2 ring-white/80 ring-inset shadow-[0_0_0_1px_rgba(255,255,255,0.4)]' : ''
+                        }`}
                         style={{ left: `${overlapX}px`, width: `${overlapWidth}px` }}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          selectTransition(transition.id)
+                        }}
+                        title={`${transitionName} (${transitionFrames}f)`}
                       >
-                        {/* Transition overlap visualization - diagonal stripes */}
-                        <div 
-                          className="absolute inset-0 opacity-40"
-                          style={{
-                            background: `repeating-linear-gradient(
-                              -45deg,
-                              transparent,
-                              transparent 3px,
-                              rgba(139, 92, 246, 0.5) 3px,
-                              rgba(139, 92, 246, 0.5) 6px
-                            )`
-                          }}
-                        />
-                        
-                        {/* Edit point marker (center of transition) */}
-                        <div 
-                          className="absolute top-0 bottom-0 w-px bg-purple-400"
-                          style={{ left: `${overlapWidth / 2}px` }}
-                        />
-                        
-                        {/* Transition controls - centered on the overlap */}
-                        <div 
-                          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-auto group/trans"
-                        >
-                          {/* Transition icon button */}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              removeTransition(transition.id)
+                        {/* Resolve-style: dark grey-black overlay container with visible border */}
+                        <div className="absolute inset-0 overflow-hidden border border-[#4a4a4a]/90 bg-[#1a1a1a]/85 rounded-[2px]">
+                          {/* Left/Right preview panes (clip A + clip B) - visible through overlay */}
+                          <div className="absolute inset-0 flex">
+                            <div className="relative h-full w-1/2 overflow-hidden">
+                              {renderTransitionPreviewPane(clipA, 'left')}
+                              <div className="absolute inset-0 bg-gradient-to-r from-black/30 to-transparent pointer-events-none" />
+                            </div>
+                            <div className="relative h-full w-1/2 overflow-hidden">
+                              {renderTransitionPreviewPane(clipB, 'right')}
+                              <div className="absolute inset-0 bg-gradient-to-l from-black/30 to-transparent pointer-events-none" />
+                            </div>
+                          </div>
+
+                          {/* Center dissolve gradient + center edit line */}
+                          <div
+                            className="absolute inset-0 pointer-events-none"
+                            style={{
+                              background: 'linear-gradient(90deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.2) 50%, rgba(255,255,255,0.06) 100%)'
                             }}
-                            className="w-6 h-6 rounded-full bg-purple-600 flex items-center justify-center hover:bg-sf-error transition-colors shadow-lg"
-                            title={`${transition.type} (${Math.round(transition.duration * FRAME_RATE)} frames) - Click to remove`}
-                          >
-                            <span className="text-[10px] text-white">
-                              {TRANSITION_TYPES.find(t => t.id === transition.type)?.icon || '⚪'}
-                            </span>
-                          </button>
-                          
-                          {/* Duration label */}
-                          <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[9px] text-purple-300 whitespace-nowrap bg-sf-dark-800/80 px-1 rounded">
-                            {Math.round(transition.duration * FRAME_RATE)}f
+                          />
+                          <div
+                            className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[1px] bg-white/80 pointer-events-none"
+                            style={{ boxShadow: '0 0 0 1px rgba(0,0,0,0.3)' }}
+                          />
+
+                          {/* Diagonal line: bottom-left to top-right (dissolve icon) - SVG so it's never clipped */}
+                          <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+                            <line x1="0" y1="100" x2="100" y2="0" stroke="rgba(255,255,255,0.5)" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
+                          </svg>
+
+                          {/* Resolve-style top bar + vertical handle */}
+                          <div className="absolute top-0 left-0 right-0 h-1.5 bg-white/95 rounded-t-[2px] pointer-events-none flex justify-center">
+                            <div className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-1 h-2 bg-white rounded-sm shadow-sm" />
+                          </div>
+
+                          {/* Transition name - white text, prominent like Resolve */}
+                          <div className="absolute top-2 left-1/2 -translate-x-1/2 max-w-[90%] px-2 py-0.5 text-[10px] font-medium text-white leading-none truncate drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]">
+                            {transitionName}
+                          </div>
+
+                          {/* Duration in grey oval/pill like Resolve */}
+                          <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 text-[9px] text-[#b0b0b0] whitespace-nowrap bg-[#2d2d2d]/95 px-2 py-0.5 rounded-full border border-[#404040]/80 leading-none">
+                            {transitionFrames}f
                           </div>
                         </div>
+
+                        {/* Resize handles (left/right) */}
+                        <div
+                          className={`absolute left-0 top-0 bottom-0 w-3 flex items-center justify-start z-30 cursor-ew-resize ${
+                            isSelected ? 'opacity-100' : 'opacity-0 group-hover/trans:opacity-100'
+                          }`}
+                          onMouseDown={(e) => {
+                            e.stopPropagation()
+                            e.preventDefault()
+                            setTransitionDragState({
+                              transitionId: transition.id,
+                              startX: e.clientX,
+                              startDuration: transition.duration,
+                              edge: 'left',
+                            })
+                          }}
+                          title="Drag to adjust transition duration"
+                        >
+                          <div className="w-1 h-7 bg-white/90 rounded-r shadow-sm" />
+                        </div>
+                        <div
+                          className={`absolute right-0 top-0 bottom-0 w-3 flex items-center justify-end z-30 cursor-ew-resize ${
+                            isSelected ? 'opacity-100' : 'opacity-0 group-hover/trans:opacity-100'
+                          }`}
+                          onMouseDown={(e) => {
+                            e.stopPropagation()
+                            e.preventDefault()
+                            setTransitionDragState({
+                              transitionId: transition.id,
+                              startX: e.clientX,
+                              startDuration: transition.duration,
+                              edge: 'right',
+                            })
+                          }}
+                          title="Drag to adjust transition duration"
+                        >
+                          <div className="w-1 h-7 bg-white/90 rounded-l shadow-sm" />
+                        </div>
+
+                        {/* Remove transition button (hover/selected). */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            removeTransition(transition.id)
+                          }}
+                          className={`absolute top-1 right-1 w-5 h-5 rounded bg-sf-dark-800/90 border border-sf-dark-500 text-sf-text-muted hover:text-sf-error hover:border-sf-error transition-colors ${
+                            isSelected ? 'opacity-100' : 'opacity-0 group-hover/trans:opacity-100'
+                          }`}
+                          title="Remove transition"
+                        >
+                          ×
+                        </button>
                       </div>
                     )
                   }
@@ -2287,7 +3149,7 @@ function Timeline({ onOpenAudioGenerate }) {
                     <div
                       key={`edit-${clipA.id}-${clipB.id}`}
                       className={`absolute top-0 bottom-0 z-20 group/edit ${isDropTarget ? 'bg-purple-500/10' : ''}`}
-                      style={{ left: `${editPointX - 8}px`, width: '16px' }}
+                      style={{ left: `${editPointX - 6}px`, width: '12px' }}
                       onDragOver={(e) => {
                         const payload = parseTransitionDrop(e)
                         if (!payload) return
@@ -2310,6 +3172,7 @@ function Timeline({ onOpenAudioGenerate }) {
                         const existingTransition = getTransitionBetween(clipA.id, clipB.id)
                         if (existingTransition) {
                           updateTransition(existingTransition.id, { type, duration })
+                          selectTransition(existingTransition.id)
                         } else {
                           addTransition(clipA.id, clipB.id, type, duration)
                         }
@@ -2317,11 +3180,24 @@ function Timeline({ onOpenAudioGenerate }) {
                     >
                       {/* Roll edit handle */}
                       <div
-                        className="absolute inset-0 cursor-ew-resize flex items-center justify-center"
+                        className={`absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-1.5 flex items-center justify-center ${
+                          canRollEdit ? 'cursor-ew-resize' : 'pointer-events-none cursor-default'
+                        }`}
                         onMouseDown={(e) => {
+                          if (!canRollEdit) return
                           e.stopPropagation()
                           e.preventDefault()
                           saveToHistory()
+                          const clipATimeScale = getTimeScale(clipA)
+                          const clipBTimeScale = getTimeScale(clipB)
+                          const clipAOriginalTrimStart = clipA.trimStart || 0
+                          const clipBOriginalTrimStart = clipB.trimStart || 0
+                          const clipBOriginalTrimEnd = clipB.trimEnd
+                            ?? clipB.sourceDuration
+                            ?? (clipBOriginalTrimStart + clipB.duration * clipBTimeScale)
+                          const clipASourceDuration = Number.isFinite(Number(clipA.sourceDuration))
+                            ? Number(clipA.sourceDuration)
+                            : null
                           setRollEditState({
                             clipAId: clipA.id,
                             clipBId: clipB.id,
@@ -2329,12 +3205,18 @@ function Timeline({ onOpenAudioGenerate }) {
                             originalEditPoint: clipAEnd,
                             clipAOriginalDuration: clipA.duration,
                             clipBOriginalStart: clipB.startTime,
-                            clipBOriginalDuration: clipB.duration
+                            clipBOriginalDuration: clipB.duration,
+                            clipAOriginalTrimStart,
+                            clipASourceDuration,
+                            clipATimeScale,
+                            clipBOriginalTrimStart,
+                            clipBOriginalTrimEnd,
+                            clipBTimeScale,
                           })
                         }}
-                        title="Drag to roll edit (extend one clip, shorten the other)"
+                        title={canRollEdit ? 'Drag to roll edit (extend one clip, shorten the other)' : 'Roll edit available when clips touch'}
                       >
-                        <div className="w-0.5 h-full bg-white/0 group-hover/edit:bg-yellow-400/70 transition-colors" />
+                        <div className={`w-0.5 h-full transition-colors ${canRollEdit ? 'bg-white/0 group-hover/edit:bg-yellow-400/70' : 'bg-white/0'}`} />
                       </div>
                       
                       {/* Add transition button */}
@@ -2363,7 +3245,7 @@ function Timeline({ onOpenAudioGenerate }) {
           {audioTracks.map((track) => {
             const trackClips = clips.filter(c => c.trackId === track.id)
             const isStereoContent = track.channels !== 'mono'
-            const contentHeight = getAudioTrackHeight(track)
+            const contentHeight = getTrackHeight(track)
             
             return (
               <div 
@@ -2385,9 +3267,7 @@ function Timeline({ onOpenAudioGenerate }) {
                 )}
                 {trackClips.map((clip) => {
                   const clipWidth = clip.duration * pixelsPerSecond
-                  // Generate deterministic waveform based on clip id
-                  const waveformBars = Math.max(Math.floor(clipWidth / 3), 8)
-                  const seed = clip.id.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
+                  const clipUrl = getClipUrl(clip)
                   
                   return (
                   <div
@@ -2398,7 +3278,7 @@ function Timeline({ onOpenAudioGenerate }) {
                     onContextMenu={(e) => handleClipContextMenu(e, clip)}
                     className={`absolute top-0.5 bottom-0.5 rounded-sm cursor-grab group overflow-hidden ${
                       selectedClipIds.includes(clip.id) ? 'ring-2 ring-white ring-offset-1 ring-offset-sf-dark-900' : ''
-                    } ${clipDragState && (clipDragState.clipId === clip.id || (selectedClipIds.includes(clip.id) && selectedClipIds.includes(clipDragState.clipId)))
+                    } ${slipState?.clipId === clip.id ? 'ring-2 ring-yellow-400 cursor-ew-resize z-30' : ''} ${clipDragState && (clipDragState.clipId === clip.id || (selectedClipIds.includes(clip.id) && selectedClipIds.includes(clipDragState.clipId)))
                         ? 'ring-2 ring-sf-accent cursor-grabbing z-30' : ''}`}
                     style={{ 
                       left: `${clip.startTime * pixelsPerSecond}px`, 
@@ -2406,37 +3286,22 @@ function Timeline({ onOpenAudioGenerate }) {
                       minWidth: '24px',
                     }}
                   >
-                    {/* Clip background with color bar at top */}
+                    {/* Clip background + top accent (Resolve-style teal) */}
                     <div 
                       className="absolute inset-0"
-                      style={{ 
-                        backgroundColor: clip.color,
-                        opacity: 0.3
-                      }}
+                      style={{ backgroundColor: AUDIO_TRACK_BG }}
                     />
                     <div 
                       className="absolute inset-x-0 top-0 h-[3px]"
-                      style={{ backgroundColor: clip.color }}
+                      style={{ backgroundColor: AUDIO_CLIP_ACCENT }}
                     />
                     
-                    {/* Waveform visualization */}
-                    <div className="absolute inset-0 top-[3px] flex items-center px-0.5 gap-px overflow-hidden">
-                      {Array.from({ length: waveformBars }).map((_, i) => {
-                        // Pseudo-random but deterministic height based on index and seed
-                        const h = Math.abs(Math.sin(seed + i * 0.7) * 0.6 + Math.cos(seed * 0.3 + i * 1.2) * 0.4) * 70 + 15
-                        return (
-                          <div 
-                            key={i} 
-                            className="flex-1 min-w-[1px] max-w-[3px] rounded-sm"
-                            style={{ 
-                              height: `${h}%`,
-                              backgroundColor: clip.color,
-                              opacity: 0.8
-                            }}
-                          />
-                        )
-                      })}
-                    </div>
+                    {/* Real waveform visualization (Resolve-style colors) */}
+                    <AudioWaveformBars
+                      clip={clip}
+                      clipWidth={clipWidth}
+                      clipUrl={clipUrl}
+                    />
                     
                     {/* Clip label - top left with background */}
                     <div className="absolute top-[4px] left-1 right-5 z-10">
@@ -2475,22 +3340,34 @@ function Timeline({ onOpenAudioGenerate }) {
                 })}
                 
                 {/* Roll edit zones between adjacent audio clips */}
-                {getAdjacentClips(track.id).map(({ clipA, clipB }) => {
+                {getAdjacentClips(track.id).map(({ clipA, clipB, isOverlapping, gap }) => {
+                  const canRollEdit = isOverlapping || Math.abs(gap) <= ROLL_EDIT_MAX_GAP_SECONDS
+                  if (!canRollEdit) return null
                   const editPointX = (clipA.startTime + clipA.duration) * pixelsPerSecond
                   
                   return (
                     <div
                       key={`edit-${clipA.id}-${clipB.id}`}
                       className="absolute top-0 bottom-0 z-20 group/edit"
-                      style={{ left: `${editPointX - 8}px`, width: '16px' }}
+                      style={{ left: `${editPointX - 6}px`, width: '12px' }}
                     >
                       {/* Roll edit handle */}
                       <div
-                        className="absolute inset-0 cursor-ew-resize flex items-center justify-center"
+                        className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-1.5 cursor-ew-resize flex items-center justify-center"
                         onMouseDown={(e) => {
                           e.stopPropagation()
                           e.preventDefault()
                           saveToHistory()
+                          const clipATimeScale = getTimeScale(clipA)
+                          const clipBTimeScale = getTimeScale(clipB)
+                          const clipAOriginalTrimStart = clipA.trimStart || 0
+                          const clipBOriginalTrimStart = clipB.trimStart || 0
+                          const clipBOriginalTrimEnd = clipB.trimEnd
+                            ?? clipB.sourceDuration
+                            ?? (clipBOriginalTrimStart + clipB.duration * clipBTimeScale)
+                          const clipASourceDuration = Number.isFinite(Number(clipA.sourceDuration))
+                            ? Number(clipA.sourceDuration)
+                            : null
                           setRollEditState({
                             clipAId: clipA.id,
                             clipBId: clipB.id,
@@ -2498,7 +3375,13 @@ function Timeline({ onOpenAudioGenerate }) {
                             originalEditPoint: clipA.startTime + clipA.duration,
                             clipAOriginalDuration: clipA.duration,
                             clipBOriginalStart: clipB.startTime,
-                            clipBOriginalDuration: clipB.duration
+                            clipBOriginalDuration: clipB.duration,
+                            clipAOriginalTrimStart,
+                            clipASourceDuration,
+                            clipATimeScale,
+                            clipBOriginalTrimStart,
+                            clipBOriginalTrimEnd,
+                            clipBTimeScale,
                           })
                         }}
                         title="Drag to roll edit"
@@ -2528,6 +3411,48 @@ function Timeline({ onOpenAudioGenerate }) {
               }}
             />
           )}
+
+          {/* Timeline Markers */}
+          {markers.map((marker, index) => {
+            const isSelected = marker.id === selectedMarkerId
+            const markerLabel = marker.label?.trim() || `M${index + 1}`
+            return (
+              <div
+                key={marker.id}
+                className="absolute top-0 bottom-0 z-[18] pointer-events-none"
+                style={{ left: `${marker.time * pixelsPerSecond}px` }}
+              >
+                <div className={`absolute top-0 bottom-0 w-px ${isSelected ? 'bg-yellow-300' : 'bg-yellow-500/70'}`} />
+                <button
+                  data-marker-handle="true"
+                  className={`absolute -top-0.5 left-1/2 -translate-x-1/2 w-3.5 h-3.5 pointer-events-auto transition-colors ${
+                    isSelected ? 'bg-yellow-300' : 'bg-yellow-500 hover:bg-yellow-400'
+                  }`}
+                  style={{ clipPath: 'polygon(50% 100%, 0 0, 100% 0)' }}
+                  onMouseDown={(e) => {
+                    e.stopPropagation()
+                    e.preventDefault()
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setPlayheadPosition(marker.time)
+                    selectMarker(marker.id)
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    removeMarker(marker.id)
+                  }}
+                  title={`${markerLabel} - ${formatTimelineTimecode(marker.time)} (right-click to remove)`}
+                />
+                {isSelected && (
+                  <div className="absolute top-3.5 left-1.5 text-[9px] px-1 py-0.5 rounded bg-black/70 text-yellow-200 whitespace-nowrap pointer-events-none font-mono">
+                    {markerLabel}
+                  </div>
+                )}
+              </div>
+            )
+          })}
           
           {/* In Point Marker */}
           {inPoint !== null && (
@@ -2602,17 +3527,20 @@ function Timeline({ onOpenAudioGenerate }) {
             />
             {/* Notch at active track (Flame-style) — aligns with primary track */}
             {activeTrackId && (() => {
-              const videoTrackHeight = 48
               const audioSectionHeight = 20
               const timeRulerHeight = 20
               const notchHeight = 10
+              const totalVideoTracksHeight = videoTracks.reduce((sum, track) => sum + getTrackHeight(track), 0)
               const vi = videoTracks.findIndex(t => t.id === activeTrackId)
               const ai = audioTracks.findIndex(t => t.id === activeTrackId)
               let centerY = 0
-              if (vi >= 0) centerY = timeRulerHeight + vi * videoTrackHeight + videoTrackHeight / 2
+              if (vi >= 0) {
+                const track = videoTracks[vi]
+                centerY = timeRulerHeight + getTrackOffset(videoTracks, vi) + getTrackHeight(track) / 2
+              }
               else if (ai >= 0) {
                 const track = audioTracks[ai]
-                centerY = timeRulerHeight + videoTracks.length * videoTrackHeight + audioSectionHeight + getAudioTrackOffset(audioTracks, ai) + getAudioTrackHeight(track) / 2
+                centerY = timeRulerHeight + totalVideoTracksHeight + audioSectionHeight + getTrackOffset(audioTracks, ai) + getTrackHeight(track) / 2
               }
               else return null
               const top = centerY - notchHeight / 2
@@ -2648,15 +3576,16 @@ function Timeline({ onOpenAudioGenerate }) {
         </div>
       </div>
       
-      {/* Transition Type Selection Menu (Portal) - Resolve-style */}
+      {/* Transition menu: single "Add transition" — change type/duration in Inspector */}
       {transitionMenu && (() => {
-        const availableDurations = getAvailableDurations()
         const maxDuration = getMaxTransitionDuration(transitionMenu.clipA.id, transitionMenu.clipB.id)
-        const maxFrames = Math.floor(maxDuration * FRAME_RATE)
-        
+        const preferredSeconds = defaultTransitionFrames / FRAME_RATE
+        const defaultSeconds = Math.min(preferredSeconds, Math.max(1 / FRAME_RATE, maxDuration))
+        const canAdd = maxDuration >= 1 / FRAME_RATE
+
         return (
           <div
-            className="fixed z-50 bg-sf-dark-800 border border-sf-dark-600 rounded-lg shadow-xl py-1 min-w-[200px]"
+            className="fixed z-50 bg-sf-dark-800 border border-sf-dark-600 rounded-lg shadow-xl py-1 min-w-[180px]"
             style={{ 
               left: `${transitionMenu.x}px`, 
               top: `${transitionMenu.y}px`,
@@ -2664,36 +3593,17 @@ function Timeline({ onOpenAudioGenerate }) {
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            {availableDurations.length > 0 ? (
-              <>
-                <div className="px-2 py-1 text-[10px] text-sf-text-muted uppercase tracking-wider border-b border-sf-dark-600 mb-1">
-                  Add Transition ({maxFrames} frames max)
-                </div>
-                {availableDurations.map((duration) => (
-                  <button
-                    key={duration.frames}
-                    onClick={() => handleSelectTransition('dissolve', duration.seconds)}
-                    className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
-                  >
-                    <span className="w-4 text-center">⚪</span>
-                    <span>Add {duration.frames} frame Cross Dissolve</span>
-                  </button>
-                ))}
-                <div className="h-px bg-sf-dark-600 my-1" />
-                <div className="px-2 py-1 text-[10px] text-sf-text-muted uppercase tracking-wider">
-                  Other Transitions
-                </div>
-                {TRANSITION_TYPES.filter(t => t.id !== 'dissolve').map((type) => (
-                  <button
-                    key={type.id}
-                    onClick={() => handleSelectTransition(type.id, availableDurations[1]?.seconds || availableDurations[0]?.seconds || 0.5)}
-                    className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
-                  >
-                    <span className="w-4 text-center">{type.icon}</span>
-                    <span>{type.name}</span>
-                  </button>
-                ))}
-              </>
+            <div className="px-3 py-2 text-[10px] text-sf-text-muted uppercase tracking-wider border-b border-sf-dark-600">
+              Add transition
+            </div>
+            {canAdd ? (
+              <button
+                onClick={() => handleSelectTransition('dissolve', defaultSeconds)}
+                className="w-full px-3 py-2.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
+              >
+                <span className="w-4 text-center">⚪</span>
+                <span>Add transition</span>
+              </button>
             ) : (
               <div className="px-3 py-2 text-xs text-sf-text-muted">
                 <div className="flex items-center gap-2 mb-1">
@@ -2825,6 +3735,25 @@ function Timeline({ onOpenAudioGenerate }) {
             <span className="w-4 text-center">📋</span>
             <span>Duplicate</span>
             <span className="ml-auto text-sf-text-muted text-[10px]">⌘D</span>
+          </button>
+          <button
+            onClick={() => { copySelectedClips(); setClipContextMenu(null) }}
+            className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
+            title="Copy selected clips to paste at playhead"
+          >
+            <span className="w-4 text-center">⎘</span>
+            <span>Copy</span>
+            <span className="ml-auto text-sf-text-muted text-[10px]">Ctrl+C</span>
+          </button>
+          <button
+            onClick={() => { pasteClipsAtPlayhead(activeTrackId, playheadPosition, assets); setClipContextMenu(null) }}
+            disabled={!activeTrackId || copiedClips.length === 0}
+            className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Paste at playhead on active track"
+          >
+            <span className="w-4 text-center">⎘</span>
+            <span>Paste at Playhead</span>
+            <span className="ml-auto text-sf-text-muted text-[10px]">Ctrl+V</span>
           </button>
           
           <div className="h-px bg-sf-dark-600 my-1" />
