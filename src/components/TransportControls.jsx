@@ -192,7 +192,10 @@ function TransportControls() {
       }
       
       // Enter = Play (start playback; only when not already playing)
+      // Skip when keydown target is an input/textarea so inspector number fields don't trigger play
       if (e.key === 'Enter' && !e.repeat) {
+        const target = e.target
+        if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return
         if (hasContent && !isPlaying) {
           e.preventDefault()
           togglePlay()

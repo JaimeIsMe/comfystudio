@@ -106,6 +106,8 @@ function DraggableNumberInput({ value, onChange, onCommit, min, max, step = 1, s
   
   const handleInputKeyDown = (e) => {
     if (e.key === 'Enter') {
+      e.preventDefault()
+      e.stopPropagation()
       handleInputBlur()
     } else if (e.key === 'Escape') {
       setIsEditing(false)
