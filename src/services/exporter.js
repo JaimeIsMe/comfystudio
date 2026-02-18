@@ -1,6 +1,7 @@
 import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
+import { getAnimatedTransform } from '../utils/keyframes'
 
 const DEFAULT_SAMPLE_RATE = 44100
 const AUDIO_FETCH_TIMEOUT_MS = 15000
@@ -53,6 +54,17 @@ const waitForEvent = (target, eventName) => new Promise((resolve, reject) => {
   target.addEventListener(eventName, onSuccess, { once: true })
   target.addEventListener('error', onError, { once: true })
 })
+
+const getMediaErrorMessage = (err) => {
+  if (!err) return 'Unknown media error'
+  if (typeof err === 'string') return err
+  if (err?.message) return err.message
+  const targetError = err?.target?.error
+  if (targetError?.message) return targetError.message
+  if (targetError?.code != null) return `Media error code ${targetError.code}`
+  if (err?.type) return `Media event: ${err.type}`
+  return String(err)
+}
 
 /** Yield to the event loop so the UI can repaint and avoid the window going black during export */
 const yieldToMain = () => new Promise(resolve => requestAnimationFrame(resolve))
@@ -118,10 +130,16 @@ const seekVideo = async (video, time, fastSeek = true) => {
   
   // Wait for seek to complete
   if (video.seeking) {
-    await Promise.race([
-      waitForEvent(video, 'seeked'),
-      new Promise((resolve) => setTimeout(resolve, 2000))
-    ])
+    try {
+      await Promise.race([
+        waitForEvent(video, 'seeked'),
+        new Promise((resolve) => setTimeout(resolve, 2000))
+      ])
+    } catch (err) {
+      // Some media elements dispatch transient demux/decode errors while seeking.
+      // Keep export running and let draw step decide whether to skip this frame.
+      console.warn('[Export] Seek warning:', getMediaErrorMessage(err))
+    }
   }
 
   // Fast mode: minimal wait, may be less accurate
@@ -181,7 +199,9 @@ const getTransitionCanvasStyle = (transitionInfo, isVideoA) => {
   if (effectiveIsVideoA) {
     switch (type) {
       case 'dissolve':
-        return { ...base, opacity: 1 - progress }
+        // Keep outgoing clip fully opaque and fade incoming over it.
+        // Fading both layers in source-over darkens the midpoint.
+        return { ...base, opacity: 1 }
       case 'fade-black':
       case 'fade-white':
         return { ...base, opacity: progress < 0.5 ? 1 - progress * 2 : 0 }
@@ -553,6 +573,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   const ctx = canvas.getContext('2d', { alpha: false })
   
   const videoElements = new Map()
+  const failedVideoSources = new Set()
   const imageElements = new Map()
   const maskElements = new Map()
   const maskRenderBuffers = new Map()
@@ -595,9 +616,17 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       const overrideUrl = cachedVideoSources.get(clip.id)
       const sourceUrl = overrideUrl || resolvedUrl
       if (!sourceUrl) continue
-      if (!videoElements.has(sourceUrl)) {
-        const video = await loadVideo(sourceUrl)
-        videoElements.set(sourceUrl, video)
+      if (!videoElements.has(sourceUrl) && !failedVideoSources.has(sourceUrl)) {
+        try {
+          const video = await loadVideo(sourceUrl)
+          if (!video.videoWidth || !video.videoHeight) {
+            throw new Error('Source has no decodable video stream')
+          }
+          videoElements.set(sourceUrl, video)
+        } catch (err) {
+          failedVideoSources.add(sourceUrl)
+          console.warn('[Export] Skipping undecodable video source:', sourceUrl, getMediaErrorMessage(err))
+        }
       }
     } else if (clip.type === 'image') {
       if (!imageElements.has(resolvedUrl)) {
@@ -653,7 +682,8 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       const isVideoB = transitionInfo?.clipB?.id === clip.id || (transitionInfo?.clip?.id === clip.id && transitionInfo?.edge === 'in')
       const transitionStyle = (isVideoA || isVideoB) ? getTransitionCanvasStyle(transitionInfo, isVideoA) : null
       
-      const clipTransform = clip.transform || {}
+      const clipTime = time - clip.startTime
+      const clipTransform = getAnimatedTransform(clip, clipTime) || clip.transform || {}
       const asset = assetsState.getAssetById(clip.assetId)
       const cachedSourceUrl = cachedVideoSources.get(clip.id)
       const usingCachedRender = !!cachedSourceUrl
@@ -670,11 +700,13 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       
       if (clip.type === 'video') {
         const sourceUrl = cachedSourceUrl || resolvedAssetUrls.get(clip.assetId) || asset?.url
+        if (sourceUrl && failedVideoSources.has(sourceUrl)) {
+          continue
+        }
         const video = sourceUrl ? videoElements.get(sourceUrl) : null
         if (!video) continue
         
         // Calculate source time matching preview logic
-        const clipTime = time - clip.startTime
         const baseScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
           ? clip.timelineFps / clip.sourceFps
           : 1)
@@ -703,7 +735,13 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
 
         shouldBlend = !!(sourceFps && sourceFps < fps - 0.5 && !maskEffect)
         if (!shouldBlend) {
-          await seekVideo(video, clampedSourceTime, fastSeek)
+          try {
+            await seekVideo(video, clampedSourceTime, fastSeek)
+          } catch (err) {
+            if (sourceUrl) failedVideoSources.add(sourceUrl)
+            console.warn('[Export] Failed to seek source video, skipping clip frame:', getMediaErrorMessage(err))
+            continue
+          }
         }
         sourceWidth = video.videoWidth || sourceWidth
         sourceHeight = video.videoHeight || sourceHeight
@@ -725,8 +763,12 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       
       ctx.save()
       ctx.globalAlpha = clipOpacity
-      ctx.filter = transitionStyle?.blur ? `blur(${transitionStyle.blur}px)` : 'none'
-      
+      const blurPx = transitionStyle?.blur ?? (clipTransform?.blur > 0 ? clipTransform.blur : null)
+      ctx.filter = blurPx != null ? `blur(${blurPx}px)` : 'none'
+      // Blend mode (CSS mix-blend-mode → canvas globalCompositeOperation)
+      const blendMode = clipTransform?.blendMode || 'normal'
+      ctx.globalCompositeOperation = blendMode === 'normal' ? 'source-over' : blendMode
+
       applyClipTransform(ctx, rect, clipTransform, transitionStyle)
       applyClipCrop(ctx, rect, clipTransform)
       applyTransitionClip(ctx, rect, transitionStyle)
@@ -738,14 +780,24 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         const nextTime = Math.min(baseTime + sourceFrameDuration, (maxSourceTime ?? sourceTime) - 0.001)
         const blend = clamp((sourceTime - baseTime) / sourceFrameDuration, 0, 1)
 
-        ctx.globalAlpha = clipOpacity * (1 - blend)
-        await seekVideo(videoElement, baseTime, fastSeek)
-        ctx.drawImage(videoElement, 0, 0, rect.width, rect.height)
-
-        if (blend > 0.001 && nextTime > baseTime + 1e-6) {
-          ctx.globalAlpha = clipOpacity * blend
-          await seekVideo(videoElement, nextTime, fastSeek)
+        try {
+          ctx.globalAlpha = clipOpacity * (1 - blend)
+          await seekVideo(videoElement, baseTime, fastSeek)
           ctx.drawImage(videoElement, 0, 0, rect.width, rect.height)
+
+          if (blend > 0.001 && nextTime > baseTime + 1e-6) {
+            ctx.globalAlpha = clipOpacity * blend
+            await seekVideo(videoElement, nextTime, fastSeek)
+            ctx.drawImage(videoElement, 0, 0, rect.width, rect.height)
+          }
+        } catch (err) {
+          console.warn('[Export] Failed blended seek/draw, skipping clip frame:', getMediaErrorMessage(err))
+          if (clip.type === 'video') {
+            const badSourceUrl = cachedVideoSources.get(clip.id) || resolvedAssetUrls.get(clip.assetId) || asset?.url
+            if (badSourceUrl) failedVideoSources.add(badSourceUrl)
+          }
+          ctx.restore()
+          continue
         }
 
         ctx.restore()
@@ -776,7 +828,8 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
           offCtx.clearRect(0, 0, width, height)
           offCtx.save()
           offCtx.globalAlpha = clipOpacity
-          offCtx.filter = transitionStyle?.blur ? `blur(${transitionStyle.blur}px)` : 'none'
+          const blurPxMask = transitionStyle?.blur ?? (clipTransform?.blur > 0 ? clipTransform.blur : null)
+          offCtx.filter = blurPxMask != null ? `blur(${blurPxMask}px)` : 'none'
           applyClipTransform(offCtx, rect, clipTransform, transitionStyle)
           applyClipCrop(offCtx, rect, clipTransform)
           applyTransitionClip(offCtx, rect, transitionStyle)
@@ -785,7 +838,8 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
           
           maskCtx.clearRect(0, 0, width, height)
           maskCtx.save()
-          maskCtx.filter = transitionStyle?.blur ? `blur(${transitionStyle.blur}px)` : 'none'
+          const blurPxMask2 = transitionStyle?.blur ?? (clipTransform?.blur > 0 ? clipTransform.blur : null)
+          maskCtx.filter = blurPxMask2 != null ? `blur(${blurPxMask2}px)` : 'none'
           applyClipTransform(maskCtx, rect, clipTransform, transitionStyle)
           applyClipCrop(maskCtx, rect, clipTransform)
           applyTransitionClip(maskCtx, rect, transitionStyle)
@@ -817,10 +871,15 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     
     for (const { clip } of activeClips.filter(({ clip }) => clip.type === 'text')) {
       const rect = getBaseDrawRect(width, height, width, height)
-      const baseOpacity = typeof clip.transform?.opacity === 'number' ? clip.transform.opacity / 100 : 1
+      const clipTime = time - clip.startTime
+      const clipTransform = getAnimatedTransform(clip, clipTime) || clip.transform || {}
+      const baseOpacity = typeof clipTransform.opacity === 'number' ? clipTransform.opacity / 100 : 1
+      const blendMode = clipTransform.blendMode || 'normal'
       ctx.save()
       ctx.globalAlpha = baseOpacity
-      applyClipTransform(ctx, rect, clip.transform || {}, null)
+      ctx.globalCompositeOperation = blendMode === 'normal' ? 'source-over' : blendMode
+      ctx.filter = clipTransform?.blur > 0 ? `blur(${clipTransform.blur}px)` : 'none'
+      applyClipTransform(ctx, rect, clipTransform, null)
       drawText(ctx, rect, clip)
       ctx.restore()
     }
@@ -867,81 +926,163 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     
     if (audioClips.length > 0 && activeTracks.length > 0) {
       const sampleRate = audioSampleRate || DEFAULT_SAMPLE_RATE
-      const totalSamples = Math.ceil(totalDuration * sampleRate)
       const channelCount = audioChannels || 2
-      const offlineContext = new OfflineAudioContext(channelCount, totalSamples, sampleRate)
-      
-      for (let index = 0; index < audioClips.length; index++) {
-        const clip = audioClips[index]
-        const track = timelineState.tracks.find(t => t.id === clip.trackId)
-        if (!track || track.muted || !track.visible) continue
-        const asset = assetsState.getAssetById(clip.assetId)
-        if (!asset?.url) continue
-        const audioUrl = await getExportAssetUrl(asset, projectHandle) || asset.url
+      const activeTrackIds = new Set(activeTracks.map(track => track.id))
+      const eligibleAudioClips = audioClips.filter(clip => activeTrackIds.has(clip.trackId))
+
+      // Preferred path: mix in main process with FFmpeg (avoids renderer OfflineAudioContext hangs).
+      if (window.electronAPI?.mixAudio && eligibleAudioClips.length > 0) {
+        let ffmpegMixHeartbeat = null
         try {
-          updateAudioStatus(`Loading clip ${index + 1}/${audioClips.length}: ${asset.name || asset.id}`, 81)
-          const response = await fetchWithTimeout(audioUrl, AUDIO_FETCH_TIMEOUT_MS)
-          const arrayBuffer = await withTimeout(response.arrayBuffer(), AUDIO_FETCH_TIMEOUT_MS, 'Audio buffer')
-          updateAudioStatus(`Decoding clip ${index + 1}/${audioClips.length}`, 82)
-          let audioBuffer = await withTimeout(
-            offlineContext.decodeAudioData(arrayBuffer),
-            AUDIO_DECODE_TIMEOUT_MS,
-            'Audio decode'
-          )
-          
-          // Mono track: downmix stereo (or multi) to one channel so the track is truly mono
-          const isMonoTrack = track.channels === 'mono'
-          if (isMonoTrack && audioBuffer.numberOfChannels >= 2) {
-            const monoBuffer = offlineContext.createBuffer(1, audioBuffer.length, audioBuffer.sampleRate)
-            const left = audioBuffer.getChannelData(0)
-            const right = audioBuffer.getChannelData(1)
-            const mono = monoBuffer.getChannelData(0)
-            for (let i = 0; i < audioBuffer.length; i++) {
-              mono[i] = (left[i] + right[i]) / 2
-            }
-            audioBuffer = monoBuffer
-          } else if (isMonoTrack && audioBuffer.numberOfChannels === 1) {
-            // Already mono, use as-is (will play to both L/R of output)
+          updateAudioStatus('Preparing FFmpeg audio mix…', 82)
+          ffmpegMixHeartbeat = setInterval(() => {
+            updateAudioStatus('Mixing audio…', 86)
+          }, 5000)
+          const mixResult = await window.electronAPI.mixAudio({
+            projectPath: projectHandle,
+            outputPath: audioPath,
+            rangeStart,
+            rangeEnd,
+            sampleRate,
+            channels: channelCount,
+            timeoutMs: AUDIO_MIX_TIMEOUT_MS,
+            clips: eligibleAudioClips.map(clip => ({
+              id: clip.id,
+              assetId: clip.assetId,
+              trackId: clip.trackId,
+              type: clip.type,
+              startTime: clip.startTime,
+              duration: clip.duration,
+              trimStart: clip.trimStart || 0,
+              sourceTimeScale: clip.sourceTimeScale,
+              timelineFps: clip.timelineFps,
+              sourceFps: clip.sourceFps,
+              speed: clip.speed,
+              reverse: clip.reverse,
+              url: clip.url || null,
+            })),
+            tracks: timelineState.tracks
+              .filter(track => track.type === 'audio')
+              .map(track => ({
+                id: track.id,
+                type: track.type,
+                muted: !!track.muted,
+                visible: track.visible !== false,
+                channels: track.channels || 'stereo',
+              })),
+            assets: assetsState.assets
+              .map(asset => ({
+                id: asset.id,
+                type: asset.type,
+                path: asset.path || null,
+                url: asset.url || null,
+              })),
+          })
+          if (ffmpegMixHeartbeat) clearInterval(ffmpegMixHeartbeat)
+          if (mixResult?.success) {
+            audioFilePath = audioPath
+            updateAudioStatus('Audio mix complete', 89)
+          } else {
+            throw new Error(mixResult?.error || 'FFmpeg audio mix failed')
           }
-          
-          const source = offlineContext.createBufferSource()
-          source.buffer = audioBuffer
-          
-          const startOffset = Math.max(0, clip.startTime - rangeStart)
-          const sourceOffset = clip.trimStart || 0
-          const playDuration = clamp(clip.duration, 0, audioBuffer.duration - sourceOffset)
-          
-          source.connect(offlineContext.destination)
-          source.start(startOffset, sourceOffset, playDuration)
         } catch (err) {
-          console.warn('Failed to decode audio clip for export:', err)
-          updateAudioStatus(`Failed clip ${index + 1}/${audioClips.length} (skipped)`, 82)
+          if (ffmpegMixHeartbeat) clearInterval(ffmpegMixHeartbeat)
+          console.warn('FFmpeg audio mix failed, falling back to WebAudio mix:', err)
+          audioFilePath = null
         }
-        await yieldToEventLoop()
       }
 
-      let renderHeartbeat = null
-      try {
-        updateAudioStatus('Rendering offline mix…', 86)
-        renderHeartbeat = setInterval(() => {
+      // Fallback path for environments where FFmpeg mix IPC is unavailable.
+      if (!audioFilePath) {
+        const totalSamples = Math.ceil(totalDuration * sampleRate)
+        const offlineContext = new OfflineAudioContext(channelCount, totalSamples, sampleRate)
+        const decodedAudioCache = new Map()
+        const resolvedAudioUrlCache = new Map()
+        
+        for (let index = 0; index < eligibleAudioClips.length; index++) {
+          const clip = eligibleAudioClips[index]
+          const track = timelineState.tracks.find(t => t.id === clip.trackId)
+          if (!track || track.muted || !track.visible) continue
+          const asset = assetsState.getAssetById(clip.assetId)
+          if (!asset?.url) continue
+          let audioUrl = resolvedAudioUrlCache.get(asset.id)
+          if (!audioUrl) {
+            audioUrl = await getExportAssetUrl(asset, projectHandle) || asset.url
+            resolvedAudioUrlCache.set(asset.id, audioUrl)
+          }
+          try {
+            updateAudioStatus(`Loading clip ${index + 1}/${eligibleAudioClips.length}: ${asset.name || asset.id}`, 81)
+            let audioBuffer = decodedAudioCache.get(audioUrl)
+            if (!audioBuffer) {
+              const response = await withTimeout(
+                fetchWithTimeout(audioUrl, AUDIO_FETCH_TIMEOUT_MS),
+                AUDIO_FETCH_TIMEOUT_MS + 2000,
+                'Audio fetch'
+              )
+              const arrayBuffer = await withTimeout(response.arrayBuffer(), AUDIO_FETCH_TIMEOUT_MS, 'Audio buffer')
+              updateAudioStatus(`Decoding clip ${index + 1}/${eligibleAudioClips.length}`, 82)
+              audioBuffer = await withTimeout(
+                offlineContext.decodeAudioData(arrayBuffer),
+                AUDIO_DECODE_TIMEOUT_MS,
+                'Audio decode'
+              )
+              decodedAudioCache.set(audioUrl, audioBuffer)
+            }
+            
+            // Mono track: downmix stereo (or multi) to one channel so the track is truly mono
+            const isMonoTrack = track.channels === 'mono'
+            if (isMonoTrack && audioBuffer.numberOfChannels >= 2) {
+              const monoBuffer = offlineContext.createBuffer(1, audioBuffer.length, audioBuffer.sampleRate)
+              const left = audioBuffer.getChannelData(0)
+              const right = audioBuffer.getChannelData(1)
+              const mono = monoBuffer.getChannelData(0)
+              for (let i = 0; i < audioBuffer.length; i++) {
+                mono[i] = (left[i] + right[i]) / 2
+              }
+              audioBuffer = monoBuffer
+            } else if (isMonoTrack && audioBuffer.numberOfChannels === 1) {
+              // Already mono, use as-is (will play to both L/R of output)
+            }
+            
+            const source = offlineContext.createBufferSource()
+            source.buffer = audioBuffer
+            
+            const startOffset = Math.max(0, clip.startTime - rangeStart)
+            const sourceOffset = clip.trimStart || 0
+            const playDuration = clamp(clip.duration, 0, audioBuffer.duration - sourceOffset)
+            
+            source.connect(offlineContext.destination)
+            source.start(startOffset, sourceOffset, playDuration)
+          } catch (err) {
+            console.warn('Failed to decode audio clip for export:', err)
+            updateAudioStatus(`Failed clip ${index + 1}/${eligibleAudioClips.length} (skipped)`, 82)
+          }
+          await yieldToEventLoop()
+        }
+
+        let renderHeartbeat = null
+        try {
           updateAudioStatus('Rendering offline mix…', 86)
-        }, 5000)
-        const mixedBuffer = await withTimeout(
-          offlineContext.startRendering(),
-          AUDIO_MIX_TIMEOUT_MS,
-          'Audio mix'
-        )
-        if (renderHeartbeat) clearInterval(renderHeartbeat)
-        updateAudioStatus('Writing WAV…', 88)
-        const wavData = audioBufferToWav(mixedBuffer)
-        await window.electronAPI.writeFileFromArrayBuffer(audioPath, wavData)
-        audioFilePath = audioPath
-        updateAudioStatus('Audio mix complete', 89)
-      } catch (err) {
-        if (renderHeartbeat) clearInterval(renderHeartbeat)
-        console.warn('Audio mix failed or timed out, exporting video only:', err)
-        onProgress({ status: 'Audio mix failed — exporting video only', progress: 85 })
-        audioFilePath = null
+          renderHeartbeat = setInterval(() => {
+            updateAudioStatus('Rendering offline mix…', 86)
+          }, 5000)
+          const mixedBuffer = await withTimeout(
+            offlineContext.startRendering(),
+            AUDIO_MIX_TIMEOUT_MS,
+            'Audio mix'
+          )
+          if (renderHeartbeat) clearInterval(renderHeartbeat)
+          updateAudioStatus('Writing WAV…', 88)
+          const wavData = audioBufferToWav(mixedBuffer)
+          await window.electronAPI.writeFileFromArrayBuffer(audioPath, wavData)
+          audioFilePath = audioPath
+          updateAudioStatus('Audio mix complete', 89)
+        } catch (err) {
+          if (renderHeartbeat) clearInterval(renderHeartbeat)
+          console.warn('Audio mix failed or timed out, exporting video only:', err)
+          onProgress({ status: 'Audio mix failed — exporting video only', progress: 85 })
+          audioFilePath = null
+        }
       }
     } else {
       updateAudioStatus('No audio clips to mix', 85)

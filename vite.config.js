@@ -95,6 +95,28 @@ export default defineConfig({
           });
         }
       },
+      '/workflow_templates': {
+        target: 'http://127.0.0.1:8188',
+        changeOrigin: true,
+        secure: false,
+        configure: (proxy, options) => {
+          proxy.on('proxyReq', (proxyReq, req, res) => {
+            proxyReq.setHeader('Origin', 'http://127.0.0.1:8188');
+            proxyReq.setHeader('Host', '127.0.0.1:8188');
+          });
+        }
+      },
+      '/extensions': {
+        target: 'http://127.0.0.1:8188',
+        changeOrigin: true,
+        secure: false,
+        configure: (proxy, options) => {
+          proxy.on('proxyReq', (proxyReq, req, res) => {
+            proxyReq.setHeader('Origin', 'http://127.0.0.1:8188');
+            proxyReq.setHeader('Host', '127.0.0.1:8188');
+          });
+        }
+      },
       '/ws': {
         target: 'ws://127.0.0.1:8188',
         ws: true,

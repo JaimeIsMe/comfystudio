@@ -2,11 +2,13 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   Sparkles, Video, Image as ImageIcon, Music, RefreshCw, Loader2,
   ChevronLeft, ChevronRight, Play, Pause, Upload, X, Film, Search,
-  FolderOpen, Wand2, Volume2, Mic, Clock, Settings
+  FolderOpen, Wand2, Volume2, Mic, Clock, Settings, Terminal, ChevronDown, ChevronUp, PenLine
 } from 'lucide-react'
+import ImageAnnotationModal from './ImageAnnotationModal'
 import useComfyUI from '../hooks/useComfyUI'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
+import { useFrameForAIStore } from '../stores/frameForAIStore'
 import { comfyui } from '../services/comfyui'
 import { importAsset, isElectron } from '../services/fileSystem'
 import { enqueuePlaybackTranscode } from '../services/playbackCache'
@@ -38,8 +40,10 @@ const WORKFLOWS = {
     { id: 'wan22-i2v', label: 'Image to Video (WAN 2.2)', needsImage: true, description: 'Animate an image into video' },
   ],
   image: [
-    { id: 'multi-angles', label: 'Multiple Angles', needsImage: true, description: 'Generate 8 camera angles from one image' },
-    { id: 'image-edit', label: 'Image Edit', needsImage: true, description: 'Edit image with text prompt (inflate, modify, etc.)' },
+    { id: 'z-image-turbo', label: 'Text to Image (Z Image Turbo)', needsImage: false, description: 'Generate image from text prompt using Z Image Turbo' },
+    { id: 'multi-angles', label: 'Multiple Angles (Characters)', needsImage: true, description: 'Generate 8 camera angles from one character image' },
+    { id: 'multi-angles-scene', label: 'Multiple Angles (Scenes)', needsImage: true, description: 'Generate 8 camera angles from one scene image' },
+    { id: 'image-edit', label: 'Image Edit', needsImage: true, description: 'Edit image with text prompt (e.g. remove person on left, change color of car)' },
   ],
   audio: [
     { id: 'music-gen', label: 'Music Generation', needsImage: false, description: 'Generate music from tags and lyrics' },
@@ -320,6 +324,12 @@ function GenerateWorkspace() {
   // Image edit settings
   const [editSteps, setEditSteps] = useState(persistedState?.editSteps || 40)
   const [editCfg, setEditCfg] = useState(persistedState?.editCfg || 4)
+  const [referenceAssetId1, setReferenceAssetId1] = useState(persistedState?.referenceAssetId1 ?? null)
+  const [referenceAssetId2, setReferenceAssetId2] = useState(persistedState?.referenceAssetId2 ?? null)
+  const [annotationModalOpen, setAnnotationModalOpen] = useState(false)
+  const [annotationInitialUrl, setAnnotationInitialUrl] = useState(null)
+  const [annotationPreparing, setAnnotationPreparing] = useState(false)
+  const annotationBlobUrlRef = useRef(null)
 
   // Music settings
   const [musicTags, setMusicTags] = useState(persistedState?.musicTags || '')
@@ -334,11 +344,33 @@ function GenerateWorkspace() {
   const processingRef = useRef(false)
   const queueRef = useRef([])
   const [formError, setFormError] = useState(null)
+  const [comfyLogExpanded, setComfyLogExpanded] = useState(false)
+  const [comfyLogLines, setComfyLogLines] = useState([])
+  const comfyLogEndRef = useRef(null)
+  const COMFY_LOG_MAX = 400
+  const addComfyLog = useCallback((type, msg) => {
+    const ts = new Date().toLocaleTimeString('en-GB', { hour12: false })
+    setComfyLogLines(prev => {
+      const next = [...prev, { ts, type, msg }]
+      return next.slice(-COMFY_LOG_MAX)
+    })
+  }, [])
 
   // Hooks
   const { isConnected, wsConnected, queueCount } = useComfyUI()
   const { addAsset, generateName, assets } = useAssetsStore()
   const { currentProjectHandle } = useProjectStore()
+  const frameForAI = useFrameForAIStore((s) => s.frame)
+  const clearFrameForAI = useFrameForAIStore((s) => s.clearFrame)
+
+  // When opened with timeline frame, switch to video i2v and use that frame as input
+  useEffect(() => {
+    if (frameForAI) {
+      setCategory('video')
+      setWorkflowId('ltx2-i2v')
+      setFormError(null)
+    }
+  }, [frameForAI?.blobUrl])
 
   // Restore selected asset from ID when assets are available
   useEffect(() => {
@@ -371,6 +403,8 @@ function GenerateWorkspace() {
         fps,
         editSteps,
         editCfg,
+        referenceAssetId1,
+        referenceAssetId2,
         musicTags,
         lyrics,
         musicDuration,
@@ -395,6 +429,8 @@ function GenerateWorkspace() {
     fps,
     editSteps,
     editCfg,
+    referenceAssetId1,
+    referenceAssetId2,
     musicTags,
     lyrics,
     musicDuration,
@@ -406,6 +442,56 @@ function GenerateWorkspace() {
   useEffect(() => {
     queueRef.current = generationQueue
   }, [generationQueue])
+
+  // Open annotation modal with current input image (or extracted video frame)
+  const openAnnotationModal = useCallback(async () => {
+    if (annotationBlobUrlRef.current) {
+      URL.revokeObjectURL(annotationBlobUrlRef.current)
+      annotationBlobUrlRef.current = null
+    }
+    if (!selectedAsset) {
+      setAnnotationInitialUrl(null)
+      setAnnotationModalOpen(true)
+      return
+    }
+    if (selectedAsset.type === 'image') {
+      setAnnotationInitialUrl(selectedAsset.url)
+      setAnnotationModalOpen(true)
+      return
+    }
+    if (selectedAsset.type === 'video') {
+      setAnnotationPreparing(true)
+      try {
+        const file = await extractFrameAsFile(selectedAsset.url, frameTime || 0, `frame_${Date.now()}.png`)
+        const url = URL.createObjectURL(file)
+        annotationBlobUrlRef.current = url
+        setAnnotationInitialUrl(url)
+        setAnnotationModalOpen(true)
+      } catch (e) {
+        console.error('Failed to extract frame for annotation', e)
+      }
+      setAnnotationPreparing(false)
+    } else {
+      setAnnotationInitialUrl(null)
+      setAnnotationModalOpen(true)
+    }
+  }, [selectedAsset, frameTime])
+
+  const closeAnnotationModal = useCallback(() => {
+    setAnnotationModalOpen(false)
+    if (annotationBlobUrlRef.current) {
+      URL.revokeObjectURL(annotationBlobUrlRef.current)
+      annotationBlobUrlRef.current = null
+    }
+  }, [])
+
+  const handleAnnotationUseAsRef = useCallback((blob, slot) => {
+    const url = URL.createObjectURL(blob)
+    const name = `Annotated ref ${slot}_${Date.now()}.png`
+    const newAsset = addAsset({ name, type: 'image', url })
+    if (slot === 1) setReferenceAssetId1(newAsset.id)
+    if (slot === 2) setReferenceAssetId2(newAsset.id)
+  }, [addAsset])
 
   // Current workflow info
   const currentWorkflow = useMemo(() => {
@@ -442,8 +528,9 @@ function GenerateWorkspace() {
   const queuedCount = queuedJobs.length
   const activeCount = activeJobs.length
 
-  // Calculate aspect ratio mismatch warning
+  // Calculate aspect ratio mismatch warning (only for workflows that use an input image)
   const aspectRatioWarning = useMemo(() => {
+    if (!currentWorkflow?.needsImage) return null
     if (!selectedAsset || !selectedAsset.settings) return null
     
     const inputWidth = selectedAsset.settings.width || selectedAsset.width
@@ -471,7 +558,7 @@ function GenerateWorkspace() {
     }
     
     return null
-  }, [selectedAsset, resolution])
+  }, [currentWorkflow?.needsImage, selectedAsset, resolution])
 
   // ============================================
   // Generation queue + handler
@@ -532,14 +619,60 @@ function GenerateWorkspace() {
     }
   }, [updateJobByPromptId])
 
+  // ComfyUI activity log (executing, complete, status, errors) for troubleshooting
+  const progressPercentRef = useRef({})
+  useEffect(() => {
+    const handleProgress = (data) => {
+      if (!data?.promptId) return
+      const pct = data.max > 0 ? Math.round((data.value / data.max) * 100) : 0
+      const key = data.promptId
+      const last = progressPercentRef.current[key]
+      if (last === undefined || pct - last >= 10 || pct === 100) {
+        progressPercentRef.current[key] = pct
+        addComfyLog('progress', `Prompt ${String(data.promptId).slice(0, 8)}… ${pct}%`)
+      }
+    }
+    const handleExecuting = (data) => {
+      if (!data?.promptId) return
+      addComfyLog('exec', data.node !== undefined ? `Executing node ${data.node}` : `Executing prompt ${String(data.promptId).slice(0, 8)}…`)
+    }
+    const handleExecuted = (data) => {
+      if (data?.node !== undefined) addComfyLog('exec', `Executed node ${data.node}`)
+    }
+    const handleComplete = (data) => {
+      if (data?.promptId) addComfyLog('ok', `Complete prompt ${String(data.promptId).slice(0, 8)}…`)
+    }
+    const handleStatus = (data) => {
+      if (data?.execution_info?.queue_remaining !== undefined) {
+        addComfyLog('status', `Queue: ${data.execution_info.queue_remaining} remaining`)
+      }
+    }
+    comfyui.on('progress', handleProgress)
+    comfyui.on('executing', handleExecuting)
+    comfyui.on('executed', handleExecuted)
+    comfyui.on('complete', handleComplete)
+    comfyui.on('status', handleStatus)
+    return () => {
+      comfyui.off('progress', handleProgress)
+      comfyui.off('executing', handleExecuting)
+      comfyui.off('executed', handleExecuted)
+      comfyui.off('complete', handleComplete)
+      comfyui.off('status', handleStatus)
+    }
+  }, [addComfyLog])
+  useEffect(() => {
+    if (comfyLogExpanded && comfyLogEndRef.current) comfyLogEndRef.current.scrollIntoView({ behavior: 'smooth' })
+  }, [comfyLogExpanded, comfyLogLines])
+
   const enqueueJob = useCallback((job) => {
     setGenerationQueue(prev => [...prev, job])
   }, [])
 
   const handleGenerate = () => {
     if (!isConnected) return
-    if (currentWorkflow?.needsImage && !selectedAsset) {
-      setFormError('Please select an input asset first')
+    const usingTimelineFrame = !!frameForAI?.file && (workflowId === 'ltx2-i2v' || workflowId === 'wan22-i2v')
+    if (currentWorkflow?.needsImage && !selectedAsset && !usingTimelineFrame) {
+      setFormError('Please select an input asset or use a timeline frame first')
       return
     }
 
@@ -567,8 +700,11 @@ function GenerateWorkspace() {
       musicDuration,
       bpm,
       keyscale,
-      inputAssetId: selectedAsset?.id || null,
-      inputAssetName: selectedAsset?.name || '',
+      inputAssetId: usingTimelineFrame ? null : (selectedAsset?.id || null),
+      inputAssetName: usingTimelineFrame ? 'Timeline frame' : (selectedAsset?.name || ''),
+      inputFromTimelineFrame: usingTimelineFrame,
+      referenceAssetId1: workflowId === 'image-edit' ? referenceAssetId1 : null,
+      referenceAssetId2: workflowId === 'image-edit' ? referenceAssetId2 : null,
       frameTime: frameTime || 0,
       status: 'queued',
       progress: 0,
@@ -583,6 +719,8 @@ function GenerateWorkspace() {
   // Poll for result
   const pollForResult = async (promptId, wfId, onProgress) => {
     const maxPolls = 600 // 10 minutes at 1s interval
+    let consecutivePollErrors = 0
+    const maxConsecutivePollErrors = 15
 
     // Helper: extract filename from various ComfyUI API formats (old dict-based and new SavedResult)
     const getFilename = (item) => item?.filename || item?.file || item?.name
@@ -609,6 +747,7 @@ function GenerateWorkspace() {
 
       try {
         const history = await comfyui.getHistory(promptId)
+        consecutivePollErrors = 0
         // ComfyUI may return { [promptId]: { outputs } } or (for /history/id) { outputs } at top level
         const outputs = history?.[promptId]?.outputs ?? history?.outputs
         if (!outputs || typeof outputs !== 'object') continue
@@ -755,7 +894,11 @@ function GenerateWorkspace() {
         }
 
       } catch (err) {
-        console.warn('Poll error:', err)
+        consecutivePollErrors += 1
+        console.warn(`Poll error (${consecutivePollErrors}/${maxConsecutivePollErrors}):`, err)
+        if (consecutivePollErrors >= maxConsecutivePollErrors) {
+          throw new Error('Lost connection to ComfyUI while waiting for generation result')
+        }
       }
     }
     return null
@@ -849,29 +992,56 @@ function GenerateWorkspace() {
     updateJob(job.id, { status: 'uploading', progress: 5, error: null })
 
     try {
-      // Upload image if needed
       let uploadedFilename = null
+      let referenceFilenames = []
+      // Upload image if needed
       if (job.needsImage) {
-        const inputAsset = assets.find(a => a.id === job.inputAssetId)
-        if (!inputAsset) {
-          throw new Error('Input asset not found')
-        }
-
         let fileToUpload = null
-        if (inputAsset.type === 'video') {
-          fileToUpload = await extractFrameAsFile(inputAsset.url, job.frameTime || 0, `frame_${Date.now()}.png`)
-        } else if (inputAsset.type === 'image') {
-          const resp = await fetch(inputAsset.url)
-          const blob = await resp.blob()
-          fileToUpload = new File([blob], inputAsset.name || `input_${Date.now()}.png`, { type: blob.type })
-        }
-
-        if (!fileToUpload) {
-          throw new Error('Unsupported input asset')
+        if (job.inputFromTimelineFrame) {
+          const frame = useFrameForAIStore.getState().frame
+          fileToUpload = frame?.file
+          if (!fileToUpload) throw new Error('Timeline frame not available')
+        } else {
+          const inputAsset = assets.find(a => a.id === job.inputAssetId)
+          if (!inputAsset) {
+            throw new Error('Input asset not found')
+          }
+          if (inputAsset.type === 'video') {
+            fileToUpload = await extractFrameAsFile(inputAsset.url, job.frameTime || 0, `frame_${Date.now()}.png`)
+          } else if (inputAsset.type === 'image') {
+            const resp = await fetch(inputAsset.url)
+            const blob = await resp.blob()
+            fileToUpload = new File([blob], inputAsset.name || `input_${Date.now()}.png`, { type: blob.type })
+          }
+          if (!fileToUpload) throw new Error('Unsupported input asset')
         }
 
         const uploadResult = await comfyui.uploadFile(fileToUpload)
         uploadedFilename = uploadResult?.name || fileToUpload.name
+      }
+
+      // Upload optional reference images for image-edit
+      if (job.workflowId === 'image-edit' && (job.referenceAssetId1 || job.referenceAssetId2)) {
+        for (const refId of [job.referenceAssetId1, job.referenceAssetId2]) {
+          if (!refId) {
+            referenceFilenames.push(null)
+            continue
+          }
+          const refAsset = assets.find(a => a.id === refId)
+          if (!refAsset || refAsset.type !== 'image') {
+            referenceFilenames.push(null)
+            continue
+          }
+          try {
+            const resp = await fetch(refAsset.url)
+            const blob = await resp.blob()
+            const file = new File([blob], refAsset.name || `ref_${Date.now()}.png`, { type: blob.type })
+            const uploadResult = await comfyui.uploadFile(file)
+            referenceFilenames.push(uploadResult?.name || file.name)
+          } catch (_) {
+            referenceFilenames.push(null)
+          }
+        }
       }
 
       // Load workflow JSON
@@ -882,7 +1052,9 @@ function GenerateWorkspace() {
         'ltx2-i2v': '/workflows/ltx2_Image_to_Video.json',
         'wan22-i2v': '/workflows/video_wan2_2_14B_i2v.json',
         'multi-angles': '/workflows/1_click_multiple_angles.json',
-        'image-edit': '/workflows/inflation.json',
+        'multi-angles-scene': '/workflows/1_click_multiple_scene_angles-v1.0.json',
+        'image-edit': '/workflows/image_qwen_image_edit_2509.json',
+        'z-image-turbo': '/workflows/image_z_image_turbo.json',
         'music-gen': '/workflows/music_generation.json',
       }
 
@@ -901,6 +1073,8 @@ function GenerateWorkspace() {
         modifyWAN22Workflow,
         modifyMultipleAnglesWorkflow,
         modifyInflationWorkflow,
+        modifyQwenImageEdit2509Workflow,
+        modifyZImageTurboWorkflow,
         modifyMusicWorkflow
       } = await import('../services/comfyui')
 
@@ -942,18 +1116,24 @@ function GenerateWorkspace() {
           })
           break
         case 'multi-angles':
+        case 'multi-angles-scene':
           modifiedWorkflow = modifyMultipleAnglesWorkflow(workflowJson, {
             inputImage: uploadedFilename,
             seed: job.seed,
           })
           break
         case 'image-edit':
-          modifiedWorkflow = modifyInflationWorkflow(workflowJson, {
+          modifiedWorkflow = modifyQwenImageEdit2509Workflow(workflowJson, {
             prompt: job.prompt,
             inputImage: uploadedFilename,
             seed: job.seed,
-            steps: job.editSteps,
-            cfg: job.editCfg,
+            referenceImages: referenceFilenames,
+          })
+          break
+        case 'z-image-turbo':
+          modifiedWorkflow = modifyZImageTurboWorkflow(workflowJson, {
+            prompt: job.prompt,
+            seed: job.seed,
           })
           break
         case 'music-gen':
@@ -991,20 +1171,24 @@ function GenerateWorkspace() {
         await saveGenerationResult(result, job.workflowId, job)
         updateJob(job.id, { status: 'done', progress: 100 })
       } else {
+        const msg = 'Generation finished but the output could not be detected'
+        addComfyLog('error', msg)
         updateJob(job.id, {
           status: 'error',
-          error: 'Generation finished but the output could not be detected',
+          error: msg,
           progress: 0
         })
       }
     } catch (err) {
+      const msg = err?.message || 'Generation failed'
+      addComfyLog('error', msg)
       updateJob(job.id, {
         status: 'error',
-        error: err?.message || 'Generation failed',
+        error: msg,
         progress: 0
       })
     }
-  }, [assets, updateJob, saveGenerationResult, pollForResult])
+  }, [assets, updateJob, saveGenerationResult, pollForResult, addComfyLog])
 
   const processQueue = useCallback(async () => {
     if (processingRef.current) return
@@ -1092,6 +1276,34 @@ function GenerateWorkspace() {
         {/* Center: Settings */}
         <div className="flex-1 min-w-0 overflow-auto p-4">
           <div className="max-w-2xl mx-auto space-y-4">
+            {/* Timeline frame from editor (Extend with AI / Starting keyframe for AI) */}
+            {frameForAI && (
+              <div className="p-3 rounded-lg border border-sf-accent/40 bg-sf-accent/5">
+                <div className="flex items-start gap-3">
+                  <div className="w-24 h-14 flex-shrink-0 rounded overflow-hidden bg-sf-dark-800 border border-sf-dark-600">
+                    <img src={frameForAI.blobUrl} alt="Timeline frame" className="w-full h-full object-contain" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-medium text-sf-text-primary">
+                      {frameForAI.mode === 'extend' ? 'Extend with AI' : 'Starting keyframe for AI'}
+                    </div>
+                    <div className="text-[10px] text-sf-text-muted mt-0.5">
+                      Frame from timeline at playhead. Choose Image to Video (LTX2) or WAN 2.2 below, then enter prompt and generate.
+                    </div>
+                    <div className="flex items-center gap-2 mt-2">
+                      <button
+                        type="button"
+                        onClick={clearFrameForAI}
+                        className="px-2 py-1 rounded text-[10px] bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-muted hover:text-sf-text-primary transition-colors"
+                      >
+                        Clear timeline frame
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Workflow selector */}
             <div>
               <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Workflow</label>
@@ -1154,12 +1366,14 @@ function GenerateWorkspace() {
                       <optgroup label="16:9 Landscape">
                         <option value="1920x1080">1920x1080</option>
                         <option value="1280x720">1280x720</option>
+                        <option value="960x540">960x540</option>
                         <option value="1024x576">1024x576</option>
                         <option value="768x512">768x512</option>
                       </optgroup>
                       <optgroup label="9:16 Portrait">
                         <option value="1080x1920">1080x1920</option>
                         <option value="720x1280">720x1280</option>
+                        <option value="540x960">540x960</option>
                         <option value="576x1024">576x1024</option>
                         <option value="512x768">512x768</option>
                       </optgroup>
@@ -1209,26 +1423,68 @@ function GenerateWorkspace() {
                   <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Prompt</label>
                   <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={3}
                     className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-none"
-                    placeholder={workflowId === 'image-edit' ? 'Describe the edit (e.g. "inflate the subject")' : 'Camera angle prompts are preset for this workflow'}
+                    placeholder={workflowId === 'image-edit' ? 'Describe the edit (e.g. remove person on left or change color of car)' : workflowId === 'z-image-turbo' ? 'Describe the image you want to generate...' : 'Camera angle prompts are preset for this workflow'}
                   />
                 </div>
                 {workflowId === 'image-edit' && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Steps</label>
-                      <input type="number" value={editSteps} onChange={e => setEditSteps(Number(e.target.value))} min={1} max={100}
-                        className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                      />
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Steps</label>
+                        <input type="number" value={editSteps} onChange={e => setEditSteps(Number(e.target.value))} min={1} max={100}
+                          className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">CFG Scale</label>
+                        <input type="number" value={editCfg} onChange={e => setEditCfg(Number(e.target.value))} min={1} max={20} step={0.5}
+                          className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                        />
+                      </div>
                     </div>
                     <div>
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">CFG Scale</label>
-                      <input type="number" value={editCfg} onChange={e => setEditCfg(Number(e.target.value))} min={1} max={20} step={0.5}
-                        className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                      />
+                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Reference images (optional)</label>
+                      <p className="text-[9px] text-sf-text-muted mt-0.5 mb-1">Qwen can use 1–2 reference images for style or subject. Annotate the same image with circles and labels (e.g. &quot;remove this&quot;) then use as ref.</p>
+                      {assets.filter(a => a.type === 'image').length === 0 && !annotationModalOpen && (
+                        <p className="text-[9px] text-sf-text-muted mb-1.5">Add images in the <strong>Assets</strong> panel, or use <strong>Annotate image…</strong> to mark up your input.</p>
+                      )}
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <button
+                          type="button"
+                          onClick={openAnnotationModal}
+                          disabled={annotationPreparing}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary text-xs"
+                        >
+                          {annotationPreparing ? <Loader2 className="w-3 h-3 animate-spin" /> : <PenLine className="w-3 h-3" />}
+                          {annotationPreparing ? 'Preparing frame…' : 'Annotate image…'}
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <select
+                          value={referenceAssetId1 || ''}
+                          onChange={e => setReferenceAssetId1(e.target.value || null)}
+                          className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                        >
+                          <option value="">None</option>
+                          {assets.filter(a => a.type === 'image').map(a => (
+                            <option key={a.id} value={a.id}>{a.name}</option>
+                          ))}
+                        </select>
+                        <select
+                          value={referenceAssetId2 || ''}
+                          onChange={e => setReferenceAssetId2(e.target.value || null)}
+                          className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                        >
+                          <option value="">None</option>
+                          {assets.filter(a => a.type === 'image').map(a => (
+                            <option key={a.id} value={a.id}>{a.name}</option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
-                  </div>
+                  </>
                 )}
-                {workflowId === 'multi-angles' && (
+                {(workflowId === 'multi-angles' || workflowId === 'multi-angles-scene') && (
                   <div className="p-3 bg-sf-dark-800/50 rounded-lg">
                     <div className="text-[10px] text-sf-text-muted">This workflow generates <strong className="text-sf-text-primary">8 camera angles</strong> from your input image:</div>
                     <div className="flex flex-wrap gap-1 mt-2">
@@ -1331,8 +1587,8 @@ function GenerateWorkspace() {
               <div className="mt-2 text-[10px] text-sf-error text-center">ComfyUI is not running. Start it to generate.</div>
             )}
 
-            {currentWorkflow?.needsImage && !selectedAsset && (
-              <div className="mt-2 text-[10px] text-yellow-500 text-center">Select an input asset from the left panel</div>
+            {currentWorkflow?.needsImage && !selectedAsset && !frameForAI && (
+              <div className="mt-2 text-[10px] text-yellow-500 text-center">Select an input asset or use a timeline frame (right-click preview → Extend with AI)</div>
             )}
 
             {formError && (
@@ -1403,6 +1659,50 @@ function GenerateWorkspace() {
           </div>
         </div>
       </div>
+
+      {/* ComfyUI activity log – always present, expand/collapse for troubleshooting */}
+      <div className="flex-shrink-0 border-t border-sf-dark-700 bg-sf-dark-900">
+        <button
+          type="button"
+          onClick={() => setComfyLogExpanded(prev => !prev)}
+          className="w-full h-9 flex items-center justify-between gap-2 px-3 text-left text-[11px] text-sf-text-muted hover:bg-sf-dark-800 hover:text-sf-text-primary transition-colors"
+          title={comfyLogExpanded ? 'Collapse ComfyUI log' : 'Show ComfyUI activity log'}
+        >
+          <span className="flex items-center gap-2">
+            <Terminal className="w-3.5 h-3.5" />
+            ComfyUI log
+            {comfyLogLines.length > 0 && (
+              <span className="text-[9px] opacity-70">{comfyLogLines.length} lines</span>
+            )}
+          </span>
+          {comfyLogExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
+        </button>
+        {comfyLogExpanded && (
+          <div className="h-44 overflow-y-auto border-t border-sf-dark-700 bg-black/40 font-mono text-[10px] text-sf-text-secondary">
+            {comfyLogLines.length === 0 ? (
+              <div className="p-3 text-sf-text-muted">No activity yet. Queue a generation to see ComfyUI events here.</div>
+            ) : (
+              <div className="p-2 space-y-0.5">
+                {comfyLogLines.map((line, i) => (
+                  <div key={i} className={`flex gap-2 ${line.type === 'error' ? 'text-sf-error' : ''}`}>
+                    <span className="text-sf-text-muted flex-shrink-0">[{line.ts}]</span>
+                    <span className="break-all">{line.msg}</span>
+                  </div>
+                ))}
+                <div ref={comfyLogEndRef} />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <ImageAnnotationModal
+        isOpen={annotationModalOpen}
+        onClose={closeAnnotationModal}
+        initialImageUrl={annotationInitialUrl}
+        otherImageAssets={assets.filter(a => a.type === 'image')}
+        onUseAsRef={handleAnnotationUseAsRef}
+      />
     </div>
   )
 }

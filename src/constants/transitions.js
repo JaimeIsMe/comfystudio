@@ -24,6 +24,24 @@ export const TRANSITION_TYPES = [
   { id: 'blur', name: 'Blur Dissolve', icon: '💨' },
 ]
 
+export const TRANSITION_CATEGORIES = [
+  {
+    id: 'dissolve',
+    label: 'Dissolve',
+    items: ['dissolve', 'blur', 'fade-black', 'fade-white'],
+  },
+  {
+    id: 'motion',
+    label: 'Motion',
+    items: ['slide-left', 'slide-right', 'slide-up', 'slide-down', 'zoom-in', 'zoom-out'],
+  },
+  {
+    id: 'wipe',
+    label: 'Wipe',
+    items: ['wipe-left', 'wipe-right', 'wipe-up', 'wipe-down'],
+  },
+]
+
 export const TRANSITION_DEFAULT_SETTINGS = {
   'zoom-in': { zoomAmount: 0.1 },
   'zoom-out': { zoomAmount: 0.1 },

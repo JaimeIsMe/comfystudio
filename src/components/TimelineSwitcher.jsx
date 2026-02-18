@@ -147,7 +147,10 @@ function TimelineSwitcher() {
             {timelines.map((timeline) => (
               <div
                 key={timeline.id}
-                onClick={() => handleSwitchTimeline(timeline.id)}
+                onClick={() => {
+                  if (editingId === timeline.id) return
+                  handleSwitchTimeline(timeline.id)
+                }}
                 className={`flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors group ${
                   timeline.id === currentTimelineId 
                     ? 'bg-sf-accent/20 border-l-2 border-sf-accent' 
@@ -159,24 +162,28 @@ function TimelineSwitcher() {
                 }`} />
                 
                 {editingId === timeline.id ? (
-                  <div className="flex-1 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex-1 flex items-center gap-1 min-w-0" onClick={(e) => e.stopPropagation()}>
                     <input
                       ref={inputRef}
                       type="text"
                       value={editName}
                       onChange={(e) => setEditName(e.target.value)}
                       onKeyDown={handleKeyDown}
-                      className="flex-1 bg-sf-dark-700 border border-sf-accent rounded px-1.5 py-0.5 text-xs text-sf-text-primary focus:outline-none"
+                      className="flex-1 min-w-0 bg-sf-dark-700 border border-sf-accent rounded px-1.5 py-0.5 text-xs text-sf-text-primary focus:outline-none"
                     />
                     <button
-                      onClick={handleSaveRename}
-                      className="p-0.5 hover:bg-sf-dark-600 rounded"
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleSaveRename(e); }}
+                      className="p-0.5 hover:bg-sf-dark-600 rounded flex-shrink-0"
+                      title="Save name"
                     >
                       <Check className="w-3 h-3 text-sf-success" />
                     </button>
                     <button
-                      onClick={handleCancelRename}
-                      className="p-0.5 hover:bg-sf-dark-600 rounded"
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleCancelRename(e); }}
+                      className="p-0.5 hover:bg-sf-dark-600 rounded flex-shrink-0"
+                      title="Cancel"
                     >
                       <X className="w-3 h-3 text-sf-text-muted" />
                     </button>
@@ -201,6 +208,7 @@ function TimelineSwitcher() {
                     {/* Actions */}
                     <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
+                        type="button"
                         onClick={(e) => handleStartRename(e, timeline)}
                         className="p-1 hover:bg-sf-dark-600 rounded"
                         title="Rename"
@@ -208,6 +216,7 @@ function TimelineSwitcher() {
                         <Edit3 className="w-3 h-3 text-sf-text-muted" />
                       </button>
                       <button
+                        type="button"
                         onClick={(e) => handleDuplicateTimeline(e, timeline.id)}
                         className="p-1 hover:bg-sf-dark-600 rounded"
                         title="Duplicate"
@@ -216,6 +225,7 @@ function TimelineSwitcher() {
                       </button>
                       {timelines.length > 1 && (
                         <button
+                          type="button"
                           onClick={(e) => handleDeleteTimeline(e, timeline.id)}
                           className="p-1 hover:bg-sf-error/20 rounded"
                           title="Delete"
@@ -230,7 +240,7 @@ function TimelineSwitcher() {
             ))}
           </div>
           
-          {/* New Timeline Button */}
+          {/* New Timeline / Duplicate Timeline */}
           <div className="border-t border-sf-dark-600">
             <button
               onClick={handleCreateTimeline}
@@ -238,6 +248,19 @@ function TimelineSwitcher() {
             >
               <Plus className="w-3.5 h-3.5 text-sf-accent" />
               <span className="text-xs text-sf-text-secondary">New Timeline...</span>
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                if (currentTimelineId) {
+                  handleDuplicateTimeline(e, currentTimelineId)
+                }
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 hover:bg-sf-dark-700 transition-colors text-left border-t border-sf-dark-600/50"
+              title="Duplicate current timeline to create a new version"
+            >
+              <Copy className="w-3.5 h-3.5 text-sf-accent" />
+              <span className="text-xs text-sf-text-secondary">Duplicate Timeline...</span>
             </button>
           </div>
         </div>

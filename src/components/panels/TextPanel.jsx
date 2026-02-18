@@ -1,6 +1,7 @@
 import { Type, AlignLeft, AlignCenter, AlignRight } from 'lucide-react'
 import { useState } from 'react'
 import { useTimelineStore } from '../../stores/timelineStore'
+import { TEXT_ANIMATION_PRESETS, TEXT_ANIMATION_MODE_OPTIONS } from '../../utils/textAnimationPresets'
 
 // Available fonts for text clips
 const FONT_OPTIONS = [
@@ -10,7 +11,7 @@ const FONT_OPTIONS = [
 
 function TextPanel() {
   // Timeline store for adding text clips
-  const { addTextClip, tracks, playheadPosition } = useTimelineStore()
+  const { addTextClip, applyTextAnimationPreset, tracks, playheadPosition } = useTimelineStore()
   
   // Text generation state
   const [textContent, setTextContent] = useState('Sample Text')
@@ -25,6 +26,8 @@ function TextPanel() {
   const [textBackgroundOpacity, setTextBackgroundOpacity] = useState(0)
   const [textShadow, setTextShadow] = useState(false)
   const [textAlign, setTextAlign] = useState('center')
+  const [animationPreset, setAnimationPreset] = useState('none')
+  const [animationMode, setAnimationMode] = useState('inOut')
 
   // Handle adding text to timeline
   const handleAddText = () => {
@@ -32,7 +35,7 @@ function TextPanel() {
     const videoTrack = tracks.find(t => t.type === 'video')
     if (!videoTrack) return
     
-    addTextClip(videoTrack.id, {
+    const newClip = addTextClip(videoTrack.id, {
       text: textContent,
       fontFamily: textFontFamily,
       fontSize: textFontSize,
@@ -46,6 +49,10 @@ function TextPanel() {
       shadow: textShadow,
       duration: textDuration,
     }, playheadPosition)
+
+    if (newClip && animationPreset !== 'none') {
+      applyTextAnimationPreset(newClip.id, animationPreset, animationMode, { saveHistory: false })
+    }
   }
 
   return (
@@ -273,6 +280,54 @@ function TextPanel() {
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Title Animation Presets */}
+        <div className="space-y-2">
+          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider block">Title Animation</label>
+          <div className="grid grid-cols-3 gap-1">
+            {TEXT_ANIMATION_MODE_OPTIONS.map((option) => (
+              <button
+                key={option.id}
+                onClick={() => setAnimationMode(option.id)}
+                className={`py-1 rounded text-[10px] transition-colors ${
+                  animationMode === option.id
+                    ? 'bg-sf-accent text-white'
+                    : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-1">
+            <button
+              onClick={() => setAnimationPreset('none')}
+              className={`px-2 py-1 rounded text-[10px] transition-colors ${
+                animationPreset === 'none'
+                  ? 'bg-sf-accent text-white'
+                  : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+              }`}
+            >
+              None
+            </button>
+            {TEXT_ANIMATION_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                onClick={() => setAnimationPreset(preset.id)}
+                className={`px-2 py-1 rounded text-[10px] transition-colors ${
+                  animationPreset === preset.id
+                    ? 'bg-sf-accent text-white'
+                    : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+                }`}
+              >
+                {preset.name}
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] text-sf-text-muted">
+            Applied automatically when you add the text clip.
+          </p>
         </div>
 
         {/* Preview */}

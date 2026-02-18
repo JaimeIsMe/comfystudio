@@ -12,8 +12,8 @@ import useAssetsStore from '../stores/assetsStore'
  * - Handling multiple overlapping audio clips
  */
 function AudioLayerRenderer() {
-  const audioElementsRef = useRef(new Map()) // clipId -> HTMLAudioElement
-  const lastPositionRef = useRef(0)
+  const audioElementsRef = useRef(new Map()) // clipId -> { element, currentSrc }
+  const isPlayingRef = useRef(false)
   
   const {
     clips,
@@ -26,6 +26,11 @@ function AudioLayerRenderer() {
   
   const getAssetById = useAssetsStore(state => state.getAssetById)
   const volume = useAssetsStore(state => state.volume) // Get volume from assets store
+
+  // Keep isPlayingRef in sync so event handlers always have current value
+  useEffect(() => {
+    isPlayingRef.current = isPlaying
+  }, [isPlaying])
   
   // Get active audio clips at current playhead position
   const activeAudioClips = useMemo(() => {
@@ -37,15 +42,15 @@ function AudioLayerRenderer() {
   
   // Create/update audio elements for active clips
   useEffect(() => {
-    const audioElements = audioElementsRef.current
+    const audioEntries = audioElementsRef.current
     
     // Remove audio elements for clips that are no longer active
     const activeClipIds = new Set(activeAudioClips.map(({ clip }) => clip.id))
-    for (const [clipId, audioEl] of audioElements.entries()) {
+    for (const [clipId, entry] of audioEntries.entries()) {
       if (!activeClipIds.has(clipId)) {
-        audioEl.pause()
-        audioEl.src = ''
-        audioElements.delete(clipId)
+        entry.element.pause()
+        entry.element.src = ''
+        audioEntries.delete(clipId)
       }
     }
     
@@ -54,20 +59,24 @@ function AudioLayerRenderer() {
       const asset = getAssetById(clip.assetId)
       if (!asset?.url) return
       
-      let audioEl = audioElements.get(clip.id)
+      let entry = audioEntries.get(clip.id)
       
-      if (!audioEl) {
+      if (!entry) {
         // Create new audio element
-        audioEl = new Audio()
+        const audioEl = new Audio()
         audioEl.preload = 'auto'
         audioEl.crossOrigin = 'anonymous'
-        audioElements.set(clip.id, audioEl)
+        entry = { element: audioEl, currentSrc: null }
+        audioEntries.set(clip.id, entry)
       }
+
+      const audioEl = entry.element
       
-      // Update src if it changed
-      const srcChanged = audioEl.src !== asset.url
+      // Check if src actually changed (compare against our tracked src, not browser-resolved URL)
+      const srcChanged = entry.currentSrc !== asset.url
       if (srcChanged) {
         audioEl.src = asset.url
+        entry.currentSrc = asset.url
       }
       
       // Calculate source time within the audio file (with speed/reverse)
@@ -89,27 +98,29 @@ function AudioLayerRenderer() {
       const clipEnd = clip.startTime + clip.duration
       const isWithinClip = playheadPosition >= clip.startTime && playheadPosition < clipEnd
       
-      // Wait for audio to load before seeking if src changed
+      // Reverse audio not supported with HTMLAudioElement; keep silent
       if (reverse) {
-        // Reverse audio not supported with HTMLAudioElement; keep silent
         audioEl.pause()
         return
       }
 
-      const effectiveRate = playbackRate * speedScale
+      const effectiveRate = Math.abs(playbackRate) * speedScale
 
       if (srcChanged) {
+        // Remove any prior loadeddata handlers to avoid stale closures
         const onLoadedData = () => {
-          if (isWithinClip && isPlaying) {
+          // Read from ref to get current isPlaying state (not stale closure)
+          const currentlyPlaying = isPlayingRef.current
+          if (isWithinClip && currentlyPlaying) {
             audioEl.currentTime = clampedTime
             audioEl.playbackRate = effectiveRate
             audioEl.play().catch(err => {
               console.warn('Failed to play audio clip:', err)
             })
           }
-          audioEl.removeEventListener('loadeddata', onLoadedData)
         }
-        audioEl.addEventListener('loadeddata', onLoadedData)
+        // Use { once: true } to auto-remove the listener
+        audioEl.addEventListener('loadeddata', onLoadedData, { once: true })
       } else if (audioEl.readyState >= 2) {
         // Audio is loaded - sync position
         const timeDiff = Math.abs(audioEl.currentTime - clampedTime)
@@ -149,12 +160,12 @@ function AudioLayerRenderer() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      const audioElements = audioElementsRef.current
-      for (const audioEl of audioElements.values()) {
-        audioEl.pause()
-        audioEl.src = ''
+      const audioEntries = audioElementsRef.current
+      for (const entry of audioEntries.values()) {
+        entry.element.pause()
+        entry.element.src = ''
       }
-      audioElements.clear()
+      audioEntries.clear()
     }
   }, [])
   

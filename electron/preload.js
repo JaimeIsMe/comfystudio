@@ -100,6 +100,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   encodeVideo: (options) => ipcRenderer.invoke('export:encodeVideo', options),
 
+  /**
+   * Mix timeline audio clips into a WAV file using FFmpeg
+   * @param {Object} options - { projectPath, outputPath, rangeStart, rangeEnd, sampleRate, channels, clips, tracks, assets, timeoutMs }
+   * @returns {Promise<{success: boolean, error?: string, clipCount?: number}>}
+   */
+  mixAudio: (options) => ipcRenderer.invoke('export:mixAudio', options),
+
   // Export worker (run export in separate window so main UI stays responsive)
   runExportInWorker: (payload) => ipcRenderer.invoke('export:runInWorker', payload),
   onExportProgress: (cb) => {
@@ -242,6 +249,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<{success: boolean, fps?: number, error?: string}>}
    */
   getVideoFps: (filePath) => ipcRenderer.invoke('media:getVideoFps', filePath),
+
+  /**
+   * Extract audio waveform peaks via ffmpeg (Electron only)
+   * @param {string} mediaInput - file:// URL, comfystudio:// URL, or absolute path
+   * @param {object} options - { sampleCount?: number, sampleRate?: number }
+   * @returns {Promise<{success: boolean, peaks?: number[], duration?: number, error?: string}>}
+   */
+  getAudioWaveform: (mediaInput, options = {}) => ipcRenderer.invoke('media:getAudioWaveform', mediaInput, options),
 
   /**
    * Get a direct file:// URL for a local file
