@@ -7,10 +7,12 @@ import StockPanel from './components/StockPanel'
 import LeftPanel from './components/LeftPanel'
 import PreviewPanel from './components/PreviewPanel'
 import Timeline from './components/Timeline'
+import DopeSheet from './components/DopeSheet'
 import TransportControls from './components/TransportControls'
 import InspectorPanel from './components/InspectorPanel'
 import ResizeHandle from './components/ResizeHandle'
 import AudioGenerateModal from './components/AudioGenerateModal'
+import SettingsModal from './components/SettingsModal'
 import WelcomeScreen from './components/WelcomeScreen'
 import BottomBar from './components/BottomBar'
 import useProjectStore from './stores/projectStore'
@@ -18,8 +20,10 @@ import useProjectStore from './stores/projectStore'
 function App() {
   const [audioModalOpen, setAudioModalOpen] = useState(false)
   const [audioModalType, setAudioModalType] = useState('music')
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false)
   const [selectedItem, setSelectedItem] = useState({ type: 'shot', id: '2.1' })
   const [mainTab, setMainTab] = useState('editor')
+  const [bottomEditorView, setBottomEditorView] = useState('timeline')
   
   // Left panel state
   const [leftPanelExpanded, setLeftPanelExpanded] = useState(true)
@@ -44,6 +48,31 @@ function App() {
   const MAX_TIMELINE = 450
 
   const LAYOUT_STORAGE_KEY = 'comfystudio-editor-layout'
+  const SHOW_COMFYUI_TAB_KEY = 'comfystudio-show-comfyui-tab'
+
+  const [showComfyUiTab, setShowComfyUiTab] = useState(() => {
+    try {
+      return localStorage.getItem(SHOW_COMFYUI_TAB_KEY) !== 'false'
+    } catch {
+      return true
+    }
+  })
+
+  useEffect(() => {
+    const handler = (e) => setShowComfyUiTab(e.detail === true)
+    window.addEventListener('comfystudio-show-comfyui-tab-changed', handler)
+    return () => window.removeEventListener('comfystudio-show-comfyui-tab-changed', handler)
+  }, [])
+  useEffect(() => {
+    if (!showComfyUiTab && mainTab === 'comfyui') setMainTab('editor')
+  }, [showComfyUiTab, mainTab])
+
+  // When user sends timeline frame to Generate (right-click preview → Extend with AI / Starting keyframe for AI)
+  useEffect(() => {
+    const handler = () => setMainTab('generate')
+    window.addEventListener('comfystudio-open-generate-with-frame', handler)
+    return () => window.removeEventListener('comfystudio-open-generate-with-frame', handler)
+  }, [])
 
   // Load persisted layout on mount (single read)
   const [layoutLoaded, setLayoutLoaded] = useState(false)
@@ -78,7 +107,7 @@ function App() {
     } catch (_) { /* ignore */ }
   }, [])
 
-  const isFullScreenTab = mainTab === 'export' || mainTab === 'generate' || mainTab === 'llm-assistant' || mainTab === 'stock'
+  const isFullScreenTab = mainTab === 'export' || mainTab === 'generate' || mainTab === 'llm-assistant' || mainTab === 'stock' || (showComfyUiTab && mainTab === 'comfyui')
   // Editor layout insets (used for content when on Editor, and always for tab bar so it doesn't shift)
   const editorLeftInset = leftPanelExpanded ? ICON_BAR_WIDTH + leftPanelWidth : ICON_BAR_WIDTH
   const editorRightInset = inspectorExpanded ? ICON_BAR_WIDTH + inspectorWidth : ICON_BAR_WIDTH
@@ -173,10 +202,25 @@ function App() {
         onTabChange={setMainTab}
         centerInsetLeft={editorLeftInset}
         centerInsetRight={editorRightInset}
+        showComfyUiTab={showComfyUiTab}
       />
       
       {/* Main Content Area */}
       <div className="flex-1 flex overflow-hidden min-h-0">
+        {/* ComfyUI tab – only when enabled in settings; kept mounted when visible so iframe does not reload */}
+        {showComfyUiTab && (
+          <div
+            className="flex-1 flex flex-col min-h-0 bg-sf-dark-950"
+            style={{ display: mainTab === 'comfyui' ? 'flex' : 'none' }}
+          >
+            <iframe
+              src="http://127.0.0.1:8188"
+              title="ComfyUI"
+              className="flex-1 w-full min-h-0 border-0"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            />
+          </div>
+        )}
         {mainTab === 'export' ? (
           <ExportPanel />
         ) : mainTab === 'stock' ? (
@@ -185,7 +229,7 @@ function App() {
           <GenerateWorkspace />
         ) : mainTab === 'llm-assistant' ? (
           <LLMAssistantWorkspace />
-        ) : (
+        ) : mainTab === 'comfyui' ? null : (
           <>
             {/* Left Panel - Full Height Mode (spans entire left side) */}
             {leftPanelFullHeight && (
@@ -201,6 +245,7 @@ function App() {
                     onTabChange={setLeftPanelTab}
                     isFullHeight={true}
                     onToggleFullHeight={() => setLeftPanelFullHeight(false)}
+                    onSettingsClick={() => setSettingsModalOpen(true)}
                   />
                 </div>
                 {/* Resize Handle for full-height left panel */}
@@ -231,6 +276,7 @@ function App() {
                         onTabChange={setLeftPanelTab}
                         isFullHeight={false}
                         onToggleFullHeight={() => setLeftPanelFullHeight(true)}
+                        onSettingsClick={() => setSettingsModalOpen(true)}
                       />
                     </div>
                     {/* Resize Handle - Left Panel (only when expanded) */}
@@ -295,9 +341,43 @@ function App() {
                     aria-hidden
                   />
                 </div>
-                {/* Timeline - takes remaining height */}
+                {/* Bottom editor view switcher */}
+                <div className="flex-shrink-0 h-7 px-2 bg-sf-dark-900 border-y border-sf-dark-700 flex items-center justify-between">
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setBottomEditorView('timeline')}
+                      className={`px-2 py-0.5 rounded text-[10px] transition-colors ${
+                        bottomEditorView === 'timeline'
+                          ? 'bg-sf-accent/20 text-sf-accent border border-sf-accent/40'
+                          : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+                      }`}
+                      title="Clip and track editing view"
+                    >
+                      Timeline
+                    </button>
+                    <button
+                      onClick={() => setBottomEditorView('dopesheet')}
+                      className={`px-2 py-0.5 rounded text-[10px] transition-colors ${
+                        bottomEditorView === 'dopesheet'
+                          ? 'bg-sf-accent/20 text-sf-accent border border-sf-accent/40'
+                          : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+                      }`}
+                      title="Property keyframe editing view"
+                    >
+                      Dope Sheet
+                    </button>
+                  </div>
+                  <span className="text-[10px] text-sf-text-muted">
+                    {bottomEditorView === 'timeline' ? 'Clip edit mode' : 'Keyframe edit mode'}
+                  </span>
+                </div>
+                {/* Selected bottom editor view - takes remaining height */}
                 <div className="flex-1 min-h-0">
-                  <Timeline onOpenAudioGenerate={openAudioModal} />
+                  {bottomEditorView === 'timeline' ? (
+                    <Timeline onOpenAudioGenerate={openAudioModal} />
+                  ) : (
+                    <DopeSheet />
+                  )}
                 </div>
               </div>
             </div>
@@ -310,8 +390,7 @@ function App() {
         projectName={currentProject?.name}
         onOpenSettings={() => {
           setMainTab('editor')
-          setLeftPanelTab('settings')
-          setLeftPanelExpanded(true)
+          setSettingsModalOpen(true)
         }}
       />
 
@@ -320,6 +399,12 @@ function App() {
         isOpen={audioModalOpen}
         onClose={() => setAudioModalOpen(false)}
         initialType={audioModalType}
+      />
+
+      {/* Settings Modal */}
+      <SettingsModal
+        isOpen={settingsModalOpen}
+        onClose={() => setSettingsModalOpen(false)}
       />
     </div>
   )

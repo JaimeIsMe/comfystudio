@@ -3,15 +3,15 @@
 ## Overview
 AI-powered video editing app with DaVinci Resolve-style UI. Integrates with ComfyUI for AI video generation.
 
-*For new chats: this file is the main project reference; see "Key Files" and "Recent Changes Log" for where to look.*
-
 | Aspect | Details |
 |--------|---------|
-| **Type** | React + Vite + Tailwind CSS web app |
+| **Type** | React + Vite + Tailwind CSS; runs as **Electron** desktop app (`npm run electron:dev`) or web (`npm run dev`) |
 | **AI Backend** | ComfyUI at `http://127.0.0.1:8188` |
-| **Storage** | File System Access API (project files) + localStorage (settings) |
+| **Storage** | Electron: native paths; Web: File System Access API + localStorage |
 | **Location** | `c:\Users\papa\Documents\coding_projects\general\comfyui_editing` |
-| **Browser** | Chrome/Edge required (File System Access API) |
+| **Browser** | Chrome/Edge for web mode; Electron for desktop (recommended) |
+
+**For new chats:** This file is the main project reference. App is ~95% complete. Latest: **Live drop preview** — dragging an asset from Assets to the timeline shows a ghost clip on the target track/time before mouse-up. Also: Inspector sliders reset on double-click; number inputs have no spinners (double-click to type); transition handle drag 1:1 with mouse; Resolve-style transition tile; timeline vertical scroll synced. See "Key Files" and "Recent Changes Log" for details.
 
 ## Running the App
 ```bash
@@ -107,6 +107,7 @@ Users can import their own media via Assets Panel:
 - Drag-and-drop or click Import button
 - Files are copied to project's `assets/` folder
 - Imported assets show "IMP" badge, AI-generated show "AI"
+- **Create overlay** (right-click empty area or folder in Assets): Generate **letterbox**, **vignette**, or **color matte** stills (canvas PNGs) at timeline or custom resolution; added as image assets. Drag onto a video track above content and use blend mode/opacity as needed.
 
 ### Auto-save
 - Saves every 30 seconds (configurable)
@@ -173,23 +174,28 @@ This enables workflows like:
 | `src/components/VideoLayerRenderer.jsx` | Video + text layer rendering with preloading |
 | `src/components/InspectorPanel.jsx` | Clip transform/crop controls, draggable number inputs |
 | `src/components/TransportControls.jsx` | JKL shuttle, I/O points, playback modes |
-| `src/components/GenerateWorkspace.jsx` | Generate tab: workflow list, job queue, progress, result import |
+| `src/components/GenerateWorkspace.jsx` | Generate tab: workflow list, job queue, progress, result import, timeline-frame input |
 | `src/components/GeneratePanel.jsx` | Legacy AI video generation UI (Video + Audio tabs) |
+| `src/stores/frameForAIStore.js` | Store for “frame from timeline” sent to Generate (Extend with AI / keyframe) |
+| `src/utils/captureTimelineFrame.js` | Capture topmost video/image clip frame at playhead for AI extend |
 | `src/components/LeftPanel.jsx` | Tabbed left panel container |
 | `src/components/panels/TextPanel.jsx` | Text clip creation with styling |
 | `src/hooks/useTimelinePlayback.js` | Timeline playback loop with loop modes |
 | `src/hooks/useSnapping.js` | Clip snapping logic |
-| `src/services/comfyui.js` | ComfyUI API; workflow modifiers (LTX2 t2v/i2v, WAN22 i2v, multi-angles, inflation, music, mask) |
-| `src/services/exporter.js` | Timeline export renderer + audio mix + FFmpeg handoff |
+| `src/services/comfyui.js` | ComfyUI API; workflow modifiers (LTX2 t2v/i2v, WAN22 i2v, multi-angles, Qwen image edit + refs, music, mask) |
+| `src/components/ImageAnnotationModal.jsx` | Annotate image for Qwen ref: circles, rects, freehand, text; colors; move/resize; export PNG |
+| `src/components/OverlayGeneratorModal.jsx` | Create overlay stills: letterbox, vignette, color matte (canvas-generated PNGs added to assets) |
+| `src/services/exporter.js` | Timeline export renderer + audio mix + FFmpeg handoff (blend modes via globalCompositeOperation) |
 | `src/services/videoCache.js` | Video element pooling and preloading |
 | `src/services/playbackCache.js` | Flame-style playback cache: transcode on import for smooth timeline playback (Electron) |
 
 ## Timeline Features
+- **AI/IMP tags on clips:** Video and image clips show an **AI** (orange) or **IMP** (gray) badge next to the clip name/type, matching the Assets panel (AI-generated vs imported).
 - **Multi-track**: Video tracks (add to top), Audio tracks (add to bottom)
 - **Audio track names**: Default "Audio 1", "Audio 2", "Audio 3" (user can rename); add track = "Audio 4", etc.
 - **Mono vs stereo**: Tracks have `channels: 'mono' | 'stereo'`. Stereo tracks render as double height with L/R bands; mono tracks single height. Export: mono tracks downmix to one channel; stereo preserved.
 - **Track Headers**: Resizable by dragging right edge (100-400px, default 208px)
-- **Vertical Scrolling**: Tracks scroll vertically with synced headers
+- **Vertical Scrolling**: Track headers (left) and track content (right) scroll together; one scrollbar on the left, right side scrollbar hidden; `min-h-0` on timeline flex chain so content area is properly scrollable
 - **Clip Operations**: Drag, trim (head/tail), move, delete, split, duplicate
 - **Text Clips**: Amber-colored clips with text preview on timeline
 - **Snapping**: To playhead, clip edges, grid (toggle with `S` key)
@@ -197,7 +203,7 @@ This enables workflows like:
 - **Ripple Edit**: Toggle with `R` key
 - **Roll Edit**: Drag between adjacent clips
 - **Undo/Redo**: Ctrl+Z / Ctrl+Shift+Z (50 states); Delete prioritizes timeline clip selection over Assets panel (so clip delete is undoable)
-- **Transitions**: 9 types (dissolve, fade, wipe, slide)
+- **Transitions**: Multiple types (dissolve, fade, wipe, slide, zoom, blur). **Resolve-style tile**: dark grey overlay, transition name + duration pill (e.g. "35f"), top bar with center handle, 50% white diagonal (bottom-left to top-right). Drag left/right handle to resize transition duration (1:1 with mouse via `pixelsPerSecond`).
 - **I/O Points**: `I` and `O` keys for three-point editing
 
 ## Text Clips
@@ -239,8 +245,12 @@ transform: {
   flipH: false, flipV: false,     // Mirror
   cropTop: 0, cropBottom: 0,      // Edge crop (0-50%)
   cropLeft: 0, cropRight: 0,
+  blendMode: 'normal',            // CSS mix-blend-mode: normal | multiply | screen | overlay | etc.
+  blur: 0,                        // Blur radius in px (0–50, 0.25 step); keyframeable
 }
 ```
+- **Blend mode** (Inspector → Transform): For video/image/text clips, choose how the clip composites with layers below (e.g. screen, multiply, overlay, vignette-style darken). Export respects blend modes.
+- **Blur** (Inspector → Transform): Slider 0–50px (0.25 step) for video/image/text clips. Keyframeable; applied in preview and export (CSS filter / canvas filter).
 
 ## Multi-Layer Compositing
 - Clips on multiple video tracks at same time = stacked layers
@@ -253,8 +263,8 @@ transform: {
 ## Inspector Panel (Right)
 When a clip is selected:
 1. **Header**: Clip name, track, duration, **Reset Transform** button
-2. **Transform**: Position (draggable), Scale (link toggle), Rotation, Flip, Opacity, Anchor Point (9-grid + draggable inputs)
-3. **Crop**: Visual preview + 4 edge sliders
+2. **Transform**: Position (draggable), Scale (link toggle), Rotation, Flip, Opacity, Anchor Point (9-grid + draggable inputs). **Double-click any slider** (Scale, Rotation, Opacity, Blur, Crop) to reset that property to default (scale 100%, rotation 0°, opacity 100%, blur 0, crop 0).
+3. **Crop**: Visual preview + 4 edge sliders (double-click slider to reset to 0)
 4. **Timing**: Start time, duration, trim in/out
 5. **Effects**: Placeholders for Ken Burns, Camera Shake, Color Grade
 
@@ -271,10 +281,13 @@ When a clip is selected:
 | `J/K/L` | Reverse / Pause / Forward (speed ramps) |
 | `I/O` | Set In/Out points |
 | `Alt+X` | Clear In/Out |
+| `X` | Split clip at playhead (on active track only; works for video, image, text) |
 | `S` | Toggle snapping |
 | `R` | Toggle ripple edit |
 | `Ctrl+Z` | Undo (timeline; e.g. undo clip delete) |
 | `Ctrl+Shift+Z` | Redo |
+| `Ctrl+C` | Copy selected clips (paste at playhead with Ctrl+V on active track) |
+| `Ctrl+V` | Paste copied clips at playhead on active track |
 | `Delete` | Delete: timeline clips if any selected, else selected assets in Assets panel |
 | `Escape` | Clear selection |
 | `Ctrl+A` | Select all clips |
@@ -287,13 +300,19 @@ When a clip is selected:
 The **Generate** tab offers workflow-based generation with a job queue and progress.
 
 **Workflows (by category):**
-- **Video**: Text to Video (LTX2), **Image to Video (LTX2)**, Image to Video (WAN 2.2)
-- **Image**: Multiple Angles (8 camera angles), Image Edit (inflate/modify)
+- **Video**: Text to Video (LTX2), Image to Video (LTX2), Image to Video (WAN 2.2)
+- **Image**: Multiple Angles (Characters), Multiple Angles (Scenes), Image Edit
 - **Audio**: Music Generation (tags + lyrics)
 
-**Workflow files** (in `public/workflows/`): `video_ltx2_t2v.json`, `ltx2_Image_to_Video.json`, `video_wan2_2_14B_i2v.json`, `1_click_multiple_angles.json`, `inflation.json`, `music_generation.json`.
+**Workflow files** (in `public/workflows/`): `video_ltx2_t2v.json`, `ltx2_Image_to_Video.json`, `video_wan2_2_14B_i2v.json`, `1_click_multiple_angles.json`, `1_click_multiple_scene_angles-v1.0.json`, `image_qwen_image_edit_2509.json`, `music_generation.json`.
+
+**Image Edit:** Qwen 2509 workflow; supports 1–2 optional reference images. **Annotate image** tool: draw circles, rectangles, freehand, and text labels on the input (or a video frame), then use as Ref 1/Ref 2. Annotation modal: color palette, move/resize shapes, text with black outline. Ref images are uploaded and wired to `image2`/`image3` on the workflow.
+
+**Aspect ratio warning:** Shown only for image-to-video workflows (not for Text to Video).
 
 **Features:** Prompt/negative prompt, cinematography tags (10 categories), resolution/duration/FPS/seed, input asset picker for image-based workflows, job queue with progress and result import to Assets.
+
+**Extend from timeline frame:** Park the playhead on a video or image clip, then right-click the preview → **Extend with AI** or **Starting keyframe for AI**. The frame at the playhead (topmost clip) is captured and sent to the Generate tab; the app switches to Generate with that frame as input. Choose **Image to Video (LTX2)** or **Image to Video (WAN 2.2)**, enter a prompt, and queue. Uses `frameForAIStore` and `captureTimelineFrame`; jobs can use `inputFromTimelineFrame` so the following clip is not pushed (no ripple).
 
 ## Text Panel Features
 - Text content textarea
@@ -316,6 +335,7 @@ The **Generate** tab offers workflow-based generation with a job queue and progr
 - Video preloading/caching for seamless clip transitions; **no black flash at cuts** (display uses cache's preloaded video element)
 - **Playback cache (Flame-style)**: Video imported (AI Generate, Assets, Stock/Pexels) is transcoded in background to H.264, keyframe every 6, no B-frames; timeline uses cached file when ready for smooth playback. Cache lives in `project/cache/playback_<assetId>.mp4`. Electron only; run with `npm run electron:dev`.
 - Video clips maintain aspect ratio (letterbox/pillarbox, no stretching)
+- **Extend with AI:** In timeline mode, right-click preview when playhead is over a video/image clip → **Extend with AI** or **Starting keyframe for AI** to capture that frame and open the Generate tab with it as input for LTX2 i2v or WAN 2.2 i2v.
 
 ### Safe Guides & Letterbox
 Preview panel includes professional overlay guides accessible via **Guides** dropdown:
@@ -363,7 +383,7 @@ Export full edits (cuts, transitions, masks, text, audio) to a video file.
 **Implementation Details:**
 - Frame-by-frame compositing to PNG sequence (canvas)
 - Uses cached renders for masked clips if enabled
-- Audio mixdown via OfflineAudioContext → WAV
+- Audio mixdown: **FFmpeg in Electron main process** (IPC `export:mixAudio`); fallback to OfflineAudioContext in renderer if FFmpeg unavailable or fails.
 - Encoding via FFmpeg in Electron main process
 
 ## Playback Modes (Right-click Play button)
@@ -389,6 +409,7 @@ Export full edits (cuts, transitions, masks, text, audio) to a video file.
 - **Collapsible panels**: Icon bar always visible (48px each side)
 - **Full-height mode**: Left panel can expand to span entire height (Resolve-style)
 - **Draggable inputs**: Position X/Y, Anchor X/Y - click+drag to adjust, double-click to edit
+- **Number inputs**: Spinner arrows hidden globally (`index.css`); double-click to type value
 
 ## Keyframing & Animation
 Clips support keyframe-based animation for transform properties.
@@ -398,6 +419,7 @@ Clips support keyframe-based animation for transform properties.
 - Scale X/Y
 - Rotation
 - Opacity
+- Blur
 - Anchor X/Y
 - Crop (Top, Bottom, Left, Right)
 
@@ -467,7 +489,6 @@ clearAllKeyframes(clipId)
 
 ## Pending Features
 - [ ] Keyboard: C (split), Ctrl+D (duplicate)
-- [ ] Copy/Paste clips
 - [ ] Timeline markers
 - [ ] Audio waveforms
 - [ ] Text animation presets
@@ -477,6 +498,141 @@ clearAllKeyframes(clipId)
 ---
 
 ## Recent Changes Log
+
+### Live drop preview when dragging from Assets (Feb 2026)
+
+**Asset-to-timeline drag preview:**
+- While dragging an asset from the Assets panel onto the timeline (before mouse-up), a **live ghost clip** appears on the target track at the current drop position. The preview shows: clip type (VID/IMG/AUD), asset name, duration (frame-quantized), and track/target time. Video/image tracks use a semi-transparent teal ghost with orange border; audio tracks use the same Resolve-style green tint. Preview updates as the cursor moves across tracks and along the timeline. On drop, the real clip is placed where the ghost was; preview clears on drop, drag leave, or drag end.
+- **Implementation:** `Timeline.jsx`: state `assetDropPreview` (assetId, trackId, startTime, duration, assetType, name, willCreateTrack); `renderAssetDropPreviewClip(track)` renders the ghost; `handleDragOver` computes drop position and duration via `getDropStartTime`, `getDropPreviewDuration`, `resolveDropTrackForAsset`, `canDropAssetOnTrack`. Overlay assets (letterbox/vignette/color matte) show “+ track on drop” when a new video track would be created. `getDraggedAssetId` reads from `dataTransfer` (assetId, text/plain JSON) with fallback to `draggedAssetId` from custom events. Global `dragend`/`drop` and custom `comfystudio-assets-drag-start` / `comfystudio-assets-drag-end` clear preview. **AssetsPanel.jsx:** `notifyAssetDragStart(assetId, idsToMove)` and `notifyAssetDragEnd()` dispatch window events on drag start/end for all three asset drag surfaces (grid, list, list expanded folders) so the timeline can show preview even when `dataTransfer.getData()` is restricted during dragover in some environments.
+
+### Inspector sliders, transitions, timeline scroll (Feb 2026)
+
+**Inspector – double-click to reset sliders:**
+- Scale (uniform or X/Y), Rotation, Opacity, Blur, and Crop (Top/Bottom/Left/Right) sliders: **double-click** resets that property to default (scale 100%, rotation 0°, opacity 100%, blur 0, crop 0). Linked scale resets both X and Y. Uses `handleSliderReset`; keyframes updated when property has keyframes. Files: `InspectorPanel.jsx`.
+
+**Number input spinners removed:**
+- All `<input type="number">` spinners (up/down arrows) hidden via global CSS so users type or use draggable inputs; double-click draggable number to edit. Files: `src/index.css`.
+
+**Transition handle 1:1 with mouse:**
+- Dragging transition left/right handle previously used fixed 20px = 1s, so the handle moved 5–8× faster than the cursor at higher zoom. Now `deltaDuration = deltaX / pixelsPerSecond` so the handle stays under the cursor. Files: `Timeline.jsx`.
+
+**Resolve-style transition visual:**
+- Transition tile: dark grey-black overlay (`#1a1a1a/85`), grey border, transition name (e.g. "Cross Dissolve") in white, duration in grey pill (e.g. "35f"), full-width white top bar with small vertical handle. **Diagonal line** from bottom-left to top-right (SVG line, 50% white) as dissolve indicator. Red edge guides removed. Files: `Timeline.jsx`.
+
+**Timeline vertical scroll sync:**
+- When tracks are resized tall, only the left (track headers) panel showed a scrollbar and scrolled; the right (track content) did not. Cause: flex items had default `min-height: auto`, so the content container grew to fit all tracks and never became scrollable. Fix: added `min-h-0` to `timelineRef`, inner flex container, and `trackContentRef` so the right side is height-constrained and scrollable; left and right sync `scrollTop` on scroll. Right-side scrollbar hidden (`.hide-scrollbar` + `scrollbarWidth: none`) so only one scrollbar is visible. Files: `Timeline.jsx`, `src/index.css`.
+
+### Export audio fix, preview scaling, slip edit, dope sheet, playback resilience (Feb 2026)
+
+**Export audio:** Audio mixing moved to Electron main process via FFmpeg (IPC `export:mixAudio`). Complex timelines no longer hang on WebAudio; fallback to OfflineAudioContext if FFmpeg fails. `exporter.js` calls `window.electronAPI.mixAudio` with clips/tracks/assets; main process builds FFmpeg filter graph (atrim, atempo, adelay, amix) and writes WAV.
+
+**Export demux resilience:** Exporter tolerates `DEMUXER_ERROR_NO_SUPPORTED_STREAMS` and bad video sources: `getMediaErrorMessage()`, `failedVideoSources` set to skip undecodable sources, seek/draw wrapped in try/catch so one bad clip doesn't abort export. `src/services/exporter.js`.
+
+**Preview scaling:** Preview composition (position, blur, text size) now scales with panel size so framing stays correct at any window size. `previewScale` in `PreviewPanel.jsx`, passed to `VideoLayerRenderer` and `TextLayer`.
+
+**Slip edit:** Alt+Drag on a video/audio clip body adjusts in/out points together without changing duration or timeline position. `Timeline.jsx` slipState, frame-quantized delta, clamped to source duration.
+
+**Dope sheet:** Bottom tab "Dope Sheet" for selected clip: property lanes, keyframe diamonds, drag to retime, frame snap toggle, add/delete keyframes. `DopeSheet.jsx`, `timelineStore` `moveKeyframeTime` / `moveKeyframesAtTime`.
+
+**Playback cache:** On project load, validate playback cache files exist; if missing, mark `playbackCacheStatus: 'failed'`. At runtime, if video fails (e.g. `video:error`, readyState 0), mark cache broken and fall back to original asset URL. `assetsStore.js`, `VideoLayerRenderer.jsx`, `videoCache.js`.
+
+### Blur, Fullscreen, Overlay IDs, Still-Frame Duration, Audio Generation (Feb 2026)
+
+**Blur clips:**
+- Per-clip **blur** (0–50px, 0.25px step) added to transform. Inspector has Blur slider + keyframe diamond for video/image/text. Applied in PreviewPanel (`buildVideoTransform`), VideoLayerRenderer (blur combined with mask filter so both apply), and exporter. `KEYFRAMEABLE_PROPERTIES` in `keyframes.js` includes blur.
+
+**Fullscreen preview fix:**
+- Fullscreen button on preview showed black grid with no picture. Cause: fullscreen panel and inner aspect-ratio wrapper had no explicit size. Fix: panel gets `width: 100vw; height: 100vh` when fullscreen; `getAspectRatioStyle()` returns explicit width/height in fullscreen (e.g. 90vw × min(90vh, 90vw/ar)) so the video area has real dimensions. File: `PreviewPanel.jsx`.
+
+**Color matte / letterbox / vignette “linked” to another clip:**
+- Trimming, moving, or deleting an overlay (e.g. color matte) also changed another clip because two clips shared the same ID. Fix: **unique clip IDs** via `getNextClipCounter(clips, fallback)` in `timelineStore.js` (scans existing `clip-N` IDs and returns next free number). `addClip`, `addTextClip`, and `pasteClipsAtPlayhead` use it; `resolveOverlaps` split-clip IDs use a safe base; `loadFromProject` sets `clipCounter` to max(existing IDs)+1. New overlays and pastes no longer collide; re-add any clips that were already duplicated.
+
+**Still-frame overlays snapping to one frame:**
+- Letterbox, color matte, vignette (image clips with infinite source) sometimes shrank to ~0.042s and Source Duration showed "s". Cause: `sourceDuration` was null/undefined and treated as 0. Fix: **`parseClipSourceDuration()`** in `timelineStore.js` (handles Infinity, numeric, null/empty); **image clips** with null source duration are treated as **Infinity** in `updateClipTrim`, `resizeClip`, `trimClipEnd`, `getClipHandles`, and `loadFromProject`. Inspector shows "Infinity" (or "Unknown") for source duration instead of calling `.toFixed(2)` on null. Timeline right-trim logic treats image/infinite source so duration is not clamped to one frame. Files: `timelineStore.js`, `Timeline.jsx`, `InspectorPanel.jsx`.
+
+**Audio generation (Music) validation fix:**
+- Generate → Music was failing with "Required input is missing" for node TextEncodeAceStepAudio1.5 (generate_audio_codes, top_k, top_p, temperature, cfg_scale, min_p). ComfyUI Ace-Step 1.5 node was updated to require these. Fix: added these inputs to `public/workflows/music_generation.json` (node 94) with defaults (generate_audio_codes: true, top_k: 0, top_p: 0.9, temperature: 1, cfg_scale: 1, min_p: 0) and in `modifyMusicWorkflow()` in `comfyui.js` so they are always set when patching. Files: `public/workflows/music_generation.json`, `src/services/comfyui.js`.
+
+### Extend from Timeline, List Details, Split Fix (Feb 2026)
+
+**Extend with AI / Starting keyframe for AI:**
+- Park the playhead on any video or image clip. Right-click the preview (timeline mode) → **Extend with AI** or **Starting keyframe for AI**. The frame from the **topmost** clip at the playhead is captured and sent to the Generate tab; the app switches to Generate with that frame as input.
+- **Generate tab:** When a timeline frame is set, a card shows the frame thumbnail, mode (Extend / Keyframe), and **Clear timeline frame**. User chooses **Image to Video (LTX2)** or **Image to Video (WAN 2.2)**, enters prompt, and queues. The job uses the captured frame file (no asset required); `runJob` supports `job.inputFromTimelineFrame` and reads the file from `frameForAIStore`.
+- **Files:** `src/stores/frameForAIStore.js` (new), `src/utils/captureTimelineFrame.js` (new; `getTopmostVideoOrImageClipAtTime`, `captureTimelineFrameAt`), `PreviewPanel.jsx` (context menu items, capture + dispatch `comfystudio-open-generate-with-frame`), `GenerateWorkspace.jsx` (frame card, use of store, job `inputFromTimelineFrame`), `App.jsx` (listener to switch to Generate tab). Import fix: use **named** import `import { useFrameForAIStore } from '../stores/frameForAIStore'` (store has no default export).
+
+**AI/IMP tags on timeline clips:**
+- Video and image clips on the timeline now show an **AI** (orange) or **IMP** (gray) badge next to the clip name (video) or next to the IMG badge (image), matching the Assets panel. Lookup via `getAssetById(clip.assetId)`; badge only when asset exists. **Files:** `Timeline.jsx` (getAssetById from store, badge in video and image clip render blocks).
+
+**Assets list view – details columns and sortable:**
+- In **list view**, a fixed header row shows columns: **Name**, **Type**, **Length**, **Size**, **Source** (AI/IMP), **Date**. Each asset row displays the same fields (thumbnail + name, type label, duration string, formatted file size, AI/IMP badge, relative time). Click any column header to sort by that column; click again to toggle ascending/descending. Sort choice is persisted in `localStorage` key `assetsListSort`. Same column layout is used for assets inside expanded folders. **Files:** `AssetsPanel.jsx` (listSortBy state, setListSort, formatFileSize, getAssetLength/Size/Source/TypeLabel, sortAssets, grid layout for header and rows; ListFolderRow updated to use same details columns for child assets).
+
+**Split (X) at playhead – fix when ripple off:**
+- Splitting a clip with **X** (or context menu **Split at Playhead**) was causing the right half to appear to disappear and the clip to the right to move left to the cut. Cause: `addClip` for the second half used the **full source duration**, so `resolveOverlaps` thought the new clip extended far to the right and trimmed/moved the following clip (Case 2).
+- **Fix:** `addClip` now accepts an optional 5th parameter `options = { duration, trimStart, trimEnd }`. When provided (for the second half of a split), the new clip is created with that duration and trim, and `resolveOverlaps` is called with that duration so it does not affect the following clip. Split handlers in `Timeline.jsx` (X key and context menu) now call `addClip(..., { duration: remainder, trimStart: sourceTimeAtCut, trimEnd: sourceTrimEnd })` and no longer call `updateClipTrim`/`resizeClip` on the new clip. **Files:** `timelineStore.js` (addClip options, finalDuration/finalTrimStart/finalTrimEnd, resolveOverlaps uses finalDuration), `Timeline.jsx` (split passes options; getTimeScale used for sourceTrimEnd).
+
+### Drag/Clip/Overlay & Copy-Paste (Feb 2026)
+
+**Drag from Assets to Timeline (forbidden cursor fix):**
+- Dragging clips from the Assets panel to the timeline was showing a red “forbidden” cursor. Cause: Assets panel set `effectAllowed = 'move'` while the Timeline sets `dropEffect = 'copy'`. The browser only allows drop effects permitted by the source.
+- **Fix:** In `AssetsPanel.jsx`, all asset drag-start handlers now set `effectAllowed = 'copyMove'` so both Timeline (copy) and folder drops (move) work.
+
+**X key / Split on text clips:**
+- Pressing **X** on a text clip (split at playhead) was only shortening the clip and not creating a second clip, because the split logic looked up an asset by `clip.assetId` (text clips have `assetId: null`).
+- **Fix:** In `Timeline.jsx`, when the clip is a text clip, after shortening the first part we call `addTextClip(trackId, { ...clip.textProperties, duration: remainder }, playheadPosition)` so the second half is a new text clip with the same styling. Same logic applied to the context menu **Split at Playhead** action.
+
+**Blend modes on clips:**
+- Clips (video, image, text) can use **blend modes** (e.g. screen, multiply, overlay, darken, lighten, color-dodge, color-burn, hard-light, soft-light, difference, exclusion, hue, saturation, color, luminosity).
+- **Store:** `clip.transform.blendMode` (default `'normal'`) added in `timelineStore.js` for new clips, `updateClipTransform`, and `resetClipTransform`.
+- **Preview:** `PreviewPanel.jsx` `buildVideoTransform()` sets `style.mixBlendMode` when not `'normal'`.
+- **Inspector:** Blend mode dropdown in Transform section for video/image clips and in the **text clip** Transform section (both inspector layouts).
+- **Export:** `exporter.js` sets `ctx.globalCompositeOperation` from `clip.transform.blendMode` when drawing each layer and text clips.
+
+**Copy / Paste clips:**
+- **Ctrl+C (Cmd+C):** Copy selected timeline clips into an internal buffer (`copiedClips`), preserving relative start times.
+- **Ctrl+V (Cmd+V):** Paste at playhead on the **active track**. Only clips matching the active track type are pasted (video track: video/image/text; audio track: audio). Overlaps resolved (NLE-style). One undo step for the whole paste.
+- **Store:** `timelineStore.js`: `copiedClips`, `copySelectedClips()`, `pasteClipsAtPlayhead(trackId, startTime, assets)`. `resolveOverlaps` extended with optional `baseClips` and `idCounter` for batch paste.
+- **Context menu:** Clip context menu has **Copy** and **Paste at Playhead** (Paste disabled when nothing copied or no active track).
+- **Files:** `Timeline.jsx` (keyboard handlers, context menu), `timelineStore.js`.
+
+**Overlay generator (Option B – generated stills):**
+- Right-click in Assets panel (empty area or on a folder) → **Create overlay** section: **Letterbox overlay…**, **Vignette overlay…**, **Color matte…**. From a folder: **Create overlay in this folder…**.
+- **OverlayGeneratorModal.jsx:** One modal with type tabs (Letterbox, Vignette, Color matte). Resolution: “Match timeline” or custom width×height. Optional name. Type-specific options: letterbox = aspect ratio (2.39:1, 2.35:1, 16:9, 4:3, 1:1) and bar color; vignette = strength and softness sliders; color matte = color picker. Generates PNG via canvas, creates blob URL, calls `onAdd(asset)` so the image is added to the asset library (and current or chosen folder). Overlays are normal image assets; drag onto a video track above content and use blend mode/opacity as needed.
+- **Files:** `src/components/OverlayGeneratorModal.jsx` (new), `src/components/panels/AssetsPanel.jsx` (context menu items, modal state, `getCurrentTimelineSettings` for resolution).
+
+**Image/text clips moving between tracks:**
+- Generated overlay images (and other image clips, and text clips) could not be moved up/down to another track; only left/right and trim worked. Cause: vertical track switching used `clip.type` to filter tracks (`tracks.filter(t => t.type === clip.type)`); image clips have `type: 'image'` but there are no tracks with `type: 'image'` (only `video` and `audio`).
+- **Fix:** In `Timeline.jsx`, when computing the target track for vertical drag, treat image and text clips as video-track clips: `trackType = (clip.type === 'image' || clip.type === 'text') ? 'video' : (clip.type || 'video')`, so they can move between Video 1, Video 2, etc.
+
+### Generate, Assets, and UX (Feb 2026)
+
+**Image Edit – reference images and annotation:**
+- Image Edit workflow supports **1–2 optional reference images** (Qwen `image2`/`image3`). Refs chosen from Assets dropdown or created via **Annotate image**.
+- **Annotate image** (button in Generate → Image Edit): Opens modal with current input image (or video frame at current time). Draw **circles**, **rectangles**, **freehand**, and **text labels**; pick **color** from palette; **move/resize** shapes (and move text). Export as Ref 1 or Ref 2 (adds to assets and sets ref). Text has black outline for readability.
+- Workflow modifier `modifyQwenImageEdit2509Workflow` injects ref LoadImage nodes and wires `image2`/`image3` on `TextEncodeQwenImageEditPlus` when refs provided.
+- Files: `src/components/ImageAnnotationModal.jsx` (new), `src/components/GenerateWorkspace.jsx`, `src/services/comfyui.js`.
+
+**Multiple Angles – characters vs scenes:**
+- **Multiple Angles (Characters):** `1_click_multiple_angles.json` – 8 camera angles from one character image.
+- **Multiple Angles (Scenes):** `1_click_multiple_scene_angles-v1.0.json` – 8 camera angles from one scene image.
+- Same modifier used for both; workflow map and WORKFLOWS in GenerateWorkspace updated.
+
+**Image Edit copy:**
+- Card and prompt placeholder updated: e.g. “remove person on left or change color of car” (replaced “inflate the subject”).
+
+**Aspect ratio mismatch:**
+- Warning shown only when workflow **needs an input image** (image-to-video). Text to Video no longer shows the warning.
+
+**Assets panel – drag to folder:**
+- Drag assets onto folders (or Root) now works in all browsers: drag data set as both custom MIME type and `text/plain`; drop handler reads `text/plain` as fallback. `effectAllowed` set to `move`.
+
+**Assets panel – folder name Enter key:**
+- In new-folder input, Enter calls `preventDefault()` and `stopPropagation()` so timeline play (global Enter) is not triggered.
+
+**Assets panel – list view expand:**
+- Each folder in list view has an **arrow** (chevron right/down). Click arrow to expand/collapse and show contents inline (subfolders + assets). Click folder name to navigate into folder. State: `expandedFolderIds` (Set).
+
+**Assets panel – folder and asset colors:**
+- Right-click folder or asset → **Color** → palette (None, red, orange, yellow, green, cyan, blue, purple, pink, gray). Store: `setFolderColor(folderId, color)`, `setAssetColor(assetId, color)`. Colored items show **left border** in grid and list. Folder context menu: Color + Delete folder.
 
 ### Black Flash Fix, Playback Cache, Input Focus (Feb 2026)
 
@@ -721,10 +877,14 @@ Updated the app's color scheme to match DaVinci Resolve more closely.
 - Create folders to organize assets (click folder+ icon)
 - Navigate into folders by clicking them
 - Breadcrumb navigation shows path (Root > Folder > Subfolder)
+- **Drag-and-drop** assets onto folders or Root to move (grid and list view; uses `text/plain` fallback for drag data in all browsers)
 - Right-click asset to move it to a different folder
 - Delete folders (contents move to parent folder)
 - Nested folders supported
 - Folder count displayed in footer
+- **List view:** Expand arrow next to each folder; click arrow to show/hide contents inline (subfolders + assets). Click folder name to navigate into folder. **Details columns:** When list view is active, a sortable header row shows **Name**, **Type**, **Length**, **Size**, **Source** (AI/IMP), **Date**. Click a column to sort; sort preference is persisted in `localStorage` (`assetsListSort`). Each asset row shows thumbnail, name, type (Video/Image/Audio/Mask), duration (e.g. 3s or 1:05), file size (KB/MB), AI or IMP badge, and relative date.
+- **Colors:** Right-click folder or asset → **Color** → pick from palette (red, orange, yellow, green, cyan, blue, purple, pink, gray, or None). Colored items show a left border in grid/list. Store: `setFolderColor(folderId, color)`, `setAssetColor(assetId, color)` in `assetsStore.js`.
+- **New folder name:** Pressing Enter to confirm folder name no longer triggers timeline play (event stopPropagation/preventDefault in AssetsPanel).
 - Files: `src/components/panels/AssetsPanel.jsx`, `src/stores/assetsStore.js`
 
 **New Store Properties (assetsStore.js):**
@@ -1058,6 +1218,33 @@ MyProject/
 - Without sprites: Video decoding on each scrub (sluggish)
 - With sprites: Instant CSS background-position change (smooth)
 - Sprite visible during scrub, video shown when stopped
+
+### Session Updates (Feb 17, 2026)
+
+**Inspector Enter key + transport shortcut fix:**
+- Pressing `Enter` while typing a number in Inspector now commits the value without triggering timeline playback.
+- `InspectorPanel.jsx`: `DraggableNumberInput` now calls `preventDefault()` and `stopPropagation()` on Enter before commit.
+- `TransportControls.jsx`: Enter-to-play now ignores key events originating from input/textarea/select/contentEditable targets.
+
+**Fullscreen preview framing parity + scrubber:**
+- Fixed fullscreen framing mismatch where fullscreen showed wider side content than normal mode.
+- `PreviewPanel.jsx` now uses the same measured render dimensions path in normal and fullscreen so transform scale and container size stay aligned.
+- Added fullscreen scrubber (click + drag seek) with current/total timecode in the fullscreen transport bar.
+
+**Inspector header cleanup (text-only):**
+- Removed the clip-type icon tile from video/image/text/audio inspector headers for a cleaner text-only header.
+- `InspectorPanel.jsx` header now shows name/track/duration (or audio name/type) without icon boxes.
+
+**Default track count for new projects/timelines:**
+- New project and new timeline defaults now start with **1 video track** and **1 audio track**.
+- Updated default/fallback track arrays in `src/stores/projectStore.js` and `src/stores/timelineStore.js`.
+
+**Generate WAN i2v reliability guard:**
+- Reviewed WAN i2v pipeline and workflow (`video_wan2_2_14B_i2v.json`): no self-referential graph loop found in the JSON.
+- Added polling guard in `GenerateWorkspace.jsx`: after repeated consecutive `/history` poll failures, abort with clear error (`Lost connection to ComfyUI while waiting for generation result`) instead of polling indefinitely.
+
+**Generate resolution presets:**
+- Added `960x540` (landscape) and `540x960` (portrait) options to Video generation resolution dropdown in `GenerateWorkspace.jsx`.
 
 ---
 *Backup of previous version: `backUP01_PROJECT_SUMMARY.md`*

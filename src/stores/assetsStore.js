@@ -193,6 +193,32 @@ export const useAssetsStore = create(
   },
 
   /**
+   * Update arbitrary asset fields.
+   * Useful for generated overlays that need in-place regeneration.
+   */
+  updateAsset: (id, updates) => {
+    if (!id || !updates || typeof updates !== 'object') return
+    set((state) => {
+      const existing = state.assets.find(a => a.id === id)
+      if (!existing) return {}
+
+      const nextAsset = { ...existing, ...updates }
+      const oldUrl = existing.url
+      const nextUrl = nextAsset.url
+      if (oldUrl && oldUrl !== nextUrl && oldUrl.startsWith('blob:')) {
+        try { URL.revokeObjectURL(oldUrl) } catch (_) {}
+      }
+
+      return {
+        assets: state.assets.map(a => (a.id === id ? nextAsset : a)),
+        currentPreview: state.currentPreview?.id === id
+          ? nextAsset
+          : state.currentPreview
+      }
+    })
+  },
+
+  /**
    * Enable/disable audio for a video asset
    */
   setAssetAudioEnabled: (id, enabled) => {
@@ -241,8 +267,33 @@ export const useAssetsStore = create(
   },
 
   /**
+   * Set folder color (for organization). color: hex string or null.
+   */
+  setFolderColor: (folderId, color) => {
+    set((state) => ({
+      folders: state.folders.map(f =>
+        f.id === folderId ? { ...f, color: color || null } : f
+      )
+    }))
+  },
+
+  /**
+   * Set asset color (for organization). color: hex string or null.
+   */
+  setAssetColor: (assetId, color) => {
+    set((state) => ({
+      assets: state.assets.map(a =>
+        a.id === assetId ? { ...a, color: color || null } : a
+      ),
+      currentPreview: state.currentPreview?.id === assetId
+        ? { ...state.currentPreview, color: color || null }
+        : state.currentPreview
+    }))
+  },
+
+  /**
    * Add a new folder
-   * @param {object} folder - Folder data { name, parentId }
+   * @param {object} folder - Folder data { name, parentId, color? }
    */
   addFolder: (folder) => {
     const state = get()
@@ -250,6 +301,7 @@ export const useAssetsStore = create(
       id: `folder-${state.folderCounter}`,
       name: folder.name,
       parentId: folder.parentId || null,
+      color: folder.color ?? null,
       createdAt: new Date().toISOString()
     }
     set((state) => ({
@@ -352,14 +404,46 @@ export const useAssetsStore = create(
           }
           // Regenerate playback cache URL if we have a cached transcode
           let playbackCacheUrl = null
+          let playbackCachePath = asset.playbackCachePath
+          let playbackCacheStatus = asset.playbackCacheStatus
           if (asset.playbackCachePath) {
             try {
-              playbackCacheUrl = await getProjectFileUrl(projectHandle, asset.playbackCachePath)
+              // Validate playback cache exists before generating a file:// URL.
+              // Missing cache files lead to networkState=3 and black flicker during playback.
+              let canUsePlaybackCache = true
+              if (
+                isElectron() &&
+                typeof projectHandle === 'string' &&
+                window.electronAPI?.pathJoin &&
+                window.electronAPI?.exists
+              ) {
+                const absolutePlaybackCachePath = await window.electronAPI.pathJoin(projectHandle, asset.playbackCachePath)
+                canUsePlaybackCache = await window.electronAPI.exists(absolutePlaybackCachePath)
+              }
+
+              if (canUsePlaybackCache) {
+                playbackCacheUrl = await getProjectFileUrl(projectHandle, asset.playbackCachePath)
+              } else {
+                playbackCachePath = null
+                playbackCacheStatus = 'failed'
+                console.warn(`[PlaybackCache] Missing cache file for ${asset.name}; falling back to source`, {
+                  assetId: asset.id,
+                  playbackCachePath: asset.playbackCachePath,
+                })
+              }
             } catch (e) {
+              playbackCachePath = null
+              playbackCacheStatus = 'failed'
               console.warn(`Could not load playback cache for ${asset.name}:`, e)
             }
           }
-          assetsWithUrls.push({ ...asset, url, playbackCacheUrl: playbackCacheUrl ?? undefined })
+          assetsWithUrls.push({
+            ...asset,
+            url,
+            playbackCachePath: playbackCachePath ?? undefined,
+            playbackCacheStatus,
+            playbackCacheUrl: playbackCacheUrl ?? undefined,
+          })
         } catch (err) {
           console.warn(`Could not load asset ${asset.name}:`, err)
           // Keep asset but mark URL as null
@@ -548,7 +632,7 @@ export const useAssetsStore = create(
     const asset = get().assets.find(a => a.id === assetId)
     if (!asset) return null
     // Use playback cache URL when available (Flame-style: optimized for playback)
-    const useCache = !!asset.playbackCacheUrl
+    const useCache = !!asset.playbackCacheUrl && asset.playbackCacheStatus !== 'failed'
     const url = useCache ? asset.playbackCacheUrl : (asset.url || null)
     if (typeof localStorage !== 'undefined' && localStorage.getItem('comfystudio-debug-playback') === '1' && asset.type === 'video') {
       console.log('[PlaybackCache] getAssetUrl:', { assetId, useCache, urlHint: url ? (url.startsWith('file:') ? 'file:// (cache or original)' : url.slice(0, 50) + '...') : 'null' })
@@ -580,6 +664,41 @@ export const useAssetsStore = create(
       ),
       currentPreview: state.currentPreview?.id === assetId
         ? { ...state.currentPreview, playbackCacheStatus: status }
+        : state.currentPreview,
+    }))
+  },
+
+  /**
+   * Mark playback cache as unusable and immediately fallback to source URL.
+   * Keeps source asset URL untouched.
+   */
+  markPlaybackCacheBroken: (assetId, reason = 'unknown') => {
+    if (!assetId) return
+
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('comfystudio-debug-playback') === '1') {
+      console.warn('[PlaybackCache] Marking cache broken, fallback to source', { assetId, reason })
+    }
+
+    set((state) => ({
+      assets: state.assets.map(a =>
+        a.id === assetId
+          ? {
+              ...a,
+              playbackCacheUrl: undefined,
+              playbackCachePath: undefined,
+              playbackCacheStatus: 'failed',
+              playbackCacheError: reason,
+            }
+          : a
+      ),
+      currentPreview: state.currentPreview?.id === assetId
+        ? {
+            ...state.currentPreview,
+            playbackCacheUrl: undefined,
+            playbackCachePath: undefined,
+            playbackCacheStatus: 'failed',
+            playbackCacheError: reason,
+          }
         : state.currentPreview,
     }))
   },

@@ -277,6 +277,8 @@ function Timeline({ onOpenAudioGenerate }) {
   const [isDragging, setIsDragging] = useState(false)
   const [dragClip, setDragClip] = useState(null)
   const [dropTarget, setDropTarget] = useState(null)
+  const [draggedAssetId, setDraggedAssetId] = useState(null)
+  const [assetDropPreview, setAssetDropPreview] = useState(null) // { assetId, trackId, startTime, duration, assetType, name, willCreateTrack }
   
   // Track headers width (resizable) — default wide enough to read labels; persisted
   const TRACK_HEADERS_MIN = 100
@@ -486,7 +488,7 @@ function Timeline({ onOpenAudioGenerate }) {
   const { snapClipPosition, snapTrim, pixelsPerSecond: snapPixelsPerSecond } = useSnapping()
 
   // Assets store for drag & drop and preview mode
-  const { assets, currentPreview, setPreview, setPreviewMode, getAssetUrl, getAssetById, isPlaying: assetIsPlaying, setIsPlaying: setAssetIsPlaying } = useAssetsStore()
+  const { assets, currentPreview, setPreviewMode, getAssetUrl, getAssetById, isPlaying: assetIsPlaying, setIsPlaying: setAssetIsPlaying } = useAssetsStore()
 
   const availableMasks = useMemo(() => {
     return assets.filter(a => a.type === 'mask')
@@ -543,6 +545,58 @@ function Timeline({ onOpenAudioGenerate }) {
         style={{ objectPosition }}
         onContextMenu={(e) => e.preventDefault()}
       />
+    )
+  }
+
+  const renderAssetDropPreviewClip = (track) => {
+    if (!assetDropPreview || assetDropPreview.trackId !== track.id) return null
+
+    const previewWidth = Math.max(24, assetDropPreview.duration * pixelsPerSecond)
+    const previewLeft = assetDropPreview.startTime * pixelsPerSecond
+    const isAudioTrack = track.type === 'audio'
+    const typeLabel = assetDropPreview.assetType === 'image'
+      ? 'IMG'
+      : assetDropPreview.assetType === 'audio'
+        ? 'AUD'
+        : 'VID'
+    const tone = isAudioTrack
+      ? {
+          background: 'rgba(45, 64, 56, 0.55)',
+          border: 'rgba(126, 184, 168, 0.9)',
+          accent: AUDIO_CLIP_ACCENT,
+        }
+      : {
+          background: 'rgba(61, 112, 128, 0.42)',
+          border: 'rgba(232, 93, 4, 0.9)',
+          accent: '#e85d04',
+        }
+
+    return (
+      <div
+        className="absolute top-0.5 bottom-0.5 rounded-sm border border-dashed pointer-events-none z-30 overflow-hidden"
+        style={{
+          left: `${previewLeft}px`,
+          width: `${previewWidth}px`,
+          minWidth: '24px',
+          backgroundColor: tone.background,
+          borderColor: tone.border,
+        }}
+      >
+        <div className="absolute inset-x-0 top-0 h-[3px]" style={{ backgroundColor: tone.accent }} />
+        <div className="absolute inset-0 bg-gradient-to-b from-white/15 to-transparent" />
+        <div className="absolute top-[5px] left-1 right-1 flex items-center gap-1 min-w-0">
+          <span className="text-[8px] uppercase tracking-wide font-semibold text-white/90">{typeLabel}</span>
+          <span className="text-[9px] text-white/90 truncate">{assetDropPreview.name}</span>
+        </div>
+        <div className="absolute bottom-1 right-1 text-[8px] text-white/85 bg-black/45 rounded px-1 py-0.5 font-mono">
+          {assetDropPreview.duration.toFixed(1)}s
+        </div>
+        {assetDropPreview.willCreateTrack && (
+          <div className="absolute bottom-1 left-1 text-[8px] text-white/85 bg-black/45 rounded px-1 py-0.5">
+            + track on drop
+          </div>
+        )}
+      </div>
     )
   }
 
@@ -980,6 +1034,40 @@ function Timeline({ onOpenAudioGenerate }) {
     }
   }, [isPanning, panStart])
 
+  useEffect(() => {
+    const handleAssetDragStart = (e) => {
+      const nextAssetId = e?.detail?.assetId
+      if (typeof nextAssetId === 'string' && nextAssetId) {
+        setDraggedAssetId(nextAssetId)
+      }
+    }
+    const handleAssetDragEnd = () => {
+      setDraggedAssetId(null)
+      setDropTarget(null)
+      setAssetDropPreview(null)
+    }
+    window.addEventListener('comfystudio-assets-drag-start', handleAssetDragStart)
+    window.addEventListener('comfystudio-assets-drag-end', handleAssetDragEnd)
+    return () => {
+      window.removeEventListener('comfystudio-assets-drag-start', handleAssetDragStart)
+      window.removeEventListener('comfystudio-assets-drag-end', handleAssetDragEnd)
+    }
+  }, [])
+
+  useEffect(() => {
+    const clearDropFeedback = () => {
+      setDraggedAssetId(null)
+      setDropTarget(null)
+      setAssetDropPreview(null)
+    }
+    window.addEventListener('dragend', clearDropFeedback)
+    window.addEventListener('drop', clearDropFeedback)
+    return () => {
+      window.removeEventListener('dragend', clearDropFeedback)
+      window.removeEventListener('drop', clearDropFeedback)
+    }
+  }, [])
+
   // Handle scroll wheel - Ctrl+Scroll to zoom, regular scroll to pan horizontally
   const handleWheel = (e) => {
     if (!timelineRef.current) return
@@ -1027,73 +1115,199 @@ function Timeline({ onOpenAudioGenerate }) {
     }
   }
 
+  const getDraggedAssetId = (dataTransfer) => {
+    if (!dataTransfer) return draggedAssetId
+    const directId = dataTransfer.getData('assetId')
+    if (directId) return directId
+    const plainText = dataTransfer.getData('text/plain')
+    if (!plainText) return draggedAssetId
+    try {
+      const parsed = JSON.parse(plainText)
+      if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
+        return parsed[0]
+      }
+    } catch (_) {
+      if (plainText.startsWith('asset-')) return plainText
+    }
+    return draggedAssetId
+  }
+
+  const getDropStartTime = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const scrollLeft = timelineRef.current?.scrollLeft || 0
+    const x = e.clientX - rect.left + scrollLeft
+    const fps = Number.isFinite(Number(timelineFps)) && Number(timelineFps) > 0
+      ? Number(timelineFps)
+      : FRAME_RATE
+    const rawStartTime = Math.max(0, x / pixelsPerSecond)
+    return Math.round(rawStartTime * fps) / fps
+  }
+
+  const getDropPreviewDuration = (asset, startTime) => {
+    if (!asset) return 5
+    const fps = Number.isFinite(Number(timelineFps)) && Number(timelineFps) > 0
+      ? Number(timelineFps)
+      : FRAME_RATE
+    const minDuration = 1 / fps
+    const isImage = asset.type === 'image'
+    const assetDuration = Number(asset.duration ?? asset.settings?.duration)
+    const sourceDuration = Number.isFinite(assetDuration) && assetDuration > 0 ? assetDuration : 5
+    let rawDuration = isImage ? 5 : sourceDuration
+    const isGeneratedOverlay = isImage && Boolean(asset?.settings?.overlayKind)
+
+    if (isGeneratedOverlay) {
+      const latestClips = useTimelineStore.getState().clips || clips
+      const timelineContentEnd = latestClips.length > 0
+        ? Math.max(...latestClips.map(c => c.startTime + c.duration))
+        : 0
+      const remainingDuration = timelineContentEnd - startTime
+      rawDuration = Math.max(5, remainingDuration > 0 ? remainingDuration : 0)
+    }
+
+    const roundedDuration = Math.round(rawDuration * fps) / fps
+    return Math.max(minDuration, roundedDuration)
+  }
+
+  const canDropAssetOnTrack = (asset, track) => {
+    if (!asset || !track) return false
+    const isVideoAsset = asset.type === 'video' || asset.type === 'image'
+    const isVideoTrack = track.type === 'video'
+    return (isVideoAsset && isVideoTrack) || (!isVideoAsset && !isVideoTrack)
+  }
+
+  const resolveDropTrackForAsset = (asset, requestedTrackId, { allowCreateTrack = false } = {}) => {
+    let targetTrackId = requestedTrackId
+    let willCreateTrack = false
+    const isOverlayAsset = asset.type === 'image' && Boolean(asset?.settings?.overlayKind)
+
+    if (!isOverlayAsset) {
+      return { targetTrackId, willCreateTrack }
+    }
+
+    const latestState = useTimelineStore.getState()
+    const latestTracks = latestState.tracks || []
+    const latestClips = latestState.clips || []
+    const unlockedVideoTracks = latestTracks.filter(t => t.type === 'video' && !t.locked)
+    const isOverlayClip = (clip) => {
+      if (clip.type !== 'image') return false
+      const clipAsset = assets.find(a => a.id === clip.assetId)
+      return Boolean(clipAsset?.settings?.overlayKind)
+    }
+
+    const reusableOverlayTrack = unlockedVideoTracks.find((trackCandidate) => {
+      const clipsOnTrack = latestClips.filter(c => c.trackId === trackCandidate.id)
+      return clipsOnTrack.length === 0 || clipsOnTrack.every(isOverlayClip)
+    })
+
+    if (reusableOverlayTrack) {
+      targetTrackId = reusableOverlayTrack.id
+      return { targetTrackId, willCreateTrack }
+    }
+
+    if (allowCreateTrack) {
+      const newTrack = addTrack('video')
+      if (newTrack?.id) {
+        targetTrackId = newTrack.id
+        willCreateTrack = true
+      }
+      return { targetTrackId, willCreateTrack }
+    }
+
+    const requestedTrack = latestTracks.find(t => t.id === requestedTrackId)
+    if (requestedTrack?.type === 'video' && !requestedTrack.locked) {
+      targetTrackId = requestedTrack.id
+    } else if (unlockedVideoTracks.length > 0) {
+      targetTrackId = unlockedVideoTracks[0].id
+    }
+    willCreateTrack = true
+    return { targetTrackId, willCreateTrack }
+  }
+
   // Handle drag over for drop zones
   const handleDragOver = (e, trackId) => {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
-    setDropTarget(trackId)
+
+    const assetId = getDraggedAssetId(e.dataTransfer)
+    if (!assetId) {
+      setDropTarget(trackId)
+      setAssetDropPreview(null)
+      return
+    }
+
+    const asset = assets.find(a => a.id === assetId)
+    if (!asset) {
+      setDropTarget(null)
+      setAssetDropPreview(null)
+      return
+    }
+
+    const startTime = getDropStartTime(e)
+    const { targetTrackId, willCreateTrack } = resolveDropTrackForAsset(asset, trackId, { allowCreateTrack: false })
+    const latestTracks = useTimelineStore.getState().tracks
+    const targetTrack = latestTracks.find(t => t.id === targetTrackId) || tracks.find(t => t.id === targetTrackId)
+
+    if (!canDropAssetOnTrack(asset, targetTrack)) {
+      setDropTarget(null)
+      setAssetDropPreview(null)
+      return
+    }
+
+    const duration = getDropPreviewDuration(asset, startTime)
+    setDropTarget(targetTrackId)
+    setAssetDropPreview((prev) => {
+      const next = {
+        assetId: asset.id,
+        trackId: targetTrackId,
+        startTime,
+        duration,
+        assetType: asset.type,
+        name: asset.name,
+        willCreateTrack,
+      }
+      if (
+        prev &&
+        prev.assetId === next.assetId &&
+        prev.trackId === next.trackId &&
+        prev.assetType === next.assetType &&
+        prev.name === next.name &&
+        prev.willCreateTrack === next.willCreateTrack &&
+        Math.abs(prev.startTime - next.startTime) < 0.0001 &&
+        Math.abs(prev.duration - next.duration) < 0.0001
+      ) {
+        return prev
+      }
+      return next
+    })
   }
 
-  const handleDragLeave = () => {
+  const handleDragLeave = (e) => {
+    if (e.currentTarget?.contains(e.relatedTarget)) return
     setDropTarget(null)
+    setAssetDropPreview(null)
   }
 
   // Handle drop from assets
   const handleDrop = (e, trackId) => {
     e.preventDefault()
     setDropTarget(null)
+    setAssetDropPreview(null)
     
-    const assetId = e.dataTransfer.getData('assetId')
+    const assetId = getDraggedAssetId(e.dataTransfer)
     if (!assetId) return
     
     const asset = assets.find(a => a.id === assetId)
     if (!asset) return
     
-    // Calculate drop time based on mouse position
-    // Need to account for timeline scroll position
-    const rect = e.currentTarget.getBoundingClientRect()
-    const scrollLeft = timelineRef.current?.scrollLeft || 0
-    const x = e.clientX - rect.left + scrollLeft
-    const startTime = Math.max(0, x / pixelsPerSecond)
-    
-    let targetTrackId = trackId
-    const isOverlayAsset = asset.type === 'image' && Boolean(asset?.settings?.overlayKind)
-
-    // Overlay assets should live on an overlay-friendly track (empty or overlay-only)
-    // to avoid overwriting primary footage on a content track.
-    if (isOverlayAsset) {
-      const videoTracks = tracks.filter(t => t.type === 'video' && !t.locked)
-      const isOverlayClip = (clip) => {
-        if (clip.type !== 'image') return false
-        const clipAsset = assets.find(a => a.id === clip.assetId)
-        return Boolean(clipAsset?.settings?.overlayKind)
-      }
-
-      const reusableOverlayTrack = videoTracks.find((trackCandidate) => {
-        const clipsOnTrack = clips.filter(c => c.trackId === trackCandidate.id)
-        return clipsOnTrack.length === 0 || clipsOnTrack.every(isOverlayClip)
-      })
-
-      if (reusableOverlayTrack) {
-        targetTrackId = reusableOverlayTrack.id
-      } else {
-        const newTrack = addTrack('video')
-        if (newTrack?.id) {
-          targetTrackId = newTrack.id
-        }
-      }
-    }
+    const startTime = getDropStartTime(e)
+    const { targetTrackId } = resolveDropTrackForAsset(asset, trackId, { allowCreateTrack: true })
 
     // Check if asset type matches target track type
     const latestTracks = useTimelineStore.getState().tracks
     const track = latestTracks.find(t => t.id === targetTrackId) || tracks.find(t => t.id === targetTrackId)
     if (!track) return
     
-    // Video assets go on video tracks, audio on audio tracks
-    const isVideoAsset = asset.type === 'video' || asset.type === 'image'
-    const isVideoTrack = track.type === 'video'
-    
-    if ((isVideoAsset && isVideoTrack) || (!isVideoAsset && !isVideoTrack)) {
+    if (canDropAssetOnTrack(asset, track)) {
       addClip(targetTrackId, asset, startTime, timelineFps)
       setPreviewMode('timeline')
       if (assetIsPlaying) {
@@ -1101,8 +1315,9 @@ function Timeline({ onOpenAudioGenerate }) {
       }
 
       // If this is a video asset with audio enabled, also add an audio clip
-      if (asset.type === 'video' && isVideoTrack && asset.audioEnabled !== false) {
-        const audioTrack = tracks.find(t => t.type === 'audio' && !t.locked)
+      if (asset.type === 'video' && track.type === 'video' && asset.audioEnabled !== false) {
+        const latestTracksAfterDrop = useTimelineStore.getState().tracks
+        const audioTrack = latestTracksAfterDrop.find(t => t.type === 'audio' && !t.locked)
         if (audioTrack) {
           const audioAsset = { ...asset, type: 'audio' }
           addClip(audioTrack.id, audioAsset, startTime, timelineFps)
@@ -1241,30 +1456,6 @@ function Timeline({ onOpenAudioGenerate }) {
               })
             }
           }
-        }
-        break
-      case 'set-in':
-        // Set clip start to playhead position
-        if (playheadPosition > clip.startTime && playheadPosition < clip.startTime + clip.duration) {
-          const newDuration = (clip.startTime + clip.duration) - playheadPosition
-          moveClip(clip.id, clip.trackId, playheadPosition)
-          resizeClip(clip.id, newDuration)
-        }
-        break
-      case 'set-out':
-        // Set clip end to playhead position
-        if (playheadPosition > clip.startTime && playheadPosition < clip.startTime + clip.duration) {
-          resizeClip(clip.id, playheadPosition - clip.startTime)
-        }
-        break
-      case 'preview':
-        // This explicitly opens the source asset in preview mode
-        // Note: This will show it in Assets panel preview, not timeline mode
-        const previewAsset = assets.find(a => a.id === clip.assetId)
-        if (previewAsset) {
-          setPreview(previewAsset)
-          // Clear the preview after setting so it triggers the asset panel but doesn't persist
-          // Actually, just set it - user can double-click in Assets to preview
         }
         break
     }
@@ -3008,6 +3199,7 @@ function Timeline({ onOpenAudioGenerate }) {
                   </div>
                   )
                 })}
+                {renderAssetDropPreviewClip(track)}
                 
                 {/* Roll edit zones and transition buttons/overlays between adjacent clips */}
                 {getAdjacentClips(track.id).map(({ clipA, clipB, transition, isOverlapping, gap }) => {
@@ -3338,6 +3530,7 @@ function Timeline({ onOpenAudioGenerate }) {
                   </div>
                   )
                 })}
+                {renderAssetDropPreviewClip(track)}
                 
                 {/* Roll edit zones between adjacent audio clips */}
                 {getAdjacentClips(track.id).map(({ clipA, clipB, isOverlapping, gap }) => {
@@ -3601,7 +3794,6 @@ function Timeline({ onOpenAudioGenerate }) {
                 onClick={() => handleSelectTransition('dissolve', defaultSeconds)}
                 className="w-full px-3 py-2.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
               >
-                <span className="w-4 text-center">⚪</span>
                 <span>Add transition</span>
               </button>
             ) : (
@@ -3643,7 +3835,6 @@ function Timeline({ onOpenAudioGenerate }) {
                     onClick={() => setMaskSubmenuOpen((prev) => !prev)}
                     className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
                   >
-                    <span className="w-4 text-center">🪄</span>
                     <span>Add Mask…</span>
                     <ChevronRight className="ml-auto w-3 h-3 text-sf-text-muted" />
                   </button>
@@ -3657,7 +3848,6 @@ function Timeline({ onOpenAudioGenerate }) {
                         onClick={() => handleContextMenuAction('add-mask')}
                         className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
                       >
-                        <span className="w-4 text-center">🧭</span>
                         <span>Open Mask Picker…</span>
                       </button>
                       
@@ -3670,7 +3860,6 @@ function Timeline({ onOpenAudioGenerate }) {
                             onClick={() => handleApplyMaskFromContextMenu(mask.id)}
                             className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
                           >
-                            <span className="w-4 text-center">🎭</span>
                             <span className="truncate">{mask.name}</span>
                           </button>
                         ))
@@ -3701,7 +3890,6 @@ function Timeline({ onOpenAudioGenerate }) {
                   onClick={() => handleContextMenuAction('flush-cache')}
                   className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
                 >
-                  <span className="w-4 text-center">🧹</span>
                   <span>Flush Render Cache</span>
                 </button>
                 <div className="h-px bg-sf-dark-600 my-1" />
@@ -3709,21 +3897,10 @@ function Timeline({ onOpenAudioGenerate }) {
             )
           })()}
           <button
-            onClick={() => handleContextMenuAction('preview')}
-            className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
-          >
-            <span className="w-4 text-center">👁</span>
-            <span>Preview</span>
-          </button>
-          
-          <div className="h-px bg-sf-dark-600 my-1" />
-          
-          <button
             onClick={() => handleContextMenuAction('split')}
             className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
             title="Split selected clip at playhead (or press X to split on active track)"
           >
-            <span className="w-4 text-center">✂️</span>
             <span>Split at Playhead</span>
             <span className="ml-auto text-sf-text-muted text-[10px]">X</span>
           </button>
@@ -3732,7 +3909,6 @@ function Timeline({ onOpenAudioGenerate }) {
             onClick={() => handleContextMenuAction('duplicate')}
             className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
           >
-            <span className="w-4 text-center">📋</span>
             <span>Duplicate</span>
             <span className="ml-auto text-sf-text-muted text-[10px]">⌘D</span>
           </button>
@@ -3741,7 +3917,6 @@ function Timeline({ onOpenAudioGenerate }) {
             className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
             title="Copy selected clips to paste at playhead"
           >
-            <span className="w-4 text-center">⎘</span>
             <span>Copy</span>
             <span className="ml-auto text-sf-text-muted text-[10px]">Ctrl+C</span>
           </button>
@@ -3751,29 +3926,8 @@ function Timeline({ onOpenAudioGenerate }) {
             className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             title="Paste at playhead on active track"
           >
-            <span className="w-4 text-center">⎘</span>
             <span>Paste at Playhead</span>
             <span className="ml-auto text-sf-text-muted text-[10px]">Ctrl+V</span>
-          </button>
-          
-          <div className="h-px bg-sf-dark-600 my-1" />
-          
-          <button
-            onClick={() => handleContextMenuAction('set-in')}
-            className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
-            title="Set clip start to playhead"
-          >
-            <span className="w-4 text-center">⟨</span>
-            <span>Set In to Playhead</span>
-          </button>
-          
-          <button
-            onClick={() => handleContextMenuAction('set-out')}
-            className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
-            title="Set clip end to playhead"
-          >
-            <span className="w-4 text-center">⟩</span>
-            <span>Set Out to Playhead</span>
           </button>
           
           <div className="h-px bg-sf-dark-600 my-1" />
@@ -3782,7 +3936,6 @@ function Timeline({ onOpenAudioGenerate }) {
             onClick={() => handleContextMenuAction('delete')}
             className="w-full px-3 py-1.5 text-left text-xs text-sf-error hover:bg-sf-error/20 flex items-center gap-2 transition-colors"
           >
-            <span className="w-4 text-center">🗑️</span>
             <span>{selectedClipIds.length > 1 ? `Delete ${selectedClipIds.length} clips` : 'Delete'}</span>
             <span className="ml-auto text-sf-text-muted text-[10px]">Del</span>
           </button>

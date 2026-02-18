@@ -1,11 +1,12 @@
-import { Upload, FolderOpen, Image, Video, Music, Search, Grid, List, Trash2, Edit3, Play, FileVideo, FileAudio, FileImage, Loader2, FolderPlus, ChevronRight, ChevronLeft, Home, Minus, Plus, MoreVertical, FolderInput, Wand2, Layers, Film, VolumeX, Volume2 } from 'lucide-react'
+import { Upload, FolderOpen, Image, Video, Music, Search, Grid, List, Trash2, Edit3, Play, FileVideo, FileAudio, FileImage, Loader2, FolderPlus, ChevronRight, ChevronDown, ChevronLeft, Home, Minus, Plus, MoreVertical, FolderInput, Wand2, Layers, Film, VolumeX, Volume2, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import useAssetsStore from '../../stores/assetsStore'
 import useProjectStore from '../../stores/projectStore'
 import useTimelineStore from '../../stores/timelineStore'
-import { importAsset, isElectron } from '../../services/fileSystem'
+import { importAsset, isElectron, writeGeneratedOverlayToProject } from '../../services/fileSystem'
 import { enqueuePlaybackTranscode } from '../../services/playbackCache'
 import MaskGenerationDialog from '../MaskGenerationDialog'
+import OverlayGeneratorModal from '../OverlayGeneratorModal'
 
 // Thumbnail size presets (xs = extra small for denser grid)
 const THUMBNAIL_SIZES = {
@@ -30,18 +31,77 @@ function AssetsPanel() {
   const [currentFolderId, setCurrentFolderId] = useState(null) // null = root
   const [showNewFolderInput, setShowNewFolderInput] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
-  const [contextMenu, setContextMenu] = useState(null) // { x, y, assetId }
+  const [contextMenu, setContextMenu] = useState(null) // { x, y, assetId?, folderId? }
   const newFolderInputRef = useRef(null)
   
   // Mask generation state
   const [maskDialogAsset, setMaskDialogAsset] = useState(null) // Asset to generate mask for
+  // Overlay generator modal (color matte, letterbox, vignette)
+  const [overlayModalOpen, setOverlayModalOpen] = useState(false)
+  const [overlayModalInitialType, setOverlayModalInitialType] = useState('letterbox')
+  const [overlayModalFolderId, setOverlayModalFolderId] = useState(null) // when opened from folder context menu
   
   // Selected assets (array for multi-select; used for delete and drag-to-folder)
   const [selectedAssetIds, setSelectedAssetIds] = useState([])
   const [dragOverFolderId, setDragOverFolderId] = useState(null) // 'root' | folderId for drop highlight
+  // List view: which folder IDs are expanded to show contents inline
+  const [expandedFolderIds, setExpandedFolderIds] = useState(() => new Set())
+  // List details view: sort by column (name | type | length | size | source | date), sortDir (asc | desc)
+  const LIST_SORT_KEY = 'assetsListSort'
+  const [listSortBy, setListSortBy] = useState(() => {
+    try {
+      const s = localStorage.getItem(LIST_SORT_KEY)
+      if (s) {
+        const { by, dir } = JSON.parse(s)
+        if (['name', 'type', 'length', 'size', 'source', 'date'].includes(by) && (dir === 'asc' || dir === 'desc')) return { by, dir }
+      }
+    } catch (_) {}
+    return { by: 'date', dir: 'desc' }
+  })
   const panelRef = useRef(null)
 
+  const setListSort = (by) => {
+    setListSortBy(prev => {
+      const nextDir = prev.by === by && prev.dir === 'asc' ? 'desc' : 'asc'
+      const next = { by, dir: nextDir }
+      try { localStorage.setItem(LIST_SORT_KEY, JSON.stringify(next)) } catch (_) {}
+      return next
+    })
+  }
+
+  const toggleFolderExpanded = (folderId) => {
+    setExpandedFolderIds(prev => {
+      const next = new Set(prev)
+      if (next.has(folderId)) next.delete(folderId)
+      else next.add(folderId)
+      return next
+    })
+  }
+
   const ASSET_DRAG_TYPE = 'application/x-comfystudio-asset-ids'
+
+  const notifyAssetDragStart = (assetId, assetIds) => {
+    if (typeof window === 'undefined') return
+    try {
+      window.dispatchEvent(new CustomEvent('comfystudio-assets-drag-start', {
+        detail: { assetId, assetIds }
+      }))
+    } catch (_) {}
+  }
+
+  const notifyAssetDragEnd = () => {
+    if (typeof window === 'undefined') return
+    try {
+      window.dispatchEvent(new Event('comfystudio-assets-drag-end'))
+    } catch (_) {}
+  }
+
+  // Color palette for folders and assets (null = no color)
+  const COLOR_PALETTE = [
+    null,
+    '#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4',
+    '#3b82f6', '#8b5cf6', '#ec4899', '#78716c',
+  ]
 
   // Get assets from store
   const { 
@@ -55,13 +115,15 @@ function AssetsPanel() {
     addFolder,
     removeFolder,
     renameFolder,
+    setFolderColor,
+    setAssetColor,
     moveAssetToFolder,
     moveAssetsToFolder,
     generateAssetSprite,
     getAssetSprite,
     setAssetAudioEnabled,
   } = useAssetsStore()
-  const { currentProjectHandle } = useProjectStore()
+  const { currentProjectHandle, getCurrentTimelineSettings } = useProjectStore()
   const { isPlaying: timelineIsPlaying, togglePlay: timelineTogglePlay, removeAudioClipsForAsset } = useTimelineStore()
   
   // Load thumbnail size from localStorage
@@ -199,6 +261,17 @@ function AssetsPanel() {
     return matchesFolder && matchesSearch
   })
   
+  // Get subfolders by parent (for list view expand)
+  const getSubfoldersOf = (parentId) => (folders || []).filter(f => f.parentId === parentId)
+  // Get assets in folder, optionally filtered by search
+  const getAssetsInFolder = (folderId, search = '') => {
+    return assets.filter(a => {
+      const inFolder = (a.folderId || null) === folderId
+      const matchesSearch = !search || a.name.toLowerCase().includes(search.toLowerCase()) || a.prompt?.toLowerCase().includes(search.toLowerCase())
+      return inFolder && matchesSearch
+    })
+  }
+
   // Get folder breadcrumb path
   const getFolderPath = () => {
     if (!currentFolderId) return []
@@ -273,6 +346,43 @@ function AssetsPanel() {
     const diffHours = Math.floor(diffMins / 60)
     if (diffHours < 24) return `${diffHours}h ago`
     return date.toLocaleDateString()
+  }
+
+  // Format file size (bytes -> KB/MB)
+  const formatFileSize = (bytes) => {
+    if (bytes == null || typeof bytes !== 'number' || bytes <= 0) return '—'
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+  }
+
+  // Asset value getters for sorting and display
+  const getAssetLength = (a) => a.duration ?? a.settings?.duration ?? 0
+  const getAssetSize = (a) => a.size ?? 0
+  const getAssetSource = (a) => (a.isImported ? 'IMP' : 'AI')
+  const getAssetDate = (a) => new Date(a.createdAt || a.imported || 0).getTime()
+  const getAssetTypeLabel = (a) => {
+    if (a.type === 'mask') return 'Mask'
+    if (a.type === 'video') return 'Video'
+    if (a.type === 'image') return 'Image'
+    if (a.type === 'audio') return 'Audio'
+    return a.type || '—'
+  }
+
+  const sortAssets = (list) => {
+    const { by, dir } = listSortBy
+    const mult = dir === 'asc' ? 1 : -1
+    return [...list].sort((a, b) => {
+      let va, vb
+      switch (by) {
+        case 'name': va = (a.name || '').toLowerCase(); vb = (b.name || '').toLowerCase(); return mult * (va < vb ? -1 : va > vb ? 1 : 0)
+        case 'type': va = getAssetTypeLabel(a); vb = getAssetTypeLabel(b); return mult * (va < vb ? -1 : va > vb ? 1 : 0)
+        case 'length': va = getAssetLength(a); vb = getAssetLength(b); return mult * (va - vb)
+        case 'size': va = getAssetSize(a); vb = getAssetSize(b); return mult * (va - vb)
+        case 'source': va = getAssetSource(a); vb = getAssetSource(b); return mult * (va < vb ? -1 : va > vb ? 1 : 0)
+        case 'date': default: va = getAssetDate(a); vb = getAssetDate(b); return mult * (va - vb)
+      }
+    })
   }
 
   // Handle double-click to preview
@@ -396,7 +506,14 @@ function AssetsPanel() {
   const handleContextMenu = (e, assetId) => {
     e.preventDefault()
     e.stopPropagation()
-    setContextMenu({ x: e.clientX, y: e.clientY, assetId })
+    setContextMenu({ x: e.clientX, y: e.clientY, assetId, folderId: null })
+  }
+
+  // Handle context menu (on folder)
+  const handleFolderContextMenu = (e, folderId) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setContextMenu({ x: e.clientX, y: e.clientY, assetId: null, folderId })
   }
 
   // Handle context menu on empty area (right-click on background / empty spot)
@@ -404,7 +521,7 @@ function AssetsPanel() {
     if (e.target.closest('[data-is-asset], [data-is-folder]')) return
     e.preventDefault()
     e.stopPropagation()
-    setContextMenu({ x: e.clientX, y: e.clientY, assetId: null })
+    setContextMenu({ x: e.clientX, y: e.clientY, assetId: null, folderId: null })
   }
 
   // Empty-area menu actions
@@ -449,12 +566,13 @@ function AssetsPanel() {
     e.preventDefault()
     e.stopPropagation()
     setDragOverFolderId(null)
-    const raw = e.dataTransfer.getData(ASSET_DRAG_TYPE)
+    // Some browsers don't expose custom MIME type on drop; fallback to text/plain
+    const raw = e.dataTransfer.getData(ASSET_DRAG_TYPE) || e.dataTransfer.getData('text/plain')
     if (!raw) return
     try {
       const assetIds = JSON.parse(raw)
       if (Array.isArray(assetIds) && assetIds.length > 0) {
-        moveAssetsToFolder(assetIds, folderId)
+        moveAssetsToFolder(assetIds, folderId === 'root' ? null : folderId)
         setSelectedAssetIds([])
       }
     } catch (_) {}
@@ -469,6 +587,114 @@ function AssetsPanel() {
   
   // Get thumbnail size config
   const sizeConfig = THUMBNAIL_SIZES[thumbnailSize]
+
+  // List view: recursive folder row with expand arrow and inline contents
+  const ListFolderRow = ({ folder, depth }) => {
+    const isExpanded = expandedFolderIds.has(folder.id)
+    const childFolders = getSubfoldersOf(folder.id)
+    const childAssets = getAssetsInFolder(folder.id, searchQuery)
+    return (
+      <>
+        <div
+          data-is-folder
+          style={{ paddingLeft: depth * 14, ...(folder.color ? { borderLeft: `3px solid ${folder.color}` } : {}) }}
+          onClick={() => handleFolderClick(folder.id)}
+          onDragOver={(e) => handleFolderDragOver(e, folder.id)}
+          onDragLeave={handleFolderDragLeave}
+          onDrop={(e) => handleFolderDrop(e, folder.id)}
+          onContextMenu={(e) => handleFolderContextMenu(e, folder.id)}
+          className={`flex items-center gap-2 p-1.5 rounded cursor-pointer transition-colors group ${
+            dragOverFolderId === folder.id ? 'bg-sf-accent/20 ring-1 ring-sf-accent' : 'hover:bg-sf-dark-800'
+          }`}
+        >
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); toggleFolderExpanded(folder.id) }}
+            className="p-0.5 -m-0.5 flex-shrink-0 rounded hover:bg-sf-dark-700 text-sf-text-muted"
+            title={isExpanded ? 'Collapse' : 'Expand'}
+          >
+            {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
+          <FolderOpen className="w-3.5 h-3.5 text-sf-accent flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-[11px] text-sf-text-primary truncate">{folder.name}</p>
+            <p className="text-[9px] text-sf-text-muted">{assets.filter(a => a.folderId === folder.id).length} items</p>
+          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              if (confirm(`Delete folder "${folder.name}"?`)) removeFolder(folder.id)
+            }}
+            className="p-0.5 opacity-0 group-hover:opacity-100 hover:bg-sf-error rounded transition-opacity"
+          >
+            <Trash2 className="w-2.5 h-2.5 text-sf-text-muted" />
+          </button>
+        </div>
+        {isExpanded && (
+          <div className="space-y-0.5">
+            {childFolders.map(f => <ListFolderRow key={f.id} folder={f} depth={depth + 1} />)}
+            {sortAssets(childAssets).map((asset) => {
+              const Icon = getIcon(asset.type)
+              const isSelected = selectedAssetIds.includes(asset.id) || currentPreview?.id === asset.id
+              const idsToMove = selectedAssetIds.includes(asset.id) ? selectedAssetIds : [asset.id]
+              const lengthSec = getAssetLength(asset)
+              const lengthStr = lengthSec > 0 ? (lengthSec >= 60 ? `${Math.floor(lengthSec / 60)}:${String(Math.floor(lengthSec % 60)).padStart(2, '0')}` : `${lengthSec}s`) : '—'
+              return (
+                <div
+                  key={asset.id}
+                  data-is-asset
+                  draggable
+                  style={{ paddingLeft: (depth + 1) * 14 }}
+                  onDragStart={(e) => {
+                    const data = JSON.stringify(idsToMove)
+                    e.dataTransfer.setData('assetId', asset.id)
+                    e.dataTransfer.setData(ASSET_DRAG_TYPE, data)
+                    e.dataTransfer.setData('text/plain', data)
+                    e.dataTransfer.effectAllowed = 'copyMove'
+                    notifyAssetDragStart(asset.id, idsToMove)
+                  }}
+                  onDragEnd={notifyAssetDragEnd}
+                  onClick={(e) => handleClick(e, asset)}
+                  onDoubleClick={() => handleDoubleClick(asset)}
+                  onContextMenu={(e) => handleContextMenu(e, asset.id)}
+                  className={`grid grid-cols-[minmax(0,1fr)_56px_48px_64px_36px_72px_28px] gap-1 items-center px-1.5 py-1 rounded cursor-pointer transition-colors group ${isSelected ? 'bg-sf-accent/20' : 'hover:bg-sf-dark-800'}`}
+                  style={asset.color ? { borderLeft: `3px solid ${asset.color}` } : {}}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-6 h-6 rounded overflow-hidden bg-sf-dark-700 flex-shrink-0 flex items-center justify-center">
+                      {asset.type === 'video' && asset.url ? (
+                        <video src={asset.url} className="w-full h-full object-cover" muted preload="metadata" />
+                      ) : asset.type === 'image' && asset.url ? (
+                        <img src={asset.url} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <Icon className="w-3.5 h-3.5 text-sf-text-muted" />
+                      )}
+                    </div>
+                    {editingId === asset.id ? (
+                      <form onSubmit={saveEdit} className="min-w-0 flex-1">
+                        <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} onBlur={saveEdit} autoFocus className="w-full bg-sf-dark-700 border border-sf-accent rounded px-1 py-0.5 text-[10px] text-sf-text-primary focus:outline-none" />
+                      </form>
+                    ) : (
+                      <span className="text-[11px] text-sf-text-primary truncate block">{asset.name}</span>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-sf-text-muted truncate">{getAssetTypeLabel(asset)}</span>
+                  <span className="text-[10px] text-sf-text-muted tabular-nums">{lengthStr}</span>
+                  <span className="text-[10px] text-sf-text-muted truncate">{formatFileSize(getAssetSize(asset))}</span>
+                  <span className={`text-[9px] font-medium px-1 py-0.5 rounded ${asset.isImported ? 'bg-sf-dark-700 text-sf-text-secondary' : 'bg-sf-accent/90 text-white'}`}>{getAssetSource(asset)}</span>
+                  <span className="text-[10px] text-sf-text-muted truncate">{formatTime(asset.createdAt)}</span>
+                  <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={(e) => startEditing(e, asset)} className="p-0.5 hover:bg-sf-dark-700 rounded" title="Rename"><Edit3 className="w-2.5 h-2.5 text-sf-text-muted" /></button>
+                    <button onClick={(e) => handleDelete(e, asset.id)} className="p-0.5 hover:bg-sf-error rounded" title="Delete"><Trash2 className="w-2.5 h-2.5 text-sf-text-muted" /></button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </>
+    )
+  }
 
   return (
     <div 
@@ -609,8 +835,15 @@ function AssetsPanel() {
             value={newFolderName}
             onChange={(e) => setNewFolderName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') handleCreateFolder()
-              if (e.key === 'Escape') setShowNewFolderInput(false)
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                e.stopPropagation()
+                handleCreateFolder()
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                setShowNewFolderInput(false)
+              }
             }}
             onBlur={() => {
               if (!newFolderName.trim()) setShowNewFolderInput(false)
@@ -703,15 +936,11 @@ function AssetsPanel() {
                 onDragOver={(e) => handleFolderDragOver(e, folder.id)}
                 onDragLeave={handleFolderDragLeave}
                 onDrop={(e) => handleFolderDrop(e, folder.id)}
-                onContextMenu={(e) => {
-                  e.preventDefault()
-                  if (confirm(`Delete folder "${folder.name}"?`)) {
-                    removeFolder(folder.id)
-                  }
-                }}
+                onContextMenu={(e) => handleFolderContextMenu(e, folder.id)}
                 className={`aspect-video bg-sf-dark-800 border rounded flex flex-col items-center justify-center cursor-pointer transition-colors group ${
                   dragOverFolderId === folder.id ? 'border-sf-accent ring-2 ring-sf-accent ring-offset-1 ring-offset-sf-dark-900' : 'border-sf-dark-600 hover:border-sf-dark-500'
                 }`}
+                style={folder.color ? { borderLeftWidth: '4px', borderLeftColor: folder.color } : {}}
               >
                 <FolderOpen className={`${sizeConfig.iconSize} text-sf-accent mb-1`} />
                 <span className={`${sizeConfig.nameSize} text-sf-text-primary truncate max-w-full px-1`}>
@@ -735,10 +964,14 @@ function AssetsPanel() {
                   data-is-asset
                   draggable
                   onDragStart={(e) => {
+                    const data = JSON.stringify(idsToMove)
                     e.dataTransfer.setData('assetId', asset.id)
-                    e.dataTransfer.setData(ASSET_DRAG_TYPE, JSON.stringify(idsToMove))
-                    e.dataTransfer.effectAllowed = 'copy'
+                    e.dataTransfer.setData(ASSET_DRAG_TYPE, data)
+                    e.dataTransfer.setData('text/plain', data)
+                    e.dataTransfer.effectAllowed = 'copyMove'
+                    notifyAssetDragStart(asset.id, idsToMove)
                   }}
+                  onDragEnd={notifyAssetDragEnd}
                   onClick={(e) => handleClick(e, asset)}
                   onDoubleClick={() => handleDoubleClick(asset)}
                   onContextMenu={(e) => handleContextMenu(e, asset.id)}
@@ -747,6 +980,7 @@ function AssetsPanel() {
                       ? 'border-sf-accent ring-1 ring-sf-accent' 
                       : 'border-sf-dark-600 hover:border-sf-dark-500'
                   }`}
+                  style={asset.color ? { borderLeftWidth: '4px', borderLeftColor: asset.color } : {}}
                 >
                   {/* Thumbnail */}
                   <div className="aspect-video bg-sf-dark-700 flex items-center justify-center relative overflow-hidden">
@@ -859,64 +1093,60 @@ function AssetsPanel() {
             </button>
           </div>
         ) : (
-          /* List View */
+          /* List View (details style with sortable columns) */
           <div 
-            className="space-y-1"
+            className="flex flex-col min-h-0"
             onDoubleClick={(e) => {
-              // Double-click on empty list area triggers import
-              if (e.target === e.currentTarget) {
-                openFilePicker()
-              }
+              if (e.target === e.currentTarget) openFilePicker()
             }}
           >
             {/* Back button if in a folder */}
             {currentFolderId && (
               <button
                 onClick={() => setCurrentFolderId(currentFolder?.parentId || null)}
-                className="w-full flex items-center gap-2 p-1.5 rounded hover:bg-sf-dark-800 transition-colors"
+                className="w-full flex items-center gap-2 p-1.5 rounded hover:bg-sf-dark-800 transition-colors flex-shrink-0"
               >
                 <ChevronLeft className="w-3.5 h-3.5 text-sf-text-muted" />
                 <span className="text-[11px] text-sf-text-muted">Back</span>
               </button>
             )}
+
+            {/* Column headers - sortable */}
+            <div className="grid grid-cols-[minmax(0,1fr)_56px_48px_64px_36px_72px_28px] gap-1 px-1.5 py-1 border-b border-sf-dark-700 flex-shrink-0 text-[10px] text-sf-text-muted font-medium">
+              <button type="button" onClick={() => setListSort('name')} className="text-left hover:text-sf-text-primary flex items-center gap-0.5 truncate">
+                Name {listSortBy.by === 'name' ? (listSortBy.dir === 'asc' ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />) : <ArrowUpDown className="w-3 h-3 flex-shrink-0 opacity-50" />}
+              </button>
+              <button type="button" onClick={() => setListSort('type')} className="text-left hover:text-sf-text-primary flex items-center gap-0.5">
+                Type {listSortBy.by === 'type' ? (listSortBy.dir === 'asc' ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />) : <ArrowUpDown className="w-3 h-3 flex-shrink-0 opacity-50" />}
+              </button>
+              <button type="button" onClick={() => setListSort('length')} className="text-left hover:text-sf-text-primary flex items-center gap-0.5">
+                Length {listSortBy.by === 'length' ? (listSortBy.dir === 'asc' ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />) : <ArrowUpDown className="w-3 h-3 flex-shrink-0 opacity-50" />}
+              </button>
+              <button type="button" onClick={() => setListSort('size')} className="text-left hover:text-sf-text-primary flex items-center gap-0.5">
+                Size {listSortBy.by === 'size' ? (listSortBy.dir === 'asc' ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />) : <ArrowUpDown className="w-3 h-3 flex-shrink-0 opacity-50" />}
+              </button>
+              <button type="button" onClick={() => setListSort('source')} className="text-left hover:text-sf-text-primary flex items-center gap-0.5">
+                Source {listSortBy.by === 'source' ? (listSortBy.dir === 'asc' ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />) : <ArrowUpDown className="w-3 h-3 flex-shrink-0 opacity-50" />}
+              </button>
+              <button type="button" onClick={() => setListSort('date')} className="text-left hover:text-sf-text-primary flex items-center gap-0.5">
+                Date {listSortBy.by === 'date' ? (listSortBy.dir === 'asc' ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />) : <ArrowUpDown className="w-3 h-3 flex-shrink-0 opacity-50" />}
+              </button>
+              <span className="w-7" aria-hidden />
+            </div>
             
-            {/* Subfolders */}
+            <div className="flex-1 min-h-0 overflow-auto space-y-0.5">
+            {/* Subfolders (with expand arrow to show contents inline) */}
             {subFolders.map((folder) => (
-              <div 
-                key={folder.id}
-                data-is-folder
-                onClick={() => handleFolderClick(folder.id)}
-                onDragOver={(e) => handleFolderDragOver(e, folder.id)}
-                onDragLeave={handleFolderDragLeave}
-                onDrop={(e) => handleFolderDrop(e, folder.id)}
-                className={`flex items-center gap-2 p-1.5 rounded cursor-pointer transition-colors group ${
-                  dragOverFolderId === folder.id ? 'bg-sf-accent/20 ring-1 ring-sf-accent' : 'hover:bg-sf-dark-800'
-                }`}
-              >
-                <FolderOpen className="w-3.5 h-3.5 text-sf-accent flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-[11px] text-sf-text-primary truncate">{folder.name}</p>
-                  <p className="text-[9px] text-sf-text-muted">{assets.filter(a => a.folderId === folder.id).length} items</p>
-                </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    if (confirm(`Delete folder "${folder.name}"?`)) {
-                      removeFolder(folder.id)
-                    }
-                  }}
-                  className="p-0.5 opacity-0 group-hover:opacity-100 hover:bg-sf-error rounded transition-opacity"
-                >
-                  <Trash2 className="w-2.5 h-2.5 text-sf-text-muted" />
-                </button>
-              </div>
+              <ListFolderRow key={folder.id} folder={folder} depth={0} />
             ))}
             
-            {/* Assets */}
-            {filteredAssets.map((asset) => {
+            {/* Assets in current folder - sorted, details columns */}
+            {sortAssets(filteredAssets).map((asset) => {
               const Icon = getIcon(asset.type)
               const isSelected = selectedAssetIds.includes(asset.id) || currentPreview?.id === asset.id
               const idsToMove = selectedAssetIds.includes(asset.id) ? selectedAssetIds : [asset.id]
+              const lengthSec = getAssetLength(asset)
+              const lengthStr = lengthSec > 0 ? (lengthSec >= 60 ? `${Math.floor(lengthSec / 60)}:${String(Math.floor(lengthSec % 60)).padStart(2, '0')}` : `${lengthSec}s`) : '—'
 
               return (
                 <div 
@@ -924,39 +1154,35 @@ function AssetsPanel() {
                   data-is-asset
                   draggable
                   onDragStart={(e) => {
+                    const data = JSON.stringify(idsToMove)
                     e.dataTransfer.setData('assetId', asset.id)
-                    e.dataTransfer.setData(ASSET_DRAG_TYPE, JSON.stringify(idsToMove))
-                    e.dataTransfer.effectAllowed = 'copy'
+                    e.dataTransfer.setData(ASSET_DRAG_TYPE, data)
+                    e.dataTransfer.setData('text/plain', data)
+                    e.dataTransfer.effectAllowed = 'copyMove'
+                    notifyAssetDragStart(asset.id, idsToMove)
                   }}
+                  onDragEnd={notifyAssetDragEnd}
                   onClick={(e) => handleClick(e, asset)}
                   onDoubleClick={() => handleDoubleClick(asset)}
                   onContextMenu={(e) => handleContextMenu(e, asset.id)}
-                  className={`flex items-center gap-2 p-1.5 rounded cursor-pointer transition-colors group ${
+                  className={`grid grid-cols-[minmax(0,1fr)_56px_48px_64px_36px_72px_28px] gap-1 items-center px-1.5 py-1 rounded cursor-pointer transition-colors group ${
                     isSelected ? 'bg-sf-accent/20' : 'hover:bg-sf-dark-800'
                   }`}
+                  style={asset.color ? { borderLeft: `3px solid ${asset.color}` } : {}}
                 >
-                  {/* Tiny thumbnail for video/image, icon for audio/other */}
-                  <div className="w-7 h-7 rounded overflow-hidden bg-sf-dark-700 flex-shrink-0 flex items-center justify-center">
-                    {asset.type === 'video' && asset.url ? (
-                      <video
-                        src={asset.url}
-                        className="w-full h-full object-cover"
-                        muted
-                        preload="metadata"
-                      />
-                    ) : asset.type === 'image' && asset.url ? (
-                      <img
-                        src={asset.url}
-                        alt=""
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <Icon className="w-3.5 h-3.5 text-sf-text-muted" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
+                  {/* Name + thumbnail */}
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-7 h-7 rounded overflow-hidden bg-sf-dark-700 flex-shrink-0 flex items-center justify-center">
+                      {asset.type === 'video' && asset.url ? (
+                        <video src={asset.url} className="w-full h-full object-cover" muted preload="metadata" />
+                      ) : asset.type === 'image' && asset.url ? (
+                        <img src={asset.url} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <Icon className="w-3.5 h-3.5 text-sf-text-muted" />
+                      )}
+                    </div>
                     {editingId === asset.id ? (
-                      <form onSubmit={saveEdit}>
+                      <form onSubmit={saveEdit} className="min-w-0 flex-1">
                         <input
                           type="text"
                           value={editName}
@@ -967,31 +1193,22 @@ function AssetsPanel() {
                         />
                       </form>
                     ) : (
-                      <>
-                        <p className="text-[11px] text-sf-text-primary truncate">{asset.name}</p>
-                        <p className="text-[9px] text-sf-text-muted">{formatTime(asset.createdAt)} • {asset.settings?.duration ? `${asset.settings.duration}s` : asset.type}</p>
-                      </>
+                      <span className="text-[11px] text-sf-text-primary truncate block">{asset.name}</span>
                     )}
                   </div>
+                  <span className="text-[10px] text-sf-text-muted truncate">{getAssetTypeLabel(asset)}</span>
+                  <span className="text-[10px] text-sf-text-muted tabular-nums">{lengthStr}</span>
+                  <span className="text-[10px] text-sf-text-muted truncate">{formatFileSize(getAssetSize(asset))}</span>
+                  <span className={`text-[9px] font-medium px-1 py-0.5 rounded ${asset.isImported ? 'bg-sf-dark-700 text-sf-text-secondary' : 'bg-sf-accent/90 text-white'}`}>{getAssetSource(asset)}</span>
+                  <span className="text-[10px] text-sf-text-muted truncate" title={asset.createdAt}>{formatTime(asset.createdAt)}</span>
                   <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={(e) => startEditing(e, asset)}
-                      className="p-0.5 hover:bg-sf-dark-700 rounded"
-                      title="Rename"
-                    >
-                      <Edit3 className="w-2.5 h-2.5 text-sf-text-muted" />
-                    </button>
-                    <button
-                      onClick={(e) => handleDelete(e, asset.id)}
-                      className="p-0.5 hover:bg-sf-error rounded"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-2.5 h-2.5 text-sf-text-muted" />
-                    </button>
+                    <button onClick={(e) => startEditing(e, asset)} className="p-0.5 hover:bg-sf-dark-700 rounded" title="Rename"><Edit3 className="w-2.5 h-2.5 text-sf-text-muted" /></button>
+                    <button onClick={(e) => handleDelete(e, asset.id)} className="p-0.5 hover:bg-sf-error rounded" title="Delete"><Trash2 className="w-2.5 h-2.5 text-sf-text-muted" /></button>
                   </div>
                 </div>
               )
             })}
+            </div>
           </div>
         )}
       </div>
@@ -1003,8 +1220,50 @@ function AssetsPanel() {
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Empty area menu: New Folder + Import */}
-          {contextMenu.assetId == null ? (
+          {/* Folder menu: Set color + Delete */}
+          {contextMenu.folderId ? (
+            <>
+              <div className="px-3 py-1 text-[10px] text-sf-text-muted uppercase tracking-wider">Color</div>
+              <div className="px-2 py-1 flex flex-wrap gap-1">
+                {COLOR_PALETTE.map((c) => (
+                  <button
+                    key={c ?? 'none'}
+                    type="button"
+                    onClick={() => {
+                      setFolderColor(contextMenu.folderId, c)
+                      setContextMenu(null)
+                    }}
+                    className={`w-5 h-5 rounded border-2 flex-shrink-0 flex items-center justify-center ${(folders?.find(f => f.id === contextMenu.folderId)?.color ?? null) === c ? 'border-white scale-110' : 'border-sf-dark-600 hover:border-sf-dark-500'} ${!c ? 'bg-sf-dark-600' : ''}`}
+                    style={c ? { backgroundColor: c } : {}}
+                    title={c ? c : 'None'}
+                  >
+                    {!c && <Minus className="w-3 h-3 text-sf-text-muted" />}
+                  </button>
+                ))}
+              </div>
+              <div className="border-t border-sf-dark-600 my-1" />
+              <button
+                onClick={() => { setOverlayModalFolderId(contextMenu.folderId); setOverlayModalInitialType('letterbox'); setOverlayModalOpen(true); setContextMenu(null) }}
+                className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+              >
+                <span className="w-4 text-center">▬</span>
+                Create overlay in this folder…
+              </button>
+              <div className="border-t border-sf-dark-600 my-1" />
+              <button
+                onClick={() => {
+                  const folder = folders?.find(f => f.id === contextMenu.folderId)
+                  if (folder && confirm(`Delete folder "${folder.name}"?`)) removeFolder(contextMenu.folderId)
+                  setContextMenu(null)
+                }}
+                className="w-full px-3 py-1.5 text-left text-xs text-sf-error hover:bg-sf-dark-700 flex items-center gap-2"
+              >
+                <Trash2 className="w-3 h-3" />
+                Delete folder
+              </button>
+            </>
+          ) : contextMenu.assetId == null ? (
+            /* Empty area: New Folder, Import, Create overlay */
             <>
               <button
                 onClick={handleEmptyMenuNewFolder}
@@ -1021,8 +1280,39 @@ function AssetsPanel() {
                 <Upload className="w-3 h-3 text-sf-accent" />
                 Import
               </button>
+              <div className="border-t border-sf-dark-600 my-1" />
+              <div className="px-2 py-1 text-[10px] text-sf-text-muted uppercase tracking-wider">Create overlay</div>
+              <button
+                onClick={() => { setOverlayModalFolderId(null); setOverlayModalInitialType('letterbox'); setOverlayModalOpen(true); setContextMenu(null) }}
+                className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+              >
+                <span className="w-4 text-center">▬</span>
+                Letterbox overlay…
+              </button>
+              <button
+                onClick={() => { setOverlayModalFolderId(null); setOverlayModalInitialType('vignette'); setOverlayModalOpen(true); setContextMenu(null) }}
+                className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+              >
+                <span className="w-4 text-center">◐</span>
+                Vignette overlay…
+              </button>
+              <button
+                onClick={() => { setOverlayModalFolderId(null); setOverlayModalInitialType('color'); setOverlayModalOpen(true); setContextMenu(null) }}
+                className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+              >
+                <span className="w-4 text-center">■</span>
+                Color matte…
+              </button>
+              <button
+                onClick={() => { setOverlayModalFolderId(null); setOverlayModalInitialType('grain'); setOverlayModalOpen(true); setContextMenu(null) }}
+                className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+              >
+                <span className="w-4 text-center">◇</span>
+                Film grain loop…
+              </button>
             </>
           ) : (
+            /* Asset menu */
             <>
           {/* Video/Image specific options */}
           {(() => {
@@ -1085,6 +1375,27 @@ function AssetsPanel() {
             )
           })()}
           
+          {/* Set color for asset */}
+          <div className="px-3 py-1 text-[10px] text-sf-text-muted uppercase tracking-wider">Color</div>
+          <div className="px-2 py-1 flex flex-wrap gap-1">
+            {COLOR_PALETTE.map((c) => (
+              <button
+                key={c ?? 'none'}
+                type="button"
+                onClick={() => {
+                  setAssetColor(contextMenu.assetId, c)
+                  setContextMenu(null)
+                }}
+                className={`w-5 h-5 rounded border-2 flex-shrink-0 flex items-center justify-center ${(assets.find(a => a.id === contextMenu.assetId)?.color ?? null) === c ? 'border-white scale-110' : 'border-sf-dark-600 hover:border-sf-dark-500'} ${!c ? 'bg-sf-dark-600' : ''}`}
+                style={c ? { backgroundColor: c } : {}}
+                title={c ? c : 'None'}
+              >
+                {!c && <Minus className="w-3 h-3 text-sf-text-muted" />}
+              </button>
+            ))}
+          </div>
+          <div className="border-t border-sf-dark-600 my-1" />
+          
           <div className="px-3 py-1 text-[10px] text-sf-text-muted uppercase tracking-wider">
             Move to folder
           </div>
@@ -1125,6 +1436,41 @@ function AssetsPanel() {
           currentFolderId={currentFolderId}
         />
       )}
+
+      {/* Overlay generator (letterbox, vignette, color matte, film grain) */}
+      <OverlayGeneratorModal
+        isOpen={overlayModalOpen}
+        onClose={() => setOverlayModalOpen(false)}
+        onAdd={async (asset) => {
+          if (asset.blob && currentProjectHandle && isElectron() && typeof currentProjectHandle === 'string') {
+            try {
+              const persisted = await writeGeneratedOverlayToProject(
+                currentProjectHandle,
+                asset.blob,
+                asset.name || 'overlay',
+                asset.type,
+                asset.settings || {}
+              )
+              addAsset({
+                ...persisted,
+                folderId: asset.folderId ?? currentFolderId,
+              })
+            } catch (err) {
+              console.warn('Could not save overlay to project, using blob URL:', err)
+              const url = URL.createObjectURL(asset.blob)
+              const { blob: _b, ...rest } = asset
+              addAsset({ ...rest, url })
+            }
+          } else {
+            const url = asset.blob ? URL.createObjectURL(asset.blob) : asset.url
+            const { blob: _b, ...rest } = asset
+            addAsset({ ...rest, url: url || rest.url })
+          }
+        }}
+        timelineSize={getCurrentTimelineSettings() ? { width: getCurrentTimelineSettings().width, height: getCurrentTimelineSettings().height } : { width: 1920, height: 1080 }}
+        defaultFolderId={overlayModalFolderId ?? currentFolderId}
+        initialType={overlayModalInitialType}
+      />
       
       {/* Footer with asset count */}
       <div className="px-2 py-1.5 border-t border-sf-dark-700 flex items-center justify-between">

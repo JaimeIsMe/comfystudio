@@ -175,6 +175,7 @@ class VideoCache {
     
     // Find clips that start within the lookahead window
     const upcomingClips = clips.filter(clip => {
+      if (clip.type !== 'video') return false
       if (isForward) {
         // Forward playback: preload clips that start soon
         return clip.startTime > currentTime && 
@@ -188,8 +189,9 @@ class VideoCache {
     })
 
     // Also include currently active clips (ensure they're loaded)
-    const activeClips = clips.filter(clip => 
-      currentTime >= clip.startTime && 
+    const activeClips = clips.filter(clip =>
+      clip.type === 'video' &&
+      currentTime >= clip.startTime &&
       currentTime < clip.startTime + clip.duration
     )
 
@@ -331,6 +333,33 @@ class VideoCache {
     }
     this.cache.clear()
     this.activeElements.clear()
+  }
+
+  /**
+   * Invalidate cached source(s) for a clip.
+   * Useful when a playback-cache URL becomes unreadable at runtime.
+   * @param {string} clipId - Clip ID
+   * @param {string|null} sourceUrl - Optional exact URL to invalidate
+   */
+  invalidateClipSource(clipId, sourceUrl = null) {
+    if (!clipId) return
+
+    for (const [key, entry] of this.cache.entries()) {
+      if (entry.baseClipId !== clipId) continue
+      if (sourceUrl && entry.url !== sourceUrl) continue
+
+      try {
+        entry.videoElement.pause()
+        entry.videoElement.src = ''
+        entry.videoElement.load()
+      } catch (_) {
+        // Best effort cleanup; ignore media element cleanup failures.
+      }
+
+      this.cache.delete(key)
+    }
+
+    this.activeElements.delete(clipId)
   }
 
   /**

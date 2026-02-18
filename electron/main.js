@@ -4,11 +4,15 @@ const fs = require('fs').promises
 const fsSync = require('fs')
 const http = require('http')
 const { spawn } = require('child_process')
+const { fileURLToPath } = require('url')
 const ffmpegPath = require('ffmpeg-static')
 const ffprobeStatic = require('ffprobe-static')
 const ffprobePath = ffprobeStatic?.path || ffprobeStatic
 
 const isDev = process.env.NODE_ENV !== 'production'
+
+// App icon (build/icon.png) – used for window and taskbar/dock
+const iconPath = path.join(__dirname, '..', 'build', 'icon.png')
 
 const SPLASH_MIN_DURATION_MS = 4500  // Minimum time splash is visible (Resolve-style)
 const COMFYUI_CHECK_MS = 2500        // Max wait for ComfyUI
@@ -136,6 +140,7 @@ function createSplashWindow() {
   splashWindow = new BrowserWindow({
     width: splashWidth,
     height: splashHeight,
+    icon: iconPath,
     backgroundColor: '#0a0a0b',
     frame: false,
     transparent: false,
@@ -160,6 +165,7 @@ async function createWindow() {
     height: 1000,
     minWidth: 1200,
     minHeight: 800,
+    icon: iconPath,
     backgroundColor: '#0a0a0b',
     titleBarStyle: 'hiddenInset',
     frame: process.platform === 'darwin' ? true : false,
@@ -565,6 +571,132 @@ ipcMain.handle('media:getVideoFps', async (event, filePath) => {
   })
 })
 
+const audioWaveformCache = new Map()
+
+function resolveMediaInputPath(mediaInput) {
+  if (!mediaInput || typeof mediaInput !== 'string') return null
+  if (mediaInput.startsWith('comfystudio://')) {
+    return decodeURIComponent(mediaInput.replace('comfystudio://', ''))
+  }
+  if (mediaInput.startsWith('file://')) {
+    try {
+      return fileURLToPath(mediaInput)
+    } catch (_) {
+      // Fallback for unusual path encodings
+      let normalizedPath = mediaInput.replace('file://', '')
+      normalizedPath = decodeURIComponent(normalizedPath)
+      if (/^\/[a-zA-Z]:\//.test(normalizedPath)) {
+        normalizedPath = normalizedPath.slice(1)
+      }
+      return normalizedPath.replace(/\//g, path.sep)
+    }
+  }
+  return mediaInput
+}
+
+ipcMain.handle('media:getAudioWaveform', async (event, mediaInput, options = {}) => {
+  if (!ffmpegPath) {
+    return { success: false, error: 'FFmpeg binary not available.' }
+  }
+
+  const filePath = resolveMediaInputPath(mediaInput)
+  if (!filePath) {
+    return { success: false, error: 'Invalid audio input path.' }
+  }
+
+  const sampleCount = Math.max(128, Math.min(8192, Math.round(Number(options?.sampleCount) || 4096)))
+  const sampleRate = Math.max(400, Math.min(6000, Math.round(Number(options?.sampleRate) || 2000)))
+
+  let stat
+  try {
+    stat = await fs.stat(filePath)
+  } catch (err) {
+    return { success: false, error: `Audio file not found: ${err.message}` }
+  }
+
+  const cacheKey = `${filePath}|${sampleCount}|${sampleRate}|${stat.mtimeMs}`
+  if (audioWaveformCache.has(cacheKey)) {
+    return { success: true, ...audioWaveformCache.get(cacheKey) }
+  }
+
+  return await new Promise((resolve) => {
+    const args = [
+      '-v', 'error',
+      '-i', filePath,
+      '-vn',
+      '-ac', '1',
+      '-ar', String(sampleRate),
+      '-f', 'f32le',
+      'pipe:1',
+    ]
+
+    const proc = spawn(ffmpegPath, args, { windowsHide: true })
+    const chunks = []
+    let stderr = ''
+
+    proc.stdout.on('data', (data) => {
+      chunks.push(Buffer.from(data))
+    })
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString()
+    })
+    proc.on('error', (err) => {
+      resolve({ success: false, error: err.message })
+    })
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        resolve({ success: false, error: stderr || `FFmpeg exited with code ${code}` })
+        return
+      }
+
+      try {
+        const raw = Buffer.concat(chunks)
+        const floatCount = Math.floor(raw.length / 4)
+        if (floatCount <= 0) {
+          resolve({ success: false, error: 'No audio samples decoded.' })
+          return
+        }
+
+        const bucketCount = sampleCount
+        const bucketSize = Math.max(1, Math.floor(floatCount / bucketCount))
+        const peaks = new Array(bucketCount).fill(0)
+        let maxPeak = 0
+
+        for (let i = 0; i < bucketCount; i++) {
+          const start = i * bucketSize
+          const end = i === bucketCount - 1 ? floatCount : Math.min(floatCount, start + bucketSize)
+          const span = Math.max(1, end - start)
+          const stride = Math.max(1, Math.floor(span / 96))
+
+          let peak = 0
+          for (let s = start; s < end; s += stride) {
+            const amp = Math.abs(raw.readFloatLE(s * 4))
+            if (amp > peak) peak = amp
+          }
+
+          peaks[i] = peak
+          if (peak > maxPeak) maxPeak = peak
+        }
+
+        if (maxPeak > 0) {
+          for (let i = 0; i < peaks.length; i++) {
+            peaks[i] = peaks[i] / maxPeak
+          }
+        }
+
+        const result = {
+          peaks,
+          duration: floatCount / sampleRate,
+        }
+        audioWaveformCache.set(cacheKey, result)
+        resolve({ success: true, ...result })
+      } catch (err) {
+        resolve({ success: false, error: err.message })
+      }
+    })
+  })
+})
+
 // ============================================
 // IPC Handlers - App Settings Storage
 // ============================================
@@ -683,6 +815,219 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
   })
   await exportWorkerWindow.loadURL(workerUrl)
   return { started: true }
+})
+
+const formatFilterNumber = (value, fallback = '0.000000') => {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return fallback
+  return Math.max(0, num).toFixed(6)
+}
+
+const getExportClipTimeScale = (clip) => {
+  if (!clip) return 1
+  const sourceScale = Number(clip.sourceTimeScale)
+  const timelineFps = Number(clip.timelineFps)
+  const sourceFps = Number(clip.sourceFps)
+  const baseScale = Number.isFinite(sourceScale) && sourceScale > 0
+    ? sourceScale
+    : ((Number.isFinite(timelineFps) && timelineFps > 0 && Number.isFinite(sourceFps) && sourceFps > 0)
+      ? (timelineFps / sourceFps)
+      : 1)
+  const speed = Number(clip.speed)
+  const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
+  return baseScale * speedScale
+}
+
+const buildAtempoFilterChain = (rate) => {
+  const safeRate = Math.max(0.01, Number(rate) || 1)
+  let remaining = safeRate
+  const filters = []
+  let guard = 0
+  while (remaining > 2 && guard < 16) {
+    filters.push('atempo=2.0')
+    remaining /= 2
+    guard += 1
+  }
+  while (remaining < 0.5 && guard < 32) {
+    filters.push('atempo=0.5')
+    remaining /= 0.5
+    guard += 1
+  }
+  filters.push(`atempo=${remaining.toFixed(6)}`)
+  return filters
+}
+
+ipcMain.handle('export:mixAudio', async (event, options = {}) => {
+  if (!ffmpegPath) {
+    return { success: false, error: 'FFmpeg binary not available.' }
+  }
+
+  const {
+    projectPath = '',
+    outputPath,
+    rangeStart = 0,
+    rangeEnd = 0,
+    sampleRate = 44100,
+    channels = 2,
+    clips = [],
+    tracks = [],
+    assets = [],
+    timeoutMs = 180000,
+  } = options
+
+  if (!outputPath) {
+    return { success: false, error: 'Missing output path for audio mix.' }
+  }
+
+  const start = Number(rangeStart)
+  const end = Number(rangeEnd)
+  const rangeStartSec = Number.isFinite(start) ? start : 0
+  const rangeEndSec = Number.isFinite(end) ? end : rangeStartSec
+  const totalDuration = Math.max(0, rangeEndSec - rangeStartSec)
+  if (totalDuration <= 0.000001) {
+    return { success: false, error: 'Invalid export range for audio mix.' }
+  }
+
+  const trackMap = new Map((tracks || []).map((track) => [track.id, track]))
+  const assetMap = new Map((assets || []).map((asset) => [asset.id, asset]))
+  const preparedInputs = []
+
+  for (const clip of clips || []) {
+    if (!clip || clip.type !== 'audio') continue
+    const track = trackMap.get(clip.trackId)
+    if (!track || track.type !== 'audio' || track.muted || track.visible === false) continue
+    if (clip.reverse) continue // Matches timeline preview behavior (reverse audio is silent).
+
+    const asset = assetMap.get(clip.assetId)
+    if (!asset) continue
+
+    let inputPath = null
+    if (asset.path && projectPath) {
+      inputPath = path.join(projectPath, asset.path)
+    }
+    if (!inputPath && asset.url) {
+      inputPath = resolveMediaInputPath(asset.url)
+    }
+    if (!inputPath && clip.url) {
+      inputPath = resolveMediaInputPath(clip.url)
+    }
+    if (!inputPath || !fsSync.existsSync(inputPath)) continue
+
+    const clipStart = Number(clip.startTime) || 0
+    const clipDuration = Math.max(0, Number(clip.duration) || 0)
+    if (clipDuration <= 0.000001) continue
+    const clipEnd = clipStart + clipDuration
+
+    const visibleStart = Math.max(rangeStartSec, clipStart)
+    const visibleEnd = Math.min(rangeEndSec, clipEnd)
+    if (visibleEnd <= visibleStart) continue
+
+    const clipOffsetOnTimeline = visibleStart - clipStart
+    const timeScale = getExportClipTimeScale(clip)
+    if (!Number.isFinite(timeScale) || timeScale <= 0) continue
+
+    const trimStart = Math.max(0, Number(clip.trimStart) || 0)
+    const sourceOffsetSec = Math.max(0, trimStart + clipOffsetOnTimeline * timeScale)
+    const timelineVisibleSec = visibleEnd - visibleStart
+    const sourceDurationSec = Math.max(0, timelineVisibleSec * timeScale)
+    if (sourceDurationSec <= 0.000001) continue
+
+    const delayMs = Math.max(0, Math.round((visibleStart - rangeStartSec) * 1000))
+    preparedInputs.push({
+      inputPath,
+      sourceOffsetSec,
+      sourceDurationSec,
+      delayMs,
+      timeScale,
+      forceMono: track.channels === 'mono',
+    })
+  }
+
+  if (preparedInputs.length === 0) {
+    return { success: false, error: 'No eligible audio clips for mix.' }
+  }
+
+  try {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true })
+  } catch (err) {
+    return { success: false, error: err.message || 'Failed to prepare audio mix output folder.' }
+  }
+
+  const normalizedSampleRate = Math.max(8000, Math.min(192000, Math.round(Number(sampleRate) || 44100)))
+  const normalizedChannels = Math.max(1, Math.min(2, Math.round(Number(channels) || 2)))
+  const normalizedTimeout = Math.max(30000, Math.round(Number(timeoutMs) || 180000))
+
+  const args = ['-y']
+  for (const entry of preparedInputs) {
+    args.push('-i', entry.inputPath)
+  }
+
+  const inputFilters = []
+  const mixLabels = []
+  preparedInputs.forEach((entry, index) => {
+    const filters = [
+      `atrim=start=${formatFilterNumber(entry.sourceOffsetSec)}:duration=${formatFilterNumber(entry.sourceDurationSec)}`,
+      'asetpts=PTS-STARTPTS',
+      ...buildAtempoFilterChain(entry.timeScale),
+    ]
+
+    if (entry.forceMono) {
+      filters.push('aformat=channel_layouts=mono')
+    }
+    if (entry.delayMs > 0) {
+      filters.push(`adelay=${entry.delayMs}:all=1`)
+    }
+
+    const label = `mix${index}`
+    inputFilters.push(`[${index}:a]${filters.join(',')}[${label}]`)
+    mixLabels.push(`[${label}]`)
+  })
+
+  const finalMixFilter = mixLabels.length === 1
+    ? `${mixLabels[0]}atrim=duration=${formatFilterNumber(totalDuration)},asetpts=PTS-STARTPTS[outa]`
+    : `${mixLabels.join('')}amix=inputs=${mixLabels.length}:duration=longest:dropout_transition=0,atrim=duration=${formatFilterNumber(totalDuration)},asetpts=PTS-STARTPTS[outa]`
+  const filterComplex = `${inputFilters.join(';')};${finalMixFilter}`
+
+  args.push(
+    '-filter_complex', filterComplex,
+    '-map', '[outa]',
+    '-ar', String(normalizedSampleRate),
+    '-ac', String(normalizedChannels),
+    '-c:a', 'pcm_s16le',
+    outputPath
+  )
+
+  return await new Promise((resolve) => {
+    const ffmpeg = spawn(ffmpegPath, args, { windowsHide: true })
+    let stderr = ''
+    let killedByTimeout = false
+    const timeoutHandle = setTimeout(() => {
+      killedByTimeout = true
+      ffmpeg.kill('SIGKILL')
+    }, normalizedTimeout)
+
+    ffmpeg.stderr.on('data', (data) => {
+      stderr += data.toString()
+    })
+
+    ffmpeg.on('error', (err) => {
+      clearTimeout(timeoutHandle)
+      resolve({ success: false, error: err.message })
+    })
+
+    ffmpeg.on('close', (code) => {
+      clearTimeout(timeoutHandle)
+      if (killedByTimeout) {
+        resolve({ success: false, error: `Audio mix timed out after ${Math.round(normalizedTimeout / 1000)}s` })
+        return
+      }
+      if (code === 0) {
+        resolve({ success: true, clipCount: preparedInputs.length })
+        return
+      }
+      resolve({ success: false, error: stderr || `FFmpeg exited with code ${code}` })
+    })
+  })
 })
 
 ipcMain.handle('export:encodeVideo', async (event, options = {}) => {

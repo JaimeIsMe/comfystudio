@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { 
   Move, RotateCw, Maximize2, Clock, Layers, Volume2, 
-  ChevronDown, ChevronRight, ChevronLeft, Sparkles, Film,
+  ChevronDown, ChevronRight, ChevronLeft, Sparkles,
   Zap, Eye, SlidersHorizontal, CircleDot,
   FlipHorizontal, FlipVertical, Link, Unlink, Crop,
   Anchor, RotateCcw, Type, AlignLeft, AlignCenter, AlignRight,
@@ -575,26 +575,18 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   // Render Video Clip Inspector (with 2D transforms)
   const renderVideoClipInspector = () => {
     if (!selectedClip || !transform) return null
-    
+
     return (
       <>
         {/* Clip Info Header */}
         <div className="p-3 border-b border-sf-dark-700">
-          <div className="flex items-center gap-2 mb-2">
-            <div 
-              className="w-8 h-8 rounded flex items-center justify-center"
-              style={{ backgroundColor: selectedClip.color || '#5a7a9e' }}
-            >
-              <Film className="w-4 h-4 text-white" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-sf-text-primary truncate">
-                {selectedClip.name}
-              </p>
-              <p className="text-[10px] text-sf-text-muted">
-                {selectedTrack?.name || 'Unknown Track'} • {selectedClip.duration?.toFixed(2)}s
-              </p>
-            </div>
+          <div className="mb-2">
+            <p className="text-sm font-medium text-sf-text-primary truncate">
+              {selectedClip.name}
+            </p>
+            <p className="text-[10px] text-sf-text-muted">
+              {selectedTrack?.name || 'Unknown Track'} • {selectedClip.duration?.toFixed(2)}s
+            </p>
           </div>
           
           {/* Reset Transform Button */}
@@ -1478,20 +1470,13 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
       <>
         {/* Text Clip Info Header */}
         <div className="p-3 border-b border-sf-dark-700">
-          <div className="flex items-center gap-2 mb-2">
-            <div 
-              className="w-8 h-8 rounded flex items-center justify-center bg-sf-accent"
-            >
-              <Type className="w-4 h-4 text-white" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-sf-text-primary truncate">
-                Text Clip
-              </p>
-              <p className="text-[10px] text-sf-text-muted">
-                {selectedTrack?.name || 'Unknown Track'} • {selectedClip.duration?.toFixed(2)}s
-              </p>
-            </div>
+          <div className="mb-2">
+            <p className="text-sm font-medium text-sf-text-primary truncate">
+              Text Clip
+            </p>
+            <p className="text-[10px] text-sf-text-muted">
+              {selectedTrack?.name || 'Unknown Track'} • {selectedClip.duration?.toFixed(2)}s
+            </p>
           </div>
           
           {/* Reset Transform Button */}
@@ -1964,19 +1949,14 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     <>
       {/* Audio Info Header */}
       <div className="p-3 border-b border-sf-dark-700">
-        <div className="flex items-center gap-2 mb-2">
-          <div className="w-8 h-8 bg-cyan-600 rounded flex items-center justify-center">
-            <Volume2 className="w-4 h-4 text-white" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <input
-              type="text"
-              value={audioData.name}
-              onChange={(e) => setAudioData({ ...audioData, name: e.target.value })}
-              className="w-full bg-transparent text-sm font-medium text-sf-text-primary focus:outline-none"
-            />
-            <p className="text-[10px] text-sf-text-muted capitalize">{audioData.type}</p>
-          </div>
+        <div className="mb-2">
+          <input
+            type="text"
+            value={audioData.name}
+            onChange={(e) => setAudioData({ ...audioData, name: e.target.value })}
+            className="w-full bg-transparent text-sm font-medium text-sf-text-primary focus:outline-none"
+          />
+          <p className="text-[10px] text-sf-text-muted capitalize">{audioData.type}</p>
         </div>
       </div>
 

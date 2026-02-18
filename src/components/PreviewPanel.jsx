@@ -1,11 +1,20 @@
-import { Maximize2, Minimize2, Plus, X, Check, Home, ZoomIn, ZoomOut, Move, Play, Pause, SkipBack, SkipForward, Volume2, Film, Image as ImageIcon, ChevronDown, Grid3X3, Crosshair, Square, Frame, Eye, EyeOff, Layers } from 'lucide-react'
+import { Maximize2, Minimize2, Plus, X, Check, Home, ZoomIn, ZoomOut, Move, Play, Pause, SkipBack, SkipForward, Volume2, Film, Image as ImageIcon, ChevronDown, Grid3X3, Crosshair, Square, Frame, Eye, EyeOff, Layers, Wand2 } from 'lucide-react'
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import useAssetsStore from '../stores/assetsStore'
 import useTimelineStore from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
+import { useFrameForAIStore } from '../stores/frameForAIStore'
 import { useTimelinePlayback } from '../hooks/useTimelinePlayback'
+import { captureTimelineFrameAt, getTopmostVideoOrImageClipAtTime } from '../utils/captureTimelineFrame'
 import VideoLayerRenderer from './VideoLayerRenderer'
 import AudioLayerRenderer from './AudioLayerRenderer'
+import {
+  getPreviewProxyPath,
+  computePreviewSignature,
+  renderPreviewProxy,
+  getPreviewComplexity,
+  shouldAutoGeneratePreviewProxy,
+} from '../services/previewCache'
 
 /**
  * MaskPreview - Component for previewing mask assets with frame-by-frame playback
@@ -182,6 +191,7 @@ const LETTERBOX_PRESETS = [
   { id: '4:5', label: '4:5 Instagram Portrait', ratio: 4/5 },
   { id: '1:1', label: '1:1 Square (Instagram)', ratio: 1 },
 ]
+const AUTO_SMOOTH_PREVIEW_KEY = 'comfystudio-auto-smooth-preview'
 
 function PreviewPanel() {
   const videoRefA = useRef(null) // Used for asset preview mode
@@ -196,6 +206,9 @@ function PreviewPanel() {
   
   // Context menu state
   const [contextMenu, setContextMenu] = useState(null) // { x, y }
+  const [capturingFrameForAI, setCapturingFrameForAI] = useState(false)
+  
+  const setFrameForAI = useFrameForAIStore((s) => s.setFrame)
   
   // Mask preview state (for multi-frame mask playback)
   const [maskFrame, setMaskFrame] = useState(0)
@@ -203,6 +216,7 @@ function PreviewPanel() {
 
   // Get current preview and playback state from assets store
   const { 
+    assets,
     currentPreview, 
     clearPreview,
     volume,
@@ -232,7 +246,17 @@ function PreviewPanel() {
     getTransitionAtTime,
     getTimelineEndTime,
     clips,
-    tracks
+    tracks,
+    transitions,
+    duration: timelineDuration,
+    timelineFps,
+    previewProxyStatus,
+    previewProxyPath,
+    previewProxySignature,
+    previewProxyProgress,
+    setPreviewProxyGenerating,
+    setPreviewProxyReady,
+    setPreviewProxyInvalid,
   } = useTimelineStore()
   
   // Use timeline playback hook
@@ -254,6 +278,7 @@ function PreviewPanel() {
       rotation: 0, anchorX: 50, anchorY: 50, opacity: 100,
       flipH: false, flipV: false,
       cropTop: 0, cropBottom: 0, cropLeft: 0, cropRight: 0,
+      blur: 0,
     }
   }
   
@@ -269,14 +294,27 @@ function PreviewPanel() {
       opacity,
       flipH, flipV,
       cropTop, cropBottom, cropLeft, cropRight,
+      blendMode,
+      blur = 0,
     } = clipTransform
+
+    // Transform values are authored in timeline-resolution pixels.
+    // Scale them into current preview pixels so composition stays identical
+    // regardless of preview pane size.
+    const previewScaleX = Number.isFinite(previewScale?.x) && previewScale.x > 0 ? previewScale.x : 1
+    const previewScaleY = Number.isFinite(previewScale?.y) && previewScale.y > 0 ? previewScale.y : 1
+    const previewScaleUniform = Number.isFinite(previewScale?.uniform) && previewScale.uniform > 0
+      ? previewScale.uniform
+      : 1
     
     // Build transform components
     const transforms = []
     
     // Position (translate)
-    if (positionX !== 0 || positionY !== 0) {
-      transforms.push(`translate(${positionX}px, ${positionY}px)`)
+    const scaledPositionX = positionX * previewScaleX
+    const scaledPositionY = positionY * previewScaleY
+    if (scaledPositionX !== 0 || scaledPositionY !== 0) {
+      transforms.push(`translate(${scaledPositionX}px, ${scaledPositionY}px)`)
     }
     
     // Scale (with flip)
@@ -306,10 +344,23 @@ function PreviewPanel() {
       style.opacity = opacity / 100
     }
     
+    // Blend mode (composite with layers below)
+    if (blendMode && blendMode !== 'normal') {
+      style.mixBlendMode = blendMode
+    }
+    
     // Crop using clip-path
     if (cropTop > 0 || cropBottom > 0 || cropLeft > 0 || cropRight > 0) {
       style.clipPath = `inset(${cropTop}% ${cropRight}% ${cropBottom}% ${cropLeft}%)`
     }
+    
+    // Blur (CSS filter)
+    if (blur > 0) {
+      style.filter = `blur(${blur * previewScaleUniform}px)`
+    }
+
+    // Expose preview scale so downstream layers (e.g. text) can match output framing.
+    style['--comfystudio-preview-scale'] = String(previewScaleUniform)
     
     return style
   }
@@ -341,16 +392,169 @@ function PreviewPanel() {
     const saved = localStorage.getItem('previewShowInfoOverlay')
     return saved !== null ? JSON.parse(saved) : true
   })
+  const [autoSmoothPreviewEnabled, setAutoSmoothPreviewEnabled] = useState(() => {
+    try {
+      return localStorage.getItem(AUTO_SMOOTH_PREVIEW_KEY) !== 'false'
+    } catch {
+      return true
+    }
+  })
   
   // Persist info overlay preference
   useEffect(() => {
     localStorage.setItem('previewShowInfoOverlay', JSON.stringify(showInfoOverlay))
   }, [showInfoOverlay])
+  useEffect(() => {
+    try {
+      localStorage.setItem(AUTO_SMOOTH_PREVIEW_KEY, autoSmoothPreviewEnabled ? 'true' : 'false')
+    } catch {
+      // Ignore localStorage errors.
+    }
+  }, [autoSmoothPreviewEnabled])
   
-  // Get timeline-specific settings
-  const { getCurrentTimelineSettings, getCurrentTimeline } = useProjectStore()
+  // Get timeline-specific settings and project handle for preview proxy
+  const { getCurrentTimelineSettings, currentProjectHandle, currentTimelineId } = useProjectStore()
   const timelineSettings = getCurrentTimelineSettings()
-  const currentTimeline = getCurrentTimeline()
+  const previewComplexity = useMemo(
+    () => getPreviewComplexity({ clips, tracks, transitions }),
+    [clips, tracks, transitions]
+  )
+  const shouldAutoGenerateProxy = useMemo(
+    () => shouldAutoGeneratePreviewProxy({ clips, tracks, transitions }),
+    [clips, tracks, transitions]
+  )
+  const currentSignature = useMemo(
+    () => computePreviewSignature(currentTimelineId, {
+      clips,
+      tracks,
+      transitions,
+      duration: timelineDuration,
+      timelineFps,
+      assets,
+    }),
+    [currentTimelineId, clips, tracks, transitions, timelineDuration, timelineFps, assets]
+  )
+  const useProxyPlayback = Boolean(
+    previewProxyPath &&
+    previewProxySignature &&
+    currentSignature === previewProxySignature
+  )
+  const lastAutoProxySignatureRef = useRef(null)
+  const forceAutoProxyRefreshRef = useRef(false)
+  const [proxyVideoUrl, setProxyVideoUrl] = useState(null)
+  const proxyVideoRef = useRef(null)
+  const runSmoothPreviewRender = useCallback(async ({ force = true, reason = 'manual' } = {}) => {
+    if (!currentProjectHandle || !currentTimelineId || !window.electronAPI) {
+      return { error: 'Preview cache is unavailable.' }
+    }
+
+    const timelineState = useTimelineStore.getState()
+    if (timelineState.previewProxyStatus === 'generating') {
+      return { skipped: true }
+    }
+
+    setPreviewProxyGenerating()
+    const result = await renderPreviewProxy(({ progress }) => {
+      useTimelineStore.getState().setPreviewProxyProgress(progress)
+    }, { force })
+
+    if (result?.path && result?.url) {
+      // Avoid enabling a stale proxy when timeline changed while rendering.
+      const latestSignature = computePreviewSignature(currentTimelineId, useTimelineStore.getState())
+      const renderedSignature = result.signature || latestSignature
+      if (renderedSignature !== latestSignature) {
+        useTimelineStore.getState().setPreviewProxyInvalid()
+        return { ...result, stale: true }
+      }
+      setPreviewProxyReady(result.path, renderedSignature)
+      setProxyVideoUrl(result.url)
+      return result
+    }
+
+    useTimelineStore.getState().setPreviewProxyInvalid()
+    if (result?.error) {
+      console.warn(`[PreviewCache:${reason}]`, result.error)
+    }
+    return result
+  }, [currentProjectHandle, currentTimelineId, setPreviewProxyGenerating, setPreviewProxyReady])
+
+  // If timeline changed, mark proxy state invalid so status stays accurate.
+  useEffect(() => {
+    if (
+      previewProxyStatus === 'ready' &&
+      previewProxySignature &&
+      currentSignature !== previewProxySignature
+    ) {
+      forceAutoProxyRefreshRef.current = true
+      lastAutoProxySignatureRef.current = null
+      setPreviewProxyInvalid()
+    }
+  }, [previewProxyStatus, previewProxySignature, currentSignature, setPreviewProxyInvalid])
+
+  // Auto-generate smooth preview when timeline is heavy and idle.
+  useEffect(() => {
+    if (!autoSmoothPreviewEnabled) return
+    if (!window.electronAPI || !currentProjectHandle || !currentTimelineId) return
+    if (previewMode !== 'timeline') return
+    if (timelineIsPlaying) return
+    if (clips.length === 0) return
+    const shouldForceRefresh = forceAutoProxyRefreshRef.current
+    if (!shouldAutoGenerateProxy && !shouldForceRefresh) return
+    if (useProxyPlayback) return
+    if (previewProxyStatus === 'generating') return
+    if (!shouldForceRefresh && lastAutoProxySignatureRef.current === currentSignature) return
+
+    const timer = setTimeout(() => {
+      const triggerReason = forceAutoProxyRefreshRef.current ? 'stale-refresh' : 'auto'
+      if (forceAutoProxyRefreshRef.current) {
+        forceAutoProxyRefreshRef.current = false
+      }
+      lastAutoProxySignatureRef.current = currentSignature
+      void runSmoothPreviewRender({ force: false, reason: triggerReason })
+    }, 1200)
+
+    return () => clearTimeout(timer)
+  }, [
+    autoSmoothPreviewEnabled,
+    currentProjectHandle,
+    currentTimelineId,
+    previewMode,
+    timelineIsPlaying,
+    clips.length,
+    shouldAutoGenerateProxy,
+    useProxyPlayback,
+    previewProxyStatus,
+    currentSignature,
+    runSmoothPreviewRender,
+  ])
+
+  useEffect(() => {
+    if (!currentProjectHandle || !currentTimelineId || previewProxyStatus !== 'ready') {
+      setProxyVideoUrl(null)
+      return
+    }
+    let cancelled = false
+    getPreviewProxyPath(currentProjectHandle, currentTimelineId).then((result) => {
+      if (!cancelled && result?.url) setProxyVideoUrl(result.url)
+      else if (!cancelled) setProxyVideoUrl(null)
+    })
+    return () => { cancelled = true }
+  }, [currentProjectHandle, currentTimelineId, previewProxyStatus, previewProxyPath])
+  // Sync proxy video with playhead and playback
+  useEffect(() => {
+    if (!proxyVideoRef.current || !proxyVideoUrl) return
+    const video = proxyVideoRef.current
+    if (timelineIsPlaying) {
+      video.play().catch(() => {})
+    } else {
+      video.pause()
+      setPlayheadPosition(video.currentTime)
+    }
+  }, [timelineIsPlaying, proxyVideoUrl, setPlayheadPosition])
+  useEffect(() => {
+    if (!proxyVideoRef.current || !proxyVideoUrl || timelineIsPlaying) return
+    proxyVideoRef.current.currentTime = playheadPosition
+  }, [playheadPosition, proxyVideoUrl, timelineIsPlaying])
   
   // Register video ref with store (for asset preview mode - only for video assets)
   // Use a timeout to ensure the video element is mounted after switching previews
@@ -396,7 +600,7 @@ function PreviewPanel() {
     })
     
     setActiveLayerClips(sortedClips)
-  }, [previewMode, playheadPosition, getActiveClipsAtTime, tracks])
+  }, [previewMode, playheadPosition, getActiveClipsAtTime, tracks, clips])
 
   // NOTE: Video sync is now handled by VideoLayerRenderer component
 
@@ -436,7 +640,9 @@ function PreviewPanel() {
     if (effectiveIsVideoA) {
       switch (type) {
         case 'dissolve':
-          return { ...baseStyles, opacity: 1 - progress, zIndex: 1 }
+          // Keep outgoing clip at full opacity and fade incoming on top.
+          // If both clips are faded, source-over compositing causes a brightness dip mid-transition.
+          return { ...baseStyles, opacity: 1, zIndex: 1 }
         case 'fade-black':
         case 'fade-white':
           // Fade out to color then fade in
@@ -912,6 +1118,36 @@ function PreviewPanel() {
       case 'reset-view':
         resetView()
         break
+      case 'extend-with-ai': {
+        setContextMenu(null)
+        if (previewMode !== 'timeline') break
+        const top = getTopmostVideoOrImageClipAtTime(playheadPosition)
+        if (!top) break
+        setCapturingFrameForAI(true)
+        captureTimelineFrameAt(playheadPosition).then((result) => {
+          setCapturingFrameForAI(false)
+          if (result) {
+            setFrameForAI({ ...result, mode: 'extend' })
+            window.dispatchEvent(new CustomEvent('comfystudio-open-generate-with-frame'))
+          }
+        })
+        break
+      }
+      case 'keyframe-for-ai': {
+        setContextMenu(null)
+        if (previewMode !== 'timeline') break
+        const top = getTopmostVideoOrImageClipAtTime(playheadPosition)
+        if (!top) break
+        setCapturingFrameForAI(true)
+        captureTimelineFrameAt(playheadPosition).then((result) => {
+          setCapturingFrameForAI(false)
+          if (result) {
+            setFrameForAI({ ...result, mode: 'keyframe' })
+            window.dispatchEvent(new CustomEvent('comfystudio-open-generate-with-frame'))
+          }
+        })
+        break
+      }
       case 'zoom-100':
         setZoom(100)
         setPan({ x: 0, y: 0 })
@@ -945,6 +1181,20 @@ function PreviewPanel() {
 
   // State for computed video dimensions
   const [videoDimensions, setVideoDimensions] = useState({ width: 0, height: 0 })
+  const previewScale = useMemo(() => {
+    const timelineWidth = Math.max(1, Number(timelineSettings?.width) || 1920)
+    const timelineHeight = Math.max(1, Number(timelineSettings?.height) || 1080)
+    const displayWidth = Number(videoDimensions?.width) > 0 ? Number(videoDimensions.width) : timelineWidth
+    const displayHeight = Number(videoDimensions?.height) > 0 ? Number(videoDimensions.height) : timelineHeight
+
+    const x = displayWidth / timelineWidth
+    const y = displayHeight / timelineHeight
+    return {
+      x,
+      y,
+      uniform: Math.min(x, y),
+    }
+  }, [timelineSettings?.width, timelineSettings?.height, videoDimensions?.width, videoDimensions?.height])
   
   // Calculate video container dimensions to fill viewport while maintaining aspect ratio
   useEffect(() => {
@@ -986,24 +1236,27 @@ function PreviewPanel() {
   }, [timelineAspectRatio])
   
   // Get video container style with computed dimensions
+  // IMPORTANT: use the same measured dimensions source in both normal + fullscreen
+  // so transform scaling (previewScale) and render box size always match.
   const getAspectRatioStyle = () => {
-    if (isFullscreen) {
-      const ar = timelineAspectRatio
-      // In fullscreen, constrain to viewport
-      return ar >= 1 
-        ? { maxWidth: '90vw', maxHeight: `calc(90vw / ${ar})`, aspectRatio: `${ar}` }
-        : { maxHeight: '85vh', maxWidth: `calc(85vh * ${ar})`, aspectRatio: `${ar}` }
-    }
-    
-    // Use computed dimensions for exact fit
+    // Use computed dimensions for exact fit in both modes.
     if (videoDimensions.width > 0 && videoDimensions.height > 0) {
       return {
         width: `${videoDimensions.width}px`,
         height: `${videoDimensions.height}px`,
+        aspectRatio: `${timelineAspectRatio}`,
       }
     }
     
     // Fallback while computing
+    if (isFullscreen) {
+      // Keep explicit dimensions during first fullscreen frame until ResizeObserver measures.
+      return {
+        width: '90vw',
+        maxWidth: '90vw',
+        aspectRatio: `${timelineAspectRatio}`,
+      }
+    }
     return { aspectRatio: `${timelineAspectRatio}` }
   }
   
@@ -1135,6 +1388,7 @@ function PreviewPanel() {
     <div 
       ref={panelRef}
       className={`flex-1 bg-sf-dark-950 flex flex-col h-full ${isFullscreen ? 'fullscreen-panel' : ''}`}
+      style={isFullscreen ? { width: '100vw', height: '100vh', minHeight: 0 } : undefined}
     >
       {/* Preview Header */}
       <div className="h-8 bg-sf-dark-900 border-b border-sf-dark-700 flex items-center justify-between px-3 flex-shrink-0">
@@ -1304,17 +1558,38 @@ function PreviewPanel() {
               {/* Timeline Playback Mode */}
             {previewMode === 'timeline' && clips.length > 0 ? (
               <>
-                {/* Audio Layer Renderer - handles audio clip playback */}
-                <AudioLayerRenderer />
-                
-                {/* Video Layer Renderer - handles preloading and seamless playback */}
-                <VideoLayerRenderer
-                  buildVideoTransform={buildVideoTransform}
-                  getClipTransform={getClipTransform}
-                  transitionInfo={transitionInfo}
-                  getTransitionStyles={getTransitionStyles}
-                  getTransitionOverlay={getTransitionOverlay}
-                />
+                {/* Flattened preview proxy (smooth playback when many layers) or live compositing */}
+                {proxyVideoUrl && useProxyPlayback ? (
+                  <video
+                    ref={proxyVideoRef}
+                    src={proxyVideoUrl}
+                    className="absolute inset-0 w-full h-full object-contain bg-black"
+                    onLoadedMetadata={() => {
+                      if (proxyVideoRef.current) {
+                        proxyVideoRef.current.currentTime = playheadPosition
+                      }
+                    }}
+                    onTimeUpdate={() => {
+                      if (proxyVideoRef.current && timelineIsPlaying) {
+                        setPlayheadPosition(proxyVideoRef.current.currentTime)
+                      }
+                    }}
+                    onEnded={() => timelineIsPlaying && timelineTogglePlay()}
+                    onContextMenu={(e) => e.preventDefault()}
+                  />
+                ) : (
+                  <>
+                    <AudioLayerRenderer />
+                    <VideoLayerRenderer
+                      buildVideoTransform={buildVideoTransform}
+                      getClipTransform={getClipTransform}
+                      transitionInfo={transitionInfo}
+                      getTransitionStyles={getTransitionStyles}
+                      getTransitionOverlay={getTransitionOverlay}
+                      previewScale={previewScale.uniform}
+                    />
+                  </>
+                )}
                 
                 {/* Timeline Mode Overlay */}
                 {showInfoOverlay && (
@@ -1345,18 +1620,61 @@ function PreviewPanel() {
                           {transitionInfo.transition?.type?.replace('-', ' ') || 'Dissolve'} {Math.round(transitionInfo.progress * 100)}%
                         </div>
                       )}
+                      {proxyVideoUrl && useProxyPlayback && (
+                        <div className="px-2 py-1 bg-green-600/80 rounded text-xs text-white">
+                          Smooth preview
+                        </div>
+                      )}
+                      {previewComplexity.maxConcurrentVideoLayers >= 2 && (
+                        <div className="px-2 py-1 bg-sf-dark-900/80 rounded text-xs text-sf-text-muted">
+                          Peak {previewComplexity.maxConcurrentVideoLayers} video layers
+                        </div>
+                      )}
+                      {autoSmoothPreviewEnabled && shouldAutoGenerateProxy && !useProxyPlayback && previewProxyStatus !== 'generating' && (
+                        <div className="px-2 py-1 bg-yellow-600/80 rounded text-xs text-white">
+                          Auto smooth preview pending
+                        </div>
+                      )}
                     </div>
-                    {currentPreview && (
-                      <button 
-                        onClick={() => {
-                          setPreviewMode('asset')
-                          if (timelineIsPlaying) timelineTogglePlay()
-                        }}
-                        className="px-2 py-1 bg-sf-dark-900/80 hover:bg-sf-dark-700 rounded text-xs text-sf-text-muted pointer-events-auto transition-colors"
-                      >
-                        View Asset
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2 pointer-events-auto">
+                      {previewProxyStatus === 'generating' && (
+                        <div className="px-2 py-1 bg-sf-dark-800 rounded text-xs text-sf-text-muted flex items-center gap-2">
+                          <span>Generating smooth preview…</span>
+                          <span>{Math.round(previewProxyProgress)}%</span>
+                        </div>
+                      )}
+                      {currentProjectHandle && window.electronAPI && clips.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setAutoSmoothPreviewEnabled(prev => !prev)}
+                          className={`px-2 py-1 rounded text-xs transition-colors ${autoSmoothPreviewEnabled ? 'bg-green-700/70 hover:bg-green-700 text-white' : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-muted'}`}
+                          title="Automatically generate smooth preview proxies for heavy timelines"
+                        >
+                          {autoSmoothPreviewEnabled ? 'Auto smooth: On' : 'Auto smooth: Off'}
+                        </button>
+                      )}
+                      {previewProxyStatus !== 'generating' && currentProjectHandle && window.electronAPI && clips.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => { void runSmoothPreviewRender({ force: true, reason: 'manual' }) }}
+                          className="px-2 py-1 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-xs text-sf-text-muted transition-colors"
+                          title="Render timeline to a single file for smoother playback with many layers (Electron only)"
+                        >
+                          {previewProxyStatus === 'ready' && useProxyPlayback ? 'Re-generate smooth preview' : 'Generate smooth preview'}
+                        </button>
+                      )}
+                      {currentPreview && (
+                        <button 
+                          onClick={() => {
+                            setPreviewMode('asset')
+                            if (timelineIsPlaying) timelineTogglePlay()
+                          }}
+                          className="px-2 py-1 bg-sf-dark-900/80 hover:bg-sf-dark-700 rounded text-xs text-sf-text-muted transition-colors"
+                        >
+                          View Asset
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </>
@@ -1633,14 +1951,11 @@ function PreviewPanel() {
       
       {/* Fullscreen Transport Controls */}
       {isFullscreen && (
-        <div className="h-12 bg-sf-dark-900 border-t border-sf-dark-700 flex items-center px-4 flex-shrink-0">
-          {/* Left spacer */}
-          <div className="flex-1" />
-          
-          {/* Center controls */}
+        <div className="h-12 bg-sf-dark-900 border-t border-sf-dark-700 flex items-center px-4 gap-4 flex-shrink-0">
+          {/* Transport buttons */}
           <div className="flex items-center gap-3">
             {/* Skip to Start */}
-            <button 
+            <button
               onClick={goToStart}
               className="p-2 hover:bg-sf-dark-700 rounded transition-colors"
               disabled={!hasContent}
@@ -1648,13 +1963,13 @@ function PreviewPanel() {
             >
               <SkipBack className="w-5 h-5 text-sf-text-secondary" />
             </button>
-            
+
             {/* Play/Pause */}
-            <button 
+            <button
               onClick={togglePlay}
               className={`p-3 rounded-full transition-colors ${
-                hasContent 
-                  ? 'bg-sf-blue hover:bg-sf-blue-hover' 
+                hasContent
+                  ? 'bg-sf-blue hover:bg-sf-blue-hover'
                   : 'bg-sf-dark-600 cursor-not-allowed'
               }`}
               disabled={!hasContent}
@@ -1666,9 +1981,9 @@ function PreviewPanel() {
                 <Play className="w-5 h-5 text-white ml-0.5" />
               )}
             </button>
-            
+
             {/* Skip to End */}
-            <button 
+            <button
               onClick={goToEnd}
               className="p-2 hover:bg-sf-dark-700 rounded transition-colors"
               disabled={!hasContent}
@@ -1676,17 +1991,74 @@ function PreviewPanel() {
             >
               <SkipForward className="w-5 h-5 text-sf-text-secondary" />
             </button>
-            
-            {/* Timecode */}
-            <div className="flex items-center gap-2 text-sm text-sf-text-secondary font-mono ml-4">
-              <span>{formatTime(currentTime)}</span>
-              <span className="text-sf-text-muted">/</span>
-              <span className="text-sf-text-muted">{formatTime(duration)}</span>
-            </div>
           </div>
-          
+
+          {/* Fullscreen scrubber */}
+          <div className="flex-1 min-w-0 flex items-center gap-3">
+            <span className="text-xs text-sf-text-secondary font-mono w-14 text-right">
+              {formatTime(currentTime)}
+            </span>
+
+            <div
+              className={`flex-1 h-5 relative ${
+                hasContent ? 'cursor-pointer group' : 'cursor-not-allowed opacity-50'
+              }`}
+              onClick={(e) => {
+                if (!hasContent || duration <= 0) return
+                const rect = e.currentTarget.getBoundingClientRect()
+                const x = e.clientX - rect.left
+                const percent = x / rect.width
+                const newTime = percent * duration
+                seekTo(Math.max(0, Math.min(duration, newTime)))
+              }}
+              onMouseDown={(e) => {
+                if (!hasContent || duration <= 0) return
+                e.preventDefault()
+                const scrubber = e.currentTarget
+
+                const handleScrub = (moveEvent) => {
+                  const rect = scrubber.getBoundingClientRect()
+                  const x = moveEvent.clientX - rect.left
+                  const percent = Math.max(0, Math.min(1, x / rect.width))
+                  const newTime = percent * duration
+                  seekTo(newTime)
+                }
+
+                const handleMouseUp = () => {
+                  window.removeEventListener('mousemove', handleScrub)
+                  window.removeEventListener('mouseup', handleMouseUp)
+                }
+
+                window.addEventListener('mousemove', handleScrub)
+                window.addEventListener('mouseup', handleMouseUp)
+
+                // Initial scrub on mousedown
+                handleScrub(e)
+              }}
+            >
+              {/* Track Background */}
+              <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 bg-sf-dark-700 rounded-full" />
+
+              {/* Progress Fill */}
+              <div
+                className="absolute top-1/2 -translate-y-1/2 h-1 bg-sf-accent/70 rounded-full left-0"
+                style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
+              />
+
+              {/* Playhead Indicator */}
+              <div
+                className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-sf-accent rounded-full shadow-md transform -translate-x-1/2 group-hover:scale-110 transition-transform"
+                style={{ left: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
+              />
+            </div>
+
+            <span className="text-xs text-sf-text-muted font-mono w-14">
+              {formatTime(duration)}
+            </span>
+          </div>
+
           {/* Right side - volume */}
-          <div className="flex-1 flex items-center justify-end gap-2">
+          <div className="flex items-center gap-2">
             <Volume2 className="w-5 h-5 text-sf-text-muted" />
             <input
               type="range"
@@ -1817,6 +2189,28 @@ function PreviewPanel() {
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Add to Timeline</span>
+              </button>
+              <div className="h-px bg-sf-dark-600 my-1" />
+            </>
+          )}
+          
+          {previewMode === 'timeline' && getTopmostVideoOrImageClipAtTime(playheadPosition) && (
+            <>
+              <button
+                onClick={() => handleContextAction('extend-with-ai')}
+                disabled={capturingFrameForAI}
+                className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors disabled:opacity-50"
+              >
+                <Wand2 className="w-3.5 h-3.5 text-sf-accent" />
+                <span>{capturingFrameForAI ? 'Capturing...' : 'Extend with AI'}</span>
+              </button>
+              <button
+                onClick={() => handleContextAction('keyframe-for-ai')}
+                disabled={capturingFrameForAI}
+                className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors disabled:opacity-50"
+              >
+                <Wand2 className="w-3.5 h-3.5 text-sf-accent" />
+                <span>{capturingFrameForAI ? 'Capturing...' : 'Starting keyframe for AI'}</span>
               </button>
               <div className="h-px bg-sf-dark-600 my-1" />
             </>

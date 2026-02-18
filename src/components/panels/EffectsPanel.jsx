@@ -1,7 +1,9 @@
 import { useMemo, useState, useEffect } from 'react'
-import { Search, Info } from 'lucide-react'
+import { Search, Info, ChevronDown, ChevronRight } from 'lucide-react'
 import { useTimelineStore } from '../../stores/timelineStore'
-import { TRANSITION_TYPES, TRANSITION_DURATIONS, FRAME_RATE, TRANSITION_DEFAULT_SETTINGS } from '../../constants/transitions'
+import { TRANSITION_TYPES, TRANSITION_DURATIONS, FRAME_RATE, TRANSITION_DEFAULT_SETTINGS, TRANSITION_CATEGORIES } from '../../constants/transitions'
+
+const TRANSITION_DEFAULT_DURATION_KEY = 'comfystudio-transition-default-duration-frames'
 
 function EffectsPanel() {
   const {
@@ -17,10 +19,19 @@ function EffectsPanel() {
   
   const [search, setSearch] = useState('')
   const [message, setMessage] = useState('')
-  const [durationFrames, setDurationFrames] = useState(TRANSITION_DURATIONS[1]?.frames || 12)
+  const [durationFrames, setDurationFrames] = useState(() => {
+    try {
+      const raw = localStorage.getItem(TRANSITION_DEFAULT_DURATION_KEY)
+      const parsed = Number(raw)
+      if (Number.isFinite(parsed) && parsed >= 1) return Math.round(parsed)
+    } catch (_) {}
+    return TRANSITION_DURATIONS[1]?.frames || 12
+  })
   const [edgeMode, setEdgeMode] = useState('between') // between | in | out
+  const [expandedCategories, setExpandedCategories] = useState(() => TRANSITION_CATEGORIES.map(c => c.id))
   
   const durationSeconds = Math.max(1, durationFrames) / FRAME_RATE
+  const minTransitionSeconds = 1 / FRAME_RATE
   
   const getTransitionDefaults = (type) => TRANSITION_DEFAULT_SETTINGS[type] || {}
   
@@ -29,6 +40,11 @@ function EffectsPanel() {
     const q = search.trim().toLowerCase()
     return TRANSITION_TYPES.filter(t => t.name.toLowerCase().includes(q))
   }, [search])
+  const transitionsById = useMemo(() => {
+    const map = new Map()
+    TRANSITION_TYPES.forEach(t => map.set(t.id, t))
+    return map
+  }, [])
   
   const selectedClips = clips.filter(c => selectedClipIds.includes(c.id))
 
@@ -41,6 +57,17 @@ function EffectsPanel() {
       setEdgeMode('between')
     }
   }, [selectedClips.length, edgeMode])
+
+  useEffect(() => {
+    const handler = (e) => {
+      const next = Number(e?.detail)
+      if (Number.isFinite(next) && next >= 1) {
+        setDurationFrames(Math.round(next))
+      }
+    }
+    window.addEventListener('comfystudio-transition-default-duration-changed', handler)
+    return () => window.removeEventListener('comfystudio-transition-default-duration-changed', handler)
+  }, [])
   
   const getSelectedPair = () => {
     if (selectedClips.length !== 2) return null
@@ -86,6 +113,22 @@ function EffectsPanel() {
     if (Number.isNaN(next)) return
     setDurationFrames(Math.max(1, Math.min(240, next)))
   }
+
+  const handleSetDefaultDuration = () => {
+    try {
+      localStorage.setItem(TRANSITION_DEFAULT_DURATION_KEY, String(durationFrames))
+      window.dispatchEvent(new CustomEvent('comfystudio-transition-default-duration-changed', { detail: durationFrames }))
+    } catch (_) {}
+    setMessage(`Default transition duration set to ${durationFrames} frames.`)
+  }
+
+  const toggleCategory = (categoryId) => {
+    setExpandedCategories(prev =>
+      prev.includes(categoryId)
+        ? prev.filter(id => id !== categoryId)
+        : [...prev, categoryId]
+    )
+  }
   
   const updateTransitionDuration = (transitionId, frames) => {
     const nextFrames = Math.max(1, Math.min(240, Number(frames) || 1))
@@ -108,7 +151,7 @@ function EffectsPanel() {
     const singleClip = getSelectedSingle()
     if (edgeMode !== 'between' && singleClip) {
       const maxDuration = getMaxEdgeTransitionDuration(singleClip.id)
-      if (maxDuration < 0.1) {
+      if (maxDuration < minTransitionSeconds) {
         setMessage('Clip is too short for an edge transition.')
         return
       }
@@ -129,7 +172,7 @@ function EffectsPanel() {
     }
     
     const maxDuration = getMaxTransitionDuration(pair.clipA.id, pair.clipB.id)
-    if (maxDuration < 0.1) {
+    if (maxDuration < minTransitionSeconds) {
       setMessage('Insufficient handles. Extend clip trims to add a transition.')
       return
     }
@@ -305,6 +348,12 @@ function EffectsPanel() {
             <span className="text-[11px] text-sf-text-muted">frames</span>
             <span className="text-[11px] text-sf-text-muted">({(durationFrames / FRAME_RATE).toFixed(2)}s)</span>
           </div>
+          <button
+            onClick={handleSetDefaultDuration}
+            className="w-full px-2 py-1 rounded border border-sf-dark-600 bg-sf-dark-800 hover:bg-sf-dark-700 text-[10px] text-sf-text-secondary transition-colors"
+          >
+            Set as Default Duration
+          </button>
         </div>
 
         {/* Edge mode for single clip */}
@@ -369,29 +418,71 @@ function EffectsPanel() {
           </div>
         )}
         
-        <div>
-          <div className="text-xs font-medium text-sf-text-primary mb-2">Transitions</div>
-          <div className="grid grid-cols-1 gap-2">
-            {filteredTransitions.map((transition) => (
-              <div
-                key={transition.id}
-                draggable
-                onDragStart={(e) => handleDragStart(e, transition.id)}
-                onClick={() => applyTransition(transition.id)}
-                className="flex items-center gap-2 px-3 py-2 bg-sf-dark-800 border border-sf-dark-600 rounded-lg text-xs text-sf-text-primary hover:border-sf-accent hover:bg-sf-dark-700 transition-colors cursor-pointer"
-                title="Drag to a cut or click to apply to selected clips"
-              >
-                <TransitionThumbnail type={transition.id} icon={transition.icon} />
-                <div className="flex-1">
-                  <div className="text-xs text-sf-text-primary">{transition.name}</div>
-                  <div className="text-[10px] text-sf-text-muted">
-                    {durationFrames}f
+        <div className="space-y-3">
+          <div className="text-xs font-medium text-sf-text-primary">Transitions</div>
+          {search.trim() ? (
+            <div className="grid grid-cols-1 gap-2">
+              {filteredTransitions.map((transition) => (
+                <div
+                  key={transition.id}
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, transition.id)}
+                  onClick={() => applyTransition(transition.id)}
+                  className="flex items-center gap-2 px-3 py-2 bg-sf-dark-800 border border-sf-dark-600 rounded-lg text-xs text-sf-text-primary hover:border-sf-accent hover:bg-sf-dark-700 transition-colors cursor-pointer"
+                  title="Drag to a cut or click to apply to selected clips"
+                >
+                  <TransitionThumbnail type={transition.id} icon={transition.icon} />
+                  <div className="flex-1">
+                    <div className="text-xs text-sf-text-primary">{transition.name}</div>
+                    <div className="text-[10px] text-sf-text-muted">{durationFrames}f</div>
                   </div>
+                  <span className="text-[10px] text-sf-text-muted">{transition.icon}</span>
                 </div>
-                <span className="text-[10px] text-sf-text-muted">{transition.icon}</span>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {TRANSITION_CATEGORIES.map((category) => {
+                const isExpanded = expandedCategories.includes(category.id)
+                const items = category.items
+                  .map(id => transitionsById.get(id))
+                  .filter(Boolean)
+
+                return (
+                  <div key={category.id} className="border border-sf-dark-700 rounded-lg overflow-hidden">
+                    <button
+                      onClick={() => toggleCategory(category.id)}
+                      className="w-full flex items-center justify-between px-2.5 py-2 bg-sf-dark-800 hover:bg-sf-dark-700 transition-colors"
+                    >
+                      <span className="text-[11px] font-medium text-sf-text-primary">{category.label}</span>
+                      {isExpanded ? (
+                        <ChevronDown className="w-3.5 h-3.5 text-sf-text-muted" />
+                      ) : (
+                        <ChevronRight className="w-3.5 h-3.5 text-sf-text-muted" />
+                      )}
+                    </button>
+                    {isExpanded && (
+                      <div className="p-2 grid grid-cols-2 gap-2 bg-sf-dark-900">
+                        {items.map((transition) => (
+                          <button
+                            key={transition.id}
+                            draggable
+                            onDragStart={(e) => handleDragStart(e, transition.id)}
+                            onClick={() => applyTransition(transition.id)}
+                            className="flex items-center gap-2 px-2 py-2 bg-sf-dark-800 border border-sf-dark-600 rounded text-[11px] text-sf-text-primary hover:border-sf-accent hover:bg-sf-dark-700 transition-colors text-left"
+                            title="Drag to a cut or click to apply"
+                          >
+                            <span className="text-[12px] text-sf-text-muted w-4 text-center">{transition.icon}</span>
+                            <span className="truncate">{transition.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -1,18 +1,33 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { X, Loader2 } from 'lucide-react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../stores/projectStore'
 
 function NewProjectDialog({ isOpen, onClose }) {
+  const { createProject, defaultResolution, defaultFps } = useProjectStore()
   const [projectName, setProjectName] = useState('')
-  const [selectedResolution, setSelectedResolution] = useState(RESOLUTION_PRESETS[0])
+  const [selectedResolution, setSelectedResolution] = useState(() => {
+    const preset = RESOLUTION_PRESETS.find(p => p.name === (defaultResolution || 'HD 1080p'))
+    return preset || RESOLUTION_PRESETS[0]
+  })
   const [customWidth, setCustomWidth] = useState(1920)
   const [customHeight, setCustomHeight] = useState(1080)
   const [isCustomResolution, setIsCustomResolution] = useState(false)
-  const [selectedFps, setSelectedFps] = useState(FPS_PRESETS[2]) // Default to 24fps
+  const [selectedFps, setSelectedFps] = useState(() => {
+    const preset = FPS_PRESETS.find(f => f.value === (defaultFps ?? 24))
+    return preset || FPS_PRESETS[2]
+  })
   const [isCreating, setIsCreating] = useState(false)
   const [error, setError] = useState(null)
-  
-  const { createProject } = useProjectStore()
+
+  // Sync with store defaults when dialog opens
+  useEffect(() => {
+    if (isOpen) {
+      const resPreset = RESOLUTION_PRESETS.find(p => p.name === (defaultResolution || 'HD 1080p')) || RESOLUTION_PRESETS[0]
+      const fpsPreset = FPS_PRESETS.find(f => f.value === (defaultFps ?? 24)) || FPS_PRESETS[2]
+      setSelectedResolution(resPreset)
+      setSelectedFps(fpsPreset)
+    }
+  }, [isOpen, defaultResolution, defaultFps])
   
   if (!isOpen) return null
   
@@ -61,11 +76,13 @@ function NewProjectDialog({ isOpen, onClose }) {
   
   const resetForm = () => {
     setProjectName('')
-    setSelectedResolution(RESOLUTION_PRESETS[0])
+    const resPreset = RESOLUTION_PRESETS.find(p => p.name === (defaultResolution || 'HD 1080p')) || RESOLUTION_PRESETS[0]
+    const fpsPreset = FPS_PRESETS.find(f => f.value === (defaultFps ?? 24)) || FPS_PRESETS[2]
+    setSelectedResolution(resPreset)
     setCustomWidth(1920)
     setCustomHeight(1080)
     setIsCustomResolution(false)
-    setSelectedFps(FPS_PRESETS[2])
+    setSelectedFps(fpsPreset)
     setError(null)
   }
   

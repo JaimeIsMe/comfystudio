@@ -72,6 +72,12 @@
   },
   "94": {
     "inputs": {
+      "generate_audio_codes": true,
+      "top_k": 0,
+      "top_p": 0.9,
+      "temperature": 1,
+      "cfg_scale": 1,
+      "min_p": 0,
       "tags": "Create a beautiful, upbeat, triumphant arena rock song inspired by the spirit of classic Queen — joyful, theatrical, and emotionally uplifting.\nTempo is medium-fast, around 120–130 BPM.\nKey is major and bright.\nStyle features piano-driven rock, anthemic guitar, rich layered harmonies, dynamic drum fills, and a powerful lead vocal with expressive range and confidence.\n\nThe song should feel celebratory, hopeful, and larger-than-life, like a crowd-sing-along anthem played in a sold-out stadium.\nVocals should be bold and charismatic, with stacked backing harmonies in the chorus.\nProduction should be polished, cinematic, and energetic, with a dramatic build and an explosive final chorus.",
       "lyrics": "Verse 1\nWoke up with the sun in my eyes today\nWorld keeps turning but I’m on my way\nEvery doubt tried to pull me down\nBut I hear that rhythm, that glorious sound\n\nPre-Chorus\nHands in the air, feel the fire inside\nEvery broken dream learned how to fly\n\nChorus\nOh we’re shining tonight, let the whole world see\nWe’re louder than fear, we’re finally free\nSing it out, let your heart run wild\nThis is our moment — born to shine\n\nVerse 2\nSteps on the wire, but I don’t look down\nFaith in the music, it carries me now\nEvery voice joins the rising wave\nWe’re not alone, we’re brave\n\nPre-Chorus\nFeel that thunder under your skin\nIf this is the end, let the victory begin\n\nChorus\nOh we’re shining tonight, let the whole world see\nWe’re louder than fear, we’re finally free\nSing it out, let your heart run wild\nThis is our moment — born to shine\n\nBridge (Big Queen-Style Breakdown)\nWhoa-oh, whoa-oh\nHear the crowd, hear the call\nWhoa-oh, whoa-oh\nWe were made for it all\n\n(Piano and harmonies swell, dramatic pause)\n\nFinal Chorus (Key Change Up)\nYeah we’re shining tonight, feel the power rise\nEvery dream alive in our eyes\nSing it loud, let the heavens know\nWe were born for this — now let it go\n\nOutro\nBorn to shine\nBorn to shine\nYeah we were born… to shine",
       "seed": 31,

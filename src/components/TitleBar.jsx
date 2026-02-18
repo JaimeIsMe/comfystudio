@@ -5,6 +5,7 @@ const TOP_TABS = [
   { id: 'editor', label: 'Editor' },
   { id: 'generate', label: 'Generate' },
   { id: 'stock', label: 'Stock' },
+  { id: 'comfyui', label: 'ComfyUI' },
   { id: 'llm-assistant', label: 'LLM' },
   { id: 'export', label: 'Export' },
 ]
@@ -14,8 +15,10 @@ function TitleBar({
   activeTab = 'editor',
   onTabChange,
   centerInsetLeft = 0,
-  centerInsetRight = 0
+  centerInsetRight = 0,
+  showComfyUiTab = true,
 }) {
+  const tabs = showComfyUiTab ? TOP_TABS : TOP_TABS.filter(t => t.id !== 'comfyui')
 
   const handleMinimize = () => {
     window.electronAPI?.minimizeWindow?.()
@@ -45,7 +48,7 @@ function TitleBar({
         }}
       >
         <div className="no-drag flex items-center gap-0 h-full bg-sf-dark-800 border-x border-sf-dark-700 border-t-0 rounded-none p-0.5">
-          {TOP_TABS.map((tab, index) => (
+          {tabs.map((tab, index) => (
             <Fragment key={tab.id}>
               {index > 0 && (
                 <div className="w-px h-4 bg-sf-dark-600 flex-shrink-0" aria-hidden="true" />

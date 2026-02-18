@@ -713,7 +713,7 @@ export function modifyMultipleAnglesWorkflow(workflow, options = {}) {
 }
 
 /**
- * Workflow modifier for Inflation / Image Edit (Qwen 2511)
+ * Workflow modifier for Inflation / Image Edit (Qwen 2511) – legacy, kept for reference
  */
 export function modifyInflationWorkflow(workflow, options = {}) {
   const {
@@ -749,6 +749,103 @@ export function modifyInflationWorkflow(workflow, options = {}) {
 }
 
 /**
+ * Workflow modifier for Image Edit (Qwen 2509)
+ * Finds nodes by class_type / _meta.title so it works with exported API workflow.
+ * Optional referenceImages: [filename1?, filename2?] – add LoadImage nodes and wire image2/image3 when present.
+ */
+export function modifyQwenImageEdit2509Workflow(workflow, options = {}) {
+  const {
+    prompt = 'edit the image',
+    inputImage = '',
+    seed = Math.floor(Math.random() * 1000000000000),
+    referenceImages = [],
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const ref1 = referenceImages[0]
+  const ref2 = referenceImages[1]
+
+  for (const [nodeId, node] of Object.entries(modified)) {
+    if (!node || typeof node !== 'object') continue
+    const title = (node._meta && node._meta.title) ? String(node._meta.title) : ''
+    const cls = node.class_type || ''
+
+    // Main image: first LoadImage gets the main input; only set if we haven't added ref nodes yet
+    if (cls === 'LoadImage' && node.inputs && 'image' in node.inputs) {
+      node.inputs.image = inputImage
+    }
+    // Text prompt: node with string/prompt/text or value (only if node looks like a prompt node)
+    if (node.inputs) {
+      const key = ['prompt', 'text', 'string'].find(k => k in node.inputs)
+      const valueKey = (key === undefined && 'value' in node.inputs && (title.includes('Prompt') || cls.includes('Prompt'))) ? 'value' : null
+      if (key) node.inputs[key] = prompt
+      else if (valueKey) node.inputs[valueKey] = prompt
+    }
+    // Seed: Image Edit node or any node with seed (e.g. the Qwen edit node)
+    if (node.inputs && 'seed' in node.inputs && (title.includes('Image Edit') || title.includes('Qwen') || cls.includes('Edit'))) {
+      node.inputs.seed = seed
+    }
+    // Save Image: set prefix
+    if (cls === 'SaveImage' && node.inputs && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = node.inputs.filename_prefix || 'ComfyStudio_edit'
+    }
+  }
+
+  // Optional reference images: add LoadImage nodes and wire image2/image3 on any node that has them
+  if (ref1) {
+    modified['ref_img_1'] = {
+      class_type: 'LoadImage',
+      inputs: { image: ref1 },
+      _meta: { title: 'Load Image (ref 1)' },
+    }
+  }
+  if (ref2) {
+    modified['ref_img_2'] = {
+      class_type: 'LoadImage',
+      inputs: { image: ref2 },
+      _meta: { title: 'Load Image (ref 2)' },
+    }
+  }
+  // Wire refs into node that accepts them (e.g. TextEncodeQwenImageEditPlus).
+  // Export often omits image2/image3 when unconnected, so set them if we have refs.
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+    const hasImage1 = 'image1' in node.inputs
+    const isQwenEdit = (node.class_type === 'TextEncodeQwenImageEditPlus') || ((node._meta?.title || '').includes('Image Edit') && hasImage1)
+    if (!isQwenEdit) continue
+    if (ref1) node.inputs.image2 = ['ref_img_1', 0]
+    if (ref2) node.inputs.image3 = ['ref_img_2', 0]
+  }
+
+  return modified
+}
+
+/**
+ * Workflow modifier for Z Image Turbo (text-to-image).
+ * Sets prompt on CLIPTextEncode and seed on KSampler.
+ */
+export function modifyZImageTurboWorkflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    seed = Math.floor(Math.random() * 1000000000000),
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+
+  for (const [nodeId, node] of Object.entries(modified)) {
+    if (!node?.inputs) continue
+    if (node.class_type === 'CLIPTextEncode' && (node._meta?.title || '').includes('Prompt')) {
+      node.inputs.text = prompt
+    }
+    if (node.class_type === 'KSampler' && 'seed' in node.inputs) {
+      node.inputs.seed = seed
+    }
+  }
+
+  return modified
+}
+
+/**
  * Workflow modifier for Music Generation (AceStep 1.5)
  */
 export function modifyMusicWorkflow(workflow, options = {}) {
@@ -766,7 +863,14 @@ export function modifyMusicWorkflow(workflow, options = {}) {
   const modified = JSON.parse(JSON.stringify(workflow))
 
   // Text encoder (node 94 - TextEncodeAceStepAudio1.5)
+  // ComfyUI now requires: generate_audio_codes, top_k, top_p, temperature, cfg_scale, min_p
   if (modified['94']) {
+    modified['94'].inputs.generate_audio_codes = modified['94'].inputs.generate_audio_codes ?? true
+    modified['94'].inputs.top_k = modified['94'].inputs.top_k ?? 0
+    modified['94'].inputs.top_p = modified['94'].inputs.top_p ?? 0.9
+    modified['94'].inputs.temperature = modified['94'].inputs.temperature ?? 1
+    modified['94'].inputs.cfg_scale = modified['94'].inputs.cfg_scale ?? 1
+    modified['94'].inputs.min_p = modified['94'].inputs.min_p ?? 0
     modified['94'].inputs.tags = tags
     modified['94'].inputs.lyrics = lyrics
     modified['94'].inputs.duration = duration

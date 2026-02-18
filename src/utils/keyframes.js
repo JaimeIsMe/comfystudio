@@ -55,6 +55,7 @@ export const KEYFRAMEABLE_PROPERTIES = [
   { id: 'scaleY', label: 'Scale Y', group: 'scale', unit: '%' },
   { id: 'rotation', label: 'Rotation', group: 'rotation', unit: '°' },
   { id: 'opacity', label: 'Opacity', group: 'opacity', unit: '%' },
+  { id: 'blur', label: 'Blur', group: 'effects', unit: 'px' },
   { id: 'anchorX', label: 'Anchor X', group: 'anchor', unit: '%' },
   { id: 'anchorY', label: 'Anchor Y', group: 'anchor', unit: '%' },
   { id: 'cropTop', label: 'Crop Top', group: 'crop', unit: '%' },
@@ -264,6 +265,24 @@ export function copyKeyframes(sourceKeyframes) {
   return sourceKeyframes.map(kf => ({ ...kf }))
 }
 
+/**
+ * Quantize a time value to the nearest frame boundary.
+ *
+ * @param {number} time - Time value in seconds
+ * @param {number} fps - Frames per second
+ * @returns {number} - Quantized time
+ */
+export function quantizeTimeToFrame(time, fps) {
+  const parsedTime = Number(time)
+  if (!Number.isFinite(parsedTime)) return 0
+
+  const parsedFps = Number(fps)
+  if (!Number.isFinite(parsedFps) || parsedFps <= 0) return parsedTime
+
+  const frameDuration = 1 / parsedFps
+  return Math.round(parsedTime / frameDuration) * frameDuration
+}
+
 export default {
   easingFunctions,
   EASING_OPTIONS,
@@ -276,4 +295,5 @@ export default {
   removeKeyframe,
   getAllKeyframeTimes,
   copyKeyframes,
+  quantizeTimeToFrame,
 }

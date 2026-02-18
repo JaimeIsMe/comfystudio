@@ -60,10 +60,7 @@ const createDefaultTimeline = (name = 'Timeline 1', id = null, settings = null) 
   zoom: 100,
   tracks: [
     { id: 'video-1', name: 'Video 1', type: 'video', muted: false, locked: false, visible: true },
-    { id: 'video-2', name: 'Video 2', type: 'video', muted: false, locked: false, visible: true },
     { id: 'audio-1', name: 'Audio 1', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
-    { id: 'audio-2', name: 'Audio 2', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
-    { id: 'audio-3', name: 'Audio 3', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
   ],
   clips: [],
   transitions: [],
@@ -110,6 +107,10 @@ export const useProjectStore = create(
       
       // Recent projects list (persisted)
       recentProjects: [], // [{ name, path, modified, settings, thumbnail }]
+      
+      // New project defaults (persisted)
+      defaultResolution: 'HD 1080p',
+      defaultFps: 24,
       
       // UI state
       isFirstRun: true, // Whether this is first time opening the app
@@ -860,6 +861,13 @@ export const useProjectStore = create(
       setAutoSaveEnabled: (enabled) => {
         set({ autoSaveEnabled: enabled })
       },
+
+      /**
+       * Set default project settings (for new projects)
+       */
+      setDefaultProjectSettings: (resolution, fps) => {
+        set({ defaultResolution: resolution, defaultFps: fps })
+      },
       
       /**
        * Get the current project handle/path for file operations
@@ -875,6 +883,8 @@ export const useProjectStore = create(
         recentProjects: state.recentProjects,
         isFirstRun: state.isFirstRun,
         defaultProjectsLocation: state.defaultProjectsLocation,
+        defaultResolution: state.defaultResolution,
+        defaultFps: state.defaultFps,
         autoSaveEnabled: state.autoSaveEnabled,
         autoSaveInterval: state.autoSaveInterval,
         // Note: Handles/paths are stored separately (IndexedDB for web, settings for Electron)

@@ -11,6 +11,23 @@ function SettingsPanel() {
   const [pexelsApiKey, setPexelsApiKeyLocal] = useState('')
   const [settingsSaved, setSettingsSaved] = useState(false)
   const [expandedSections, setExpandedSections] = useState(['connection', 'storage', 'stock'])
+
+  const SHOW_COMFYUI_TAB_KEY = 'comfystudio-show-comfyui-tab'
+  const [showComfyUiTab, setShowComfyUiTab] = useState(() => {
+    try {
+      return localStorage.getItem(SHOW_COMFYUI_TAB_KEY) !== 'false'
+    } catch {
+      return true
+    }
+  })
+  const handleToggleShowComfyUiTab = () => {
+    const next = !showComfyUiTab
+    setShowComfyUiTab(next)
+    try {
+      localStorage.setItem(SHOW_COMFYUI_TAB_KEY, String(next))
+      window.dispatchEvent(new CustomEvent('comfystudio-show-comfyui-tab-changed', { detail: next }))
+    } catch (_) {}
+  }
   
   const { 
     defaultProjectsLocation, 
@@ -168,6 +185,25 @@ function SettingsPanel() {
               </div>
               <button className="px-2 py-1 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors">
                 Test
+              </button>
+            </div>
+            <div className="flex items-center justify-between pt-2 border-t border-sf-dark-700 mt-2">
+              <div>
+                <label className="text-[11px] text-sf-text-primary">Show ComfyUI tab</label>
+                <p className="text-[9px] text-sf-text-muted">For advanced users. When off, the ComfyUI tab is hidden from the app bar.</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={showComfyUiTab}
+                onClick={handleToggleShowComfyUiTab}
+                className={`w-9 h-5 rounded-full transition-colors flex-shrink-0 relative ${showComfyUiTab ? 'bg-sf-accent' : 'bg-sf-dark-600'}`}
+                title={showComfyUiTab ? 'Hide ComfyUI tab' : 'Show ComfyUI tab'}
+              >
+                <span
+                  className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${showComfyUiTab ? 'left-[calc(100%-1.25rem)]' : 'left-0.5'}`}
+                  aria-hidden
+                />
               </button>
             </div>
           </div>

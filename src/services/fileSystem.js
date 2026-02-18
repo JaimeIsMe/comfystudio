@@ -425,8 +425,8 @@ export const importAsset = async (projectDir, file, category = 'video') => {
       isImported: true,
     }
   }
-  
-  // Web fallback - original implementation
+
+  // Web fallback - original implementation (non-Electron)
   const assetsDir = await projectDir.getDirectoryHandle('assets')
   const categoryDir = await assetsDir.getDirectoryHandle(category, { create: true })
   
@@ -482,6 +482,65 @@ export const importAsset = async (projectDir, file, category = 'video') => {
     height,
     isImported: true,
   }
+}
+
+/**
+ * Write a generated overlay (letterbox, vignette, color matte, film grain) to the project folder
+ * so it survives app restart. Electron only.
+ * @param {string} projectDir - Project directory path
+ * @param {Blob} blob - The overlay blob (PNG or WebM)
+ * @param {string} suggestedName - Base name for the file (extension added from mimeType)
+ * @param {string} assetType - 'image' or 'video'
+ * @param {object} [settings] - Optional { width, height, duration, fps }
+ * @returns {Promise<object>} Asset fields { path, absolutePath, url, name, type, size, mimeType, settings?, duration?, ... }
+ */
+export const writeGeneratedOverlayToProject = async (projectDir, blob, suggestedName, assetType, settings = {}) => {
+  if (!isElectron() || !projectDir) {
+    throw new Error('Project folder is required to save overlay (open a project first)')
+  }
+  const category = assetType === 'video' ? 'video' : 'images'
+  const ext = assetType === 'video'
+    ? (blob.type && blob.type.includes('webm') ? '.webm' : '.mp4')
+    : '.png'
+  const safeBase = (suggestedName || 'overlay').replace(/[^a-zA-Z0-9_\-\s]/g, '_').replace(/\s+/g, '_').substring(0, 60)
+  let finalFileName = safeBase + ext
+  let counter = 1
+  const categoryPath = await window.electronAPI.pathJoin(projectDir, 'assets', category)
+  await window.electronAPI.createDirectory(categoryPath)
+  let destPath = await window.electronAPI.pathJoin(categoryPath, finalFileName)
+  while (await window.electronAPI.exists(destPath)) {
+    finalFileName = `${safeBase}_${counter}${ext}`
+    destPath = await window.electronAPI.pathJoin(categoryPath, finalFileName)
+    counter++
+  }
+  const arrayBuffer = await blob.arrayBuffer()
+  const result = await window.electronAPI.writeFileFromArrayBuffer(destPath, arrayBuffer)
+  if (!result?.success) {
+    throw new Error(result?.error || 'Failed to write overlay file')
+  }
+  const relativePath = `assets/${category}/${finalFileName}`
+  const fileInfo = await window.electronAPI.getFileInfo(destPath)
+  const url = await window.electronAPI.getFileUrlDirect(destPath)
+  const out = {
+    path: relativePath,
+    absolutePath: destPath,
+    url,
+    name: suggestedName || finalFileName.replace(ext, ''),
+    type: assetType,
+    size: fileInfo?.info?.size ?? blob.size,
+    mimeType: blob.type || (assetType === 'video' ? 'video/webm' : 'image/png'),
+    isImported: true,
+    imported: new Date().toISOString(),
+    settings: { ...settings },
+  }
+  if (assetType === 'video' && (settings.duration != null || settings.fps != null)) {
+    out.duration = settings.duration ?? null
+    out.settings.fps = settings.fps
+    out.audioEnabled = false
+  }
+  if (settings.width != null) out.settings.width = settings.width
+  if (settings.height != null) out.settings.height = settings.height
+  return out
 }
 
 // Helper to get MIME type from filename

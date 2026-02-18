@@ -4,11 +4,10 @@ import {
   ChevronLeft, ChevronRight, PanelLeftClose, PanelLeft
 } from 'lucide-react'
 import AssetsPanel from './panels/AssetsPanel'
-import SettingsPanel from './panels/SettingsPanel'
 import TextPanel from './panels/TextPanel'
 import EffectsPanel from './panels/EffectsPanel'
 
-function LeftPanel({ isExpanded, onToggleExpanded, activeTab, onTabChange, isFullHeight = false, onToggleFullHeight }) {
+function LeftPanel({ isExpanded, onToggleExpanded, activeTab, onTabChange, isFullHeight = false, onToggleFullHeight, onSettingsClick }) {
   const tabs = [
     { id: 'assets', label: 'Assets', icon: FolderOpen },
     { id: 'text', label: 'Text', icon: Type },
@@ -17,6 +16,10 @@ function LeftPanel({ isExpanded, onToggleExpanded, activeTab, onTabChange, isFul
   ]
 
   const handleTabClick = (tabId) => {
+    if (tabId === 'settings' && onSettingsClick) {
+      onSettingsClick()
+      return
+    }
     if (activeTab === tabId && isExpanded) {
       // Clicking active tab when expanded -> collapse
       onToggleExpanded()
@@ -38,8 +41,6 @@ function LeftPanel({ isExpanded, onToggleExpanded, activeTab, onTabChange, isFul
         return <EffectsPanel />
       case 'assets':
         return <AssetsPanel />
-      case 'settings':
-        return <SettingsPanel />
       default:
         return <AssetsPanel />
     }
