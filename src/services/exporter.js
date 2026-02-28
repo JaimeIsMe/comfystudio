@@ -1,7 +1,8 @@
 import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
-import { getAnimatedTransform } from '../utils/keyframes'
+import { getAnimatedTransform, getAnimatedAdjustmentSettings } from '../utils/keyframes'
+import { buildCssFilterFromAdjustments, hasAdjustmentEffect, normalizeAdjustmentSettings } from '../utils/adjustments'
 
 const DEFAULT_SAMPLE_RATE = 44100
 const AUDIO_FETCH_TIMEOUT_MS = 15000
@@ -571,6 +572,10 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   canvas.width = width
   canvas.height = height
   const ctx = canvas.getContext('2d', { alpha: false })
+  const adjustmentCanvas = document.createElement('canvas')
+  adjustmentCanvas.width = width
+  adjustmentCanvas.height = height
+  const adjustmentCtx = adjustmentCanvas.getContext('2d', { alpha: false })
   
   const videoElements = new Map()
   const failedVideoSources = new Set()
@@ -581,7 +586,6 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   
   const videoClips = timelineState.clips.filter(c => c.type === 'video')
   const imageClips = timelineState.clips.filter(c => c.type === 'image')
-  const textClips = timelineState.clips.filter(c => c.type === 'text')
 
   if (useCachedRenders) {
     for (const clip of videoClips) {
@@ -669,7 +673,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     ctx.fillRect(0, 0, width, height)
     
     const activeClips = timelineState.getActiveClipsAtTime(time)
-    const videoLayerClips = activeClips
+    const visualLayerClips = activeClips
       .filter(({ track }) => track.type === 'video')
       .sort((a, b) => {
         const indexA = timelineState.tracks.findIndex(t => t.id === a.track.id)
@@ -677,13 +681,70 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         return indexB - indexA
       })
     
-    for (const { clip } of videoLayerClips) {
+    for (const { clip } of visualLayerClips) {
+      if (clip.type === 'adjustment') {
+        const clipTime = time - clip.startTime
+        const adjustmentSettings = normalizeAdjustmentSettings(
+          getAnimatedAdjustmentSettings(clip, clipTime) || clip.adjustments || {}
+        )
+        const clipTransform = getAnimatedTransform(clip, clipTime) || clip.transform || {}
+        if (adjustmentCtx && hasAdjustmentEffect(adjustmentSettings)) {
+          const adjustmentFilter = buildCssFilterFromAdjustments(adjustmentSettings)
+          if (adjustmentFilter !== 'none') {
+            adjustmentCtx.clearRect(0, 0, width, height)
+            adjustmentCtx.save()
+            adjustmentCtx.filter = adjustmentFilter
+            adjustmentCtx.drawImage(canvas, 0, 0)
+            adjustmentCtx.restore()
+
+            const rect = getBaseDrawRect(width, height, width, height)
+            const baseOpacity = typeof clipTransform.opacity === 'number' ? clipTransform.opacity / 100 : 1
+            const blendMode = clipTransform?.blendMode || 'normal'
+
+            ctx.save()
+            ctx.globalAlpha = baseOpacity
+            ctx.globalCompositeOperation = blendMode === 'normal' ? 'source-over' : blendMode
+            ctx.filter = 'none'
+            applyClipTransform(ctx, rect, clipTransform, null)
+            applyClipCrop(ctx, rect, clipTransform)
+            ctx.drawImage(adjustmentCanvas, 0, 0, rect.width, rect.height)
+            ctx.restore()
+          }
+        }
+        continue
+      }
+
       const isVideoA = transitionInfo?.clipA?.id === clip.id || (transitionInfo?.clip?.id === clip.id && transitionInfo?.edge === 'out')
       const isVideoB = transitionInfo?.clipB?.id === clip.id || (transitionInfo?.clip?.id === clip.id && transitionInfo?.edge === 'in')
       const transitionStyle = (isVideoA || isVideoB) ? getTransitionCanvasStyle(transitionInfo, isVideoA) : null
       
       const clipTime = time - clip.startTime
       const clipTransform = getAnimatedTransform(clip, clipTime) || clip.transform || {}
+      const clipAdjustmentSettings = normalizeAdjustmentSettings(
+        getAnimatedAdjustmentSettings(clip, clipTime) || clip.adjustments || {}
+      )
+      const clipAdjustmentFilter = buildCssFilterFromAdjustments(clipAdjustmentSettings)
+      const clipAdjustmentFilterValue = clipAdjustmentFilter !== 'none' ? clipAdjustmentFilter : null
+      if (clip.type === 'text') {
+        const rect = getBaseDrawRect(width, height, width, height)
+        const baseOpacity = typeof clipTransform.opacity === 'number' ? clipTransform.opacity / 100 : 1
+        const clipOpacity = (transitionStyle?.opacity ?? 1) * baseOpacity
+        const blendMode = clipTransform.blendMode || 'normal'
+        ctx.save()
+        ctx.globalAlpha = clipOpacity
+        ctx.globalCompositeOperation = blendMode === 'normal' ? 'source-over' : blendMode
+        const blurPx = transitionStyle?.blur ?? (clipTransform?.blur > 0 ? clipTransform.blur : null)
+        const filterParts = []
+        if (clipAdjustmentFilterValue) filterParts.push(clipAdjustmentFilterValue)
+        if (blurPx != null) filterParts.push(`blur(${blurPx}px)`)
+        ctx.filter = filterParts.length > 0 ? filterParts.join(' ') : 'none'
+        applyClipTransform(ctx, rect, clipTransform, transitionStyle)
+        applyClipCrop(ctx, rect, clipTransform)
+        applyTransitionClip(ctx, rect, transitionStyle)
+        drawText(ctx, rect, clip)
+        ctx.restore()
+        continue
+      }
       const asset = assetsState.getAssetById(clip.assetId)
       const cachedSourceUrl = cachedVideoSources.get(clip.id)
       const usingCachedRender = !!cachedSourceUrl
@@ -764,7 +825,10 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       ctx.save()
       ctx.globalAlpha = clipOpacity
       const blurPx = transitionStyle?.blur ?? (clipTransform?.blur > 0 ? clipTransform.blur : null)
-      ctx.filter = blurPx != null ? `blur(${blurPx}px)` : 'none'
+      const filterParts = []
+      if (clipAdjustmentFilterValue) filterParts.push(clipAdjustmentFilterValue)
+      if (blurPx != null) filterParts.push(`blur(${blurPx}px)`)
+      ctx.filter = filterParts.length > 0 ? filterParts.join(' ') : 'none'
       // Blend mode (CSS mix-blend-mode → canvas globalCompositeOperation)
       const blendMode = clipTransform?.blendMode || 'normal'
       ctx.globalCompositeOperation = blendMode === 'normal' ? 'source-over' : blendMode
@@ -866,21 +930,6 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       }
       
       ctx.drawImage(drawSource, 0, 0, rect.width, rect.height)
-      ctx.restore()
-    }
-    
-    for (const { clip } of activeClips.filter(({ clip }) => clip.type === 'text')) {
-      const rect = getBaseDrawRect(width, height, width, height)
-      const clipTime = time - clip.startTime
-      const clipTransform = getAnimatedTransform(clip, clipTime) || clip.transform || {}
-      const baseOpacity = typeof clipTransform.opacity === 'number' ? clipTransform.opacity / 100 : 1
-      const blendMode = clipTransform.blendMode || 'normal'
-      ctx.save()
-      ctx.globalAlpha = baseOpacity
-      ctx.globalCompositeOperation = blendMode === 'normal' ? 'source-over' : blendMode
-      ctx.filter = clipTransform?.blur > 0 ? `blur(${clipTransform.blur}px)` : 'none'
-      applyClipTransform(ctx, rect, clipTransform, null)
-      drawText(ctx, rect, clip)
       ctx.restore()
     }
     

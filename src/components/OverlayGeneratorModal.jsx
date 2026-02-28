@@ -8,8 +8,54 @@ import {
   generateLetterboxOverlayBlob,
 } from '../utils/overlayGenerators'
 
+const DEFAULT_MOTION_INITIAL_VALUES = Object.freeze({
+  motionTemplate: 'lower-third',
+  motionTitle: 'YOUR HEADLINE',
+  motionSubtitle: 'Subheading or call-to-action',
+  motionDuration: 4,
+  motionFps: 30,
+  motionAccentColor: '#f59e0b',
+  motionTextColor: '#ffffff',
+  motionPanelOpacity: 72,
+})
+
+const REMOTION_TEMPLATE_OPTIONS = Object.freeze([
+  { id: 'lower-third', label: 'Lower Third' },
+  { id: 'cinematic-lower-third', label: 'Cinematic Lower Third' },
+  { id: 'corner-bug', label: 'Corner Bug (Logo Tag)' },
+  { id: 'cta-banner', label: 'CTA Banner' },
+  { id: 'split-title', label: 'Split Title' },
+  { id: 'title-card', label: 'Title Card' },
+  { id: 'end-slate', label: 'End Slate' },
+  { id: 'caption-strip', label: 'Caption Strip' },
+])
+const REMOTION_TEMPLATE_ID_SET = new Set(REMOTION_TEMPLATE_OPTIONS.map((option) => option.id))
+
+function clampNumber(value, min, max, fallback) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(min, Math.min(max, parsed))
+}
+
+function sanitizeHexColor(value, fallback) {
+  const text = String(value || '').trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(text)) return text
+  return fallback
+}
+
+function normalizeMotionTemplate(value, fallback = DEFAULT_MOTION_INITIAL_VALUES.motionTemplate) {
+  const id = String(value || '').trim().toLowerCase()
+  return REMOTION_TEMPLATE_ID_SET.has(id) ? id : fallback
+}
+
+function getRemotionTemplateLabel(templateId) {
+  const resolved = normalizeMotionTemplate(templateId)
+  const match = REMOTION_TEMPLATE_OPTIONS.find((option) => option.id === resolved)
+  return match?.label || 'Lower Third'
+}
+
 /**
- * Generate overlay assets (PNG for matte/letterbox/vignette, PNG or loop video for grain).
+ * Generate overlay assets (matte/letterbox/vignette/grain plus Remotion motion overlays).
  */
 function generateColorMatteBlob(width, height, color) {
   const canvas = document.createElement('canvas')
@@ -196,6 +242,8 @@ export default function OverlayGeneratorModal({
   timelineSize = { width: 1920, height: 1080 },
   defaultFolderId = null,
   initialType = 'letterbox',
+  replaceAssetId = null,
+  initialValues = null,
 }) {
   const [type, setType] = useState(initialType)
   const [name, setName] = useState('')
@@ -217,12 +265,46 @@ export default function OverlayGeneratorModal({
   const [grainAnimated, setGrainAnimated] = useState(true)
   const [grainDuration, setGrainDuration] = useState(3)
   const [grainFps, setGrainFps] = useState(12)
+  // Remotion motion overlays
+  const [motionTemplate, setMotionTemplate] = useState('lower-third')
+  const [motionTitle, setMotionTitle] = useState('YOUR HEADLINE')
+  const [motionSubtitle, setMotionSubtitle] = useState('Subheading or call-to-action')
+  const [motionDuration, setMotionDuration] = useState(4)
+  const [motionFps, setMotionFps] = useState(30)
+  const [motionAccentColor, setMotionAccentColor] = useState('#f59e0b')
+  const [motionTextColor, setMotionTextColor] = useState('#ffffff')
+  const [motionPanelOpacity, setMotionPanelOpacity] = useState(72)
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState(null)
+  const isEditingOverlay = Boolean(replaceAssetId)
 
   useEffect(() => {
-    if (isOpen) setType(initialType)
-  }, [isOpen, initialType])
+    if (!isOpen) return
+    setType(initialType)
+    setName(typeof initialValues?.name === 'string' ? initialValues.name : '')
+
+    const timelineWidth = Math.max(1, Math.min(4096, Math.round(Number(timelineSize?.width) || 1920)))
+    const timelineHeight = Math.max(1, Math.min(4096, Math.round(Number(timelineSize?.height) || 1080)))
+    const requestedUseTimeline = initialValues && typeof initialValues.useTimelineSize === 'boolean'
+      ? initialValues.useTimelineSize
+      : true
+    const requestedWidth = Math.max(1, Math.min(4096, Math.round(Number(initialValues?.customWidth) || timelineWidth)))
+    const requestedHeight = Math.max(1, Math.min(4096, Math.round(Number(initialValues?.customHeight) || timelineHeight)))
+    setUseTimelineSize(requestedUseTimeline)
+    setCustomWidth(requestedWidth)
+    setCustomHeight(requestedHeight)
+
+    const motionDefaults = { ...DEFAULT_MOTION_INITIAL_VALUES, ...(initialValues || {}) }
+    setMotionTemplate(normalizeMotionTemplate(motionDefaults.motionTemplate))
+    setMotionTitle(String(motionDefaults.motionTitle || DEFAULT_MOTION_INITIAL_VALUES.motionTitle))
+    setMotionSubtitle(String(motionDefaults.motionSubtitle || DEFAULT_MOTION_INITIAL_VALUES.motionSubtitle))
+    setMotionDuration(clampNumber(motionDefaults.motionDuration, 1, 20, DEFAULT_MOTION_INITIAL_VALUES.motionDuration))
+    setMotionFps(clampNumber(motionDefaults.motionFps, 12, 60, DEFAULT_MOTION_INITIAL_VALUES.motionFps))
+    setMotionAccentColor(sanitizeHexColor(motionDefaults.motionAccentColor, DEFAULT_MOTION_INITIAL_VALUES.motionAccentColor))
+    setMotionTextColor(sanitizeHexColor(motionDefaults.motionTextColor, DEFAULT_MOTION_INITIAL_VALUES.motionTextColor))
+    setMotionPanelOpacity(clampNumber(motionDefaults.motionPanelOpacity, 5, 95, DEFAULT_MOTION_INITIAL_VALUES.motionPanelOpacity))
+    setError(null)
+  }, [isOpen, initialType, initialValues, timelineSize?.width, timelineSize?.height])
 
   const width = useTimelineSize ? (timelineSize?.width ?? 1920) : customWidth
   const height = useTimelineSize ? (timelineSize?.height ?? 1080) : customHeight
@@ -269,7 +351,7 @@ export default function OverlayGeneratorModal({
       } else if (type === 'vignette') {
         blob = await generateVignetteBlob(width, height, strength, softness)
         if (!defaultName) defaultName = 'Vignette overlay'
-      } else {
+      } else if (type === 'grain') {
         if (grainAnimated) {
           blob = await generateFilmGrainLoopBlob(width, height, grainIntensity, grainSize, grainDuration, grainFps)
           assetType = 'video'
@@ -281,6 +363,69 @@ export default function OverlayGeneratorModal({
           blob = await generateFilmGrainBlob(width, height, grainIntensity, grainSize)
           if (!defaultName) defaultName = 'Film grain overlay'
         }
+      } else if (type === 'remotion') {
+        if (!window?.electronAPI?.renderRemotionOverlay) {
+          throw new Error('Remotion overlays require Electron mode.')
+        }
+
+        const normalizedPanelOpacity = Math.max(5, Math.min(100, Number(motionPanelOpacity) || 72)) / 100
+        const renderResult = await window.electronAPI.renderRemotionOverlay({
+          template: motionTemplate,
+          width,
+          height,
+          fps: Math.max(12, Math.min(60, Number(motionFps) || 30)),
+          durationSec: Math.max(1, Math.min(20, Number(motionDuration) || 4)),
+          title: motionTitle,
+          subtitle: motionSubtitle,
+          accentColor: motionAccentColor,
+          textColor: motionTextColor,
+          panelOpacity: normalizedPanelOpacity,
+        })
+        if (!renderResult?.success || !renderResult.outputPath) {
+          throw new Error(renderResult?.error || 'Remotion render failed')
+        }
+
+        const readResult = await window.electronAPI.readFileAsBuffer(renderResult.outputPath)
+        if (!readResult?.success || !readResult.data) {
+          throw new Error(readResult?.error || 'Could not read rendered overlay file')
+        }
+
+        blob = new Blob([readResult.data], { type: renderResult.mimeType || 'video/webm' })
+        assetType = 'video'
+        mimeType = renderResult.mimeType || 'video/webm'
+        assetDuration = renderResult.durationSec || motionDuration
+        assetSettings = {
+          width,
+          height,
+          duration: assetDuration,
+          fps: renderResult.fps || motionFps,
+          overlayKind: 'remotion',
+          hasAlpha: renderResult.hasAlpha !== false,
+          remotionTemplate: motionTemplate,
+          remotion: {
+            title: String(motionTitle || '').trim(),
+            subtitle: String(motionSubtitle || '').trim(),
+            accentColor: motionAccentColor,
+            textColor: motionTextColor,
+            panelOpacity: normalizedPanelOpacity,
+          },
+        }
+        const trimmedTitle = String(motionTitle || '').trim()
+        if (!defaultName) {
+          defaultName = trimmedTitle
+            ? `Motion ${trimmedTitle.slice(0, 28)}`
+            : `Motion ${getRemotionTemplateLabel(motionTemplate)} ${assetDuration}s`
+        }
+
+        try {
+          await window.electronAPI.deleteFile(renderResult.outputPath)
+          const renderDir = await window.electronAPI.pathDirname(renderResult.outputPath)
+          await window.electronAPI.deleteDirectory(renderDir, { recursive: true })
+        } catch (_) {
+          // Best-effort cleanup for temporary render artifacts.
+        }
+      } else {
+        throw new Error('Unknown overlay type')
       }
       onAdd({
         name: defaultName,
@@ -291,6 +436,7 @@ export default function OverlayGeneratorModal({
         mimeType,
         settings: assetSettings,
         ...(assetDuration ? { duration: assetDuration, audioEnabled: false } : {}),
+        ...(replaceAssetId ? { replaceAssetId } : {}),
       })
       onClose()
     } catch (err) {
@@ -315,9 +461,18 @@ export default function OverlayGeneratorModal({
     grainAnimated,
     grainDuration,
     grainFps,
+    motionTemplate,
+    motionTitle,
+    motionSubtitle,
+    motionDuration,
+    motionFps,
+    motionAccentColor,
+    motionTextColor,
+    motionPanelOpacity,
     onAdd,
     onClose,
     defaultFolderId,
+    replaceAssetId,
   ])
 
   if (!isOpen) return null
@@ -329,7 +484,7 @@ export default function OverlayGeneratorModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-3 border-b border-sf-dark-700">
-          <h3 className="text-sm font-medium text-sf-text-primary">Create overlay</h3>
+          <h3 className="text-sm font-medium text-sf-text-primary">{isEditingOverlay ? 'Edit overlay' : 'Create overlay'}</h3>
           <button
             type="button"
             onClick={onClose}
@@ -349,18 +504,26 @@ export default function OverlayGeneratorModal({
                 { id: 'vignette', label: 'Vignette', icon: Circle },
                 { id: 'color', label: 'Color matte', icon: Palette },
                 { id: 'grain', label: 'Film grain', icon: Sparkles },
+                { id: 'remotion', label: 'Motion', icon: Sparkles },
               ].map(({ id, label, icon: Icon }) => (
+                // In edit mode we currently support in-place updates for Remotion overlays only.
+                (() => {
+                  const isDisabledByEditMode = isEditingOverlay && id !== 'remotion'
+                  return (
                 <button
                   key={id}
                   type="button"
+                  disabled={isDisabledByEditMode}
                   onClick={() => setType(id)}
                   className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-[11px] transition-colors ${
                     type === id ? 'bg-sf-accent text-white' : 'text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary'
-                  }`}
+                  } ${isDisabledByEditMode ? 'opacity-35 cursor-not-allowed hover:bg-transparent hover:text-sf-text-muted' : ''}`}
                 >
                   <Icon className="w-3.5 h-3.5" />
                   {label}
                 </button>
+                  )
+                })()
               ))}
             </div>
           </div>
@@ -418,7 +581,17 @@ export default function OverlayGeneratorModal({
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder={type === 'color' ? 'Color matte' : type === 'letterbox' ? 'Letterbox 2.39:1' : type === 'grain' ? 'Film grain overlay' : 'Vignette'}
+              placeholder={
+                type === 'color'
+                  ? 'Color matte'
+                  : type === 'letterbox'
+                    ? 'Letterbox 2.39:1'
+                    : type === 'grain'
+                      ? 'Film grain overlay'
+                      : type === 'remotion'
+                        ? `Motion ${getRemotionTemplateLabel(motionTemplate)}`
+                        : 'Vignette'
+              }
               className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary placeholder-sf-text-muted focus:outline-none focus:border-sf-accent"
             />
           </div>
@@ -616,6 +789,117 @@ export default function OverlayGeneratorModal({
             </>
           )}
 
+          {type === 'remotion' && (
+            <>
+              <div>
+                <label className="text-[10px] text-sf-text-muted block mb-1">Template</label>
+                <select
+                  value={motionTemplate}
+                  onChange={(e) => setMotionTemplate(e.target.value)}
+                  className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                >
+                  {REMOTION_TEMPLATE_OPTIONS.map((templateOption) => (
+                    <option key={templateOption.id} value={templateOption.id}>{templateOption.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] text-sf-text-muted block mb-1">Title</label>
+                <input
+                  type="text"
+                  value={motionTitle}
+                  onChange={(e) => setMotionTitle(e.target.value)}
+                  className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary placeholder-sf-text-muted focus:outline-none focus:border-sf-accent"
+                  placeholder="YOUR HEADLINE"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-sf-text-muted block mb-1">Subtitle</label>
+                <input
+                  type="text"
+                  value={motionSubtitle}
+                  onChange={(e) => setMotionSubtitle(e.target.value)}
+                  className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary placeholder-sf-text-muted focus:outline-none focus:border-sf-accent"
+                  placeholder="Subheading"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] text-sf-text-muted block mb-1">Duration (s)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={motionDuration}
+                    onChange={(e) => setMotionDuration(Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 4)))}
+                    className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-sf-text-muted block mb-1">FPS</label>
+                  <select
+                    value={motionFps}
+                    onChange={(e) => setMotionFps(Number(e.target.value))}
+                    className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                  >
+                    <option value={24}>24</option>
+                    <option value={30}>30</option>
+                    <option value={48}>48</option>
+                    <option value={60}>60</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] text-sf-text-muted block mb-1">Accent color</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={motionAccentColor}
+                      onChange={(e) => setMotionAccentColor(e.target.value)}
+                      className="w-10 h-8 rounded border border-sf-dark-600 cursor-pointer bg-transparent"
+                    />
+                    <input
+                      type="text"
+                      value={motionAccentColor}
+                      onChange={(e) => setMotionAccentColor(e.target.value)}
+                      className="flex-1 bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary font-mono"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] text-sf-text-muted block mb-1">Text color</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={motionTextColor}
+                      onChange={(e) => setMotionTextColor(e.target.value)}
+                      className="w-10 h-8 rounded border border-sf-dark-600 cursor-pointer bg-transparent"
+                    />
+                    <input
+                      type="text"
+                      value={motionTextColor}
+                      onChange={(e) => setMotionTextColor(e.target.value)}
+                      className="flex-1 bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary font-mono"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] text-sf-text-muted block mb-1">Panel opacity ({motionPanelOpacity}%)</label>
+                <input
+                  type="range"
+                  min={5}
+                  max={95}
+                  value={motionPanelOpacity}
+                  onChange={(e) => setMotionPanelOpacity(parseInt(e.target.value, 10))}
+                  className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+                />
+                <p className="text-[9px] text-sf-text-muted mt-0.5">Renders as transparent WebM so you can overlay it directly on timeline video clips.</p>
+              </div>
+            </>
+          )}
+
           {error && (
             <p className="text-xs text-sf-error">{error}</p>
           )}
@@ -635,7 +919,7 @@ export default function OverlayGeneratorModal({
             disabled={generating || (type === 'letterbox' && !hasValidLetterboxAspect)}
             className="px-3 py-1.5 text-xs text-white rounded bg-sf-accent hover:bg-sf-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {generating ? 'Generating…' : 'Create overlay'}
+            {generating ? (isEditingOverlay ? 'Updating…' : 'Generating…') : (isEditingOverlay ? 'Update overlay' : 'Create overlay')}
           </button>
         </div>
       </div>

@@ -9,6 +9,7 @@ import { exportTimeline } from './exporter'
 import useTimelineStore from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
 import useAssetsStore from '../stores/assetsStore'
+import { normalizeAdjustmentSettings } from '../utils/adjustments'
 
 const CACHE_DIR = 'cache'
 const PREFIX = 'preview_'
@@ -152,6 +153,9 @@ function buildClipSignature(clip) {
       blendMode: transform.blendMode || 'normal',
       blur: roundNumber(transform.blur),
     },
+    adjustments: (clip.type === 'adjustment' || clip.type === 'video' || clip.type === 'image' || clip.type === 'text')
+      ? normalizeAdjustmentSettings(clip.adjustments || {})
+      : null,
     effects,
     textProperties,
   }

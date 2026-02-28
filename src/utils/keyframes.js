@@ -62,7 +62,16 @@ export const KEYFRAMEABLE_PROPERTIES = [
   { id: 'cropBottom', label: 'Crop Bottom', group: 'crop', unit: '%' },
   { id: 'cropLeft', label: 'Crop Left', group: 'crop', unit: '%' },
   { id: 'cropRight', label: 'Crop Right', group: 'crop', unit: '%' },
+  { id: 'brightness', label: 'Exposure', group: 'adjustments', unit: '' },
+  { id: 'contrast', label: 'Contrast', group: 'adjustments', unit: '' },
+  { id: 'saturation', label: 'Saturation', group: 'adjustments', unit: '' },
+  { id: 'gain', label: 'Gain', group: 'adjustments', unit: '' },
+  { id: 'gamma', label: 'Gamma', group: 'adjustments', unit: '' },
+  { id: 'offset', label: 'Offset', group: 'adjustments', unit: '' },
+  { id: 'hue', label: 'Hue', group: 'adjustments', unit: 'deg' },
 ]
+
+export const ADJUSTMENT_KEYFRAME_PROPERTIES = ['brightness', 'contrast', 'saturation', 'gain', 'gamma', 'offset', 'hue', 'blur']
 
 /**
  * Get the value of a property at a specific time, interpolating between keyframes
@@ -157,6 +166,33 @@ export function getAnimatedTransform(clip, clipTime) {
   }
   
   return animatedTransform
+}
+
+/**
+ * Get keyframed adjustment values at a specific time.
+ *
+ * @param {Object} clip - Clip containing adjustments and keyframes
+ * @param {number} clipTime - Time relative to clip start (seconds)
+ * @returns {Object} - Adjustment values (brightness/contrast/saturation/gain/gamma/offset/hue/blur)
+ */
+export function getAnimatedAdjustmentSettings(clip, clipTime) {
+  if (!clip) return null
+
+  const baseAdjustments = clip.adjustments || {}
+  const keyframes = clip.keyframes || {}
+  const animatedAdjustments = { ...baseAdjustments }
+
+  for (const propertyId of ADJUSTMENT_KEYFRAME_PROPERTIES) {
+    const propertyKeyframes = keyframes[propertyId]
+    const baseValue = baseAdjustments[propertyId] ?? 0
+    if (propertyKeyframes && propertyKeyframes.length > 0) {
+      animatedAdjustments[propertyId] = getValueAtTime(propertyKeyframes, clipTime, baseValue)
+    } else if (!Object.prototype.hasOwnProperty.call(animatedAdjustments, propertyId)) {
+      animatedAdjustments[propertyId] = baseValue
+    }
+  }
+
+  return animatedAdjustments
 }
 
 /**
@@ -287,8 +323,10 @@ export default {
   easingFunctions,
   EASING_OPTIONS,
   KEYFRAMEABLE_PROPERTIES,
+  ADJUSTMENT_KEYFRAME_PROPERTIES,
   getValueAtTime,
   getAnimatedTransform,
+  getAnimatedAdjustmentSettings,
   getKeyframeAtTime,
   hasKeyframes,
   setKeyframe,

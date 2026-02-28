@@ -264,6 +264,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<string>}
    */
   getFileUrlDirect: (filePath) => ipcRenderer.invoke('media:getFileUrlDirect', filePath),
+
+  /**
+   * Render a transparent motion-graphics overlay using Remotion (Electron only)
+   * @param {object} options - { template, width, height, fps, durationSec, title, subtitle, accentColor, textColor, panelOpacity }
+   * @returns {Promise<{success: boolean, outputPath?: string, mimeType?: string, width?: number, height?: number, fps?: number, durationSec?: number, size?: number, template?: string, hasAlpha?: boolean, error?: string}>}
+   */
+  renderRemotionOverlay: (options = {}) => ipcRenderer.invoke('remotion:renderOverlay', options),
   
   // ============================================
   // App Settings (persistent storage in userData)

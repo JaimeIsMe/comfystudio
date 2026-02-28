@@ -9,8 +9,12 @@
 // Use relative URLs in dev (proxied by Vite), direct URLs in production
 const isDev = import.meta.env.DEV;
 const COMFYUI_HTTP = isDev ? '' : 'http://127.0.0.1:8188';
-// WebSocket must connect directly to ComfyUI (Vite proxy doesn't support WS well)
-const COMFYUI_WS = 'ws://127.0.0.1:8188';
+// In dev, use Vite's /ws proxy so Host/Origin/cookies stay aligned.
+const COMFYUI_WS = isDev
+  ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
+  : 'ws://127.0.0.1:8188';
+const COMFY_ORG_API_KEY_SETTING_KEY = 'comfyApiKeyComfyOrg';
+const COMFY_ORG_API_KEY_LOCAL_KEY = 'comfystudio-comfy-api-key';
 
 class ComfyUIService {
   constructor() {
@@ -191,15 +195,22 @@ class ComfyUIService {
    */
   async queuePrompt(workflow) {
     try {
+      const apiKey = await this.getComfyOrgApiKey();
+      const payload = {
+        prompt: workflow,
+        client_id: this.clientId
+      };
+      if (apiKey) {
+        payload.extra_data = {
+          api_key_comfy_org: apiKey
+        };
+      }
       const response = await fetch(`${COMFYUI_HTTP}/prompt`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          prompt: workflow,
-          client_id: this.clientId
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
@@ -213,6 +224,30 @@ class ComfyUIService {
       console.error('Error queuing prompt:', error);
       throw error;
     }
+  }
+
+  /**
+   * Resolve optional Comfy account API key for paid API nodes.
+   */
+  async getComfyOrgApiKey() {
+    try {
+      if (typeof window !== 'undefined' && window?.electronAPI?.getSetting) {
+        const stored = await window.electronAPI.getSetting(COMFY_ORG_API_KEY_SETTING_KEY)
+        const normalized = String(stored || '').trim()
+        if (normalized) return normalized
+      }
+    } catch (_) {
+      // Ignore and fall back to localStorage.
+    }
+
+    try {
+      if (typeof localStorage !== 'undefined') {
+        return String(localStorage.getItem(COMFY_ORG_API_KEY_LOCAL_KEY) || '').trim()
+      }
+    } catch (_) {
+      // Ignore storage access errors.
+    }
+    return ''
   }
 
   /**
@@ -441,109 +476,6 @@ class ComfyUIService {
 export const comfyui = new ComfyUIService();
 
 /**
- * Workflow modifier for LTX-2 Text-to-Video
- */
-export function modifyLTX2Workflow(workflow, options = {}) {
-  const {
-    prompt = '',
-    negativePrompt = 'blurry, low quality, still frame, frames, watermark, overlay, titles, has blurbox, has subtitles',
-    width = 1280,
-    height = 720,
-    frames = 121,
-    seed = Math.floor(Math.random() * 1000000),
-    fps = 24
-  } = options;
-
-  // Create a deep copy
-  const modified = JSON.parse(JSON.stringify(workflow));
-
-  // Update positive prompt (node 92:3)
-  if (modified['92:3']) {
-    modified['92:3'].inputs.text = prompt;
-  }
-
-  // Update negative prompt (node 92:4)
-  if (modified['92:4']) {
-    modified['92:4'].inputs.text = negativePrompt;
-  }
-
-  // Update resolution (node 92:89)
-  if (modified['92:89']) {
-    modified['92:89'].inputs.width = width;
-    modified['92:89'].inputs.height = height;
-  }
-
-  // Update frame count (node 92:62)
-  if (modified['92:62']) {
-    modified['92:62'].inputs.value = frames;
-  }
-
-  // Update seed (node 92:11)
-  if (modified['92:11']) {
-    modified['92:11'].inputs.noise_seed = seed;
-  }
-
-  // Update FPS (nodes 92:102 and 92:99)
-  if (modified['92:102']) {
-    modified['92:102'].inputs.value = fps;
-  }
-  if (modified['92:99']) {
-    modified['92:99'].inputs.value = fps;
-  }
-
-  return modified;
-}
-
-/**
- * Workflow modifier for LTX-2 Image-to-Video.
- * Accepts same options as other i2v workflows. Node IDs may need to match your
- * ltx2_Image_to_Video.json workflow (inspect the JSON and update below if needed).
- */
-export function modifyLTX2I2VWorkflow(workflow, options = {}) {
-  const {
-    prompt = '',
-    negativePrompt = 'blurry, low quality, still frame, watermark',
-    inputImage = '',
-    width = 1280,
-    height = 720,
-    frames = 121,
-    fps = 24,
-    seed = Math.floor(Math.random() * 1000000),
-  } = options;
-
-  const modified = JSON.parse(JSON.stringify(workflow));
-
-  // Patch any node that has these input names (works across different workflow layouts)
-  for (const nodeId of Object.keys(modified)) {
-    const node = modified[nodeId]
-    if (!node?.inputs) continue
-    const inputs = node.inputs
-    if (typeof inputs.image === 'string') inputs.image = inputImage
-    if (typeof inputs.width === 'number') inputs.width = width
-    if (typeof inputs.height === 'number') inputs.height = height
-    if (typeof inputs.noise_seed === 'number') inputs.noise_seed = seed
-    if (typeof inputs.fps === 'number') inputs.fps = fps
-    if (typeof inputs.value === 'number' && inputs.value > 50 && inputs.value < 500) inputs.value = frames
-    if (typeof inputs.length === 'number') inputs.length = frames
-  }
-
-  // Positive and negative prompt: first text node = prompt, second = negative
-  let textCount = 0
-  for (const nodeId of Object.keys(modified)) {
-    const node = modified[nodeId]
-    if (!node?.inputs || typeof node.inputs.text !== 'string') continue
-    textCount++
-    if (textCount === 1) node.inputs.text = prompt
-    else if (textCount === 2) {
-      node.inputs.text = negativePrompt
-      break
-    }
-  }
-
-  return modified;
-}
-
-/**
  * Workflow modifier for Mask Generation (SAM3 + MatAnyone)
  * 
  * Workflow nodes:
@@ -600,17 +532,35 @@ export function modifyWAN22Workflow(workflow, options = {}) {
     frames = 81,
     fps = 16,
     seed = Math.floor(Math.random() * 1000000000000),
+    filenamePrefix = 'video/ComfyStudio_wan',
+    qualityPreset = 'balanced', // balanced | face-lock
   } = options
 
   const modified = JSON.parse(JSON.stringify(workflow))
+  const useFaceLockPreset = String(qualityPreset || 'balanced') === 'face-lock'
+  const positivePrompt = useFaceLockPreset
+    ? `${prompt}. Keep the exact same person identity in every frame: same face, eyes, skin tone, hairstyle, and bone structure. Preserve facial consistency during motion.`
+    : prompt
+  const negativeWithFaceLock = [
+    negativePrompt,
+    useFaceLockPreset ? 'identity drift, different person, changing face, face morphing, deformed face' : '',
+  ]
+    .filter(Boolean)
+    .join(', ')
+
+  const samplerSteps = useFaceLockPreset ? 6 : 4
+  const samplerCfg = useFaceLockPreset ? 1.3 : 1
+  const splitStep = Math.max(2, Math.floor(samplerSteps / 2))
+  const modelShift = useFaceLockPreset ? 4.5 : 5.0
+  const loraStrength = useFaceLockPreset ? 1.05 : 1.0
 
   // Positive prompt (node 93)
   if (modified['93']) {
-    modified['93'].inputs.text = prompt
+    modified['93'].inputs.text = positivePrompt
   }
   // Negative prompt (node 89)
   if (modified['89']) {
-    modified['89'].inputs.text = negativePrompt
+    modified['89'].inputs.text = negativeWithFaceLock
   }
   // Image input (node 97)
   if (modified['97']) {
@@ -629,10 +579,36 @@ export function modifyWAN22Workflow(workflow, options = {}) {
   // Seed (node 86 - KSamplerAdvanced 1st pass)
   if (modified['86']) {
     modified['86'].inputs.noise_seed = seed
+    modified['86'].inputs.steps = samplerSteps
+    modified['86'].inputs.cfg = samplerCfg
+    modified['86'].inputs.start_at_step = 0
+    modified['86'].inputs.end_at_step = splitStep
+  }
+  // Seed + sampler tuning (node 85 - KSamplerAdvanced 2nd pass)
+  if (modified['85']) {
+    modified['85'].inputs.noise_seed = seed
+    modified['85'].inputs.steps = samplerSteps
+    modified['85'].inputs.cfg = samplerCfg
+    modified['85'].inputs.start_at_step = splitStep
+    modified['85'].inputs.end_at_step = samplerSteps
+  }
+  // LoRA strength tuning (nodes 101/102)
+  if (modified['101']) {
+    modified['101'].inputs.strength_model = loraStrength
+  }
+  if (modified['102']) {
+    modified['102'].inputs.strength_model = loraStrength
+  }
+  // Model sampling shift tuning (nodes 103/104)
+  if (modified['103']) {
+    modified['103'].inputs.shift = modelShift
+  }
+  if (modified['104']) {
+    modified['104'].inputs.shift = modelShift
   }
   // Output prefix (node 108)
   if (modified['108']) {
-    modified['108'].inputs.filename_prefix = 'video/ComfyStudio_wan'
+    modified['108'].inputs.filename_prefix = filenamePrefix
   }
 
   return modified
@@ -839,6 +815,191 @@ export function modifyZImageTurboWorkflow(workflow, options = {}) {
     }
     if (node.class_type === 'KSampler' && 'seed' in node.inputs) {
       node.inputs.seed = seed
+    }
+  }
+
+  return modified
+}
+
+/**
+ * Workflow modifier for Nano Banana 2.
+ * Supports both GeminiNanoBanana2 (new) and GeminiImage2Node (legacy) nodes.
+ */
+export function modifyNanoBanana2Workflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    seed = Math.floor(Math.random() * 1000000000000),
+    model = 'Nano Banana 2 (Gemini 3.1 Flash Image)',
+    aspectRatio = 'auto',
+    resolution = '2K',
+    filenamePrefix = 'image/nano_banana_2',
+    systemPrompt = null,
+    thinkingLevel = 'MINIMAL',
+    referenceImages = [],
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const validReferences = (Array.isArray(referenceImages) ? referenceImages : [])
+    .map((name) => String(name || '').trim())
+    .filter(Boolean)
+    .slice(0, 2)
+
+  let geminiNode = null
+
+  const getUniqueNodeId = (baseId) => {
+    let nextId = baseId
+    let suffix = 1
+    while (modified[nextId]) {
+      nextId = `${baseId}_${suffix}`
+      suffix += 1
+    }
+    return nextId
+  }
+
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+
+    const isNanoBananaNode = (
+      node.class_type === 'GeminiNanoBanana2' ||
+      node.class_type === 'GeminiImage2Node'
+    )
+    if (isNanoBananaNode) {
+      geminiNode = node
+      if ('prompt' in node.inputs) node.inputs.prompt = prompt
+      if ('model' in node.inputs) node.inputs.model = model
+      if ('seed' in node.inputs) node.inputs.seed = seed
+      if ('aspect_ratio' in node.inputs) node.inputs.aspect_ratio = aspectRatio
+      if ('resolution' in node.inputs) node.inputs.resolution = resolution
+      if ('response_modalities' in node.inputs) node.inputs.response_modalities = 'IMAGE'
+      if ('thinking_level' in node.inputs) node.inputs.thinking_level = thinkingLevel
+      if (systemPrompt && 'system_prompt' in node.inputs) {
+        node.inputs.system_prompt = systemPrompt
+      }
+    }
+
+    if (node.class_type === 'SaveImage' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix
+    }
+  }
+
+  if (geminiNode && validReferences.length === 0) {
+    // Remove placeholder image linkage from exported workflow when no refs were provided.
+    if (Object.prototype.hasOwnProperty.call(geminiNode.inputs, 'images')) {
+      delete geminiNode.inputs.images
+    }
+  }
+
+  if (geminiNode && validReferences.length > 0) {
+    const referenceNodeIds = validReferences.map((filename, index) => {
+      const loadNodeId = getUniqueNodeId(`ref_img_${index + 1}`)
+      modified[loadNodeId] = {
+        class_type: 'LoadImage',
+        inputs: { image: filename },
+        _meta: { title: `Load Image (reference ${index + 1})` },
+      }
+      return loadNodeId
+    })
+
+    if (referenceNodeIds.length === 1) {
+      geminiNode.inputs.images = [referenceNodeIds[0], 0]
+    } else {
+      const batchNodeId = getUniqueNodeId('ref_img_batch')
+      modified[batchNodeId] = {
+        class_type: 'ImageBatch',
+        inputs: {
+          image1: [referenceNodeIds[0], 0],
+          image2: [referenceNodeIds[1], 0],
+        },
+        _meta: { title: 'Batch reference images' },
+      }
+      geminiNode.inputs.images = [batchNodeId, 0]
+    }
+  }
+
+  return modified
+}
+
+// Backward-compatible alias for legacy callers.
+export const modifyNanoBananaProWorkflow = modifyNanoBanana2Workflow
+
+function resolveClosestAspectRatio(width, height) {
+  const w = Number(width)
+  const h = Number(height)
+  if (!Number.isFinite(w) || !Number.isFinite(h) || h <= 0) return '16:9'
+
+  const target = w / h
+  const candidates = [
+    { label: '16:9', value: 16 / 9 },
+    { label: '9:16', value: 9 / 16 },
+    { label: '1:1', value: 1 },
+    { label: '4:3', value: 4 / 3 },
+    { label: '3:4', value: 3 / 4 },
+  ]
+
+  let best = candidates[0]
+  let bestDelta = Math.abs(target - best.value)
+  for (const candidate of candidates.slice(1)) {
+    const delta = Math.abs(target - candidate.value)
+    if (delta < bestDelta) {
+      best = candidate
+      bestDelta = delta
+    }
+  }
+
+  return best.label
+}
+
+/**
+ * Workflow modifier for Kling 3.0 Omni image-to-video.
+ * Expects LoadImage + KlingOmniProImageToVideoNode + SaveVideo in the workflow JSON.
+ */
+export function modifyKlingO3I2VWorkflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    inputImage = '',
+    width = 1280,
+    height = 720,
+    duration = 5,
+    frames = null,
+    fps = 24,
+    seed = Math.floor(Math.random() * 1000000000000),
+    generateAudio = false,
+    modelName = 'kling-v3-omni',
+    filenamePrefix = 'video/kling_o3_i2v',
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const parsedDuration = Number(duration)
+  const fallbackDuration = (
+    Number.isFinite(Number(frames)) && Number(frames) > 1 && Number.isFinite(Number(fps)) && Number(fps) > 0
+  )
+    ? Number(frames) / Number(fps)
+    : 5
+  const safeDuration = Number.isFinite(parsedDuration) && parsedDuration > 0
+    ? parsedDuration
+    : Math.max(1, Math.round(fallbackDuration))
+  const aspectRatio = resolveClosestAspectRatio(width, height)
+  const resolution = Number(height) >= 1080 ? '1080p' : '720p'
+
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+
+    if (node.class_type === 'LoadImage' && 'image' in node.inputs) {
+      node.inputs.image = inputImage
+    }
+
+    if (node.class_type === 'KlingOmniProImageToVideoNode') {
+      if ('model_name' in node.inputs) node.inputs.model_name = modelName
+      if ('prompt' in node.inputs) node.inputs.prompt = prompt
+      if ('aspect_ratio' in node.inputs) node.inputs.aspect_ratio = aspectRatio
+      if ('duration' in node.inputs) node.inputs.duration = safeDuration
+      if ('resolution' in node.inputs) node.inputs.resolution = resolution
+      if ('generate_audio' in node.inputs) node.inputs.generate_audio = Boolean(generateAudio)
+      if ('seed' in node.inputs) node.inputs.seed = seed
+    }
+
+    if (node.class_type === 'SaveVideo' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix
     }
   }
 

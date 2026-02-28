@@ -22,7 +22,7 @@ export function getTopmostVideoOrImageClipAtTime(time) {
         const indexB = tracks.findIndex((t) => t && t.id === b.track.id)
         return indexA - indexB
       })
-    const top = videoLayerClips[0]
+    const top = videoLayerClips.find(({ clip }) => clip?.type === 'video' || clip?.type === 'image')
     if (!top || !top.clip) return null
     const { clip } = top
     if (clip.type === 'video' || clip.type === 'image') return top

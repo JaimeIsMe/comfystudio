@@ -4,19 +4,27 @@ import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 import videoCache from '../services/videoCache'
 import renderCacheService from '../services/renderCache'
-import { getAnimatedTransform } from '../utils/keyframes'
+import { getAnimatedTransform, getAnimatedAdjustmentSettings } from '../utils/keyframes'
 import { loadRenderCache, saveRenderCache } from '../services/fileSystem'
 import { getSpriteFramePosition } from '../services/thumbnailSprites'
+import { buildCssFilterFromAdjustments, hasAdjustmentEffect, normalizeAdjustmentSettings } from '../utils/adjustments'
 
 /**
  * Returns true if this layer fully obscures all layers below it (opaque, normal blend, covers frame).
  * When true, we can skip decoding/rendering all layers underneath for performance.
  */
-function isLayerFullyObscuring(clip, playheadPosition) {
+function isLayerFullyObscuring(clip, playheadPosition, getAssetById) {
   if (!clip) return false
   // Images may contain transparency (PNG overlays like letterbox/vignette),
   // so they cannot be safely treated as fully occluding.
   if (clip.type !== 'video') return false
+  const asset = clip.assetId && typeof getAssetById === 'function'
+    ? getAssetById(clip.assetId)
+    : null
+  // Remotion overlays are rendered with alpha and must not cull lower layers.
+  if (asset?.settings?.overlayKind === 'remotion' || asset?.settings?.hasAlpha === true) {
+    return false
+  }
   const clipTime = playheadPosition - (clip.startTime || 0)
   const t = getAnimatedTransform(clip, clipTime)
   if (!t) return false
@@ -34,6 +42,13 @@ function isLayerFullyObscuring(clip, playheadPosition) {
   if (rotation !== 0) return false
   if (cropTop > 0 || cropBottom > 0 || cropLeft > 0 || cropRight > 0) return false
   return true
+}
+
+function getClipAdjustmentFilter(clip, clipTime) {
+  const settings = normalizeAdjustmentSettings(
+    getAnimatedAdjustmentSettings(clip, clipTime) || clip?.adjustments || {}
+  )
+  return buildCssFilterFromAdjustments(settings)
 }
 
 /**
@@ -963,9 +978,11 @@ const VideoLayer = memo(function VideoLayer({
 
   // Use animated transform instead of base transform
   const transformStyle = buildVideoTransform(animatedTransform)
+  const adjustmentFilter = getClipAdjustmentFilter(clip, clipTime)
+  const adjustmentFilterValue = adjustmentFilter !== 'none' ? adjustmentFilter : undefined
   // Combine blur (from transform) with mask filter (e.g. invert) so both apply
-  const combinedFilter = [transformStyle.filter, maskStyles.filter].filter(Boolean).join(' ') || undefined
-  const spriteCombinedFilter = [transformStyle.filter, spriteMaskStyles.filter].filter(Boolean).join(' ') || undefined
+  const combinedFilter = [adjustmentFilterValue, transformStyle.filter, maskStyles.filter].filter(Boolean).join(' ') || undefined
+  const spriteCombinedFilter = [adjustmentFilterValue, transformStyle.filter, spriteMaskStyles.filter].filter(Boolean).join(' ') || undefined
 
   return (
     <>
@@ -1059,7 +1076,9 @@ const ImageLayer = memo(function ImageLayer({
   }, [clip, clipTime])
   
   const transformStyle = buildVideoTransform(animatedTransform)
-  const combinedFilter = [transformStyle.filter, maskStyles.filter].filter(Boolean).join(' ') || undefined
+  const adjustmentFilter = getClipAdjustmentFilter(clip, clipTime)
+  const adjustmentFilterValue = adjustmentFilter !== 'none' ? adjustmentFilter : undefined
+  const combinedFilter = [adjustmentFilterValue, transformStyle.filter, maskStyles.filter].filter(Boolean).join(' ') || undefined
 
   return (
     <img
@@ -1109,6 +1128,9 @@ const TextLayer = memo(function TextLayer({
   }, [clip, clipTime])
   
   const transformStyle = buildVideoTransform(animatedTransform)
+  const adjustmentFilter = getClipAdjustmentFilter(clip, clipTime)
+  const adjustmentFilterValue = adjustmentFilter !== 'none' ? adjustmentFilter : undefined
+  const combinedFilter = [adjustmentFilterValue, transformStyle.filter].filter(Boolean).join(' ') || undefined
   const textProps = clip.textProperties || {}
   const safePreviewScale = Number.isFinite(previewScale) && previewScale > 0 ? previewScale : 1
   const scaledFontSize = (textProps.fontSize || 64) * safePreviewScale
@@ -1161,9 +1183,10 @@ const TextLayer = memo(function TextLayer({
     <div
       className="absolute inset-0 flex items-center justify-center pointer-events-none"
       style={{
-        zIndex: layerIndex + 10, // Text layers render on top of video
+        zIndex: layerIndex + 1,
         alignItems: getVerticalAlign(),
         ...transformStyle,
+        filter: combinedFilter,
       }}
     >
       <div 
@@ -1177,6 +1200,86 @@ const TextLayer = memo(function TextLayer({
           {textProps.text || 'Sample Text'}
         </span>
       </div>
+    </div>
+  )
+})
+
+/**
+ * AdjustmentWrapper wraps all layers below an adjustment clip so that
+ * CSS `filter` (brightness/contrast/etc.) applies to the composited content
+ * and CSS `transform` (position/scale/rotation/flip/crop/anchor) correctly
+ * transforms the entire composited output.
+ *
+ * Opacity and blend-mode are handled via an inner backdrop-filter element
+ * so they composite against the original (unfiltered) content, matching
+ * the export-path behaviour.
+ */
+const AdjustmentWrapper = memo(function AdjustmentWrapper({ clip, playheadPosition, buildVideoTransform, children }) {
+  const clipTime = playheadPosition - (clip?.startTime || 0)
+
+  const adjustmentSettings = useMemo(() => {
+    const animated = getAnimatedAdjustmentSettings(clip, clipTime) || clip?.adjustments || {}
+    return normalizeAdjustmentSettings(animated)
+  }, [clip, clipTime])
+
+  const wrapperStyle = useMemo(() => {
+    const animatedTransform = getAnimatedTransform(clip, clipTime)
+    const t = animatedTransform || clip?.transform || {}
+    const opacity = typeof t.opacity === 'number' ? t.opacity : 100
+    const opacityFactor = Math.max(0, Math.min(1, opacity / 100))
+
+    // Scale adjustment values by opacity so 50% opacity = half-strength filter.
+    // Mathematically correct for linear filters (brightness, contrast, saturation)
+    // and a close approximation for hue-rotate and blur.
+    const scaledSettings = {
+      brightness: adjustmentSettings.brightness * opacityFactor,
+      contrast: adjustmentSettings.contrast * opacityFactor,
+      saturation: adjustmentSettings.saturation * opacityFactor,
+      gain: adjustmentSettings.gain * opacityFactor,
+      gamma: adjustmentSettings.gamma * opacityFactor,
+      offset: adjustmentSettings.offset * opacityFactor,
+      hue: adjustmentSettings.hue * opacityFactor,
+      blur: adjustmentSettings.blur * opacityFactor,
+    }
+    const effectiveFilter = buildCssFilterFromAdjustments(scaledSettings)
+    const hasEffect = effectiveFilter !== 'none'
+
+    // Use buildVideoTransform to get properly scaled CSS styles (position,
+    // scale, rotation, anchor, crop, blend mode — all preview-scale aware).
+    const baseStyle = buildVideoTransform(animatedTransform) || {}
+
+    const ws = {
+      position: 'absolute',
+      top: 0, left: 0, right: 0, bottom: 0,
+    }
+    if (baseStyle.transform) ws.transform = baseStyle.transform
+    if (baseStyle.transformOrigin) ws.transformOrigin = baseStyle.transformOrigin
+    if (baseStyle.clipPath) ws.clipPath = baseStyle.clipPath
+    if (baseStyle.mixBlendMode) ws.mixBlendMode = baseStyle.mixBlendMode
+    // Don't apply baseStyle.opacity — opacity is folded into filter strength.
+    // Don't apply baseStyle.filter — that's the transform blur; adjustment
+    // filter is the one we care about.
+
+    if (hasEffect) {
+      ws.filter = effectiveFilter
+      ws.WebkitFilter = effectiveFilter
+    }
+
+    ws._hasVisualEffect = hasEffect
+    return ws
+  }, [clip, clipTime, buildVideoTransform, adjustmentSettings])
+
+  const hasTransform = wrapperStyle.transform || wrapperStyle.clipPath
+  if (!wrapperStyle._hasVisualEffect && !hasTransform) {
+    return <>{children}</>
+  }
+
+  const style = { ...wrapperStyle }
+  delete style._hasVisualEffect
+
+  return (
+    <div style={style}>
+      {children}
     </div>
   )
 })
@@ -1481,9 +1584,6 @@ function VideoLayerRenderer({
     return () => clearInterval(cleanup)
   }, [clips, playheadPosition])
 
-  // Separate text clips (rendered on top)
-  const textClips = activeLayerClips.filter(({ clip }) => clip.type === 'text')
-  
   // Combined video and image layers (both render in the same z-order space)
   const allMediaClips = activeLayerClips.filter(({ clip }) => clip.type === 'video' || clip.type === 'image')
 
@@ -1530,48 +1630,54 @@ function VideoLayerRenderer({
       // Preserve render order (bottom -> top) while scanning from top.
       visible.unshift(entry)
       const inTransition = transitionStyleByClipId.has(entry.clip.id)
-      if (!inTransition && isLayerFullyObscuring(entry.clip, playheadPosition)) break
+      if (!inTransition && isLayerFullyObscuring(entry.clip, playheadPosition, getAssetById)) break
     }
     return visible
   })()
+  const visibleMediaClipIds = useMemo(
+    () => new Set(mediaClips.map(({ clip }) => clip.id)),
+    [mediaClips]
+  )
+  const compositedVisualClips = useMemo(
+    () => activeLayerClips.filter(({ clip }) => {
+      if (clip.type === 'adjustment') return true
+      if (clip.type === 'text') return true
+      if (clip.type === 'video' || clip.type === 'image') return visibleMediaClipIds.has(clip.id)
+      return false
+    }),
+    [activeLayerClips, visibleMediaClipIds]
+  )
 
-  // Handle no active clips — just black, no message.
-  // Keep this AFTER hooks so hook call order never changes between renders.
-  if (activeLayerClips.length === 0 && !transitionInfo) {
-    return <div className="absolute inset-0 bg-black" />
-  }
-  
-  // Render multi-layer composition (including transitions)
-  return (
-    <div ref={containerRef} className="relative w-full h-full">
-      {/* Video/Image layers */}
-      {mediaClips.map(({ clip, track }, index) => (
-        clip.type === 'image' ? (
+  // Build the layer tree. Adjustment layers wrap all content below them so
+  // that CSS filter + transform apply to the composited result.
+  const layerElements = useMemo(() => {
+    let accumulated = []
+
+    const renderClip = (clip, track, visualIndex) => {
+      if (clip.type === 'text') {
+        return (
+          <TextLayer
+            key={`text-${track.id}-${clip.id}`}
+            clip={clip}
+            track={track}
+            layerIndex={visualIndex}
+            totalLayers={compositedVisualClips.length}
+            playheadPosition={playheadPosition}
+            buildVideoTransform={buildVideoTransform}
+            getClipTransform={getClipTransform}
+            previewScale={previewScale}
+          />
+        )
+      }
+      if (clip.type === 'image') {
+        return (
           <ImageLayer
             key={`img-${track.id}-${clip.id}`}
             clip={clip}
             track={track}
-            layerIndex={index}
-            totalLayers={mediaClips.length}
+            layerIndex={visualIndex}
+            totalLayers={compositedVisualClips.length}
             playheadPosition={playheadPosition}
-            buildVideoTransform={(transform) => {
-              const transitionStyle = transitionStyleByClipId.get(clip.id) || null
-              return transitionStyle
-                ? { ...buildVideoTransform(transform), ...transitionStyle }
-                : buildVideoTransform(transform)
-            }}
-            getClipTransform={getClipTransform}
-          />
-        ) : (
-          <VideoLayer
-            key={`vid-${track.id}-${clip.id}`}
-            clip={clip}
-            track={track}
-            layerIndex={index}
-            totalLayers={mediaClips.length}
-            playheadPosition={playheadPosition}
-            isPlaying={isPlaying}
-            isInTransition={transitionStyleByClipId.has(clip.id)}
             buildVideoTransform={(transform) => {
               const transitionStyle = transitionStyleByClipId.get(clip.id) || null
               return transitionStyle
@@ -1581,23 +1687,54 @@ function VideoLayerRenderer({
             getClipTransform={getClipTransform}
           />
         )
-      ))}
-      
-      {/* Text layers (rendered on top) */}
-      {textClips.map(({ clip, track }, index) => (
-        <TextLayer
-          key={`text-${track.id}-${clip.id}`}
+      }
+      return (
+        <VideoLayer
+          key={`vid-${track.id}-${clip.id}`}
           clip={clip}
           track={track}
-          layerIndex={index}
-          totalLayers={textClips.length}
+          layerIndex={visualIndex}
+          totalLayers={compositedVisualClips.length}
           playheadPosition={playheadPosition}
-          buildVideoTransform={buildVideoTransform}
+          isPlaying={isPlaying}
+          isInTransition={transitionStyleByClipId.has(clip.id)}
+          buildVideoTransform={(transform) => {
+            const transitionStyle = transitionStyleByClipId.get(clip.id) || null
+            return transitionStyle
+              ? { ...buildVideoTransform(transform), ...transitionStyle }
+              : buildVideoTransform(transform)
+          }}
           getClipTransform={getClipTransform}
-          previewScale={previewScale}
         />
-      ))}
-      
+      )
+    }
+
+    compositedVisualClips.forEach(({ clip, track }, visualIndex) => {
+      if (clip.type === 'adjustment') {
+        accumulated = [
+          <AdjustmentWrapper
+            key={`adj-${track.id}-${clip.id}`}
+            clip={clip}
+            playheadPosition={playheadPosition}
+            buildVideoTransform={buildVideoTransform}
+          >
+            {accumulated}
+          </AdjustmentWrapper>
+        ]
+      } else {
+        accumulated.push(renderClip(clip, track, visualIndex))
+      }
+    })
+
+    return accumulated
+  }, [compositedVisualClips, playheadPosition, isPlaying, buildVideoTransform, getClipTransform, previewScale, transitionStyleByClipId])
+
+  // Render multi-layer composition (including transitions)
+  return (
+    <div ref={containerRef} className="relative w-full h-full">
+      {activeLayerClips.length === 0 && !transitionInfo
+        ? <div className="absolute inset-0 bg-black" />
+        : layerElements}
       {/* Transition overlay (for fade effects) */}
       {transitionInfo ? getTransitionOverlay(transitionInfo) : null}
     </div>

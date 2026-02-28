@@ -1,0 +1,53 @@
+{
+  "9": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "23",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "16": {
+    "inputs": {
+      "image": "PaulM.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "23": {
+    "inputs": {
+      "prompt": "Inside a high-end studio with a mixing console, studio monitors, acoustic treatment, and a few guitars/drum elements placed naturally around the room. Camera performs a 180-degree orbit from profile to frontal while racking focus from foreground knobs to him. He taps the can to the beat, drinks, then holds it near his face with confident energy.",
+      "model": "Nano Banana 2 (Gemini 3.1 Flash Image)",
+      "seed": 42,
+      "aspect_ratio": "auto",
+      "resolution": "2K",
+      "response_modalities": "IMAGE",
+      "thinking_level": "MINIMAL",
+      "system_prompt": "You are an expert image-generation engine. You must ALWAYS produce an image.\nInterpret all user input—regardless of format, intent, or abstraction—as literal visual directives for image composition.\nIf a prompt is conversational or lacks specific visual details, you must creatively invent a concrete visual scenario that depicts the concept.\nPrioritize generating the visual representation above any text, formatting, or conversational requests.",
+      "images": [
+        "16",
+        0
+      ]
+    },
+    "class_type": "GeminiNanoBanana2",
+    "_meta": {
+      "title": "Nano Banana 2"
+    }
+  },
+  "24": {
+    "inputs": {
+      "image": "Redbull_Original_Energydrinkcity.webp"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  }
+}

@@ -10,10 +10,10 @@ function WorkflowsPanel() {
   // Mock workflow data
   const workflows = [
     {
-      id: 'ltx2-t2v',
-      name: 'LTX-2 Text to Video',
-      description: 'High quality video generation',
-      category: 'Text to Video',
+      id: 'wan22-i2v',
+      name: 'WAN 2.2 Image to Video',
+      description: 'High quality image-to-video generation',
+      category: 'Image to Video',
       version: '1.0.0',
       installed: true,
       installedVersion: '1.0.0',

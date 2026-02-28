@@ -11,6 +11,18 @@ const PEXELS_VIDEOS_URL = 'https://api.pexels.com/videos/search'
 const PEXELS_CURATED_PHOTOS_URL = 'https://api.pexels.com/v1/curated'
 const PEXELS_POPULAR_VIDEOS_URL = 'https://api.pexels.com/videos/popular'
 const PER_PAGE = 20
+const STOCK_PANEL_STORAGE_KEY = 'comfystudio-stock-panel-state-v1'
+
+function loadPersistedStockState() {
+  try {
+    const raw = localStorage.getItem(STOCK_PANEL_STORAGE_KEY)
+    if (!raw) return null
+    return JSON.parse(raw)
+  } catch (error) {
+    console.error('Failed to load Stock panel state:', error)
+    return null
+  }
+}
 
 /** Pick best video file for playback or download (prefer HD mp4). */
 function getBestVideoUrl(item) {
@@ -23,16 +35,19 @@ function getBestVideoUrl(item) {
 }
 
 function StockPanel() {
+  const persistedState = loadPersistedStockState()
   const [apiKey, setApiKey] = useState(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [mediaType, setMediaType] = useState('videos') // 'videos' | 'photos'
-  const [results, setResults] = useState([])
-  const [page, setPage] = useState(1)
-  const [totalResults, setTotalResults] = useState(0)
+  const [searchQuery, setSearchQuery] = useState(persistedState?.searchQuery || '')
+  const [mediaType, setMediaType] = useState(
+    persistedState?.mediaType === 'photos' ? 'photos' : 'videos'
+  ) // 'videos' | 'photos'
+  const [results, setResults] = useState(Array.isArray(persistedState?.results) ? persistedState.results : [])
+  const [page, setPage] = useState(Math.max(1, Number(persistedState?.page) || 1))
+  const [totalResults, setTotalResults] = useState(Math.max(0, Number(persistedState?.totalResults) || 0))
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [addingId, setAddingId] = useState(null) // id of item being added
-  const [isDefaultContent, setIsDefaultContent] = useState(true) // trending/popular when no search
+  const [isDefaultContent, setIsDefaultContent] = useState(Boolean(persistedState?.isDefaultContent ?? true)) // trending/popular when no search
   const [previewVideo, setPreviewVideo] = useState(null) // video item for preview modal
 
   const { currentProjectHandle } = useProjectStore()
@@ -42,6 +57,22 @@ function StockPanel() {
   useEffect(() => {
     getPexelsApiKey().then(key => setApiKey(key?.trim() || null))
   }, [])
+
+  // Persist panel state so tab switches keep current stock context/results.
+  useEffect(() => {
+    try {
+      localStorage.setItem(STOCK_PANEL_STORAGE_KEY, JSON.stringify({
+        searchQuery,
+        mediaType,
+        results,
+        page,
+        totalResults,
+        isDefaultContent,
+      }))
+    } catch (error) {
+      console.error('Failed to save Stock panel state:', error)
+    }
+  }, [searchQuery, mediaType, results, page, totalResults, isDefaultContent])
 
   // Fetch trending/popular content when no search query (first visit or cleared search)
   const loadDefaultContent = useCallback(async (pageNum = 1) => {
@@ -78,8 +109,9 @@ function StockPanel() {
   // When API key is ready and there's no search query, show trending/popular
   useEffect(() => {
     if (!apiKey || searchQuery.trim()) return
+    if (results.length > 0 && isDefaultContent) return
     loadDefaultContent(1)
-  }, [apiKey, mediaType, searchQuery, loadDefaultContent])
+  }, [apiKey, mediaType, searchQuery, isDefaultContent, results.length, loadDefaultContent])
 
   const search = useCallback(async (pageNum = 1) => {
     if (!apiKey) {
