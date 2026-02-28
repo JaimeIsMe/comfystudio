@@ -143,7 +143,21 @@ function TransportControls() {
   // JKL Shuttle keyboard handlers
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Don't trigger when typing in inputs (use activeElement so we don't steal keys from prompt/search etc.)
+      // Reserve timeline frame-step on Left/Right globally so inspector controls
+      // don't trap arrow keys when the user expects timeline navigation.
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        frameBack()
+        return
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        frameForward()
+        return
+      }
+
+      // For other shortcuts, don't trigger while typing in inputs (use activeElement so
+      // we don't steal keys from prompt/search, textareas, etc.)
       const active = document.activeElement
       if (active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable)) return
       
@@ -209,16 +223,6 @@ function TransportControls() {
         }
       }
       
-      // Left/Right Arrow keys for frame-by-frame navigation
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault()
-        frameBack()
-      }
-      
-      if (e.key === 'ArrowRight') {
-        e.preventDefault()
-        frameForward()
-      }
     }
     
     const handleKeyUp = (e) => {

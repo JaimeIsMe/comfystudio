@@ -122,6 +122,12 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
         secure: false,
+        configure: (proxy, options) => {
+          proxy.on('proxyReqWs', (proxyReq, req, socket, options, head) => {
+            proxyReq.setHeader('Origin', 'http://127.0.0.1:8188')
+            proxyReq.setHeader('Host', '127.0.0.1:8188')
+          })
+        }
       },
     },
   },

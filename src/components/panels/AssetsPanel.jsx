@@ -36,10 +36,12 @@ function AssetsPanel() {
   
   // Mask generation state
   const [maskDialogAsset, setMaskDialogAsset] = useState(null) // Asset to generate mask for
-  // Overlay generator modal (color matte, letterbox, vignette)
+  // Overlay generator modal (matte/letterbox/vignette/grain + Remotion motion overlays)
   const [overlayModalOpen, setOverlayModalOpen] = useState(false)
   const [overlayModalInitialType, setOverlayModalInitialType] = useState('letterbox')
   const [overlayModalFolderId, setOverlayModalFolderId] = useState(null) // when opened from folder context menu
+  const [overlayModalReplaceAssetId, setOverlayModalReplaceAssetId] = useState(null)
+  const [overlayModalInitialValues, setOverlayModalInitialValues] = useState(null)
   
   // Selected assets (array for multi-select; used for delete and drag-to-folder)
   const [selectedAssetIds, setSelectedAssetIds] = useState([])
@@ -111,6 +113,7 @@ function AssetsPanel() {
     removeAsset, 
     renameAsset, 
     addAsset,
+    updateAsset,
     folders,
     addFolder,
     removeFolder,
@@ -246,6 +249,54 @@ function AssetsPanel() {
   // Open file picker
   const openFilePicker = () => {
     fileInputRef.current?.click()
+  }
+
+  const closeOverlayModal = () => {
+    setOverlayModalOpen(false)
+    setOverlayModalReplaceAssetId(null)
+    setOverlayModalInitialValues(null)
+  }
+
+  const openOverlayGenerator = (type = 'letterbox', folderId = null) => {
+    setOverlayModalFolderId(folderId)
+    setOverlayModalInitialType(type)
+    setOverlayModalReplaceAssetId(null)
+    setOverlayModalInitialValues(null)
+    setOverlayModalOpen(true)
+  }
+
+  const handleEditRemotionOverlay = (assetId) => {
+    const asset = assets.find(a => a.id === assetId)
+    if (!asset || asset.type !== 'video' || asset?.settings?.overlayKind !== 'remotion') return
+
+    const settings = asset.settings || {}
+    const remotion = settings.remotion || {}
+    const timelineSettings = getCurrentTimelineSettings() || { width: 1920, height: 1080 }
+    const width = Math.max(1, Math.min(4096, Math.round(Number(settings.width) || Number(timelineSettings.width) || 1920)))
+    const height = Math.max(1, Math.min(4096, Math.round(Number(settings.height) || Number(timelineSettings.height) || 1080)))
+    const panelOpacityPct = Math.max(
+      5,
+      Math.min(95, Math.round((Number(remotion.panelOpacity) || 0.72) * 100))
+    )
+
+    setOverlayModalFolderId(asset.folderId ?? null)
+    setOverlayModalInitialType('remotion')
+    setOverlayModalReplaceAssetId(asset.id)
+    setOverlayModalInitialValues({
+      name: asset.name || '',
+      useTimelineSize: false,
+      customWidth: width,
+      customHeight: height,
+      motionTemplate: settings.remotionTemplate || 'lower-third',
+      motionTitle: remotion.title || 'YOUR HEADLINE',
+      motionSubtitle: remotion.subtitle || '',
+      motionDuration: Number(asset.duration ?? settings.duration ?? 4) || 4,
+      motionFps: Number(settings.fps ?? 30) || 30,
+      motionAccentColor: remotion.accentColor || '#f59e0b',
+      motionTextColor: remotion.textColor || '#ffffff',
+      motionPanelOpacity: panelOpacityPct,
+    })
+    setOverlayModalOpen(true)
   }
 
   // Get current folder and its subfolders
@@ -1243,7 +1294,7 @@ function AssetsPanel() {
               </div>
               <div className="border-t border-sf-dark-600 my-1" />
               <button
-                onClick={() => { setOverlayModalFolderId(contextMenu.folderId); setOverlayModalInitialType('letterbox'); setOverlayModalOpen(true); setContextMenu(null) }}
+                onClick={() => { openOverlayGenerator('letterbox', contextMenu.folderId); setContextMenu(null) }}
                 className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
               >
                 <span className="w-4 text-center">▬</span>
@@ -1283,32 +1334,39 @@ function AssetsPanel() {
               <div className="border-t border-sf-dark-600 my-1" />
               <div className="px-2 py-1 text-[10px] text-sf-text-muted uppercase tracking-wider">Create overlay</div>
               <button
-                onClick={() => { setOverlayModalFolderId(null); setOverlayModalInitialType('letterbox'); setOverlayModalOpen(true); setContextMenu(null) }}
+                onClick={() => { openOverlayGenerator('letterbox', null); setContextMenu(null) }}
                 className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
               >
                 <span className="w-4 text-center">▬</span>
                 Letterbox overlay…
               </button>
               <button
-                onClick={() => { setOverlayModalFolderId(null); setOverlayModalInitialType('vignette'); setOverlayModalOpen(true); setContextMenu(null) }}
+                onClick={() => { openOverlayGenerator('vignette', null); setContextMenu(null) }}
                 className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
               >
                 <span className="w-4 text-center">◐</span>
                 Vignette overlay…
               </button>
               <button
-                onClick={() => { setOverlayModalFolderId(null); setOverlayModalInitialType('color'); setOverlayModalOpen(true); setContextMenu(null) }}
+                onClick={() => { openOverlayGenerator('color', null); setContextMenu(null) }}
                 className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
               >
                 <span className="w-4 text-center">■</span>
                 Color matte…
               </button>
               <button
-                onClick={() => { setOverlayModalFolderId(null); setOverlayModalInitialType('grain'); setOverlayModalOpen(true); setContextMenu(null) }}
+                onClick={() => { openOverlayGenerator('grain', null); setContextMenu(null) }}
                 className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
               >
                 <span className="w-4 text-center">◇</span>
                 Film grain loop…
+              </button>
+              <button
+                onClick={() => { openOverlayGenerator('remotion', null); setContextMenu(null) }}
+                className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+              >
+                <span className="w-4 text-center">✦</span>
+                Motion graphic (Remotion)…
               </button>
             </>
           ) : (
@@ -1323,11 +1381,25 @@ function AssetsPanel() {
             const isGenerating = asset?.spriteGenerating
             const showAudioToggle = asset?.type === 'video'
             const isAudioDisabled = asset?.audioEnabled === false
+            const isRemotionOverlay = asset?.type === 'video' && asset?.settings?.overlayKind === 'remotion'
             
-            if (!showMask && !showThumbnails && !showAudioToggle) return null
+            if (!showMask && !showThumbnails && !showAudioToggle && !isRemotionOverlay) return null
             
             return (
               <>
+                {isRemotionOverlay && (
+                  <button
+                    onClick={() => {
+                      handleEditRemotionOverlay(contextMenu.assetId)
+                      setContextMenu(null)
+                    }}
+                    className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+                  >
+                    <Edit3 className="w-3 h-3 text-sf-accent" />
+                    Edit Motion Overlay...
+                  </button>
+                )}
+
                 {/* Toggle audio on video */}
                 {showAudioToggle && (
                   <button
@@ -1440,8 +1512,26 @@ function AssetsPanel() {
       {/* Overlay generator (letterbox, vignette, color matte, film grain) */}
       <OverlayGeneratorModal
         isOpen={overlayModalOpen}
-        onClose={() => setOverlayModalOpen(false)}
+        onClose={closeOverlayModal}
         onAdd={async (asset) => {
+          const replaceAssetId = asset?.replaceAssetId || null
+          const existingAsset = replaceAssetId ? assets.find(a => a.id === replaceAssetId) : null
+          const targetFolderId = existingAsset?.folderId ?? asset.folderId ?? currentFolderId
+
+          const applyGeneratedAsset = (nextAsset) => {
+            if (replaceAssetId && existingAsset) {
+              updateAsset(replaceAssetId, {
+                ...nextAsset,
+                folderId: targetFolderId,
+              })
+              return
+            }
+            addAsset({
+              ...nextAsset,
+              folderId: targetFolderId,
+            })
+          }
+
           if (asset.blob && currentProjectHandle && isElectron() && typeof currentProjectHandle === 'string') {
             try {
               const persisted = await writeGeneratedOverlayToProject(
@@ -1451,25 +1541,24 @@ function AssetsPanel() {
                 asset.type,
                 asset.settings || {}
               )
-              addAsset({
-                ...persisted,
-                folderId: asset.folderId ?? currentFolderId,
-              })
+              applyGeneratedAsset(persisted)
             } catch (err) {
               console.warn('Could not save overlay to project, using blob URL:', err)
               const url = URL.createObjectURL(asset.blob)
-              const { blob: _b, ...rest } = asset
-              addAsset({ ...rest, url })
+              const { blob: _b, replaceAssetId: _replace, ...rest } = asset
+              applyGeneratedAsset({ ...rest, url })
             }
           } else {
             const url = asset.blob ? URL.createObjectURL(asset.blob) : asset.url
-            const { blob: _b, ...rest } = asset
-            addAsset({ ...rest, url: url || rest.url })
+            const { blob: _b, replaceAssetId: _replace, ...rest } = asset
+            applyGeneratedAsset({ ...rest, url: url || rest.url })
           }
         }}
         timelineSize={getCurrentTimelineSettings() ? { width: getCurrentTimelineSettings().width, height: getCurrentTimelineSettings().height } : { width: 1920, height: 1080 }}
         defaultFolderId={overlayModalFolderId ?? currentFolderId}
         initialType={overlayModalInitialType}
+        replaceAssetId={overlayModalReplaceAssetId}
+        initialValues={overlayModalInitialValues}
       />
       
       {/* Footer with asset count */}

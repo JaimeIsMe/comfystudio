@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import comfyui, { modifyLTX2Workflow, modifyMaskWorkflow } from '../services/comfyui';
+import comfyui, { modifyMaskWorkflow } from '../services/comfyui';
 
 // Store the base workflow in memory after first load
 let cachedWorkflows = {};
@@ -281,59 +281,16 @@ export function useComfyUI() {
   }, [isConnected]);
 
   /**
-   * Generate video using LTX-2 workflow
+   * Legacy GeneratePanel entrypoint retained for backward compatibility.
+   * Active generation now runs through GenerateWorkspace queue workflows.
    */
-  const generateVideo = useCallback(async (options) => {
+  const generateVideo = useCallback(async () => {
     if (!isConnected) {
       setError('ComfyUI is not connected');
       return null;
     }
-
-    setIsGenerating(true);
-    setError(null);
-    setProgress({ value: 0, max: 100, percent: 0 });
-    setGenerationResult(null);
-    setCurrentNode(null);
-    nodeProgressRef.current = { completed: 0, total: 0 };
-    processedPromptRef.current = null; // Reset for new generation
-
-    try {
-      // Load the workflow if not cached
-      if (!cachedWorkflows['ltx2-t2v']) {
-        const response = await fetch('/workflows/video_ltx2_t2v.json');
-        if (!response.ok) {
-          throw new Error('Failed to load workflow');
-        }
-        cachedWorkflows['ltx2-t2v'] = await response.json();
-      }
-
-      const baseWorkflow = cachedWorkflows['ltx2-t2v'];
-      
-      // Modify workflow with user options
-      const workflow = modifyLTX2Workflow(baseWorkflow, {
-        prompt: options.prompt,
-        negativePrompt: options.negativePrompt,
-        width: options.width || 1280,
-        height: options.height || 720,
-        frames: options.frames || 121,
-        seed: options.seed,
-        fps: options.fps || 24
-      });
-
-      console.log('Queueing workflow with options:', options);
-
-      // Queue the prompt
-      const promptId = await comfyui.queuePrompt(workflow);
-      console.log('Got prompt ID:', promptId);
-      setCurrentPromptId(promptId);
-
-      return promptId;
-    } catch (err) {
-      console.error('Generation error:', err);
-      setError(err.message);
-      setIsGenerating(false);
-      return null;
-    }
+    setError('Legacy single-click video generation has been retired. Use Generate workflows instead.');
+    return null;
   }, [isConnected]);
 
   /**

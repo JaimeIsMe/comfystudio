@@ -466,6 +466,7 @@ function Timeline({ onOpenAudioGenerate }) {
     addMarker,
     removeMarker,
     selectMarker,
+    addAdjustmentClip,
   } = useTimelineStore()
 
   const { currentProjectHandle, getCurrentTimelineSettings } = useProjectStore()
@@ -505,6 +506,14 @@ function Timeline({ onOpenAudioGenerate }) {
     }
     // Fallback to clip's stored URL
     return clip.url
+  }
+
+  const handleAddAdjustmentLayer = () => {
+    const activeVideoTrack = tracks.find(t => t.id === activeTrackId && t.type === 'video' && !t.locked)
+    const fallbackVideoTrack = tracks.find(t => t.type === 'video' && !t.locked)
+    const targetTrack = activeVideoTrack || fallbackVideoTrack
+    if (!targetTrack) return
+    addAdjustmentClip(targetTrack.id, playheadPosition, { duration: 5 })
   }
 
   // Resolve-like transition pane preview (left/right clip contributions).
@@ -968,6 +977,13 @@ function Timeline({ onOpenAudioGenerate }) {
             // Text clips: add second clip with same text properties
             const textOptions = { ...(clip.textProperties || {}), duration: remainder }
             addTextClip(clip.trackId, textOptions, playheadPosition)
+          } else if (clip.type === 'adjustment') {
+            addAdjustmentClip(clip.trackId, playheadPosition, {
+              duration: remainder,
+              name: clip.name,
+              adjustments: clip.adjustments || {},
+              transform: clip.transform || {},
+            })
           } else {
             // Video/audio: second clip continues from cut in source (pass duration/trim so resolveOverlaps doesn't push following clips)
             const timeScale = getTimeScale(clip)
@@ -1001,7 +1017,7 @@ function Timeline({ onOpenAudioGenerate }) {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
     }
-  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedTransitionId, selectedMarkerId, removeSelectedClips, removeTransition, removeMarker, clearSelection, selectMarker, clips, undo, redo, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips])
+  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedTransitionId, selectedMarkerId, removeSelectedClips, removeTransition, removeMarker, clearSelection, selectMarker, clips, undo, redo, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips])
 
   // Handle spacebar panning
   useEffect(() => {
@@ -1045,6 +1061,7 @@ function Timeline({ onOpenAudioGenerate }) {
       setDraggedAssetId(null)
       setDropTarget(null)
       setAssetDropPreview(null)
+      clearActiveSnap()
     }
     window.addEventListener('comfystudio-assets-drag-start', handleAssetDragStart)
     window.addEventListener('comfystudio-assets-drag-end', handleAssetDragEnd)
@@ -1052,13 +1069,14 @@ function Timeline({ onOpenAudioGenerate }) {
       window.removeEventListener('comfystudio-assets-drag-start', handleAssetDragStart)
       window.removeEventListener('comfystudio-assets-drag-end', handleAssetDragEnd)
     }
-  }, [])
+  }, [clearActiveSnap])
 
   useEffect(() => {
     const clearDropFeedback = () => {
       setDraggedAssetId(null)
       setDropTarget(null)
       setAssetDropPreview(null)
+      clearActiveSnap()
     }
     window.addEventListener('dragend', clearDropFeedback)
     window.addEventListener('drop', clearDropFeedback)
@@ -1066,7 +1084,7 @@ function Timeline({ onOpenAudioGenerate }) {
       window.removeEventListener('dragend', clearDropFeedback)
       window.removeEventListener('drop', clearDropFeedback)
     }
-  }, [])
+  }, [clearActiveSnap])
 
   // Handle scroll wheel - Ctrl+Scroll to zoom, regular scroll to pan horizontally
   const handleWheel = (e) => {
@@ -1141,6 +1159,17 @@ function Timeline({ onOpenAudioGenerate }) {
       : FRAME_RATE
     const rawStartTime = Math.max(0, x / pixelsPerSecond)
     return Math.round(rawStartTime * fps) / fps
+  }
+
+  const getSnappedDropStartTime = (rawStartTime, clipDuration) => {
+    const snapResult = snapClipPosition(null, rawStartTime, clipDuration)
+    if (snapResult.snapped) {
+      return {
+        startTime: Math.max(0, snapResult.startTime),
+        snapTime: snapResult.snapInfo?.snapPoint?.time ?? null,
+      }
+    }
+    return { startTime: rawStartTime, snapTime: null }
   }
 
   const getDropPreviewDuration = (asset, startTime) => {
@@ -1232,6 +1261,7 @@ function Timeline({ onOpenAudioGenerate }) {
     if (!assetId) {
       setDropTarget(trackId)
       setAssetDropPreview(null)
+      clearActiveSnap()
       return
     }
 
@@ -1239,10 +1269,11 @@ function Timeline({ onOpenAudioGenerate }) {
     if (!asset) {
       setDropTarget(null)
       setAssetDropPreview(null)
+      clearActiveSnap()
       return
     }
 
-    const startTime = getDropStartTime(e)
+    const rawStartTime = getDropStartTime(e)
     const { targetTrackId, willCreateTrack } = resolveDropTrackForAsset(asset, trackId, { allowCreateTrack: false })
     const latestTracks = useTimelineStore.getState().tracks
     const targetTrack = latestTracks.find(t => t.id === targetTrackId) || tracks.find(t => t.id === targetTrackId)
@@ -1250,11 +1281,18 @@ function Timeline({ onOpenAudioGenerate }) {
     if (!canDropAssetOnTrack(asset, targetTrack)) {
       setDropTarget(null)
       setAssetDropPreview(null)
+      clearActiveSnap()
       return
     }
 
-    const duration = getDropPreviewDuration(asset, startTime)
+    const duration = getDropPreviewDuration(asset, rawStartTime)
+    const { startTime, snapTime } = getSnappedDropStartTime(rawStartTime, duration)
     setDropTarget(targetTrackId)
+    if (snapTime !== null) {
+      setActiveSnapTime(snapTime)
+    } else {
+      clearActiveSnap()
+    }
     setAssetDropPreview((prev) => {
       const next = {
         assetId: asset.id,
@@ -1285,6 +1323,7 @@ function Timeline({ onOpenAudioGenerate }) {
     if (e.currentTarget?.contains(e.relatedTarget)) return
     setDropTarget(null)
     setAssetDropPreview(null)
+    clearActiveSnap()
   }
 
   // Handle drop from assets
@@ -1292,6 +1331,7 @@ function Timeline({ onOpenAudioGenerate }) {
     e.preventDefault()
     setDropTarget(null)
     setAssetDropPreview(null)
+    clearActiveSnap()
     
     const assetId = getDraggedAssetId(e.dataTransfer)
     if (!assetId) return
@@ -1299,7 +1339,7 @@ function Timeline({ onOpenAudioGenerate }) {
     const asset = assets.find(a => a.id === assetId)
     if (!asset) return
     
-    const startTime = getDropStartTime(e)
+    const rawStartTime = getDropStartTime(e)
     const { targetTrackId } = resolveDropTrackForAsset(asset, trackId, { allowCreateTrack: true })
 
     // Check if asset type matches target track type
@@ -1308,6 +1348,8 @@ function Timeline({ onOpenAudioGenerate }) {
     if (!track) return
     
     if (canDropAssetOnTrack(asset, track)) {
+      const duration = getDropPreviewDuration(asset, rawStartTime)
+      const { startTime } = getSnappedDropStartTime(rawStartTime, duration)
       addClip(targetTrackId, asset, startTime, timelineFps)
       setPreviewMode('timeline')
       if (assetIsPlaying) {
@@ -1399,6 +1441,7 @@ function Timeline({ onOpenAudioGenerate }) {
     
     switch (action) {
       case 'add-mask':
+        if (!(clip.type === 'video' || clip.type === 'image')) break
         // Ensure single selection on this clip
         selectClip(clip.id)
         requestMaskPicker(clip.id, { openPicker: true })
@@ -1428,9 +1471,21 @@ function Timeline({ onOpenAudioGenerate }) {
         break
       case 'duplicate':
         // Duplicate clip right after current position
-        const asset = assets.find(a => a.id === clip.assetId)
-        if (asset) {
-          addClip(clip.trackId, asset, clip.startTime + clip.duration + 0.1, timelineFps)
+        if (clip.type === 'text') {
+          const textOptions = { ...(clip.textProperties || {}), duration: clip.duration }
+          addTextClip(clip.trackId, textOptions, clip.startTime + clip.duration + 0.1)
+        } else if (clip.type === 'adjustment') {
+          addAdjustmentClip(clip.trackId, clip.startTime + clip.duration + 0.1, {
+            duration: clip.duration,
+            name: clip.name,
+            adjustments: clip.adjustments || {},
+            transform: clip.transform || {},
+          })
+        } else {
+          const asset = assets.find(a => a.id === clip.assetId)
+          if (asset) {
+            addClip(clip.trackId, asset, clip.startTime + clip.duration + 0.1, timelineFps)
+          }
         }
         break
       case 'split':
@@ -1443,6 +1498,13 @@ function Timeline({ onOpenAudioGenerate }) {
           if (clip.type === 'text') {
             const textOptions = { ...(clip.textProperties || {}), duration: remainder }
             addTextClip(clip.trackId, textOptions, playheadPosition)
+          } else if (clip.type === 'adjustment') {
+            addAdjustmentClip(clip.trackId, playheadPosition, {
+              duration: remainder,
+              name: clip.name,
+              adjustments: clip.adjustments || {},
+              transform: clip.transform || {},
+            })
           } else {
             const timeScale = getTimeScale(clip)
             const sourceTimeAtCut = (clip.trimStart || 0) + splitTime * timeScale
@@ -1467,6 +1529,7 @@ function Timeline({ onOpenAudioGenerate }) {
   const handleApplyMaskFromContextMenu = (maskAssetId) => {
     const clip = clips.find(c => c.id === clipContextMenu?.clipId)
     if (!clip) return
+    if (!(clip.type === 'video' || clip.type === 'image')) return
 
     selectClip(clip.id)
     addMaskEffect(clip.id, maskAssetId)
@@ -1852,8 +1915,8 @@ function Timeline({ onOpenAudioGenerate }) {
         const contentRect = trackContentRef.current.getBoundingClientRect()
         const relativeY = e.clientY - contentRect.top + trackContentRef.current.scrollTop
         
-        // Image and text clips go on video tracks; only video/audio clips have matching track types
-        const trackType = (clip.type === 'image' || clip.type === 'text') ? 'video' : (clip.type || 'video')
+        // Image/text/adjustment clips stay on video tracks; only pure audio clips map to audio tracks
+        const trackType = (clip.type === 'image' || clip.type === 'text' || clip.type === 'adjustment') ? 'video' : (clip.type || 'video')
         const relevantTracks = tracks.filter(t => t.type === trackType)
         const audioSectionHeight = 20
         const totalVideoTracksHeight = videoTracks.reduce((sum, track) => sum + getTrackHeight(track), 0)
@@ -2361,6 +2424,14 @@ function Timeline({ onOpenAudioGenerate }) {
           >
             <Flag className="w-3 h-3 text-yellow-400" />
             Marker
+          </button>
+          <button
+            onClick={handleAddAdjustmentLayer}
+            className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
+            title="Add adjustment layer on active video track"
+          >
+            <Square className="w-3 h-3 text-purple-400" />
+            Adj
           </button>
           {selectedMarkerId && (
             <button
@@ -2887,6 +2958,7 @@ function Timeline({ onOpenAudioGenerate }) {
                   // Calculate how many thumbnail frames to show (roughly one per 60px)
                   const thumbCount = Math.max(1, Math.floor(clipWidth / 60))
                   const isTextClip = clip.type === 'text'
+                  const isAdjustmentClip = clip.type === 'adjustment'
                   
                   return (
                   <div
@@ -2974,6 +3046,52 @@ function Timeline({ onOpenAudioGenerate }) {
                         {/* Keyframe markers */}
                         {clip.keyframes && Object.keys(clip.keyframes).length > 0 && (
                           <div className="absolute bottom-[3px] left-0 right-0 h-2 pointer-events-none">
+                            {getAllKeyframeTimes(clip.keyframes).map((kf, i) => (
+                              <div
+                                key={`kf-${i}-${kf.time}`}
+                                className="absolute w-2 h-2 -translate-x-1/2"
+                                style={{ left: `${(kf.time / clip.duration) * 100}%` }}
+                                title={`Keyframe at ${kf.time.toFixed(2)}s: ${kf.properties.join(', ')}`}
+                              >
+                                <Diamond className="w-2 h-2 text-yellow-400 fill-yellow-400" />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    ) : isAdjustmentClip ? (
+                      <>
+                        {/* Adjustment Layer Clip Rendering */}
+                        <div
+                          className="absolute inset-0 bg-[#2a1f3a]"
+                          style={{
+                            borderTop: '3px solid #a855f7',
+                            backgroundImage: 'repeating-linear-gradient(135deg, rgba(168,85,247,0.28) 0px, rgba(168,85,247,0.28) 8px, rgba(30,20,45,0.65) 8px, rgba(30,20,45,0.65) 16px)',
+                          }}
+                        />
+
+                        <div className="absolute inset-x-0 top-[3px] h-6 bg-gradient-to-b from-black/55 to-transparent pointer-events-none" />
+
+                        <div className="absolute top-1 left-1 z-10 flex items-center gap-1">
+                          <div className="bg-purple-600/85 rounded px-1 py-0.5 flex items-center gap-0.5">
+                            <Square className="w-2.5 h-2.5 text-white" />
+                            <span className="text-[8px] text-white font-medium">ADJ</span>
+                          </div>
+                        </div>
+
+                        <div className="absolute inset-x-0 bottom-0 h-[14px] bg-[#4d2f69]/95 border-t border-black/45 pointer-events-none" />
+                        <div className="absolute bottom-[1px] left-1.5 right-12 z-10">
+                          <span className="text-[10px] text-white/95 font-medium truncate block leading-none drop-shadow-sm">
+                            {clip.name || 'Adjustment Layer'}
+                          </span>
+                        </div>
+
+                        <div className="absolute bottom-[1px] right-1 px-1 py-0 rounded bg-black/55 text-[8px] text-white/90 font-mono leading-none">
+                          {clip.duration.toFixed(1)}s
+                        </div>
+
+                        {clip.keyframes && Object.keys(clip.keyframes).length > 0 && (
+                          <div className="absolute bottom-[15px] left-0 right-0 h-2 pointer-events-none">
                             {getAllKeyframeTimes(clip.keyframes).map((kf, i) => (
                               <div
                                 key={`kf-${i}-${kf.time}`}
@@ -3824,9 +3942,8 @@ function Timeline({ onOpenAudioGenerate }) {
         >
           {(() => {
             const contextClip = clips.find(c => c.id === clipContextMenu.clipId)
-            const track = tracks.find(t => t.id === contextClip?.trackId)
-            const isVideoClip = track?.type === 'video'
-            if (!isVideoClip) return null
+            const canUseMask = contextClip?.type === 'video' || contextClip?.type === 'image'
+            if (!canUseMask) return null
             
             return (
               <>

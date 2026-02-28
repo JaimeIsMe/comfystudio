@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react'
 import TitleBar from './components/TitleBar'
 import ExportPanel from './components/ExportPanel'
 import GenerateWorkspace from './components/GenerateWorkspace'
+import RemotionWorkspace from './components/RemotionWorkspace'
 import LLMAssistantWorkspace from './components/LLMAssistantWorkspace'
 import StockPanel from './components/StockPanel'
 import LeftPanel from './components/LeftPanel'
@@ -74,6 +75,16 @@ function App() {
     return () => window.removeEventListener('comfystudio-open-generate-with-frame', handler)
   }, [])
 
+  // When user sends a Remotion render to Editor
+  useEffect(() => {
+    const handler = () => {
+      setMainTab('editor')
+      setLeftPanelTab('assets')
+    }
+    window.addEventListener('comfystudio-open-editor-from-remotion', handler)
+    return () => window.removeEventListener('comfystudio-open-editor-from-remotion', handler)
+  }, [])
+
   // Load persisted layout on mount (single read)
   const [layoutLoaded, setLayoutLoaded] = useState(false)
   useEffect(() => {
@@ -107,7 +118,7 @@ function App() {
     } catch (_) { /* ignore */ }
   }, [])
 
-  const isFullScreenTab = mainTab === 'export' || mainTab === 'generate' || mainTab === 'llm-assistant' || mainTab === 'stock' || (showComfyUiTab && mainTab === 'comfyui')
+  const isFullScreenTab = mainTab === 'export' || mainTab === 'generate' || mainTab === 'remotion' || mainTab === 'llm-assistant' || mainTab === 'stock' || (showComfyUiTab && mainTab === 'comfyui')
   // Editor layout insets (used for content when on Editor, and always for tab bar so it doesn't shift)
   const editorLeftInset = leftPanelExpanded ? ICON_BAR_WIDTH + leftPanelWidth : ICON_BAR_WIDTH
   const editorRightInset = inspectorExpanded ? ICON_BAR_WIDTH + inspectorWidth : ICON_BAR_WIDTH
@@ -227,6 +238,8 @@ function App() {
           <StockPanel />
         ) : mainTab === 'generate' ? (
           <GenerateWorkspace />
+        ) : mainTab === 'remotion' ? (
+          <RemotionWorkspace />
         ) : mainTab === 'llm-assistant' ? (
           <LLMAssistantWorkspace />
         ) : mainTab === 'comfyui' ? null : (

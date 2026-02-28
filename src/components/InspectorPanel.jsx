@@ -15,8 +15,9 @@ import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 import renderCacheService from '../services/renderCache'
 import { saveRenderCache, deleteRenderCache, writeGeneratedOverlayToProject, isElectron } from '../services/fileSystem'
-import { getKeyframeAtTime, getAnimatedTransform, EASING_OPTIONS } from '../utils/keyframes'
+import { getKeyframeAtTime, getAnimatedTransform, getAnimatedAdjustmentSettings, EASING_OPTIONS } from '../utils/keyframes'
 import { TEXT_ANIMATION_PRESETS, TEXT_ANIMATION_MODE_OPTIONS } from '../utils/textAnimationPresets'
+import { DEFAULT_ADJUSTMENT_SETTINGS, normalizeAdjustmentSettings } from '../utils/adjustments'
 import { clearDiskCacheUrl } from './VideoLayerRenderer'
 import { FRAME_RATE, TRANSITION_TYPES, TRANSITION_DEFAULT_SETTINGS } from '../constants/transitions'
 import {
@@ -236,7 +237,7 @@ function KeyframeButton({ clipId, property, clip, playheadPosition }) {
 }
 
 function InspectorPanel({ isExpanded, onToggleExpanded }) {
-  const [expandedSections, setExpandedSections] = useState(['transform', 'crop', 'timing', 'effects', 'text', 'style', 'animation'])
+  const [expandedSections, setExpandedSections] = useState(['transform', 'crop', 'timing', 'effects', 'text', 'style', 'animation', 'adjustments'])
   const [showMaskPicker, setShowMaskPicker] = useState(false)
   const [renderProgress, setRenderProgress] = useState(null) // { status, progress, error }
   const [isRendering, setIsRendering] = useState(false)
@@ -256,6 +257,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     transitions,
     playheadPosition,
     updateClipTransform, 
+    updateClipAdjustments,
     resetClipTransform,
     updateTextProperties,
     applyTextAnimationPreset,
@@ -331,7 +333,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   
   // Check if it's a video, text, or audio clip
   const isTextClip = selectedClip?.type === 'text'
-  const isVideoClip = selectedTrack?.type === 'video' && !isTextClip
+  const isAdjustmentClip = selectedClip?.type === 'adjustment'
+  const isVideoClip = selectedTrack?.type === 'video' && !isTextClip && !isAdjustmentClip
   const isAudioClip = selectedTrack?.type === 'audio'
   
   // Get transform with defaults for legacy clips
@@ -378,6 +381,15 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     if (!selectedClip) return transform
     return getAnimatedTransform(selectedClip, clipTime) || transform
   }, [selectedClip, clipTime, transform])
+
+  const animatedAdjustments = useMemo(() => {
+    if (!selectedClip || selectedClip.type !== 'adjustment') {
+      return normalizeAdjustmentSettings(selectedClip?.adjustments || {})
+    }
+    return normalizeAdjustmentSettings(
+      getAnimatedAdjustmentSettings(selectedClip, clipTime) || selectedClip.adjustments || {}
+    )
+  }, [selectedClip, clipTime])
   
   // Check if a property has keyframes
   const propertyHasKeyframes = useCallback((property) => {
@@ -392,7 +404,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     
     // If this property has keyframes, also update the keyframe at current time
     if (propertyHasKeyframes(key)) {
-      setKeyframe(selectedClip.id, key, clipTime, value)
+      setKeyframe(selectedClip.id, key, clipTime, value, 'easeInOut', { saveHistory: false })
     }
     
     // Handle linked scale: if scaleX or scaleY changes and scale is linked, also update the other
@@ -401,7 +413,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     if (isLinked) {
       const otherKey = key === 'scaleX' ? 'scaleY' : 'scaleX'
       if (propertyHasKeyframes(otherKey)) {
-        setKeyframe(selectedClip.id, otherKey, clipTime, value)
+        setKeyframe(selectedClip.id, otherKey, clipTime, value, 'easeInOut', { saveHistory: false })
       }
     }
   }, [selectedClip, updateClipTransform, propertyHasKeyframes, setKeyframe, clipTime, transform])
@@ -422,7 +434,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
       : { [property]: defaultValue }
     for (const key of Object.keys(updates)) {
       if (propertyHasKeyframes(key)) {
-        setKeyframe(selectedClip.id, key, clipTime, updates[key])
+        setKeyframe(selectedClip.id, key, clipTime, updates[key], 'easeInOut', { saveHistory: false })
       }
     }
     updateClipTransform(selectedClip.id, updates, true)
@@ -433,6 +445,20 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     if (!selectedClip) return
     resetClipTransform(selectedClip.id)
   }, [selectedClip, resetClipTransform])
+
+  // Shared clip adjustment handlers (video/image/text/adjustment)
+  const handleClipAdjustmentChange = useCallback((key, value, saveHistory = false) => {
+    if (!selectedClip) return
+    updateClipAdjustments(selectedClip.id, { [key]: value }, saveHistory)
+    if (propertyHasKeyframes(key)) {
+      setKeyframe(selectedClip.id, key, clipTime, value, 'easeInOut', { saveHistory: false })
+    }
+  }, [selectedClip, updateClipAdjustments, propertyHasKeyframes, setKeyframe, clipTime])
+
+  const handleClipAdjustmentCommit = useCallback((key, value) => {
+    if (!selectedClip) return
+    updateClipAdjustments(selectedClip.id, { [key]: value }, true)
+  }, [selectedClip, updateClipAdjustments])
   
   // Legacy audio data state (for audio clips - will be connected to real data later)
   const [audioData, setAudioData] = useState({
@@ -1050,6 +1076,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
           </div>
         )}
 
+        {renderStandardClipAdjustmentsSection()}
+
         {/* Timing Section */}
         {renderSectionHeader('timing', 'Timing', Clock)}
         {expandedSections.includes('timing') && (
@@ -1410,6 +1438,955 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
       </>
     )
   }
+
+  const renderAdjustmentClipInspector = () => {
+    if (!selectedClip || !transform) return null
+    const adjustments = animatedAdjustments
+
+    const handleAdjustmentChange = (key, value, saveHistory = false) => {
+      updateClipAdjustments(selectedClip.id, { [key]: value }, saveHistory)
+      if (propertyHasKeyframes(key)) {
+        setKeyframe(selectedClip.id, key, clipTime, value, 'easeInOut', { saveHistory: false })
+      }
+    }
+
+    const handleAdjustmentCommit = (key, value) => {
+      updateClipAdjustments(selectedClip.id, { [key]: value }, true)
+    }
+
+    return (
+      <>
+        <div className="p-3 border-b border-sf-dark-700">
+          <div className="mb-2">
+            <p className="text-sm font-medium text-sf-text-primary truncate">
+              {selectedClip.name || 'Adjustment Layer'}
+            </p>
+            <p className="text-[10px] text-sf-text-muted">
+              {selectedTrack?.name || 'Unknown Track'} • {selectedClip.duration?.toFixed(2)}s
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={handleResetTransform}
+              className="py-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[11px] text-sf-text-secondary hover:text-sf-text-primary transition-colors flex items-center justify-center gap-1.5"
+              title="Reset transform properties"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Reset Transform
+            </button>
+            <button
+              onClick={() => updateClipAdjustments(selectedClip.id, DEFAULT_ADJUSTMENT_SETTINGS, true)}
+              className="py-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[11px] text-sf-text-secondary hover:text-sf-text-primary transition-colors flex items-center justify-center gap-1.5"
+              title="Reset adjustment controls"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Reset Adjustments
+            </button>
+          </div>
+        </div>
+
+        {renderSectionHeader('transform', 'Transform', Move)}
+        {expandedSections.includes('transform') && (
+          <div className="p-3 space-y-3 border-b border-sf-dark-700">
+            <div>
+              <label className="text-[10px] text-sf-text-muted block mb-1.5 flex items-center gap-1">
+                <Move className="w-3 h-3" /> Position
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <label className="text-[9px] text-sf-text-muted">X</label>
+                    <KeyframeButton
+                      clipId={selectedClip?.id}
+                      property="positionX"
+                      clip={selectedClip}
+                      playheadPosition={playheadPosition}
+                    />
+                  </div>
+                  <div className="flex items-center">
+                    <DraggableNumberInput
+                      value={animatedTransform?.positionX ?? transform.positionX}
+                      onChange={(val) => handleTransformChange('positionX', val)}
+                      onCommit={(val) => handleTransformCommit('positionX', val)}
+                      step={1}
+                      sensitivity={1}
+                    />
+                    <span className="ml-1 text-[9px] text-sf-text-muted">px</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <label className="text-[9px] text-sf-text-muted">Y</label>
+                    <KeyframeButton
+                      clipId={selectedClip?.id}
+                      property="positionY"
+                      clip={selectedClip}
+                      playheadPosition={playheadPosition}
+                    />
+                  </div>
+                  <div className="flex items-center">
+                    <DraggableNumberInput
+                      value={animatedTransform?.positionY ?? transform.positionY}
+                      onChange={(val) => handleTransformChange('positionY', val)}
+                      onCommit={(val) => handleTransformCommit('positionY', val)}
+                      step={1}
+                      sensitivity={1}
+                    />
+                    <span className="ml-1 text-[9px] text-sf-text-muted">px</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] text-sf-text-muted flex items-center gap-1">
+                  <Maximize2 className="w-3 h-3" /> Scale
+                </label>
+                <div className="flex items-center gap-1">
+                  <KeyframeButton
+                    clipId={selectedClip?.id}
+                    property="scaleX"
+                    clip={selectedClip}
+                    playheadPosition={playheadPosition}
+                  />
+                  <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedTransform?.scaleX ?? transform.scaleX)}%</span>
+                </div>
+              </div>
+              <input
+                type="range"
+                min="10"
+                max="400"
+                value={animatedTransform?.scaleX ?? transform.scaleX}
+                onChange={(e) => handleTransformChange('scaleX', parseInt(e.target.value))}
+                onMouseUp={(e) => handleTransformCommit('scaleX', parseInt(e.target.value))}
+                onDoubleClick={() => handleSliderReset('scaleX', 100)}
+                title="Double-click to reset to 100%"
+                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] text-sf-text-muted flex items-center gap-1">
+                  <RotateCw className="w-3 h-3" /> Rotation
+                </label>
+                <div className="flex items-center gap-1">
+                  <KeyframeButton
+                    clipId={selectedClip?.id}
+                    property="rotation"
+                    clip={selectedClip}
+                    playheadPosition={playheadPosition}
+                  />
+                  <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedTransform?.rotation ?? transform.rotation)}deg</span>
+                </div>
+              </div>
+              <input
+                type="range"
+                min="-180"
+                max="180"
+                value={animatedTransform?.rotation ?? transform.rotation}
+                onChange={(e) => handleTransformChange('rotation', parseInt(e.target.value))}
+                onMouseUp={(e) => handleTransformCommit('rotation', parseInt(e.target.value))}
+                onDoubleClick={() => handleSliderReset('rotation', 0)}
+                title="Double-click to reset to 0deg"
+                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+              />
+            </div>
+
+            <div>
+              <label className="text-[10px] text-sf-text-muted block mb-1.5">Flip</label>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleTransformCommit('flipH', !(animatedTransform?.flipH ?? transform.flipH))}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs transition-colors ${
+                    (animatedTransform?.flipH ?? transform.flipH)
+                      ? 'bg-sf-accent text-white'
+                      : 'bg-sf-dark-700 text-sf-text-secondary hover:bg-sf-dark-600'
+                  }`}
+                >
+                  <FlipHorizontal className="w-3.5 h-3.5" />
+                  Horizontal
+                </button>
+                <button
+                  onClick={() => handleTransformCommit('flipV', !(animatedTransform?.flipV ?? transform.flipV))}
+                  className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded text-xs transition-colors ${
+                    (animatedTransform?.flipV ?? transform.flipV)
+                      ? 'bg-sf-accent text-white'
+                      : 'bg-sf-dark-700 text-sf-text-secondary hover:bg-sf-dark-600'
+                  }`}
+                >
+                  <FlipVertical className="w-3.5 h-3.5" />
+                  Vertical
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] text-sf-text-muted block mb-1.5 flex items-center gap-1">
+                <Anchor className="w-3 h-3" /> Anchor Point
+              </label>
+              <div className="grid grid-cols-3 gap-1">
+                {[
+                  [0, 0], [50, 0], [100, 0],
+                  [0, 50], [50, 50], [100, 50],
+                  [0, 100], [50, 100], [100, 100],
+                ].map(([x, y], i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      if (propertyHasKeyframes('anchorX')) {
+                        setKeyframe(selectedClip.id, 'anchorX', clipTime, x, 'easeInOut', { saveHistory: false })
+                      }
+                      if (propertyHasKeyframes('anchorY')) {
+                        setKeyframe(selectedClip.id, 'anchorY', clipTime, y, 'easeInOut', { saveHistory: false })
+                      }
+                      updateClipTransform(selectedClip.id, { anchorX: x, anchorY: y }, true)
+                    }}
+                    className={`h-6 rounded text-[9px] transition-colors ${
+                      Math.round(animatedTransform?.anchorX ?? transform.anchorX) === x
+                        && Math.round(animatedTransform?.anchorY ?? transform.anchorY) === y
+                        ? 'bg-sf-accent text-white'
+                        : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+                    }`}
+                    title={`Anchor ${x}%, ${y}%`}
+                  >
+                    {x === 50 && y === 50 ? '●' : '○'}
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                <div>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <label className="text-[9px] text-sf-text-muted">X</label>
+                    <KeyframeButton
+                      clipId={selectedClip?.id}
+                      property="anchorX"
+                      clip={selectedClip}
+                      playheadPosition={playheadPosition}
+                    />
+                  </div>
+                  <DraggableNumberInput
+                    value={animatedTransform?.anchorX ?? transform.anchorX}
+                    onChange={(val) => handleTransformChange('anchorX', val)}
+                    onCommit={(val) => handleTransformCommit('anchorX', val)}
+                    min={0}
+                    max={100}
+                    step={1}
+                    sensitivity={0.5}
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <label className="text-[9px] text-sf-text-muted">Y</label>
+                    <KeyframeButton
+                      clipId={selectedClip?.id}
+                      property="anchorY"
+                      clip={selectedClip}
+                      playheadPosition={playheadPosition}
+                    />
+                  </div>
+                  <DraggableNumberInput
+                    value={animatedTransform?.anchorY ?? transform.anchorY}
+                    onChange={(val) => handleTransformChange('anchorY', val)}
+                    onCommit={(val) => handleTransformCommit('anchorY', val)}
+                    min={0}
+                    max={100}
+                    step={1}
+                    sensitivity={0.5}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] text-sf-text-muted flex items-center gap-1">
+                  <Eye className="w-3 h-3" /> Opacity
+                </label>
+                <div className="flex items-center gap-1">
+                  <KeyframeButton
+                    clipId={selectedClip?.id}
+                    property="opacity"
+                    clip={selectedClip}
+                    playheadPosition={playheadPosition}
+                  />
+                  <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedTransform?.opacity ?? transform.opacity)}%</span>
+                </div>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={animatedTransform?.opacity ?? transform.opacity}
+                onChange={(e) => handleTransformChange('opacity', parseInt(e.target.value))}
+                onMouseUp={(e) => handleTransformCommit('opacity', parseInt(e.target.value))}
+                onDoubleClick={() => handleSliderReset('opacity', 100)}
+                title="Double-click to reset to 100%"
+                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+              />
+            </div>
+
+            <div>
+              <label className="text-[10px] text-sf-text-muted block mb-1">
+                Blend Mode
+              </label>
+              <select
+                value={transform.blendMode ?? 'normal'}
+                onChange={(e) => {
+                  handleTransformChange('blendMode', e.target.value)
+                  handleTransformCommit('blendMode', e.target.value)
+                }}
+                className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+              >
+                {BLEND_MODES.map(({ value, label }) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+
+        {renderSectionHeader('crop', 'Crop', Crop)}
+        {expandedSections.includes('crop') && (
+          <div className="p-3 space-y-3 border-b border-sf-dark-700">
+            <div className="relative w-full aspect-video bg-sf-dark-800 rounded overflow-hidden">
+              <div
+                className="absolute bg-sf-dark-600 border border-sf-dark-500"
+                style={{
+                  left: `${animatedTransform?.cropLeft ?? transform.cropLeft}%`,
+                  right: `${animatedTransform?.cropRight ?? transform.cropRight}%`,
+                  top: `${animatedTransform?.cropTop ?? transform.cropTop}%`,
+                  bottom: `${animatedTransform?.cropBottom ?? transform.cropBottom}%`,
+                }}
+              >
+                <div className="w-full h-full flex items-center justify-center text-[9px] text-sf-text-muted">
+                  Preview
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-[9px] text-sf-text-muted">Top</label>
+                  <div className="flex items-center gap-1">
+                    <KeyframeButton
+                      clipId={selectedClip?.id}
+                      property="cropTop"
+                      clip={selectedClip}
+                      playheadPosition={playheadPosition}
+                    />
+                    <span className="text-[9px] text-sf-text-secondary">{Math.round(animatedTransform?.cropTop ?? transform.cropTop)}%</span>
+                  </div>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="50"
+                  value={animatedTransform?.cropTop ?? transform.cropTop}
+                  onChange={(e) => handleTransformChange('cropTop', parseInt(e.target.value))}
+                  onMouseUp={(e) => handleTransformCommit('cropTop', parseInt(e.target.value))}
+                  onDoubleClick={() => handleSliderReset('cropTop', 0)}
+                  title="Double-click to reset to 0"
+                  className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+                />
+              </div>
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-[9px] text-sf-text-muted">Bottom</label>
+                  <div className="flex items-center gap-1">
+                    <KeyframeButton
+                      clipId={selectedClip?.id}
+                      property="cropBottom"
+                      clip={selectedClip}
+                      playheadPosition={playheadPosition}
+                    />
+                    <span className="text-[9px] text-sf-text-secondary">{Math.round(animatedTransform?.cropBottom ?? transform.cropBottom)}%</span>
+                  </div>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="50"
+                  value={animatedTransform?.cropBottom ?? transform.cropBottom}
+                  onChange={(e) => handleTransformChange('cropBottom', parseInt(e.target.value))}
+                  onMouseUp={(e) => handleTransformCommit('cropBottom', parseInt(e.target.value))}
+                  onDoubleClick={() => handleSliderReset('cropBottom', 0)}
+                  title="Double-click to reset to 0"
+                  className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+                />
+              </div>
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-[9px] text-sf-text-muted">Left</label>
+                  <div className="flex items-center gap-1">
+                    <KeyframeButton
+                      clipId={selectedClip?.id}
+                      property="cropLeft"
+                      clip={selectedClip}
+                      playheadPosition={playheadPosition}
+                    />
+                    <span className="text-[9px] text-sf-text-secondary">{Math.round(animatedTransform?.cropLeft ?? transform.cropLeft)}%</span>
+                  </div>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="50"
+                  value={animatedTransform?.cropLeft ?? transform.cropLeft}
+                  onChange={(e) => handleTransformChange('cropLeft', parseInt(e.target.value))}
+                  onMouseUp={(e) => handleTransformCommit('cropLeft', parseInt(e.target.value))}
+                  onDoubleClick={() => handleSliderReset('cropLeft', 0)}
+                  title="Double-click to reset to 0"
+                  className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+                />
+              </div>
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-[9px] text-sf-text-muted">Right</label>
+                  <div className="flex items-center gap-1">
+                    <KeyframeButton
+                      clipId={selectedClip?.id}
+                      property="cropRight"
+                      clip={selectedClip}
+                      playheadPosition={playheadPosition}
+                    />
+                    <span className="text-[9px] text-sf-text-secondary">{Math.round(animatedTransform?.cropRight ?? transform.cropRight)}%</span>
+                  </div>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="50"
+                  value={animatedTransform?.cropRight ?? transform.cropRight}
+                  onChange={(e) => handleTransformChange('cropRight', parseInt(e.target.value))}
+                  onMouseUp={(e) => handleTransformCommit('cropRight', parseInt(e.target.value))}
+                  onDoubleClick={() => handleSliderReset('cropRight', 0)}
+                  title="Double-click to reset to 0"
+                  className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+                />
+              </div>
+            </div>
+
+            <button
+              onClick={() => {
+                const resetCrop = {
+                  cropTop: 0,
+                  cropBottom: 0,
+                  cropLeft: 0,
+                  cropRight: 0,
+                }
+                for (const [property, value] of Object.entries(resetCrop)) {
+                  if (propertyHasKeyframes(property)) {
+                    setKeyframe(selectedClip.id, property, clipTime, value, 'easeInOut', { saveHistory: false })
+                  }
+                }
+                updateClipTransform(selectedClip.id, resetCrop, true)
+              }}
+              className="w-full text-[10px] text-sf-accent hover:text-sf-accent-hover transition-colors"
+            >
+              Reset Crop
+            </button>
+          </div>
+        )}
+
+        {renderSectionHeader('adjustments', 'Adjustments', Sparkles)}
+        {expandedSections.includes('adjustments') && (
+          <div className="p-3 space-y-3 border-b border-sf-dark-700">
+            <p className="text-[10px] text-sf-text-muted">
+              Applies to clips below this layer.
+            </p>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] text-sf-text-muted">Exposure</label>
+                <div className="flex items-center gap-1">
+                  <KeyframeButton
+                    clipId={selectedClip?.id}
+                    property="brightness"
+                    clip={selectedClip}
+                    playheadPosition={playheadPosition}
+                  />
+                  <span className="text-[10px] text-sf-text-secondary">{Math.round(adjustments.brightness)}</span>
+                </div>
+              </div>
+              <input
+                type="range"
+                min="-100"
+                max="100"
+                step="1"
+                value={adjustments.brightness}
+                onChange={(e) => handleAdjustmentChange('brightness', Number(e.target.value), false)}
+                onMouseUp={(e) => handleAdjustmentCommit('brightness', Number(e.target.value))}
+                onDoubleClick={() => handleAdjustmentChange('brightness', DEFAULT_ADJUSTMENT_SETTINGS.brightness, true)}
+                title="Double-click to reset to 0"
+                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] text-sf-text-muted">Contrast</label>
+                <div className="flex items-center gap-1">
+                  <KeyframeButton
+                    clipId={selectedClip?.id}
+                    property="contrast"
+                    clip={selectedClip}
+                    playheadPosition={playheadPosition}
+                  />
+                  <span className="text-[10px] text-sf-text-secondary">{Math.round(adjustments.contrast)}</span>
+                </div>
+              </div>
+              <input
+                type="range"
+                min="-100"
+                max="100"
+                step="1"
+                value={adjustments.contrast}
+                onChange={(e) => handleAdjustmentChange('contrast', Number(e.target.value), false)}
+                onMouseUp={(e) => handleAdjustmentCommit('contrast', Number(e.target.value))}
+                onDoubleClick={() => handleAdjustmentChange('contrast', DEFAULT_ADJUSTMENT_SETTINGS.contrast, true)}
+                title="Double-click to reset to 0"
+                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] text-sf-text-muted">Saturation</label>
+                <div className="flex items-center gap-1">
+                  <KeyframeButton
+                    clipId={selectedClip?.id}
+                    property="saturation"
+                    clip={selectedClip}
+                    playheadPosition={playheadPosition}
+                  />
+                  <span className="text-[10px] text-sf-text-secondary">{Math.round(adjustments.saturation)}</span>
+                </div>
+              </div>
+              <input
+                type="range"
+                min="-100"
+                max="100"
+                step="1"
+                value={adjustments.saturation}
+                onChange={(e) => handleAdjustmentChange('saturation', Number(e.target.value), false)}
+                onMouseUp={(e) => handleAdjustmentCommit('saturation', Number(e.target.value))}
+                onDoubleClick={() => handleAdjustmentChange('saturation', DEFAULT_ADJUSTMENT_SETTINGS.saturation, true)}
+                title="Double-click to reset to 0"
+                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] text-sf-text-muted">Gain</label>
+                <div className="flex items-center gap-1">
+                  <KeyframeButton
+                    clipId={selectedClip?.id}
+                    property="gain"
+                    clip={selectedClip}
+                    playheadPosition={playheadPosition}
+                  />
+                  <span className="text-[10px] text-sf-text-secondary">{Math.round(adjustments.gain)}</span>
+                </div>
+              </div>
+              <input
+                type="range"
+                min="-100"
+                max="100"
+                step="1"
+                value={adjustments.gain}
+                onChange={(e) => handleAdjustmentChange('gain', Number(e.target.value), false)}
+                onMouseUp={(e) => handleAdjustmentCommit('gain', Number(e.target.value))}
+                onDoubleClick={() => handleAdjustmentChange('gain', DEFAULT_ADJUSTMENT_SETTINGS.gain, true)}
+                title="Double-click to reset to 0"
+                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] text-sf-text-muted">Gamma</label>
+                <div className="flex items-center gap-1">
+                  <KeyframeButton
+                    clipId={selectedClip?.id}
+                    property="gamma"
+                    clip={selectedClip}
+                    playheadPosition={playheadPosition}
+                  />
+                  <span className="text-[10px] text-sf-text-secondary">{Math.round(adjustments.gamma)}</span>
+                </div>
+              </div>
+              <input
+                type="range"
+                min="-100"
+                max="100"
+                step="1"
+                value={adjustments.gamma}
+                onChange={(e) => handleAdjustmentChange('gamma', Number(e.target.value), false)}
+                onMouseUp={(e) => handleAdjustmentCommit('gamma', Number(e.target.value))}
+                onDoubleClick={() => handleAdjustmentChange('gamma', DEFAULT_ADJUSTMENT_SETTINGS.gamma, true)}
+                title="Double-click to reset to 0"
+                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] text-sf-text-muted">Offset</label>
+                <div className="flex items-center gap-1">
+                  <KeyframeButton
+                    clipId={selectedClip?.id}
+                    property="offset"
+                    clip={selectedClip}
+                    playheadPosition={playheadPosition}
+                  />
+                  <span className="text-[10px] text-sf-text-secondary">{Math.round(adjustments.offset)}</span>
+                </div>
+              </div>
+              <input
+                type="range"
+                min="-100"
+                max="100"
+                step="1"
+                value={adjustments.offset}
+                onChange={(e) => handleAdjustmentChange('offset', Number(e.target.value), false)}
+                onMouseUp={(e) => handleAdjustmentCommit('offset', Number(e.target.value))}
+                onDoubleClick={() => handleAdjustmentChange('offset', DEFAULT_ADJUSTMENT_SETTINGS.offset, true)}
+                title="Double-click to reset to 0"
+                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] text-sf-text-muted">Hue</label>
+                <div className="flex items-center gap-1">
+                  <KeyframeButton
+                    clipId={selectedClip?.id}
+                    property="hue"
+                    clip={selectedClip}
+                    playheadPosition={playheadPosition}
+                  />
+                  <span className="text-[10px] text-sf-text-secondary">{Math.round(adjustments.hue)}deg</span>
+                </div>
+              </div>
+              <input
+                type="range"
+                min="-180"
+                max="180"
+                step="1"
+                value={adjustments.hue}
+                onChange={(e) => handleAdjustmentChange('hue', Number(e.target.value), false)}
+                onMouseUp={(e) => handleAdjustmentCommit('hue', Number(e.target.value))}
+                onDoubleClick={() => handleAdjustmentChange('hue', DEFAULT_ADJUSTMENT_SETTINGS.hue, true)}
+                title="Double-click to reset to 0deg"
+                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] text-sf-text-muted">Blur</label>
+                <div className="flex items-center gap-1">
+                  <KeyframeButton
+                    clipId={selectedClip?.id}
+                    property="blur"
+                    clip={selectedClip}
+                    playheadPosition={playheadPosition}
+                  />
+                  <span className="text-[10px] text-sf-text-secondary">{adjustments.blur.toFixed(1)}px</span>
+                </div>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="50"
+                step="0.25"
+                value={adjustments.blur}
+                onChange={(e) => handleAdjustmentChange('blur', Number(e.target.value), false)}
+                onMouseUp={(e) => handleAdjustmentCommit('blur', Number(e.target.value))}
+                onDoubleClick={() => handleAdjustmentChange('blur', DEFAULT_ADJUSTMENT_SETTINGS.blur, true)}
+                title="Double-click to reset to 0px"
+                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+              />
+            </div>
+          </div>
+        )}
+
+        {renderSectionHeader('timing', 'Timing', Clock)}
+        {expandedSections.includes('timing') && (
+          <div className="p-3 space-y-3 border-b border-sf-dark-700">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[9px] text-sf-text-muted block mb-1">Start Time</label>
+                <div className="flex items-center">
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    value={selectedClip.startTime?.toFixed(2)}
+                    disabled
+                    className="w-full bg-sf-dark-800 border border-sf-dark-700 rounded px-2 py-1 text-xs text-sf-text-muted cursor-not-allowed"
+                  />
+                  <span className="ml-1 text-[9px] text-sf-text-muted">s</span>
+                </div>
+              </div>
+              <div>
+                <label className="text-[9px] text-sf-text-muted block mb-1">Duration</label>
+                <div className="flex items-center">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.04"
+                    value={selectedClip.duration?.toFixed(3)}
+                    onChange={(e) => {
+                      const parsed = parseFloat(e.target.value)
+                      if (Number.isFinite(parsed)) resizeClip(selectedClip.id, parsed)
+                    }}
+                    className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                  />
+                  <span className="ml-1 text-[9px] text-sf-text-muted">s</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    )
+  }
+
+  const renderStandardClipAdjustmentsSection = () => (
+    <>
+      {renderSectionHeader('adjustments', 'Adjustments', Sparkles)}
+      {expandedSections.includes('adjustments') && (
+        <div className="p-3 space-y-3 border-b border-sf-dark-700">
+          <p className="text-[10px] text-sf-text-muted">
+            Applies to this clip.
+          </p>
+
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <label className="text-[10px] text-sf-text-muted">Exposure</label>
+              <div className="flex items-center gap-1">
+                <KeyframeButton
+                  clipId={selectedClip?.id}
+                  property="brightness"
+                  clip={selectedClip}
+                  playheadPosition={playheadPosition}
+                />
+                <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedAdjustments.brightness)}</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min="-100"
+              max="100"
+              step="1"
+              value={animatedAdjustments.brightness}
+              onChange={(e) => handleClipAdjustmentChange('brightness', Number(e.target.value), false)}
+              onMouseUp={(e) => handleClipAdjustmentCommit('brightness', Number(e.target.value))}
+              onDoubleClick={() => handleClipAdjustmentChange('brightness', DEFAULT_ADJUSTMENT_SETTINGS.brightness, true)}
+              title="Double-click to reset to 0"
+              className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+            />
+          </div>
+
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <label className="text-[10px] text-sf-text-muted">Contrast</label>
+              <div className="flex items-center gap-1">
+                <KeyframeButton
+                  clipId={selectedClip?.id}
+                  property="contrast"
+                  clip={selectedClip}
+                  playheadPosition={playheadPosition}
+                />
+                <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedAdjustments.contrast)}</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min="-100"
+              max="100"
+              step="1"
+              value={animatedAdjustments.contrast}
+              onChange={(e) => handleClipAdjustmentChange('contrast', Number(e.target.value), false)}
+              onMouseUp={(e) => handleClipAdjustmentCommit('contrast', Number(e.target.value))}
+              onDoubleClick={() => handleClipAdjustmentChange('contrast', DEFAULT_ADJUSTMENT_SETTINGS.contrast, true)}
+              title="Double-click to reset to 0"
+              className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+            />
+          </div>
+
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <label className="text-[10px] text-sf-text-muted">Saturation</label>
+              <div className="flex items-center gap-1">
+                <KeyframeButton
+                  clipId={selectedClip?.id}
+                  property="saturation"
+                  clip={selectedClip}
+                  playheadPosition={playheadPosition}
+                />
+                <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedAdjustments.saturation)}</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min="-100"
+              max="100"
+              step="1"
+              value={animatedAdjustments.saturation}
+              onChange={(e) => handleClipAdjustmentChange('saturation', Number(e.target.value), false)}
+              onMouseUp={(e) => handleClipAdjustmentCommit('saturation', Number(e.target.value))}
+              onDoubleClick={() => handleClipAdjustmentChange('saturation', DEFAULT_ADJUSTMENT_SETTINGS.saturation, true)}
+              title="Double-click to reset to 0"
+              className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+            />
+          </div>
+
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <label className="text-[10px] text-sf-text-muted">Gain</label>
+              <div className="flex items-center gap-1">
+                <KeyframeButton
+                  clipId={selectedClip?.id}
+                  property="gain"
+                  clip={selectedClip}
+                  playheadPosition={playheadPosition}
+                />
+                <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedAdjustments.gain)}</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min="-100"
+              max="100"
+              step="1"
+              value={animatedAdjustments.gain}
+              onChange={(e) => handleClipAdjustmentChange('gain', Number(e.target.value), false)}
+              onMouseUp={(e) => handleClipAdjustmentCommit('gain', Number(e.target.value))}
+              onDoubleClick={() => handleClipAdjustmentChange('gain', DEFAULT_ADJUSTMENT_SETTINGS.gain, true)}
+              title="Double-click to reset to 0"
+              className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+            />
+          </div>
+
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <label className="text-[10px] text-sf-text-muted">Gamma</label>
+              <div className="flex items-center gap-1">
+                <KeyframeButton
+                  clipId={selectedClip?.id}
+                  property="gamma"
+                  clip={selectedClip}
+                  playheadPosition={playheadPosition}
+                />
+                <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedAdjustments.gamma)}</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min="-100"
+              max="100"
+              step="1"
+              value={animatedAdjustments.gamma}
+              onChange={(e) => handleClipAdjustmentChange('gamma', Number(e.target.value), false)}
+              onMouseUp={(e) => handleClipAdjustmentCommit('gamma', Number(e.target.value))}
+              onDoubleClick={() => handleClipAdjustmentChange('gamma', DEFAULT_ADJUSTMENT_SETTINGS.gamma, true)}
+              title="Double-click to reset to 0"
+              className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+            />
+          </div>
+
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <label className="text-[10px] text-sf-text-muted">Offset</label>
+              <div className="flex items-center gap-1">
+                <KeyframeButton
+                  clipId={selectedClip?.id}
+                  property="offset"
+                  clip={selectedClip}
+                  playheadPosition={playheadPosition}
+                />
+                <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedAdjustments.offset)}</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min="-100"
+              max="100"
+              step="1"
+              value={animatedAdjustments.offset}
+              onChange={(e) => handleClipAdjustmentChange('offset', Number(e.target.value), false)}
+              onMouseUp={(e) => handleClipAdjustmentCommit('offset', Number(e.target.value))}
+              onDoubleClick={() => handleClipAdjustmentChange('offset', DEFAULT_ADJUSTMENT_SETTINGS.offset, true)}
+              title="Double-click to reset to 0"
+              className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+            />
+          </div>
+
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <label className="text-[10px] text-sf-text-muted">Hue</label>
+              <div className="flex items-center gap-1">
+                <KeyframeButton
+                  clipId={selectedClip?.id}
+                  property="hue"
+                  clip={selectedClip}
+                  playheadPosition={playheadPosition}
+                />
+                <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedAdjustments.hue)}deg</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min="-180"
+              max="180"
+              step="1"
+              value={animatedAdjustments.hue}
+              onChange={(e) => handleClipAdjustmentChange('hue', Number(e.target.value), false)}
+              onMouseUp={(e) => handleClipAdjustmentCommit('hue', Number(e.target.value))}
+              onDoubleClick={() => handleClipAdjustmentChange('hue', DEFAULT_ADJUSTMENT_SETTINGS.hue, true)}
+              title="Double-click to reset to 0deg"
+              className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+            />
+          </div>
+
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <label className="text-[10px] text-sf-text-muted">Blur</label>
+              <div className="flex items-center gap-1">
+                <KeyframeButton
+                  clipId={selectedClip?.id}
+                  property="blur"
+                  clip={selectedClip}
+                  playheadPosition={playheadPosition}
+                />
+                <span className="text-[10px] text-sf-text-secondary">{animatedAdjustments.blur.toFixed(1)}px</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="50"
+              step="0.25"
+              value={animatedAdjustments.blur}
+              onChange={(e) => handleClipAdjustmentChange('blur', Number(e.target.value), false)}
+              onMouseUp={(e) => handleClipAdjustmentCommit('blur', Number(e.target.value))}
+              onDoubleClick={() => handleClipAdjustmentChange('blur', DEFAULT_ADJUSTMENT_SETTINGS.blur, true)}
+              title="Double-click to reset to 0px"
+              className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+            />
+          </div>
+        </div>
+      )}
+    </>
+  )
 
   // Text property handlers
   const handleTextPropertyChange = useCallback((key, value) => {
@@ -1900,6 +2877,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
             </div>
           </div>
         )}
+
+        {renderStandardClipAdjustmentsSection()}
 
         {/* Timing Section */}
         {renderSectionHeader('timing', 'Timing', Clock)}
@@ -2731,6 +3710,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     if (selectedClipIds.length > 1) return renderMultiSelectInfo()
     
     // Single selection
+    if (isAdjustmentClip) return renderAdjustmentClipInspector()
     if (isTextClip) return renderTextClipInspector()
     if (isVideoClip) return renderVideoClipInspector()
     if (isAudioClip) return renderAudioInspector()

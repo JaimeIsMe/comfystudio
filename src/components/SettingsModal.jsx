@@ -15,6 +15,8 @@ import { fetchComfyUITemplates } from '../services/comfyuiTemplates'
 import { Video, Image as ImageIcon, Music } from 'lucide-react'
 
 const CATEGORY_ICONS = { video: Video, image: ImageIcon, audio: Music }
+const COMFY_ORG_API_KEY_SETTING_KEY = 'comfyApiKeyComfyOrg'
+const COMFY_ORG_API_KEY_LOCAL_KEY = 'comfystudio-comfy-api-key'
 
 function GeneralTab() {
   const [comfyUrl, setComfyUrl] = useState('http://127.0.0.1:8188')
@@ -22,6 +24,7 @@ function GeneralTab() {
   const [workflowPath, setWorkflowPath] = useState('C:\\Users\\...\\ComfyUI\\workflow_API')
   const [theme, setTheme] = useState('dark')
   const [pexelsApiKey, setPexelsApiKeyLocal] = useState('')
+  const [comfyOrgApiKey, setComfyOrgApiKey] = useState('')
   const [settingsSaved, setSettingsSaved] = useState(false)
   const [expandedSections, setExpandedSections] = useState(['connection', 'storage', 'stock'])
 
@@ -56,6 +59,20 @@ function GeneralTab() {
 
   useEffect(() => {
     getPexelsApiKey().then(key => setPexelsApiKeyLocal(key || ''))
+    ;(async () => {
+      try {
+        let next = ''
+        if (window?.electronAPI?.getSetting) {
+          next = String(await window.electronAPI.getSetting(COMFY_ORG_API_KEY_SETTING_KEY) || '')
+        }
+        if (!next && typeof localStorage !== 'undefined') {
+          next = String(localStorage.getItem(COMFY_ORG_API_KEY_LOCAL_KEY) || '')
+        }
+        setComfyOrgApiKey(next)
+      } catch {
+        setComfyOrgApiKey('')
+      }
+    })()
   }, [])
 
   const toggleSection = (section) => {
@@ -68,8 +85,27 @@ function GeneralTab() {
     setPexelsApiKey(pexelsApiKey.trim()).catch(console.error)
   }
 
+  const handleSaveComfyOrgApiKey = async () => {
+    const normalized = String(comfyOrgApiKey || '').trim()
+    try {
+      if (window?.electronAPI?.setSetting) {
+        await window.electronAPI.setSetting(COMFY_ORG_API_KEY_SETTING_KEY, normalized)
+      }
+      if (typeof localStorage !== 'undefined') {
+        if (normalized) {
+          localStorage.setItem(COMFY_ORG_API_KEY_LOCAL_KEY, normalized)
+        } else {
+          localStorage.removeItem(COMFY_ORG_API_KEY_LOCAL_KEY)
+        }
+      }
+    } catch (err) {
+      console.error('Failed to save Comfy account API key:', err)
+    }
+  }
+
   const handleSaveAllSettings = async () => {
     await setPexelsApiKey(pexelsApiKey.trim())
+    await handleSaveComfyOrgApiKey()
     setSettingsSaved(true)
     setTimeout(() => setSettingsSaved(false), 2000)
   }
@@ -190,6 +226,21 @@ function GeneralTab() {
             <button className="px-3 py-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-xs text-sf-text-secondary transition-colors">
               Test
             </button>
+          </div>
+          <div className="pt-2 border-t border-sf-dark-700 mt-2">
+            <label className="block text-xs text-sf-text-muted mb-1">Comfy Account API Key (for partner nodes)</label>
+            <input
+              type="password"
+              autoComplete="off"
+              value={comfyOrgApiKey}
+              onChange={(e) => setComfyOrgApiKey(e.target.value)}
+              onBlur={handleSaveComfyOrgApiKey}
+              placeholder="comfyui-..."
+              className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-3 py-2 text-sm text-sf-text-primary placeholder-sf-text-muted focus:outline-none focus:border-sf-accent"
+            />
+            <p className="text-[10px] text-sf-text-muted mt-1">
+              Used as <code>extra_data.api_key_comfy_org</code> when queueing prompts so paid API nodes can authenticate in headless/custom frontend flows.
+            </p>
           </div>
           <div className="flex items-center justify-between pt-2 border-t border-sf-dark-700 mt-2">
             <div>

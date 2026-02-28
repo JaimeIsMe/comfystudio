@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { TRANSITION_DEFAULT_SETTINGS, FRAME_RATE } from '../constants/transitions'
 import { buildTextAnimationPresetKeyframes, TEXT_ANIMATION_KEYFRAME_PROPERTIES } from '../utils/textAnimationPresets'
+import { normalizeAdjustmentSettings } from '../utils/adjustments'
 
 // Maximum number of undo states to keep
 const MAX_HISTORY_SIZE = 50
@@ -164,6 +165,34 @@ const getNextClipCounter = (clips = [], fallback = 1) => {
   const safeFallback = Number.isFinite(fallbackNum) && fallbackNum > 0 ? fallbackNum : 1
   return Math.max(safeFallback, maxClipId + 1)
 }
+
+const isAdjustmentClipType = (clip) => clip?.type === 'adjustment'
+const supportsClipAdjustments = (clip) => (
+  clip?.type === 'video'
+  || clip?.type === 'image'
+  || clip?.type === 'text'
+  || clip?.type === 'adjustment'
+)
+
+const createDefaultClipTransform = () => ({
+  positionX: 0,
+  positionY: 0,
+  scaleX: 100,
+  scaleY: 100,
+  scaleLinked: true,
+  rotation: 0,
+  anchorX: 50,
+  anchorY: 50,
+  opacity: 100,
+  flipH: false,
+  flipV: false,
+  cropTop: 0,
+  cropBottom: 0,
+  cropLeft: 0,
+  cropRight: 0,
+  blendMode: 'normal',
+  blur: 0,
+})
 
 /**
  * Store for managing timeline state
@@ -732,6 +761,73 @@ export const useTimelineStore = create(
   },
 
   /**
+   * Add an adjustment layer clip to the timeline.
+   * Adjustment layers have no media source and apply filters to clips below.
+   * @param {string} trackId - Target video track ID
+   * @param {number|null} startTime - Start time (null = end of existing clips)
+   * @param {object} options - { duration?: number, name?: string, adjustments?: object, transform?: object }
+   */
+  addAdjustmentClip: (trackId, startTime = null, options = {}) => {
+    const state = get()
+    const track = state.tracks.find(t => t.id === trackId)
+    if (!track || track.type !== 'video') return null
+    const safeClipCounter = getNextClipCounter(state.clips, state.clipCounter || 1)
+
+    get().saveToHistory()
+
+    const fps = state.timelineFps || 24
+    const trackClips = state.clips.filter(c => c.trackId === trackId)
+    const rawStartTime = startTime ?? trackClips.reduce((max, clip) =>
+      Math.max(max, clip.startTime + clip.duration), 0
+    )
+    const calculatedStartTime = roundToFrame(rawStartTime, fps)
+    const duration = roundDurationToFrame(options?.duration ?? 5, fps)
+
+    const newClip = {
+      id: `clip-${safeClipCounter}`,
+      trackId,
+      assetId: null,
+      name: options?.name || 'Adjustment Layer',
+      startTime: calculatedStartTime,
+      duration,
+      sourceDuration: Infinity,
+      trimStart: 0,
+      trimEnd: duration,
+      sourceTimeScale: 1,
+      speed: 1,
+      reverse: false,
+      color: '#6f569a',
+      type: 'adjustment',
+      url: null,
+      thumbnail: null,
+      adjustments: normalizeAdjustmentSettings(options?.adjustments || {}),
+      transform: {
+        ...createDefaultClipTransform(),
+        ...(options?.transform || {}),
+        blendMode: options?.transform?.blendMode ?? 'normal',
+      },
+    }
+
+    const { clips: updatedClips, addedCount } = get().resolveOverlaps(
+      trackId,
+      newClip.id,
+      calculatedStartTime,
+      duration,
+      undefined,
+      safeClipCounter + 1
+    )
+
+    set((state) => ({
+      clips: [...updatedClips, newClip],
+      clipCounter: Math.max(state.clipCounter, safeClipCounter + 1 + addedCount),
+      selectedClipIds: [newClip.id],
+      duration: Math.max(state.duration, calculatedStartTime + newClip.duration + 10)
+    }))
+
+    return newClip
+  },
+
+  /**
    * Update text clip properties
    * @param {string} clipId - The text clip to update
    * @param {object} textUpdates - Partial text properties object
@@ -817,7 +913,7 @@ export const useTimelineStore = create(
     const isVideoTrack = track.type === 'video'
     const isAudioTrack = track.type === 'audio'
     const matchesTrack = (t) =>
-      (isVideoTrack && (t.type === 'video' || t.type === 'image' || t.type === 'text')) ||
+      (isVideoTrack && (t.type === 'video' || t.type === 'image' || t.type === 'text' || t.type === 'adjustment')) ||
       (isAudioTrack && t.type === 'audio')
 
     const toPaste = state.copiedClips.filter(matchesTrack).sort((a, b) => (a.relativeStart ?? 0) - (b.relativeStart ?? 0))
@@ -832,7 +928,40 @@ export const useTimelineStore = create(
 
     for (const template of toPaste) {
       const clipStartTime = roundToFrame(startTime + (template.relativeStart ?? 0), fps)
-      if (template.type === 'text') {
+      if (template.type === 'adjustment') {
+        const rawDuration = template.duration ?? 5
+        const duration = roundDurationToFrame(rawDuration, fps)
+        const newClip = {
+          id: `clip-${clipCounter}`,
+          trackId,
+          assetId: null,
+          name: template.name || 'Adjustment Layer',
+          startTime: clipStartTime,
+          duration,
+          sourceDuration: Infinity,
+          trimStart: 0,
+          trimEnd: duration,
+          sourceTimeScale: 1,
+          speed: 1,
+          reverse: false,
+          color: '#6f569a',
+          type: 'adjustment',
+          url: null,
+          thumbnail: null,
+          adjustments: normalizeAdjustmentSettings(template.adjustments || {}),
+          transform: {
+            ...createDefaultClipTransform(),
+            ...(template.transform || {}),
+            blendMode: template.transform?.blendMode ?? 'normal',
+          },
+          keyframes: template.keyframes ? JSON.parse(JSON.stringify(template.keyframes)) : undefined,
+        }
+        clipCounter += 1
+        const result = get().resolveOverlaps(trackId, newClip.id, clipStartTime, duration, clips, clipCounter)
+        clips = [...result.clips, newClip]
+        clipCounter += result.addedCount
+        newIds.push(newClip.id)
+      } else if (template.type === 'text') {
         const rawDuration = template.duration ?? 5
         const duration = roundDurationToFrame(rawDuration, fps)
         const textOptions = {
@@ -1578,6 +1707,32 @@ export const useTimelineStore = create(
   },
 
   /**
+   * Update adjustment layer properties (brightness/contrast/saturation/gain/gamma/offset/hue/blur)
+   * @param {string} clipId - The adjustment clip to update
+   * @param {object} adjustmentUpdates - Partial adjustment object
+   * @param {boolean} saveHistory - Whether to save to history
+   */
+  updateClipAdjustments: (clipId, adjustmentUpdates, saveHistory = false) => {
+    if (saveHistory) {
+      get().saveToHistory()
+    }
+
+    set((state) => ({
+      clips: state.clips.map((clip) => {
+        if (clip.id !== clipId || !supportsClipAdjustments(clip)) return clip
+        const currentAdjustments = normalizeAdjustmentSettings(clip.adjustments || {})
+        return {
+          ...clip,
+          adjustments: normalizeAdjustmentSettings({
+            ...currentAdjustments,
+            ...(adjustmentUpdates || {}),
+          }),
+        }
+      })
+    }))
+  },
+
+  /**
    * Reset clip transform to defaults
    * @param {string} clipId - The clip to reset
    */
@@ -1864,7 +2019,11 @@ export const useTimelineStore = create(
       }
     } else {
       // Add new keyframe with current transform value
-      const currentValue = clip.transform?.[property] ?? 0
+      const hasAdjustmentValue = clip.type === 'adjustment'
+        && Object.prototype.hasOwnProperty.call(clip.adjustments || {}, property)
+      const currentValue = hasAdjustmentValue
+        ? (clip.adjustments?.[property] ?? 0)
+        : (clip.transform?.[property] ?? clip.adjustments?.[property] ?? 0)
       get().setKeyframe(clipId, property, clipTime, currentValue, 'easeInOut', { saveHistory: true })
       // If scale is linked, also add keyframe for the other scale property
       if (isLinked) {
@@ -2499,7 +2658,7 @@ export const useTimelineStore = create(
         // For video/audio, cap at source duration
         const timeScale = getClipTimeScale(clip)
         const parsedSourceDuration = parseClipSourceDuration(clip.sourceDuration)
-        const maxDuration = parsedSourceDuration === Infinity || (parsedSourceDuration === null && clip.type === 'image')
+        const maxDuration = parsedSourceDuration === Infinity || (parsedSourceDuration === null && (clip.type === 'image' || clip.type === 'adjustment'))
           ? Infinity
           : (Number.isFinite(parsedSourceDuration) ? parsedSourceDuration : getClipTrimEnd(clip))
         const minSourceDuration = 0.5 * timeScale
@@ -2532,7 +2691,7 @@ export const useTimelineStore = create(
     const headHandle = sourceToTimelineTime(clip, clip.trimStart || 0)
     const parsedSourceDuration = parseClipSourceDuration(clip.sourceDuration)
     const sourceDuration = parsedSourceDuration === null
-      ? (clip.type === 'image' ? Infinity : getClipTrimEnd(clip))
+      ? ((clip.type === 'image' || clip.type === 'adjustment') ? Infinity : getClipTrimEnd(clip))
       : parsedSourceDuration
     const trimEnd = getClipTrimEnd(clip)
     const tailHandle = sourceToTimelineTime(clip, sourceDuration - trimEnd)
@@ -2564,6 +2723,7 @@ export const useTimelineStore = create(
     const clipB = state.clips.find(c => c.id === clipBId)
     
     if (!clipA || !clipB) return 0
+    if (isAdjustmentClipType(clipA) || isAdjustmentClipType(clipB)) return 0
     
     // ClipA needs tail handle (to extend past its current end)
     const clipAHandles = get().getClipHandles(clipAId)
@@ -2609,6 +2769,7 @@ export const useTimelineStore = create(
     const state = get()
     const clip = state.clips.find(c => c.id === clipId)
     if (!clip) return 0
+    if (isAdjustmentClipType(clip)) return 0
     return Math.max(0, clip.duration)
   },
 
@@ -2634,6 +2795,7 @@ export const useTimelineStore = create(
     const clipB = state.clips.find(c => c.id === clipBId)
     
     if (!clipA || !clipB) return null
+    if (isAdjustmentClipType(clipA) || isAdjustmentClipType(clipB)) return null
     
     // Check if transition already exists
     const existingTransition = state.transitions.find(
@@ -2732,6 +2894,7 @@ export const useTimelineStore = create(
     const state = get()
     const clip = state.clips.find(c => c.id === clipId)
     if (!clip) return null
+    if (isAdjustmentClipType(clip)) return null
     
     // Only one edge transition per clip+edge
     const existing = state.transitions.find(
@@ -2969,6 +3132,7 @@ export const useTimelineStore = create(
     for (const track of videoTracks) {
       const clip = state.clips.find(c => 
         c.trackId === track.id &&
+        (c.type === 'video' || c.type === 'image') &&
         time >= c.startTime &&
         time < c.startTime + c.duration
       )
@@ -3213,11 +3377,21 @@ export const useTimelineStore = create(
    * Toggle play/pause
    */
   togglePlay: () => {
-    set((state) => ({ 
-      isPlaying: !state.isPlaying,
-      playbackRate: state.isPlaying ? state.playbackRate : 1, // Reset to 1x when starting
-      shuttleMode: false
-    }))
+    set((state) => {
+      const nextIsPlaying = !state.isPlaying
+      const timelineEnd = state.getTimelineEndTime()
+      const atOrPastEnd = timelineEnd > 0 && state.playheadPosition >= (timelineEnd - 0.001)
+
+      return {
+        isPlaying: nextIsPlaying,
+        // Restart from beginning when pressing play at the timeline end in normal mode.
+        playheadPosition: (!state.isPlaying && nextIsPlaying && state.loopMode === 'normal' && atOrPastEnd)
+          ? 0
+          : state.playheadPosition,
+        playbackRate: state.isPlaying ? state.playbackRate : 1, // Reset to 1x when starting
+        shuttleMode: false
+      }
+    })
   },
 
   /**
@@ -3532,7 +3706,7 @@ export const useTimelineStore = create(
       const timeScale = getClipTimeScale(clip)
       let sourceDuration = parseClipSourceDuration(clip.sourceDuration)
       if (sourceDuration === null) {
-        sourceDuration = clip.type === 'image'
+        sourceDuration = (clip.type === 'image' || clip.type === 'adjustment')
           ? Infinity
           : (parseClipSourceDuration(clip.trimEnd) ?? Infinity)
       }
@@ -3540,7 +3714,10 @@ export const useTimelineStore = create(
       let trimEnd = trimStart + timelineToSourceTime(clip, duration)
       if (Number.isFinite(sourceDuration)) trimEnd = Math.min(trimEnd, sourceDuration)
       trimEnd = Math.max(trimStart + (1 / fps) * timeScale, trimEnd)
-      return { ...clip, startTime, duration, trimEnd, sourceDuration }
+      const normalizedAdjustments = supportsClipAdjustments(clip)
+        ? normalizeAdjustmentSettings(clip.adjustments || {})
+        : clip.adjustments
+      return { ...clip, startTime, duration, trimEnd, sourceDuration, adjustments: normalizedAdjustments }
     })
     const restoredClipCounter = Number(timelineData.clipCounter) || 1
     const nextClipCounter = Math.max(restoredClipCounter, getNextClipCounter(frameAlignedClips, 1))

@@ -181,7 +181,7 @@ function GeneratePanel() {
   // Video generation state
   const [prompt, setPrompt] = useState('A cinematic wide shot of a runner on a mountain trail at sunrise, epic lighting, slow motion')
   const [negativePrompt, setNegativePrompt] = useState('blurry, low quality, still frame, frames, watermark, overlay, titles')
-  const [selectedWorkflow, setSelectedWorkflow] = useState('ltx2-t2v')
+  const [selectedWorkflow, setSelectedWorkflow] = useState('wan22-i2v')
   const [seed, setSeed] = useState(Math.floor(Math.random() * 1000000))
   const [duration, setDuration] = useState(5) // seconds
   const [resolution, setResolution] = useState({ width: 1280, height: 720 })
@@ -205,7 +205,7 @@ function GeneratePanel() {
   })
 
   const workflows = [
-    { id: 'ltx2-t2v', name: 'LTX-2 Text to Video', description: 'High quality video generation' },
+    { id: 'wan22-i2v', name: 'WAN 2.2 Image to Video', description: 'High quality image-to-video generation' },
   ]
 
   const resolutions = [

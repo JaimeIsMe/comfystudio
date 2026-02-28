@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Clock3, Diamond, Magnet, Trash2 } from 'lucide-react'
 import useTimelineStore from '../stores/timelineStore'
-import { KEYFRAMEABLE_PROPERTIES, getAnimatedTransform, quantizeTimeToFrame } from '../utils/keyframes'
+import { KEYFRAMEABLE_PROPERTIES, getAnimatedTransform, getAnimatedAdjustmentSettings, quantizeTimeToFrame } from '../utils/keyframes'
 
 const LEFT_COLUMN_WIDTH = 148
 const KEYFRAME_MATCH_TOLERANCE = 0.05
@@ -50,8 +50,9 @@ function DopeSheet() {
 
     return KEYFRAMEABLE_PROPERTIES.filter((property) => {
       const hasBaseValue = Object.prototype.hasOwnProperty.call(selectedClip.transform || {}, property.id)
+      const hasAdjustmentBaseValue = Object.prototype.hasOwnProperty.call(selectedClip.adjustments || {}, property.id)
       const hasKeyframes = (selectedClip.keyframes?.[property.id] || []).length > 0
-      return hasBaseValue || hasKeyframes
+      return hasBaseValue || hasAdjustmentBaseValue || hasKeyframes
     })
   }, [selectedClip])
 
@@ -113,7 +114,16 @@ function DopeSheet() {
 
     const targetTime = normalizeEditableTime(clipLocalPlayheadTime)
     const animatedTransform = getAnimatedTransform(selectedClip, targetTime) || selectedClip.transform || {}
-    const rawValue = animatedTransform[propertyId] ?? selectedClip.transform?.[propertyId] ?? 0
+    const animatedAdjustments = selectedClip.type === 'adjustment'
+      ? (getAnimatedAdjustmentSettings(selectedClip, targetTime) || selectedClip.adjustments || {})
+      : {}
+    const hasAdjustmentValue = Object.prototype.hasOwnProperty.call(animatedAdjustments, propertyId)
+    const rawValue = hasAdjustmentValue
+      ? animatedAdjustments[propertyId]
+      : (animatedTransform[propertyId]
+        ?? selectedClip.transform?.[propertyId]
+        ?? selectedClip.adjustments?.[propertyId]
+        ?? 0)
     const value = Number.isFinite(Number(rawValue)) ? Number(rawValue) : 0
 
     setKeyframe(selectedClip.id, propertyId, targetTime, value, 'easeInOut', { saveHistory: true })
