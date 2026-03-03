@@ -98,6 +98,7 @@ npm run starter-pack:build
 - [ ] Generate blocks queueing when required dependencies are missing.
 - [ ] Director Mode beta queueing also blocks on missing dependencies and shows details.
 - [ ] "Open in ComfyUI" behavior is clear to user (tab switch + workflow guidance).
+- [ ] Generate docs/help buttons open the correct page for current mode/workflow.
 
 ### Effects and Media
 
@@ -144,11 +145,28 @@ npm run electron:build:linux
 - [ ] Update root `README.md` if behavior/workflow requirements changed.
 - [ ] Ensure hardware tier guidance still matches actual workflows.
 - [ ] Ensure starter pack docs are current (`docs/workflow-starter-pack/README.md`).
+- [ ] Publish/update a single user manual entry point (quick start + deep dive).
 - [ ] Write release notes with:
   - major features/fixes
   - known limitations
   - setup requirements
   - starter pack link
+
+### In-App Contextual Docs (Do Not Skip)
+
+- [ ] Add `Docs` / `Help` button(s) inside Generate so users can open guidance in context.
+- [ ] Add Director Mode beta-specific docs covering: script input, style notes, shot settings, references, and queue flow.
+- [ ] Include "what goes where" guidance with screenshots/examples for ad creation and music video creation.
+- [ ] Link directly from Generate docs to dependency troubleshooting and starter pack instructions.
+- [ ] Ensure docs links work in packaged builds (external URL or bundled local docs fallback).
+
+### First-Run Onboarding Tutorial (Planned Requirement)
+
+- [ ] Implement first-launch guided tour (skippable) for new users.
+- [ ] Tutorial must cover: create/open project, select project/output folder path, set ComfyUI port, test connection, and basic Generate flow.
+- [ ] Include clear "where files go" guidance (models/nodes/workflows/output folders).
+- [ ] Add `Replay tutorial` in Settings/Help so users can run onboarding again later.
+- [ ] Verify onboarding works on a clean user profile and does not block normal usage.
 
 ---
 
