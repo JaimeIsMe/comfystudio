@@ -18,6 +18,7 @@ import { checkWorkflowDependencies, buildMissingDependencyClipboardText } from '
 import {
   ACTIVE_JOB_STATUSES,
   CATEGORY_ORDER,
+  DIRECTOR_MODE_BETA_LABEL,
   GENERATED_ASSET_FOLDERS,
   HARDWARE_TIERS,
   NON_TERMINAL_JOB_STATUSES,
@@ -623,7 +624,7 @@ function GenerateWorkspace() {
   const [bpm, setBpm] = useState(persistedState?.bpm || 120)
   const [keyscale, setKeyscale] = useState(persistedState?.keyscale || 'C major')
 
-  // YOLO mode state
+  // Director mode state
   const [yoloCreationType, setYoloCreationType] = useState(persistedState?.yoloCreationType || 'ad')
   const [yoloScript, setYoloScript] = useState(persistedState?.yoloScript || '')
   const [yoloStyleNotes, setYoloStyleNotes] = useState(persistedState?.yoloStyleNotes || '')
@@ -638,7 +639,7 @@ function GenerateWorkspace() {
   const [yoloVideoWorkflowTarget, setYoloVideoWorkflowTarget] = useState(persistedState?.yoloVideoWorkflowTarget || 'profile')
   const [yoloPlan, setYoloPlan] = useState(() => normalizePersistedYoloPlan(persistedState?.yoloPlan || []))
 
-  // YOLO music video mode state
+  // Director mode music video state
   const [yoloMusicTitle, setYoloMusicTitle] = useState(persistedState?.yoloMusicTitle || '')
   const [yoloMusicLyrics, setYoloMusicLyrics] = useState(persistedState?.yoloMusicLyrics || '')
   const [yoloMusicStoryIdea, setYoloMusicStoryIdea] = useState(persistedState?.yoloMusicStoryIdea || '')
@@ -1883,7 +1884,7 @@ function GenerateWorkspace() {
     const {
       allowExistingDoneKeys = false,
       skipConfirm = false,
-      sourceLabel = `YOLO ${yoloModeLabel.toLowerCase()} storyboard pass`,
+      sourceLabel = `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} storyboard pass`,
     } = options
 
     if (!Array.isArray(variants) || variants.length === 0) {
@@ -1943,7 +1944,7 @@ function GenerateWorkspace() {
       return createQueuedJob({
         category: 'image',
         workflowId: yoloProfile.storyboardWorkflowId,
-        workflowLabel: `YOLO ${yoloModeLabel} Storyboard (${yoloProfile.storyboardWorkflowId})`,
+        workflowLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel} Storyboard (${yoloProfile.storyboardWorkflowId})`,
         needsImage: false,
         prompt: variant.storyboardPrompt || variant.prompt,
         seed: storyboardSeed,
@@ -2001,7 +2002,7 @@ function GenerateWorkspace() {
     }
     const depsOk = await validateDependenciesForQueue(
       [yoloProfile.storyboardWorkflowId],
-      `YOLO ${yoloModeLabel.toLowerCase()} storyboard pass`
+      `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} storyboard pass`
     )
     if (!depsOk) return
 
@@ -2012,7 +2013,7 @@ function GenerateWorkspace() {
     queueYoloStoryboardVariants(variants, {
       allowExistingDoneKeys: false,
       skipConfirm: false,
-      sourceLabel: `YOLO ${yoloModeLabel.toLowerCase()} storyboard pass`,
+      sourceLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} storyboard pass`,
     })
   }, [
     buildActiveYoloPlan,
@@ -2064,7 +2065,7 @@ function GenerateWorkspace() {
       skipConfirm = false,
       workflowId = yoloProfile.videoWorkflowId,
       suppressEmptyError = false,
-      sourceLabel = `YOLO ${yoloModeLabel.toLowerCase()} video pass`,
+      sourceLabel = `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} video pass`,
     } = options
 
     if (!Array.isArray(variants) || variants.length === 0) {
@@ -2108,7 +2109,7 @@ function GenerateWorkspace() {
       jobs.push(createQueuedJob({
         category: 'video',
         workflowId,
-        workflowLabel: `YOLO ${yoloModeLabel} Video (${getWorkflowDisplayLabel(workflowId)})`,
+        workflowLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel} Video (${getWorkflowDisplayLabel(workflowId)})`,
         needsImage: true,
         inputAssetId: storyboardAsset.id,
         inputAssetName: storyboardAsset.name || variant.key,
@@ -2186,7 +2187,7 @@ function GenerateWorkspace() {
     const targets = yoloSelectedVideoWorkflowIds
     const depsOk = await validateDependenciesForQueue(
       targets,
-      `YOLO ${yoloModeLabel.toLowerCase()} video pass`
+      `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} video pass`
     )
     if (!depsOk) return
 
@@ -2205,7 +2206,7 @@ function GenerateWorkspace() {
         allowExistingDoneKeys: false,
         skipConfirm: targets.length > 1,
         suppressEmptyError: targets.length > 1,
-        sourceLabel: `YOLO ${yoloModeLabel.toLowerCase()} video pass (${getWorkflowDisplayLabel(targetWorkflowId)})`,
+        sourceLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} video pass (${getWorkflowDisplayLabel(targetWorkflowId)})`,
       })
     }
     if (totalQueued === 0) {
@@ -2973,7 +2974,7 @@ function GenerateWorkspace() {
               onClick={() => setGenerationMode('yolo')}
               className={`px-3 py-1 rounded text-xs transition-colors ${generationMode === 'yolo' ? 'bg-sf-accent text-white' : 'text-sf-text-muted hover:text-sf-text-primary'}`}
             >
-              YOLO Beta
+              {DIRECTOR_MODE_BETA_LABEL}
             </button>
           </div>
 
@@ -3701,7 +3702,7 @@ function GenerateWorkspace() {
 
                 <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/50 p-2.5">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">YOLO Dependencies</div>
+                    <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">{DIRECTOR_MODE_BETA_LABEL} dependencies</div>
                     <button
                       type="button"
                       onClick={() => { void runYoloDependencySnapshotCheck() }}
@@ -3842,7 +3843,7 @@ function GenerateWorkspace() {
                 </div>
 
                 {yoloDependencyCheckInProgress && (
-                  <div className="text-[10px] text-yellow-400">Checking YOLO workflow dependencies...</div>
+                  <div className="text-[10px] text-yellow-400">Checking {DIRECTOR_MODE_BETA_LABEL} workflow dependencies...</div>
                 )}
 
                 <div className="p-3 rounded-lg bg-sf-dark-800/70 border border-sf-dark-700 text-xs text-sf-text-secondary">
@@ -4371,7 +4372,7 @@ function GenerateWorkspace() {
                 </>
               ) : (
                 <>
-                  <div><span className="text-sf-text-muted">Mode:</span> YOLO Beta</div>
+                  <div><span className="text-sf-text-muted">Mode:</span> {DIRECTOR_MODE_BETA_LABEL}</div>
                   <div><span className="text-sf-text-muted">Creation:</span> {yoloModeLabel}</div>
                   <div><span className="text-sf-text-muted">Profile:</span> {yoloActiveQualityProfile}</div>
                   <div><span className="text-sf-text-muted">Storyboard workflow:</span> {yoloProfile.storyboardWorkflowId}</div>

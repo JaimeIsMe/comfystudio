@@ -30,6 +30,8 @@ export const WORKFLOWS = {
   ],
 }
 
+export const DIRECTOR_MODE_BETA_LABEL = 'Director Mode beta'
+
 export const YOLO_PROFILES = {
   draft: {
     storyboardWorkflowId: 'z-image-turbo',

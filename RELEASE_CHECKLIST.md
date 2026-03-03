@@ -53,7 +53,7 @@ Keep these unless intentionally changing product direction:
 - [ ] ComfyUI remains local-only (loopback/localhost), no LAN/remote mode by default.
 - [ ] ComfyUI default port remains `8188`, with settings override and reset button.
 - [ ] LLM tab remains local-only (LM Studio) for now.
-- [ ] Generate tab dependency preflight remains enabled (single workflow + YOLO queue gating).
+- [ ] Generate tab dependency preflight remains enabled (single workflow + Director Mode beta queue gating).
 - [ ] Hardware tiers remain visible in Generate (`Lite`, `Standard`, `Pro`, `Cloud`).
 - [ ] Starter Pack remains the official setup bridge for advanced ComfyUI users.
 
@@ -96,7 +96,7 @@ npm run starter-pack:build
 
 - [ ] ComfyUI connection test works from settings (local port).
 - [ ] Generate blocks queueing when required dependencies are missing.
-- [ ] YOLO queueing also blocks on missing dependencies and shows details.
+- [ ] Director Mode beta queueing also blocks on missing dependencies and shows details.
 - [ ] "Open in ComfyUI" behavior is clear to user (tab switch + workflow guidance).
 
 ### Effects and Media
@@ -195,7 +195,7 @@ Release target version/date:
 Non-negotiable product decisions:
 - ComfyUI local-only (no LAN/remote by default)
 - LLM tab local-only for now
-- Dependency preflight gating enabled (single + YOLO)
+- Dependency preflight gating enabled (single + Director Mode beta)
 - Hardware tiers shown in Generate
 - Starter pack is required release artifact
 
