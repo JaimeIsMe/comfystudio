@@ -368,6 +368,7 @@ export const importAsset = async (projectDir, file, category = 'video') => {
     let width = null
     let height = null
     let fps = null
+    let hasAudio = null
     
     if (category === 'video' || category === 'audio') {
       try {
@@ -377,6 +378,9 @@ export const importAsset = async (projectDir, file, category = 'video') => {
         duration = mediaInfo.duration
         width = mediaInfo.width
         height = mediaInfo.height
+        if (typeof mediaInfo.hasAudio === 'boolean') {
+          hasAudio = mediaInfo.hasAudio
+        }
         console.log(`Media info for ${finalFileName}:`, { duration, width, height })
       } catch (err) {
         console.warn('Could not get media info:', err)
@@ -389,6 +393,9 @@ export const importAsset = async (projectDir, file, category = 'video') => {
             duration = mediaInfo.duration
             width = mediaInfo.width
             height = mediaInfo.height
+            if (typeof mediaInfo.hasAudio === 'boolean') {
+              hasAudio = mediaInfo.hasAudio
+            }
             URL.revokeObjectURL(blobUrl)
             console.log(`Fallback media info for ${finalFileName}:`, { duration, width, height })
           } catch (fallbackErr) {
@@ -404,12 +411,15 @@ export const importAsset = async (projectDir, file, category = 'video') => {
         if (fpsResult?.success && fpsResult.fps) {
           fps = fpsResult.fps
         }
+        if (typeof fpsResult?.hasAudio === 'boolean') {
+          hasAudio = fpsResult.hasAudio
+        }
       } catch (err) {
         console.warn('Could not get video FPS:', err)
       }
     }
-    
-    return {
+
+    const importedAsset = {
       id: `asset_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       name: finalFileName,
       type: category === 'images' ? 'image' : category,
@@ -424,6 +434,13 @@ export const importAsset = async (projectDir, file, category = 'video') => {
       fps,
       isImported: true,
     }
+    if (category === 'video') {
+      const resolvedHasAudio = hasAudio !== false
+      importedAsset.hasAudio = resolvedHasAudio
+      importedAsset.audioEnabled = resolvedHasAudio
+    }
+    
+    return importedAsset
   }
 
   // Web fallback - original implementation (non-Electron)
@@ -457,6 +474,7 @@ export const importAsset = async (projectDir, file, category = 'video') => {
   let duration = null
   let width = null
   let height = null
+  let hasAudio = null
   
   if (category === 'video' || category === 'audio') {
     try {
@@ -464,12 +482,15 @@ export const importAsset = async (projectDir, file, category = 'video') => {
       duration = mediaInfo.duration
       width = mediaInfo.width
       height = mediaInfo.height
+      if (typeof mediaInfo.hasAudio === 'boolean') {
+        hasAudio = mediaInfo.hasAudio
+      }
     } catch (err) {
       console.warn('Could not get media info:', err)
     }
   }
-  
-  return {
+
+  const importedAsset = {
     id: `asset_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     name: fileName,
     type: category === 'images' ? 'image' : category,
@@ -482,6 +503,13 @@ export const importAsset = async (projectDir, file, category = 'video') => {
     height,
     isImported: true,
   }
+  if (category === 'video') {
+    const resolvedHasAudio = hasAudio !== false
+    importedAsset.hasAudio = resolvedHasAudio
+    importedAsset.audioEnabled = resolvedHasAudio
+  }
+  
+  return importedAsset
 }
 
 /**
@@ -536,6 +564,7 @@ export const writeGeneratedOverlayToProject = async (projectDir, blob, suggested
   if (assetType === 'video' && (settings.duration != null || settings.fps != null)) {
     out.duration = settings.duration ?? null
     out.settings.fps = settings.fps
+    out.hasAudio = false
     out.audioEnabled = false
   }
   if (settings.width != null) out.settings.width = settings.width
@@ -566,10 +595,21 @@ function getMimeType(filename) {
 // Media Info Extraction
 // ============================================
 
+const detectMediaElementAudioPresence = (videoElement) => {
+  if (typeof videoElement?.mozHasAudio === 'boolean') {
+    return videoElement.mozHasAudio
+  }
+  const tracks = videoElement?.audioTracks
+  if (tracks && typeof tracks.length === 'number') {
+    return tracks.length > 0
+  }
+  return null
+}
+
 /**
  * Get media file info from a File object (Web only)
  * @param {File} file - The media file
- * @returns {Promise<object>} - Object with duration, width, height
+ * @returns {Promise<object>} - Object with duration, width, height, hasAudio
  */
 const getMediaInfo = (file) => {
   return new Promise((resolve, reject) => {
@@ -585,6 +625,7 @@ const getMediaInfo = (file) => {
           duration: video.duration,
           width: video.videoWidth,
           height: video.videoHeight,
+          hasAudio: detectMediaElementAudioPresence(video),
         })
       }
       
@@ -604,6 +645,7 @@ const getMediaInfo = (file) => {
           duration: audio.duration,
           width: null,
           height: null,
+          hasAudio: true,
         })
       }
       
@@ -615,7 +657,7 @@ const getMediaInfo = (file) => {
       audio.src = url
     } else {
       URL.revokeObjectURL(url)
-      resolve({ duration: null, width: null, height: null })
+      resolve({ duration: null, width: null, height: null, hasAudio: null })
     }
   })
 }
@@ -624,14 +666,14 @@ const getMediaInfo = (file) => {
  * Get media info from a URL (for Electron file:// URLs)
  * @param {string} url - The file URL
  * @param {string} type - 'video' or 'audio'
- * @returns {Promise<object>}
+ * @returns {Promise<object>} - { duration, width, height, hasAudio }
  */
 const getMediaInfoFromUrl = (url, type) => {
   return new Promise((resolve, reject) => {
     // Timeout after 10 seconds
     const timeout = setTimeout(() => {
       console.warn('Media info extraction timed out for:', url)
-      resolve({ duration: null, width: null, height: null })
+      resolve({ duration: null, width: null, height: null, hasAudio: null })
     }, 10000)
     
     if (type === 'video') {
@@ -647,6 +689,7 @@ const getMediaInfoFromUrl = (url, type) => {
           duration: video.duration,
           width: video.videoWidth,
           height: video.videoHeight,
+          hasAudio: detectMediaElementAudioPresence(video),
         })
       }
       
@@ -669,6 +712,7 @@ const getMediaInfoFromUrl = (url, type) => {
           duration: audio.duration,
           width: null,
           height: null,
+          hasAudio: true,
         })
       }
       
@@ -682,7 +726,7 @@ const getMediaInfoFromUrl = (url, type) => {
       audio.load()
     } else {
       clearTimeout(timeout)
-      resolve({ duration: null, width: null, height: null })
+      resolve({ duration: null, width: null, height: null, hasAudio: null })
     }
   })
 }

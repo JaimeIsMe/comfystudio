@@ -37,7 +37,6 @@ export const BUILTIN_WORKFLOW_PATHS = {
 // Optional workflows - user can download to enable (not in Generate until installed)
 export const AVAILABLE_WORKFLOWS = [
   { id: 'mask-gen', label: 'Mask Generation', category: 'image', needsImage: true, description: 'Generate masks from images/videos using text prompts (SAM3)', file: 'mask_generation_text_prompt.json' },
-  { id: 'inflation', label: 'Inflation', category: 'image', needsImage: true, description: 'Inflate/expand images with AI', file: 'inflation.json' },
 ]
 
 // All workflows for display (built-in + available)

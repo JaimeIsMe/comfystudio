@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect } from 'react'
 import TitleBar from './components/TitleBar'
 import ExportPanel from './components/ExportPanel'
 import GenerateWorkspace from './components/GenerateWorkspace'
-import RemotionWorkspace from './components/RemotionWorkspace'
 import LLMAssistantWorkspace from './components/LLMAssistantWorkspace'
 import StockPanel from './components/StockPanel'
 import LeftPanel from './components/LeftPanel'
@@ -17,6 +16,11 @@ import SettingsModal from './components/SettingsModal'
 import WelcomeScreen from './components/WelcomeScreen'
 import BottomBar from './components/BottomBar'
 import useProjectStore from './stores/projectStore'
+import {
+  COMFY_CONNECTION_CHANGED_EVENT,
+  getLocalComfyHttpBaseSync,
+  hydrateLocalComfyConnection,
+} from './services/localComfyConnection'
 
 function App() {
   const [audioModalOpen, setAudioModalOpen] = useState(false)
@@ -58,11 +62,31 @@ function App() {
       return true
     }
   })
+  const [comfyIframeUrl, setComfyIframeUrl] = useState(() => getLocalComfyHttpBaseSync())
 
   useEffect(() => {
     const handler = (e) => setShowComfyUiTab(e.detail === true)
     window.addEventListener('comfystudio-show-comfyui-tab-changed', handler)
     return () => window.removeEventListener('comfystudio-show-comfyui-tab-changed', handler)
+  }, [])
+  useEffect(() => {
+    let cancelled = false
+    hydrateLocalComfyConnection().then((config) => {
+      if (!cancelled && config?.httpBase) {
+        setComfyIframeUrl(config.httpBase)
+      }
+    }).catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  useEffect(() => {
+    const handler = (event) => {
+      const next = event?.detail?.httpBase || getLocalComfyHttpBaseSync()
+      setComfyIframeUrl(next)
+    }
+    window.addEventListener(COMFY_CONNECTION_CHANGED_EVENT, handler)
+    return () => window.removeEventListener(COMFY_CONNECTION_CHANGED_EVENT, handler)
   }, [])
   useEffect(() => {
     if (!showComfyUiTab && mainTab === 'comfyui') setMainTab('editor')
@@ -75,15 +99,16 @@ function App() {
     return () => window.removeEventListener('comfystudio-open-generate-with-frame', handler)
   }, [])
 
-  // When user sends a Remotion render to Editor
+  // Allow Generate tab to open ComfyUI directly (used for workflow import guidance).
   useEffect(() => {
     const handler = () => {
-      setMainTab('editor')
-      setLeftPanelTab('assets')
+      if (showComfyUiTab) {
+        setMainTab('comfyui')
+      }
     }
-    window.addEventListener('comfystudio-open-editor-from-remotion', handler)
-    return () => window.removeEventListener('comfystudio-open-editor-from-remotion', handler)
-  }, [])
+    window.addEventListener('comfystudio-open-comfyui-tab', handler)
+    return () => window.removeEventListener('comfystudio-open-comfyui-tab', handler)
+  }, [showComfyUiTab])
 
   // Load persisted layout on mount (single read)
   const [layoutLoaded, setLayoutLoaded] = useState(false)
@@ -118,7 +143,7 @@ function App() {
     } catch (_) { /* ignore */ }
   }, [])
 
-  const isFullScreenTab = mainTab === 'export' || mainTab === 'generate' || mainTab === 'remotion' || mainTab === 'llm-assistant' || mainTab === 'stock' || (showComfyUiTab && mainTab === 'comfyui')
+  const isFullScreenTab = mainTab === 'export' || mainTab === 'generate' || mainTab === 'llm-assistant' || mainTab === 'stock' || (showComfyUiTab && mainTab === 'comfyui')
   // Editor layout insets (used for content when on Editor, and always for tab bar so it doesn't shift)
   const editorLeftInset = leftPanelExpanded ? ICON_BAR_WIDTH + leftPanelWidth : ICON_BAR_WIDTH
   const editorRightInset = inspectorExpanded ? ICON_BAR_WIDTH + inspectorWidth : ICON_BAR_WIDTH
@@ -225,7 +250,7 @@ function App() {
             style={{ display: mainTab === 'comfyui' ? 'flex' : 'none' }}
           >
             <iframe
-              src="http://127.0.0.1:8188"
+              src={comfyIframeUrl}
               title="ComfyUI"
               className="flex-1 w-full min-h-0 border-0"
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
@@ -238,8 +263,6 @@ function App() {
           <StockPanel />
         ) : mainTab === 'generate' ? (
           <GenerateWorkspace />
-        ) : mainTab === 'remotion' ? (
-          <RemotionWorkspace />
         ) : mainTab === 'llm-assistant' ? (
           <LLMAssistantWorkspace />
         ) : mainTab === 'comfyui' ? null : (

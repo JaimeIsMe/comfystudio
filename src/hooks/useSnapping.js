@@ -16,13 +16,11 @@ export const SNAP_TYPES = {
  * Provides snap point calculation and snapping logic for clips and playhead
  */
 export function useSnapping() {
-  const { 
-    clips, 
-    playheadPosition, 
-    snappingEnabled,
-    snappingThreshold,
-    zoom 
-  } = useTimelineStore()
+  const clips = useTimelineStore((state) => state.clips)
+  const playheadPosition = useTimelineStore((state) => state.playheadPosition)
+  const snappingEnabled = useTimelineStore((state) => state.snappingEnabled)
+  const snappingThreshold = useTimelineStore((state) => state.snappingThreshold)
+  const zoom = useTimelineStore((state) => state.zoom)
   
   // Pixels per second based on zoom
   const pixelsPerSecond = zoom / 5
@@ -30,61 +28,63 @@ export function useSnapping() {
   // Convert threshold from pixels to time
   const thresholdInSeconds = snappingThreshold / pixelsPerSecond
 
+  const clipEdgeSnapPoints = useMemo(() => {
+    const points = []
+    clips.forEach((clip) => {
+      points.push({
+        time: clip.startTime,
+        type: SNAP_TYPES.CLIP_START,
+        clipId: clip.id,
+        priority: 2,
+      })
+      points.push({
+        time: clip.startTime + clip.duration,
+        type: SNAP_TYPES.CLIP_END,
+        clipId: clip.id,
+        priority: 2,
+      })
+    })
+    return points
+  }, [clips])
+
+  const gridSnapPoints = useMemo(() => {
+    const points = []
+    const gridInterval = zoom > 200 ? 0.5 : zoom > 100 ? 1 : 2
+    let maxTime = 60
+    clips.forEach((clip) => {
+      const clipEnd = clip.startTime + clip.duration + 10
+      if (clipEnd > maxTime) maxTime = clipEnd
+    })
+    for (let t = 0; t <= maxTime; t += gridInterval) {
+      points.push({
+        time: t,
+        type: SNAP_TYPES.GRID,
+        priority: 3,
+      })
+    }
+    return points
+  }, [clips, zoom])
+
+  const allSnapPoints = useMemo(() => {
+    return [
+      {
+        time: playheadPosition,
+        type: SNAP_TYPES.PLAYHEAD,
+        priority: 1,
+      },
+      ...clipEdgeSnapPoints,
+      ...gridSnapPoints,
+    ]
+  }, [playheadPosition, clipEdgeSnapPoints, gridSnapPoints])
+
   /**
    * Get all snap points on the timeline
    * Returns array of { time, type, clipId? }
    */
   const getSnapPoints = useCallback((excludeClipId = null) => {
-    const snapPoints = []
-    
-    // Add playhead as snap point
-    snapPoints.push({
-      time: playheadPosition,
-      type: SNAP_TYPES.PLAYHEAD,
-      priority: 1 // Higher priority for playhead
-    })
-    
-    // Add clip edges as snap points
-    clips.forEach(clip => {
-      // Skip the clip being dragged
-      if (clip.id === excludeClipId) return
-      
-      // Clip start
-      snapPoints.push({
-        time: clip.startTime,
-        type: SNAP_TYPES.CLIP_START,
-        clipId: clip.id,
-        priority: 2
-      })
-      
-      // Clip end
-      snapPoints.push({
-        time: clip.startTime + clip.duration,
-        type: SNAP_TYPES.CLIP_END,
-        clipId: clip.id,
-        priority: 2
-      })
-    })
-    
-    // Add grid snap points (every second or based on zoom level)
-    // More granular at higher zoom levels
-    const gridInterval = zoom > 200 ? 0.5 : zoom > 100 ? 1 : 2
-    const maxTime = Math.max(60, ...clips.map(c => c.startTime + c.duration + 10))
-    
-    for (let t = 0; t <= maxTime; t += gridInterval) {
-      // Only add if not too close to an existing snap point
-      const nearExisting = snapPoints.some(sp => Math.abs(sp.time - t) < 0.1)
-      if (!nearExisting) {
-        snapPoints.push({
-          time: t,
-          type: SNAP_TYPES.GRID,
-          priority: 3 // Lowest priority
-        })
-      }
-    }
-    
-    return snapPoints
-  }, [clips, playheadPosition, zoom])
+    if (!excludeClipId) return allSnapPoints
+    return allSnapPoints.filter((point) => point.clipId !== excludeClipId)
+  }, [allSnapPoints])
 
   /**
    * Find the nearest snap point to a given time
@@ -96,12 +96,11 @@ export function useSnapping() {
     }
     
     const threshold = customThreshold ?? thresholdInSeconds
-    const snapPoints = getSnapPoints(excludeClipId)
-    
     let nearestSnap = null
     let minDistance = Infinity
     
-    for (const snapPoint of snapPoints) {
+    for (const snapPoint of allSnapPoints) {
+      if (excludeClipId && snapPoint.clipId === excludeClipId) continue
       const distance = Math.abs(snapPoint.time - time)
       
       if (distance < threshold && distance < minDistance) {
@@ -128,7 +127,7 @@ export function useSnapping() {
     }
     
     return { snapped: false, time }
-  }, [snappingEnabled, thresholdInSeconds, getSnapPoints])
+  }, [snappingEnabled, thresholdInSeconds, allSnapPoints])
 
   /**
    * Snap a clip's position (checks both start and end edges)

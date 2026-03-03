@@ -1,18 +1,14 @@
 /**
  * ComfyUI API Service
  * Handles communication with the ComfyUI backend
- * 
- * In development, requests are proxied through Vite to avoid CORS issues.
- * In production (Electron), requests go directly to ComfyUI.
  */
+import {
+  checkLocalComfyConnection,
+  getLocalComfyHttpBaseSync,
+  getLocalComfyWsBaseSync,
+  hydrateLocalComfyConnection,
+} from './localComfyConnection'
 
-// Use relative URLs in dev (proxied by Vite), direct URLs in production
-const isDev = import.meta.env.DEV;
-const COMFYUI_HTTP = isDev ? '' : 'http://127.0.0.1:8188';
-// In dev, use Vite's /ws proxy so Host/Origin/cookies stay aligned.
-const COMFYUI_WS = isDev
-  ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
-  : 'ws://127.0.0.1:8188';
 const COMFY_ORG_API_KEY_SETTING_KEY = 'comfyApiKeyComfyOrg';
 const COMFY_ORG_API_KEY_LOCAL_KEY = 'comfystudio-comfy-api-key';
 
@@ -24,10 +20,19 @@ class ComfyUIService {
     this.wsFailCount = 0;
     this.lastWsAttempt = 0;
     this.wsBackoffMs = 5000; // Minimum time between reconnection attempts
+    void hydrateLocalComfyConnection()
   }
 
   generateClientId() {
     return 'comfystudio-' + Math.random().toString(36).substring(2, 15);
+  }
+
+  getHttpBase() {
+    return getLocalComfyHttpBaseSync()
+  }
+
+  getWsBase() {
+    return getLocalComfyWsBaseSync()
   }
 
   /**
@@ -59,7 +64,7 @@ class ComfyUIService {
       }
 
       // Always connect directly to ComfyUI (Vite proxy doesn't handle WS well)
-      const wsUrl = `${COMFYUI_WS}/ws?clientId=${this.clientId}`;
+      const wsUrl = `${this.getWsBase()}/ws?clientId=${this.clientId}`;
       
       // Only log first attempt
       if (this.wsFailCount === 0) {
@@ -181,13 +186,26 @@ class ComfyUIService {
    * Check if ComfyUI is running
    */
   async checkConnection() {
-    try {
-      const response = await fetch(`${COMFYUI_HTTP}/system_stats`);
-      return response.ok;
-    } catch (error) {
-      console.log('ComfyUI connection check failed:', error.message);
-      return false;
+    const result = await checkLocalComfyConnection()
+    if (!result.ok) {
+      console.log('ComfyUI connection check failed:', result.error)
     }
+    return result.ok
+  }
+
+  /**
+   * Get ComfyUI object metadata (available node classes and input schemas).
+   * Optionally scopes to a single class when classType is provided.
+   */
+  async getObjectInfo(classType = null) {
+    const suffix = classType
+      ? `/object_info/${encodeURIComponent(String(classType).trim())}`
+      : '/object_info'
+    const response = await fetch(`${this.getHttpBase()}${suffix}`)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch ComfyUI object info (${response.status})`)
+    }
+    return response.json()
   }
 
   /**
@@ -205,7 +223,7 @@ class ComfyUIService {
           api_key_comfy_org: apiKey
         };
       }
-      const response = await fetch(`${COMFYUI_HTTP}/prompt`, {
+      const response = await fetch(`${this.getHttpBase()}/prompt`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -256,8 +274,8 @@ class ComfyUIService {
   async getHistory(promptId) {
     try {
       const url = promptId
-        ? `${COMFYUI_HTTP}/history/${promptId}`
-        : `${COMFYUI_HTTP}/history`;
+        ? `${this.getHttpBase()}/history/${promptId}`
+        : `${this.getHttpBase()}/history`;
       const response = await fetch(url);
       return await response.json();
     } catch (error) {
@@ -275,7 +293,7 @@ class ComfyUIService {
       subfolder,
       type
     });
-    return `${COMFYUI_HTTP}/view?${params}`;
+    return `${this.getHttpBase()}/view?${params}`;
   }
 
   /**
@@ -310,7 +328,7 @@ class ComfyUIService {
    */
   async interrupt() {
     try {
-      await fetch(`${COMFYUI_HTTP}/interrupt`, { method: 'POST' });
+      await fetch(`${this.getHttpBase()}/interrupt`, { method: 'POST' });
     } catch (error) {
       console.error('Error interrupting:', error);
     }
@@ -321,7 +339,7 @@ class ComfyUIService {
    */
   async getQueueStatus() {
     try {
-      const response = await fetch(`${COMFYUI_HTTP}/queue`);
+      const response = await fetch(`${this.getHttpBase()}/queue`);
       return await response.json();
     } catch (error) {
       console.error('Error getting queue:', error);
@@ -353,7 +371,7 @@ class ComfyUIService {
       formData.append('type', type);
       formData.append('overwrite', 'true');
 
-      const response = await fetch(`${COMFYUI_HTTP}/upload/image`, {
+      const response = await fetch(`${this.getHttpBase()}/upload/image`, {
         method: 'POST',
         body: formData,
       });
@@ -683,42 +701,6 @@ export function modifyMultipleAnglesWorkflow(workflow, options = {}) {
     if (modified[nodeId]) {
       modified[nodeId].inputs.filename_prefix = `ComfyStudio-${suffix}`
     }
-  }
-
-  return modified
-}
-
-/**
- * Workflow modifier for Inflation / Image Edit (Qwen 2511) – legacy, kept for reference
- */
-export function modifyInflationWorkflow(workflow, options = {}) {
-  const {
-    prompt = 'inflate the subject',
-    inputImage = '',      // Filename uploaded to ComfyUI
-    seed = Math.floor(Math.random() * 1000000000000),
-    steps = 40,
-    cfg = 4,
-  } = options
-
-  const modified = JSON.parse(JSON.stringify(workflow))
-
-  // Image input (node 41)
-  if (modified['41']) {
-    modified['41'].inputs.image = inputImage
-  }
-  // Positive prompt (node 89:68)
-  if (modified['89:68']) {
-    modified['89:68'].inputs.prompt = prompt
-  }
-  // KSampler settings (node 89:65)
-  if (modified['89:65']) {
-    modified['89:65'].inputs.seed = seed
-    modified['89:65'].inputs.steps = steps
-    modified['89:65'].inputs.cfg = cfg
-  }
-  // Output prefix (node 9)
-  if (modified['9']) {
-    modified['9'].inputs.filename_prefix = 'ComfyStudio_edit'
   }
 
   return modified

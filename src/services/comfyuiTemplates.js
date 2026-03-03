@@ -3,17 +3,19 @@
  * Fetches available workflow templates from a running ComfyUI instance.
  * ComfyUI docs: /workflow_templates returns a map of custom node modules and their template workflows.
  */
-
-const isDev = import.meta.env.DEV
-const COMFYUI_BASE = isDev ? '' : 'http://127.0.0.1:8188'
+import {
+  getLocalComfyHttpBaseSync,
+  isLoopbackHttpUrl,
+} from './localComfyConnection'
 
 /**
  * Fetch workflow templates from ComfyUI.
  * @returns {Promise<{ success: boolean, templates?: Array<{ id: string, name: string, category: string, path?: string }>, error?: string }>}
  */
 export async function fetchComfyUITemplates() {
+  const comfyBase = getLocalComfyHttpBaseSync()
   try {
-    const url = `${COMFYUI_BASE}/workflow_templates`
+    const url = `${comfyBase}/workflow_templates`
     const resp = await fetch(url)
     if (!resp.ok) {
       return { success: false, error: `ComfyUI returned ${resp.status}` }
@@ -27,7 +29,7 @@ export async function fetchComfyUITemplates() {
     console.warn('[ComfyUI Templates]', err)
     return {
       success: false,
-      error: err.message || 'Failed to fetch templates. Is ComfyUI running at http://127.0.0.1:8188?'
+      error: err.message || `Failed to fetch templates. Is ComfyUI running at ${comfyBase}?`
     }
   }
 }
@@ -98,8 +100,18 @@ function parseComfyUITemplates(data) {
  * @returns {Promise<{ success: boolean, workflow?: object, error?: string }>}
  */
 export async function fetchComfyUIWorkflow(path) {
+  const comfyBase = getLocalComfyHttpBaseSync()
   try {
-    const url = path.startsWith('http') ? path : `${COMFYUI_BASE}/${path.replace(/^\//, '')}`
+    const workflowPath = String(path || '')
+    if (workflowPath.startsWith('http') && !isLoopbackHttpUrl(workflowPath)) {
+      return {
+        success: false,
+        error: 'Remote template URLs are disabled. Use local ComfyUI only.',
+      }
+    }
+    const url = workflowPath.startsWith('http')
+      ? workflowPath
+      : `${comfyBase}/${workflowPath.replace(/^\//, '')}`
     const resp = await fetch(url)
     if (!resp.ok) {
       return { success: false, error: `Failed to fetch: ${resp.status}` }

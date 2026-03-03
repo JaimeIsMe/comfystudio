@@ -3,7 +3,6 @@ const path = require('path')
 const fs = require('fs').promises
 const fsSync = require('fs')
 const http = require('http')
-const os = require('os')
 const { spawn } = require('child_process')
 const { fileURLToPath } = require('url')
 const ffmpegPath = require('ffmpeg-static')
@@ -18,71 +17,13 @@ const iconPath = path.join(__dirname, '..', 'build', 'icon.png')
 const SPLASH_MIN_DURATION_MS = 4500  // Minimum time splash is visible (Resolve-style)
 const COMFYUI_CHECK_MS = 2500        // Max wait for ComfyUI
 const STEP_DELAY_MS = 400            // Delay between status messages
+const COMFY_CONNECTION_SETTING_KEY = 'comfyConnection'
+const DEFAULT_LOCAL_COMFY_PORT = 8188
 
 let mainWindow = null
 let splashWindow = null
 let exportWorkerWindow = null
-let remotionBundleLocation = null
-let remotionBundlePromise = null
-const REMOTION_COMPOSITION_ID = 'ComfyTransparentLowerThird'
-const REMOTION_TEMPLATE_IDS = new Set([
-  'lower-third',
-  'cinematic-lower-third',
-  'corner-bug',
-  'cta-banner',
-  'split-title',
-  'title-card',
-  'end-slate',
-  'caption-strip',
-])
-
-function clampNumber(value, min, max, fallback) {
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return fallback
-  return Math.max(min, Math.min(max, parsed))
-}
-
-function sanitizeHexColor(input, fallback) {
-  const value = String(input || '').trim()
-  if (/^#[0-9a-fA-F]{6}$/.test(value)) return value
-  return fallback
-}
-
-function resolveRemotionEntryPoint() {
-  return path.join(__dirname, 'remotion', 'entry.jsx')
-}
-
-async function ensureRemotionBundle() {
-  if (remotionBundleLocation && fsSync.existsSync(remotionBundleLocation)) {
-    return remotionBundleLocation
-  }
-  if (remotionBundlePromise) {
-    return remotionBundlePromise
-  }
-
-  remotionBundlePromise = (async () => {
-    const entryPoint = resolveRemotionEntryPoint()
-    if (!fsSync.existsSync(entryPoint)) {
-      throw new Error(`Missing Remotion entry file at ${entryPoint}`)
-    }
-    const { bundle } = require('@remotion/bundler')
-    const outDir = path.join(os.tmpdir(), 'comfystudio-remotion-bundle')
-    await fs.mkdir(outDir, { recursive: true })
-    const serveUrl = await bundle({
-      entryPoint,
-      outDir,
-      enableCaching: true,
-      webpackOverride: (config) => config,
-      onProgress: () => {},
-    })
-    remotionBundleLocation = serveUrl
-    return serveUrl
-  })().finally(() => {
-    remotionBundlePromise = null
-  })
-
-  return remotionBundlePromise
-}
+const settingsPath = path.join(app.getPath('userData'), 'settings.json')
 
 function setSplashStatus(text) {
   if (!splashWindow || splashWindow.isDestroyed()) return
@@ -94,15 +35,39 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-function checkComfyUIRunning() {
+function sanitizeLocalComfyPort(value) {
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed)) return null
+  if (parsed < 1 || parsed > 65535) return null
+  return parsed
+}
+
+async function resolveLocalComfyPort() {
+  try {
+    const data = await fs.readFile(settingsPath, 'utf8')
+    const settings = JSON.parse(data)
+    const raw = settings?.[COMFY_CONNECTION_SETTING_KEY]
+    const rawPort = raw && typeof raw === 'object' ? raw.port : raw
+    return sanitizeLocalComfyPort(rawPort) || DEFAULT_LOCAL_COMFY_PORT
+  } catch {
+    return DEFAULT_LOCAL_COMFY_PORT
+  }
+}
+
+async function checkComfyUIRunning(portOverride = null) {
+  const port = sanitizeLocalComfyPort(portOverride) || await resolveLocalComfyPort()
+  const healthUrl = `http://127.0.0.1:${port}/system_stats`
   return new Promise((resolve) => {
-    const req = http.get('http://127.0.0.1:8188/', (res) => {
-      resolve(res.statusCode === 200 || (res.statusCode >= 200 && res.statusCode < 400))
+    const req = http.get(healthUrl, (res) => {
+      resolve({
+        ok: res.statusCode === 200 || (res.statusCode >= 200 && res.statusCode < 400),
+        port,
+      })
     })
-    req.on('error', () => resolve(false))
+    req.on('error', () => resolve({ ok: false, port }))
     req.setTimeout(COMFYUI_CHECK_MS, () => {
       req.destroy()
-      resolve(false)
+      resolve({ ok: false, port })
     })
   })
 }
@@ -111,12 +76,13 @@ async function runStartupChecks() {
   const start = Date.now()
   if (!splashWindow || splashWindow.isDestroyed()) return
 
-  setSplashStatus('Checking ComfyUI…')
-  const comfyOk = await checkComfyUIRunning()
-  if (comfyOk) {
-    setSplashStatus('ComfyUI connected')
+  const comfyPort = await resolveLocalComfyPort()
+  setSplashStatus(`Checking ComfyUI on localhost:${comfyPort}…`)
+  const comfyCheck = await checkComfyUIRunning(comfyPort)
+  if (comfyCheck.ok) {
+    setSplashStatus(`ComfyUI connected (localhost:${comfyCheck.port})`)
   } else {
-    setSplashStatus('ComfyUI not detected (start it for AI generation)')
+    setSplashStatus(`ComfyUI not detected on localhost:${comfyCheck.port}`)
   }
   await delay(STEP_DELAY_MS)
 
@@ -598,8 +564,7 @@ ipcMain.handle('media:getVideoFps', async (event, filePath) => {
   return await new Promise((resolve) => {
     const args = [
       '-v', 'error',
-      '-select_streams', 'v:0',
-      '-show_entries', 'stream=avg_frame_rate,r_frame_rate',
+      '-show_entries', 'stream=codec_type,avg_frame_rate,r_frame_rate',
       '-of', 'json',
       filePath
     ]
@@ -624,9 +589,11 @@ ipcMain.handle('media:getVideoFps', async (event, filePath) => {
       }
       try {
         const parsed = JSON.parse(stdout)
-        const stream = parsed?.streams?.[0]
-        const fps = parseFps(stream?.avg_frame_rate) || parseFps(stream?.r_frame_rate)
-        resolve({ success: !!fps, fps: fps || null })
+        const streams = Array.isArray(parsed?.streams) ? parsed.streams : []
+        const videoStream = streams.find((stream) => stream?.codec_type === 'video') || null
+        const fps = parseFps(videoStream?.avg_frame_rate) || parseFps(videoStream?.r_frame_rate)
+        const hasAudio = streams.some((stream) => stream?.codec_type === 'audio')
+        resolve({ success: true, fps: fps || null, hasAudio })
       } catch (err) {
         resolve({ success: false, error: err.message })
       }
@@ -760,112 +727,9 @@ ipcMain.handle('media:getAudioWaveform', async (event, mediaInput, options = {})
   })
 })
 
-ipcMain.handle('remotion:renderOverlay', async (event, options = {}) => {
-  let framesDir = null
-  try {
-    const template = String(options.template || 'lower-third').trim().toLowerCase()
-    if (!REMOTION_TEMPLATE_IDS.has(template)) {
-      return { success: false, error: `Unsupported Remotion template: ${template}` }
-    }
-
-    const width = Math.round(clampNumber(options.width, 256, 4096, 1920))
-    const height = Math.round(clampNumber(options.height, 256, 4096, 1080))
-    const fps = Math.round(clampNumber(options.fps, 12, 60, 30))
-    const durationSec = clampNumber(options.durationSec, 0.5, 20, 4)
-    const durationInFrames = Math.max(2, Math.round(durationSec * fps))
-    const inputProps = {
-      width,
-      height,
-      fps,
-      durationSec,
-      durationInFrames,
-      template,
-      title: String(options.title || '').trim().slice(0, 120),
-      subtitle: String(options.subtitle || '').trim().slice(0, 180),
-      accentColor: sanitizeHexColor(options.accentColor, '#f59e0b'),
-      textColor: sanitizeHexColor(options.textColor, '#ffffff'),
-      panelOpacity: clampNumber(options.panelOpacity, 0.05, 1, 0.72),
-    }
-
-    const serveUrl = await ensureRemotionBundle()
-    const { selectComposition, renderFrames, stitchFramesToVideo } = require('@remotion/renderer')
-    const composition = await selectComposition({
-      serveUrl,
-      id: REMOTION_COMPOSITION_ID,
-      inputProps,
-      logLevel: 'error',
-      timeoutInMilliseconds: 120000,
-    })
-
-    const tempRoot = path.join(os.tmpdir(), 'comfystudio-remotion-renders')
-    await fs.mkdir(tempRoot, { recursive: true })
-    const jobId = `overlay_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-    const jobDir = path.join(tempRoot, jobId)
-    framesDir = path.join(jobDir, 'frames')
-    await fs.mkdir(framesDir, { recursive: true })
-
-    const outputPath = path.join(jobDir, `${jobId}.webm`)
-
-    const rendered = await renderFrames({
-      serveUrl,
-      composition,
-      inputProps,
-      outputDir: framesDir,
-      imageFormat: 'png',
-      onStart: () => {},
-      onFrameUpdate: () => {},
-      logLevel: 'error',
-      timeoutInMilliseconds: 180000,
-    })
-
-    const resolvedFps = composition.fps || fps
-    await stitchFramesToVideo({
-      assetsInfo: rendered.assetsInfo,
-      fps: resolvedFps,
-      width: composition.width || width,
-      height: composition.height || height,
-      // VP8 alpha playback is more broadly reliable in Chromium/Electron than VP9 alpha.
-      codec: 'vp8',
-      pixelFormat: 'yuva420p',
-      outputLocation: outputPath,
-      force: true,
-      audioCodec: null,
-      muted: true,
-      logLevel: 'error',
-    })
-
-    const stat = await fs.stat(outputPath)
-    return {
-      success: true,
-      outputPath,
-      mimeType: 'video/webm',
-      width,
-      height,
-      fps: resolvedFps,
-      durationSec: durationInFrames / resolvedFps,
-      size: stat.size,
-      template,
-      hasAlpha: true,
-    }
-  } catch (err) {
-    console.error('Remotion overlay render failed:', err)
-    return { success: false, error: err?.message || 'Failed to render Remotion overlay' }
-  } finally {
-    if (framesDir) {
-      try {
-        await fs.rm(framesDir, { recursive: true, force: true })
-      } catch (_) {
-        // Ignore cleanup errors.
-      }
-    }
-  }
-})
-
 // ============================================
 // IPC Handlers - App Settings Storage
 // ============================================
-
-const settingsPath = path.join(app.getPath('userData'), 'settings.json')
 
 ipcMain.handle('settings:get', async (event, key) => {
   try {

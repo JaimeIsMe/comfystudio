@@ -21,8 +21,8 @@ function isLayerFullyObscuring(clip, playheadPosition, getAssetById) {
   const asset = clip.assetId && typeof getAssetById === 'function'
     ? getAssetById(clip.assetId)
     : null
-  // Remotion overlays are rendered with alpha and must not cull lower layers.
-  if (asset?.settings?.overlayKind === 'remotion' || asset?.settings?.hasAlpha === true) {
+  // Alpha overlays must not cull lower layers.
+  if (asset?.settings?.hasAlpha === true) {
     return false
   }
   const clipTime = playheadPosition - (clip.startTime || 0)
@@ -367,6 +367,7 @@ const VideoLayer = memo(function VideoLayer({
   isPlaying,
   buildVideoTransform,
   getClipTransform,
+  onClipPointerDown,
   isInTransition = false, // Whether this clip is part of a transition
 }) {
   const containerRef = useRef(null)   // Container we attach the cached video element to
@@ -990,6 +991,11 @@ const VideoLayer = memo(function VideoLayer({
       <div
         ref={containerRef}
         className="bg-transparent w-full h-full"
+        onPointerDown={(e) => {
+          if (typeof onClipPointerDown === 'function') {
+            onClipPointerDown(clip, e)
+          }
+        }}
         style={{
           position: layerIndex === 0 ? 'relative' : 'absolute',
           top: 0,
@@ -1058,6 +1064,7 @@ const ImageLayer = memo(function ImageLayer({
   playheadPosition,
   buildVideoTransform,
   getClipTransform,
+  onClipPointerDown,
 }) {
   // Get the current valid URL (may be cached render or original)
   const { url: clipUrl, isCached: isCachedRender } = useClipUrl(clip)
@@ -1100,6 +1107,11 @@ const ImageLayer = memo(function ImageLayer({
       }}
       onContextMenu={(e) => e.preventDefault()}
       draggable={false}
+      onPointerDown={(e) => {
+        if (typeof onClipPointerDown === 'function') {
+          onClipPointerDown(clip, e)
+        }
+      }}
     />
   )
 })
@@ -1115,6 +1127,7 @@ const TextLayer = memo(function TextLayer({
   playheadPosition,
   buildVideoTransform,
   getClipTransform,
+  onClipPointerDown,
   previewScale = 1,
 }) {
   if (!clip || clip.type !== 'text') return null
@@ -1181,7 +1194,12 @@ const TextLayer = memo(function TextLayer({
 
   return (
     <div
-      className="absolute inset-0 flex items-center justify-center pointer-events-none"
+      className="absolute inset-0 flex items-center justify-center"
+      onPointerDown={(e) => {
+        if (typeof onClipPointerDown === 'function') {
+          onClipPointerDown(clip, e)
+        }
+      }}
       style={{
         zIndex: layerIndex + 1,
         alignItems: getVerticalAlign(),
@@ -1293,6 +1311,7 @@ function VideoLayerRenderer({
   transitionInfo,
   getTransitionStyles,
   getTransitionOverlay,
+  onClipPointerDown,
   previewScale = 1,
 }) {
   const containerRef = useRef(null)
@@ -1665,6 +1684,7 @@ function VideoLayerRenderer({
             playheadPosition={playheadPosition}
             buildVideoTransform={buildVideoTransform}
             getClipTransform={getClipTransform}
+            onClipPointerDown={onClipPointerDown}
             previewScale={previewScale}
           />
         )
@@ -1685,6 +1705,7 @@ function VideoLayerRenderer({
                 : buildVideoTransform(transform)
             }}
             getClipTransform={getClipTransform}
+            onClipPointerDown={onClipPointerDown}
           />
         )
       }
@@ -1705,6 +1726,7 @@ function VideoLayerRenderer({
               : buildVideoTransform(transform)
           }}
           getClipTransform={getClipTransform}
+          onClipPointerDown={onClipPointerDown}
         />
       )
     }
@@ -1727,7 +1749,7 @@ function VideoLayerRenderer({
     })
 
     return accumulated
-  }, [compositedVisualClips, playheadPosition, isPlaying, buildVideoTransform, getClipTransform, previewScale, transitionStyleByClipId])
+  }, [compositedVisualClips, playheadPosition, isPlaying, buildVideoTransform, getClipTransform, onClipPointerDown, previewScale, transitionStyleByClipId])
 
   // Render multi-layer composition (including transitions)
   return (

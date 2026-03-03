@@ -561,6 +561,10 @@ export const useTimelineStore = create(
     const sourceDuration = isImage ? Infinity : (assetDuration || 5)
     const sourceFps = isVideo ? Number(asset.settings?.fps ?? asset.fps) : null
     const normalizedTimelineFps = Number(timelineFps)
+    const assetDefaultTransform = (
+      asset?.settings?.defaultTransform
+      && typeof asset.settings.defaultTransform === 'object'
+    ) ? asset.settings.defaultTransform : null
     const isGeneratedOverlay = isImage && Boolean(asset?.settings?.overlayKind)
     let defaultDuration = isImage ? 5 : sourceDuration // Keep video/audio duration in real seconds
     if (isGeneratedOverlay) {
@@ -608,24 +612,9 @@ export const useTimelineStore = create(
       thumbnail: asset.url, // For video clips
       // 2D Transform properties (NLE-style)
       transform: {
-        positionX: 0,        // X position offset (pixels, 0 = centered)
-        positionY: 0,        // Y position offset (pixels, 0 = centered)
-        scaleX: 100,         // Horizontal scale (percentage, 100 = original)
-        scaleY: 100,         // Vertical scale (percentage, 100 = original)
-        scaleLinked: true,   // Link X and Y scale together
-        rotation: 0,         // Rotation angle (degrees, -180 to 180)
-        anchorX: 50,         // Anchor point X (percentage, 50 = center)
-        anchorY: 50,         // Anchor point Y (percentage, 50 = center)
-        opacity: 100,        // Opacity (percentage, 0-100)
-        flipH: false,        // Horizontal flip
-        flipV: false,        // Vertical flip
-        // Crop (percentage from each edge)
-        cropTop: 0,
-        cropBottom: 0,
-        cropLeft: 0,
-        cropRight: 0,
-        blendMode: 'normal',
-        blur: 0,
+        ...createDefaultClipTransform(),
+        ...(assetDefaultTransform || {}),
+        blendMode: assetDefaultTransform?.blendMode ?? 'normal',
       },
     }
     
@@ -3815,14 +3804,20 @@ export const useTimelineStore = create(
    * Set active snap time for visual feedback
    */
   setActiveSnapTime: (time) => {
-    set({ activeSnapTime: time })
+    set((state) => {
+      if (state.activeSnapTime === time) return state
+      return { activeSnapTime: time }
+    })
   },
 
   /**
    * Clear active snap indicator
    */
   clearActiveSnap: () => {
-    set({ activeSnapTime: null })
+    set((state) => {
+      if (state.activeSnapTime === null) return state
+      return { activeSnapTime: null }
+    })
   },
 
   /**

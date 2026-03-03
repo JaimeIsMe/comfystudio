@@ -26,6 +26,36 @@ An AI-powered animatic and pre-visualization tool for film, animation, and adver
 - Node.js 18+
 - ComfyUI running at `http://127.0.0.1:8188`
 
+### Generate Hardware Tiers
+
+ComfyStudio tags workflows in Generate with a hardware tier so users can quickly estimate whether a workflow will run on their machine.
+
+| Tier | Meaning | Typical Workflows | Practical Guidance |
+|---|---|---|---|
+| Lite | Low-end local GPU | Z Image Turbo, Music Generation | Usually works on 6-8 GB VRAM GPUs |
+| Standard | Mid-range local GPU | Image Edit, Multiple Angles | Usually needs 12-16 GB VRAM |
+| Pro | High-end local GPU | WAN 2.2 image-to-video | Usually needs 24 GB+ VRAM (20 GB absolute minimum in ideal settings) |
+| Cloud | Credits / partner nodes | Nano Banana 2, Kling O3 Omni | Local VRAM is not the primary bottleneck; requires ComfyUI partner credits/API |
+
+Notes:
+- VRAM guidance is approximate and depends on resolution, frame count, batch size, model variants, and other apps using GPU memory.
+- If a workflow reports missing dependencies, install the required models/nodes first, then click re-check in Generate.
+
+### Workflow Starter Pack (for ComfyUI users)
+
+To keep setup documentation aligned as new workflows are added, ComfyStudio can generate a starter-pack manifest and per-workflow dependency checklists:
+
+```bash
+npm run starter-pack:build
+```
+
+Generated output:
+- `docs/workflow-starter-pack/starter-pack.manifest.json`
+- `docs/workflow-starter-pack/INDEX.md`
+- `docs/workflow-starter-pack/workflows/*.md`
+
+See `docs/workflow-starter-pack/README.md` for publishing and maintenance guidance.
+
 ### Installation
 
 ```bash

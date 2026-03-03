@@ -244,9 +244,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getFileUrl: (filePath) => ipcRenderer.invoke('media:getFileUrl', filePath),
   
   /**
-   * Get video FPS via ffprobe (Electron only)
+   * Get video stream info via ffprobe (Electron only)
    * @param {string} filePath
-   * @returns {Promise<{success: boolean, fps?: number, error?: string}>}
+   * @returns {Promise<{success: boolean, fps?: number, hasAudio?: boolean, error?: string}>}
    */
   getVideoFps: (filePath) => ipcRenderer.invoke('media:getVideoFps', filePath),
 
@@ -265,13 +265,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   getFileUrlDirect: (filePath) => ipcRenderer.invoke('media:getFileUrlDirect', filePath),
 
-  /**
-   * Render a transparent motion-graphics overlay using Remotion (Electron only)
-   * @param {object} options - { template, width, height, fps, durationSec, title, subtitle, accentColor, textColor, panelOpacity }
-   * @returns {Promise<{success: boolean, outputPath?: string, mimeType?: string, width?: number, height?: number, fps?: number, durationSec?: number, size?: number, template?: string, hasAlpha?: boolean, error?: string}>}
-   */
-  renderRemotionOverlay: (options = {}) => ipcRenderer.invoke('remotion:renderOverlay', options),
-  
   // ============================================
   // App Settings (persistent storage in userData)
   // ============================================

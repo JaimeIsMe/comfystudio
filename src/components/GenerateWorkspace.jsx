@@ -9,10 +9,12 @@ import useComfyUI from '../hooks/useComfyUI'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 import { useFrameForAIStore } from '../stores/frameForAIStore'
+import { BUILTIN_WORKFLOW_PATHS } from '../config/workflowRegistry'
 import { comfyui } from '../services/comfyui'
 import { importAsset, isElectron } from '../services/fileSystem'
 import { enqueuePlaybackTranscode } from '../services/playbackCache'
 import { buildYoloPlanFromScript, flattenYoloPlanVariants } from '../utils/yoloPlanning'
+import { checkWorkflowDependencies, buildMissingDependencyClipboardText } from '../services/workflowDependencies'
 
 // ============================================
 // Cinematography Tags (reused from GeneratePanel)
@@ -99,9 +101,178 @@ const WORKFLOW_DISPLAY_LABELS = Object.freeze({
   'wan22-i2v': 'WAN 2.2',
   'kling-o3-i2v': 'Kling O3 Omni',
 })
+const OPEN_COMFY_TAB_EVENT = 'comfystudio-open-comfyui-tab'
+const HARDWARE_TIERS = Object.freeze({
+  lite: {
+    id: 'lite',
+    shortLabel: 'Lite',
+    label: 'Low-end local',
+    badgeClass: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+  },
+  standard: {
+    id: 'standard',
+    shortLabel: 'Standard',
+    label: 'Mid-range local',
+    badgeClass: 'border-sky-500/40 bg-sky-500/10 text-sky-300',
+  },
+  pro: {
+    id: 'pro',
+    shortLabel: 'Pro',
+    label: 'High-end local',
+    badgeClass: 'border-violet-500/40 bg-violet-500/10 text-violet-300',
+  },
+  cloud: {
+    id: 'cloud',
+    shortLabel: 'Cloud',
+    label: 'Credits / cloud',
+    badgeClass: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
+  },
+})
+const WORKFLOW_HARDWARE = Object.freeze({
+  'z-image-turbo': {
+    tierId: 'lite',
+    runtime: 'local',
+    minimumVramGb: 8,
+    recommendedVramGb: 10,
+  },
+  'music-gen': {
+    tierId: 'lite',
+    runtime: 'local',
+    minimumVramGb: 4,
+    recommendedVramGb: 8,
+  },
+  'image-edit': {
+    tierId: 'standard',
+    runtime: 'local',
+    minimumVramGb: 12,
+    recommendedVramGb: 16,
+  },
+  'multi-angles': {
+    tierId: 'standard',
+    runtime: 'local',
+    minimumVramGb: 12,
+    recommendedVramGb: 16,
+  },
+  'multi-angles-scene': {
+    tierId: 'standard',
+    runtime: 'local',
+    minimumVramGb: 12,
+    recommendedVramGb: 16,
+  },
+  'wan22-i2v': {
+    tierId: 'pro',
+    runtime: 'local',
+    minimumVramGb: 20,
+    recommendedVramGb: 24,
+  },
+  'nano-banana-2': {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
+  'kling-o3-i2v': {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
+})
 
 function getWorkflowDisplayLabel(workflowId = '') {
   return WORKFLOW_DISPLAY_LABELS[workflowId] || String(workflowId || '')
+}
+
+function getWorkflowHardwareInfo(workflowId = '') {
+  const normalized = String(workflowId || '').trim() === 'nano-banana-pro'
+    ? 'nano-banana-2'
+    : String(workflowId || '').trim()
+  return WORKFLOW_HARDWARE[normalized] || null
+}
+
+function getWorkflowTierMeta(workflowId = '') {
+  const hardware = getWorkflowHardwareInfo(workflowId)
+  if (!hardware) return null
+  return HARDWARE_TIERS[hardware.tierId] || null
+}
+
+function formatWorkflowHardwareRuntime(workflowId = '') {
+  const hardware = getWorkflowHardwareInfo(workflowId)
+  if (!hardware) return 'VRAM unknown'
+  if (hardware.runtime === 'cloud') {
+    return 'Credits via ComfyUI partner nodes'
+  }
+  const min = Number(hardware.minimumVramGb)
+  const rec = Number(hardware.recommendedVramGb)
+  if (Number.isFinite(min) && min > 0 && Number.isFinite(rec) && rec >= min) {
+    return `${min}GB min / ${rec}GB rec`
+  }
+  if (Number.isFinite(min) && min > 0) {
+    return `${min}GB minimum`
+  }
+  return 'Local GPU'
+}
+
+function formatWorkflowTierSummary(workflowId = '') {
+  const tier = getWorkflowTierMeta(workflowId)
+  const label = getWorkflowDisplayLabel(workflowId)
+  const runtime = formatWorkflowHardwareRuntime(workflowId)
+  if (!tier) return `${label}: ${runtime}`
+  return `${label}: ${tier.label} (${runtime})`
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = String(text || '')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
+}
+
+function formatCountLabel(count, singular, plural = `${singular}s`) {
+  const value = Number(count) || 0
+  return `${value} ${value === 1 ? singular : plural}`
+}
+
+function summarizeBlockingDependency(checkResult) {
+  const workflowLabel = checkResult?.pack?.displayName
+    || getWorkflowDisplayLabel(checkResult?.workflowId)
+    || String(checkResult?.workflowId || 'workflow')
+
+  const issues = []
+  if ((checkResult?.missingNodes?.length || 0) > 0) {
+    issues.push(formatCountLabel(checkResult.missingNodes.length, 'node'))
+  }
+  if ((checkResult?.missingModels?.length || 0) > 0) {
+    issues.push(formatCountLabel(checkResult.missingModels.length, 'model'))
+  }
+  if (checkResult?.missingAuth) {
+    issues.push('API key')
+  }
+  return `${workflowLabel} (${issues.join(', ') || 'requirements missing'})`
+}
+
+function buildDependencyResultMap(results = []) {
+  const byWorkflow = {}
+  for (const result of results) {
+    const workflow = String(result?.workflowId || '').trim()
+    if (!workflow) continue
+    byWorkflow[workflow] = result
+  }
+  return byWorkflow
+}
+
+function getDependencyAggregateStatus(results = []) {
+  if (!Array.isArray(results) || results.length === 0) return 'idle'
+  if (results.some((result) => result?.hasPack && result?.hasBlockingIssues)) return 'missing'
+  if (results.some((result) => result?.status === 'error')) return 'error'
+  if (results.some((result) => result?.status === 'partial')) return 'partial'
+  if (results.some((result) => result?.status === 'no-pack')) return 'no-pack'
+  return 'ready'
 }
 
 function ensureAssetFolderPath(pathSegments = []) {
@@ -673,6 +844,29 @@ function GenerateWorkspace() {
   const MAX_CONSECUTIVE_RAPID_FAILS = 3
   const MIN_JOB_INTERVAL_MS = 2000
   const [formError, setFormError] = useState(null)
+  const [openWorkflowHint, setOpenWorkflowHint] = useState('')
+  const [yoloDependencyCheckInProgress, setYoloDependencyCheckInProgress] = useState(false)
+  const [yoloDependencyPanel, setYoloDependencyPanel] = useState({
+    status: 'idle',
+    byWorkflow: {},
+    checkedAt: 0,
+    error: '',
+  })
+  const yoloDependencyPanelVersionRef = useRef(0)
+  const [dependencyCheck, setDependencyCheck] = useState({
+    status: 'idle',
+    hasPack: false,
+    hasBlockingIssues: false,
+    missingNodes: [],
+    missingModels: [],
+    unresolvedModels: [],
+    missingAuth: false,
+    error: '',
+    pack: null,
+    checkedAt: 0,
+    workflowId: '',
+  })
+  const dependencyCheckVersionRef = useRef(0)
   const [comfyLogExpanded, setComfyLogExpanded] = useState(false)
   const [comfyLogLines, setComfyLogLines] = useState([])
   const comfyLogEndRef = useRef(null)
@@ -895,6 +1089,169 @@ function GenerateWorkspace() {
     setFormError(null)
   }, [generationMode, yoloCreationType])
 
+  useEffect(() => {
+    setOpenWorkflowHint('')
+  }, [workflowId, generationMode, category])
+
+  const runWorkflowDependencyCheck = useCallback(async () => {
+    const requestVersion = dependencyCheckVersionRef.current + 1
+    dependencyCheckVersionRef.current = requestVersion
+
+    if (generationMode !== 'single' || !workflowId) {
+      setDependencyCheck({
+        status: 'idle',
+        hasPack: false,
+        hasBlockingIssues: false,
+        missingNodes: [],
+        missingModels: [],
+        unresolvedModels: [],
+        missingAuth: false,
+        error: '',
+        pack: null,
+        checkedAt: Date.now(),
+        workflowId: workflowId || '',
+      })
+      return null
+    }
+
+    if (!isConnected) {
+      setDependencyCheck((prev) => ({
+        ...prev,
+        status: 'offline',
+        error: '',
+        checkedAt: Date.now(),
+        workflowId,
+      }))
+      return null
+    }
+
+    setDependencyCheck((prev) => ({
+      ...prev,
+      status: 'checking',
+      error: '',
+      checkedAt: Date.now(),
+      workflowId,
+    }))
+
+    const result = await checkWorkflowDependencies(workflowId)
+    if (dependencyCheckVersionRef.current !== requestVersion) return null
+    setDependencyCheck(result)
+    return result
+  }, [generationMode, workflowId, isConnected])
+
+  useEffect(() => {
+    void runWorkflowDependencyCheck()
+  }, [runWorkflowDependencyCheck])
+
+  const validateDependenciesForQueue = useCallback(async (workflowIds, queueLabel) => {
+    const normalizedIds = Array.from(new Set(
+      (Array.isArray(workflowIds) ? workflowIds : [])
+        .map((workflow) => String(workflow || '').trim())
+        .filter(Boolean)
+    ))
+    if (normalizedIds.length === 0) return true
+
+    setYoloDependencyCheckInProgress(true)
+    try {
+      const results = await Promise.all(normalizedIds.map((workflow) => checkWorkflowDependencies(workflow)))
+      setYoloDependencyPanel({
+        status: getDependencyAggregateStatus(results),
+        byWorkflow: buildDependencyResultMap(results),
+        checkedAt: Date.now(),
+        error: '',
+      })
+
+      const blocked = results.filter((result) => result?.hasPack && result?.hasBlockingIssues)
+      if (blocked.length > 0) {
+        const summary = blocked.map(summarizeBlockingDependency).join('; ')
+        setFormError(`Cannot queue ${queueLabel}. Missing dependencies: ${summary}.`)
+        addComfyLog('error', `Blocked ${queueLabel}: ${summary}`)
+        return false
+      }
+
+      const failures = results.filter((result) => result?.status === 'error')
+      if (failures.length > 0) {
+        addComfyLog(
+          'error',
+          `${queueLabel}: dependency check unavailable for ${failures.length} workflow${failures.length === 1 ? '' : 's'}. Queueing continues.`
+        )
+      }
+      return true
+    } catch (error) {
+      setYoloDependencyPanel((prev) => ({
+        ...prev,
+        status: 'error',
+        checkedAt: Date.now(),
+        error: error instanceof Error ? error.message : String(error || 'Dependency check failed'),
+      }))
+      addComfyLog('error', `${queueLabel}: dependency check failed. Queueing continues.`)
+      return true
+    } finally {
+      setYoloDependencyCheckInProgress(false)
+    }
+  }, [addComfyLog])
+
+  const handleCopyDependencyReport = useCallback(async () => {
+    const text = buildMissingDependencyClipboardText(dependencyCheck)
+    try {
+      await copyTextToClipboard(text)
+      addComfyLog('info', 'Dependency report copied to clipboard.')
+    } catch (_) {
+      setFormError('Could not copy dependency report. Copy manually from the checklist.')
+    }
+  }, [addComfyLog, dependencyCheck])
+
+  const handleOpenCurrentWorkflowInComfyUi = useCallback(async () => {
+    if (generationMode !== 'single') return
+
+    const workflowPath = BUILTIN_WORKFLOW_PATHS[workflowId]
+    if (!workflowPath) {
+      setFormError('This workflow file is not mapped in Generate.')
+      return
+    }
+
+    const comfyTabVisible = (() => {
+      try {
+        return localStorage.getItem('comfystudio-show-comfyui-tab') !== 'false'
+      } catch (_) {
+        return true
+      }
+    })()
+    if (!comfyTabVisible) {
+      setFormError('ComfyUI tab is hidden. Enable "Show ComfyUI tab" in Settings first.')
+      return
+    }
+
+    try {
+      const response = await fetch(workflowPath)
+      if (!response.ok) {
+        throw new Error(`Failed to fetch workflow JSON (${response.status})`)
+      }
+      const workflowText = await response.text()
+      await copyTextToClipboard(workflowText)
+
+      window.dispatchEvent(new CustomEvent(OPEN_COMFY_TAB_EVENT, {
+        detail: { workflowId, workflowPath },
+      }))
+
+      setOpenWorkflowHint('Opened ComfyUI and copied workflow JSON. In ComfyUI canvas, press Ctrl+V to import it.')
+      setFormError(null)
+      addComfyLog('info', `Copied ${getWorkflowDisplayLabel(workflowId)} workflow JSON for ComfyUI import.`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      setFormError(`Could not open workflow in ComfyUI: ${message}`)
+      setOpenWorkflowHint('')
+    }
+  }, [addComfyLog, generationMode, workflowId])
+
+  const dependencyCheckInProgress = generationMode === 'single' && dependencyCheck.status === 'checking'
+  const hasBlockingDependencies = generationMode === 'single' && dependencyCheck.hasBlockingIssues
+  const isGenerateDisabled = (
+    !isConnected
+    || (generationMode === 'single' && (dependencyCheckInProgress || hasBlockingDependencies))
+    || (generationMode === 'yolo' && yoloDependencyCheckInProgress)
+  )
+
   // Build full prompt with tags
   const fullPrompt = useMemo(() => {
     const tagStr = selectedTags.length > 0 ? selectedTags.join(', ') + '. ' : ''
@@ -959,6 +1316,98 @@ function GenerateWorkspace() {
     () => yoloSelectedVideoWorkflowIds.map(getWorkflowDisplayLabel).join(' + '),
     [yoloSelectedVideoWorkflowIds]
   )
+  const currentWorkflowTierMeta = useMemo(
+    () => getWorkflowTierMeta(workflowId),
+    [workflowId]
+  )
+  const currentWorkflowRuntimeLabel = useMemo(
+    () => formatWorkflowHardwareRuntime(workflowId),
+    [workflowId]
+  )
+  const yoloStoryboardTierSummary = useMemo(
+    () => formatWorkflowTierSummary(yoloProfile.storyboardWorkflowId),
+    [yoloProfile.storyboardWorkflowId]
+  )
+  const yoloVideoTargetTierSummary = useMemo(
+    () => yoloSelectedVideoWorkflowIds.map((id) => formatWorkflowTierSummary(id)).join(' + '),
+    [yoloSelectedVideoWorkflowIds]
+  )
+  const yoloDependencyWorkflowIds = useMemo(() => Array.from(new Set([
+    yoloProfile.storyboardWorkflowId,
+    ...yoloSelectedVideoWorkflowIds,
+  ].map((workflow) => String(workflow || '').trim()).filter(Boolean))), [
+    yoloProfile.storyboardWorkflowId,
+    yoloSelectedVideoWorkflowIds,
+  ])
+
+  const runYoloDependencySnapshotCheck = useCallback(async () => {
+    const requestVersion = yoloDependencyPanelVersionRef.current + 1
+    yoloDependencyPanelVersionRef.current = requestVersion
+
+    if (generationMode !== 'yolo') {
+      setYoloDependencyPanel({
+        status: 'idle',
+        byWorkflow: {},
+        checkedAt: Date.now(),
+        error: '',
+      })
+      return null
+    }
+
+    if (!isConnected) {
+      setYoloDependencyPanel((prev) => ({
+        ...prev,
+        status: 'offline',
+        checkedAt: Date.now(),
+        error: '',
+      }))
+      return null
+    }
+
+    if (yoloDependencyWorkflowIds.length === 0) {
+      setYoloDependencyPanel({
+        status: 'idle',
+        byWorkflow: {},
+        checkedAt: Date.now(),
+        error: '',
+      })
+      return null
+    }
+
+    setYoloDependencyPanel((prev) => ({
+      ...prev,
+      status: 'checking',
+      checkedAt: Date.now(),
+      error: '',
+    }))
+
+    try {
+      const results = await Promise.all(yoloDependencyWorkflowIds.map((workflow) => checkWorkflowDependencies(workflow)))
+      if (yoloDependencyPanelVersionRef.current !== requestVersion) return null
+
+      setYoloDependencyPanel({
+        status: getDependencyAggregateStatus(results),
+        byWorkflow: buildDependencyResultMap(results),
+        checkedAt: Date.now(),
+        error: '',
+      })
+      return results
+    } catch (error) {
+      if (yoloDependencyPanelVersionRef.current !== requestVersion) return null
+      setYoloDependencyPanel((prev) => ({
+        ...prev,
+        status: 'error',
+        checkedAt: Date.now(),
+        error: error instanceof Error ? error.message : String(error || 'Dependency check failed'),
+      }))
+      return null
+    }
+  }, [generationMode, isConnected, yoloDependencyWorkflowIds])
+
+  useEffect(() => {
+    void runYoloDependencySnapshotCheck()
+  }, [runYoloDependencySnapshotCheck])
+
   const yoloSceneCount = yoloActivePlan.length
   const yoloVariants = useMemo(() => flattenYoloPlanVariants(yoloActivePlan), [yoloActivePlan])
   const yoloQueueVariants = yoloVariants
@@ -1718,7 +2167,7 @@ function GenerateWorkspace() {
     yoloProfile.storyboardWorkflowId,
   ])
 
-  const handleQueueYoloStoryboards = useCallback(() => {
+  const handleQueueYoloStoryboards = useCallback(async () => {
     if (!isConnected) return
     if (
       !isYoloMusicMode &&
@@ -1729,6 +2178,12 @@ function GenerateWorkspace() {
       setFormError('Product/model references require Balanced or Premium profile (Nano Banana 2 storyboards).')
       return
     }
+    const depsOk = await validateDependenciesForQueue(
+      [yoloProfile.storyboardWorkflowId],
+      `YOLO ${yoloModeLabel.toLowerCase()} storyboard pass`
+    )
+    if (!depsOk) return
+
     const planToUse = yoloActivePlan.length > 0 ? yoloActivePlan : buildActiveYoloPlan()
     if (!planToUse) return
 
@@ -1743,14 +2198,21 @@ function GenerateWorkspace() {
     isConnected,
     isYoloMusicMode,
     queueYoloStoryboardVariants,
+    validateDependenciesForQueue,
     yoloActivePlan,
     yoloAdHasReferenceAnchors,
     yoloProfile.storyboardWorkflowId,
     yoloModeLabel,
   ])
 
-  const handleQueueYoloShotStoryboard = useCallback((sceneId, shotId) => {
+  const handleQueueYoloShotStoryboard = useCallback(async (sceneId, shotId) => {
     if (!isConnected) return
+    const depsOk = await validateDependenciesForQueue(
+      [yoloProfile.storyboardWorkflowId],
+      `storyboard re-render for ${sceneId} ${shotId}`
+    )
+    if (!depsOk) return
+
     const planToUse = yoloActivePlan.length > 0 ? yoloActivePlan : buildActiveYoloPlan()
     if (!planToUse) return
 
@@ -1770,7 +2232,9 @@ function GenerateWorkspace() {
     buildActiveYoloPlan,
     isConnected,
     queueYoloStoryboardVariants,
+    validateDependenciesForQueue,
     yoloActivePlan,
+    yoloProfile.storyboardWorkflowId,
   ])
 
   const queueYoloVideoVariants = useCallback((variants, options = {}) => {
@@ -1887,7 +2351,7 @@ function GenerateWorkspace() {
     yoloStoryboardAssetMap,
   ])
 
-  const handleQueueYoloVideos = useCallback(() => {
+  const handleQueueYoloVideos = useCallback(async () => {
     if (!isConnected) return
     const planToUse = yoloActivePlan.length > 0 ? yoloActivePlan : buildActiveYoloPlan()
     if (!planToUse) return
@@ -1899,6 +2363,12 @@ function GenerateWorkspace() {
     }
 
     const targets = yoloSelectedVideoWorkflowIds
+    const depsOk = await validateDependenciesForQueue(
+      targets,
+      `YOLO ${yoloModeLabel.toLowerCase()} video pass`
+    )
+    if (!depsOk) return
+
     if (targets.length > 1) {
       const estimatedJobs = variants.length * targets.length
       if (!confirmLargeQueueBatch(estimatedJobs, 'video')) {
@@ -1925,13 +2395,20 @@ function GenerateWorkspace() {
     confirmLargeQueueBatch,
     isConnected,
     queueYoloVideoVariants,
+    validateDependenciesForQueue,
     yoloActivePlan,
     yoloSelectedVideoWorkflowIds,
     yoloModeLabel,
   ])
 
-  const handleQueueYoloShotVideo = useCallback((sceneId, shotId) => {
+  const handleQueueYoloShotVideo = useCallback(async (sceneId, shotId) => {
     if (!isConnected) return
+    const depsOk = await validateDependenciesForQueue(
+      yoloSelectedVideoWorkflowIds,
+      `video re-render for ${sceneId} ${shotId}`
+    )
+    if (!depsOk) return
+
     const planToUse = yoloActivePlan.length > 0 ? yoloActivePlan : buildActiveYoloPlan()
     if (!planToUse) return
 
@@ -1959,6 +2436,7 @@ function GenerateWorkspace() {
     buildActiveYoloPlan,
     isConnected,
     queueYoloVideoVariants,
+    validateDependenciesForQueue,
     yoloActivePlan,
     yoloSelectedVideoWorkflowIds,
   ])
@@ -1966,7 +2444,15 @@ function GenerateWorkspace() {
   const handleGenerate = () => {
     if (!isConnected) return
     if (generationMode === 'yolo') {
-      handleQueueYoloStoryboards()
+      void handleQueueYoloStoryboards()
+      return
+    }
+    if (dependencyCheckInProgress) {
+      setFormError('Checking workflow dependencies. Please wait a moment and try again.')
+      return
+    }
+    if (hasBlockingDependencies) {
+      setFormError('Missing required workflow dependencies. Install the missing items listed below and re-check.')
       return
     }
     const usingTimelineFrame = !!frameForAI?.file && (
@@ -2429,19 +2915,7 @@ function GenerateWorkspace() {
       // Load workflow JSON
       updateJob(job.id, { status: 'configuring', progress: 20 })
       let workflowJson = null
-      const workflowMap = {
-        'wan22-i2v': '/workflows/video_wan2_2_14B_i2v.json',
-        'kling-o3-i2v': '/workflows/api_kling_o3_i2v.json',
-        'multi-angles': '/workflows/1_click_multiple_angles.json',
-        'multi-angles-scene': '/workflows/1_click_multiple_scene_angles-v1.0.json',
-        'image-edit': '/workflows/image_qwen_image_edit_2509.json',
-        'z-image-turbo': '/workflows/image_z_image_turbo.json',
-        'nano-banana-2': '/workflows/api_google_nano_banana2_image_edit.json',
-        'nano-banana-pro': '/workflows/api_google_nano_banana2_image_edit.json',
-        'music-gen': '/workflows/music_generation.json',
-      }
-
-      const workflowPath = workflowMap[job.workflowId]
+      const workflowPath = BUILTIN_WORKFLOW_PATHS[job.workflowId]
       if (!workflowPath) throw new Error('Unknown workflow: ' + job.workflowId)
 
       const resp = await fetch(workflowPath)
@@ -2461,7 +2935,6 @@ function GenerateWorkspace() {
       const {
         modifyWAN22Workflow,
         modifyMultipleAnglesWorkflow,
-        modifyInflationWorkflow,
         modifyQwenImageEdit2509Workflow,
         modifyZImageTurboWorkflow,
         modifyNanoBanana2Workflow,
@@ -2767,15 +3240,65 @@ function GenerateWorkspace() {
                 {/* Workflow selector */}
                 <div>
                   <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Workflow</label>
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1">
+                      {['lite', 'standard', 'pro', 'cloud'].map((tierId) => {
+                        const tierMeta = HARDWARE_TIERS[tierId]
+                        if (!tierMeta) return null
+                        return (
+                          <span key={tierId} className={`px-1.5 py-0.5 rounded border text-[9px] ${tierMeta.badgeClass}`}>
+                            {tierMeta.shortLabel}
+                          </span>
+                        )
+                      })}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { void handleOpenCurrentWorkflowInComfyUi() }}
+                      className="px-2 py-1 rounded border border-sf-dark-500 bg-sf-dark-800 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
+                      title="Switch to ComfyUI tab and copy workflow JSON"
+                    >
+                      Open in ComfyUI
+                    </button>
+                  </div>
+                  <div className="mt-1 text-[9px] text-sf-text-muted">
+                    <span
+                      className="underline decoration-dotted cursor-help"
+                      title="Quick guide: Lite is usually 6-8GB VRAM, Standard is usually 12-16GB, Pro is usually 24GB+, and Cloud uses partner credits."
+                    >
+                      Not sure your VRAM?
+                    </span>{' '}
+                    6-8GB = Lite, 12-16GB = Standard, 24GB+ = Pro, Cloud = credits.
+                  </div>
+                  {openWorkflowHint && (
+                    <div className="mt-1 text-[9px] text-green-400">{openWorkflowHint}</div>
+                  )}
                   <div className="flex gap-2 mt-1">
-                    {(WORKFLOWS[category] || []).map(wf => (
-                      <button key={wf.id} onClick={() => setWorkflowId(wf.id)}
-                        className={`flex-1 px-3 py-2 rounded-lg border text-xs transition-colors ${workflowId === wf.id ? 'bg-sf-accent/20 border-sf-accent text-sf-accent' : 'bg-sf-dark-800 border-sf-dark-600 text-sf-text-muted hover:border-sf-dark-500'}`}
-                      >
-                        <div className="font-medium">{wf.label}</div>
-                        <div className="text-[9px] opacity-70 mt-0.5">{wf.description}</div>
-                      </button>
-                    ))}
+                    {(WORKFLOWS[category] || []).map((wf) => {
+                      const isActiveWorkflow = workflowId === wf.id
+                      const tierMeta = getWorkflowTierMeta(wf.id)
+                      const runtimeLabel = formatWorkflowHardwareRuntime(wf.id)
+                      return (
+                        <button
+                          key={wf.id}
+                          onClick={() => setWorkflowId(wf.id)}
+                          className={`flex-1 px-3 py-2 rounded-lg border text-xs transition-colors ${
+                            isActiveWorkflow
+                              ? 'bg-sf-accent/20 border-sf-accent text-sf-accent'
+                              : 'bg-sf-dark-800 border-sf-dark-600 text-sf-text-muted hover:border-sf-dark-500'
+                          }`}
+                        >
+                          <div className="font-medium">{wf.label}</div>
+                          <div className="text-[9px] opacity-70 mt-0.5">{wf.description}</div>
+                          <div className="mt-1 flex items-center justify-between gap-1">
+                            <span className={`px-1.5 py-0.5 rounded border text-[9px] ${tierMeta?.badgeClass || 'border-sf-dark-600 bg-sf-dark-700 text-sf-text-muted'}`}>
+                              {tierMeta?.shortLabel || 'Unknown'}
+                            </span>
+                            <span className="text-[9px] opacity-70 whitespace-nowrap">{runtimeLabel}</span>
+                          </div>
+                        </button>
+                      )
+                    })}
                   </div>
                 </div>
 
@@ -3333,6 +3856,9 @@ function GenerateWorkspace() {
                 <div className="mt-1 text-[10px] text-sf-text-muted">
                   Storyboard: <span className="text-sf-text-secondary">{yoloProfile.storyboardWorkflowId}</span> · Video profile default: <span className="text-sf-text-secondary">{getWorkflowDisplayLabel(yoloProfile.videoWorkflowId)}</span>
                 </div>
+                <div className="text-[10px] text-sf-text-muted">
+                  Storyboard tier: <span className="text-sf-text-secondary">{yoloStoryboardTierSummary}</span>
+                </div>
                 <div>
                   <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Video Queue Target</label>
                   <select
@@ -3347,6 +3873,117 @@ function GenerateWorkspace() {
                   <div className="mt-1 text-[10px] text-sf-text-muted">
                     Queue Video Pass / Queue Shot Video will use: <span className="text-sf-text-secondary">{yoloSelectedVideoWorkflowLabel}</span>
                   </div>
+                  <div className="mt-1 text-[10px] text-sf-text-muted">
+                    Queue target tier: <span className="text-sf-text-secondary">{yoloVideoTargetTierSummary}</span>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/50 p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">YOLO Dependencies</div>
+                    <button
+                      type="button"
+                      onClick={() => { void runYoloDependencySnapshotCheck() }}
+                      disabled={!isConnected || yoloDependencyPanel.status === 'checking' || yoloDependencyCheckInProgress}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] border transition-colors ${
+                        !isConnected || yoloDependencyPanel.status === 'checking' || yoloDependencyCheckInProgress
+                          ? 'border-sf-dark-600 text-sf-text-muted cursor-not-allowed'
+                          : 'border-sf-dark-500 text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400'
+                      }`}
+                    >
+                      <RefreshCw className={`w-3 h-3 ${
+                        yoloDependencyPanel.status === 'checking' || yoloDependencyCheckInProgress ? 'animate-spin' : ''
+                      }`} />
+                      Re-check
+                    </button>
+                  </div>
+
+                  {yoloDependencyPanel.status === 'offline' && (
+                    <div className="mt-2 text-[10px] text-yellow-400">ComfyUI is offline. Start ComfyUI to verify dependencies.</div>
+                  )}
+                  {yoloDependencyPanel.status === 'checking' && (
+                    <div className="mt-2 text-[10px] text-yellow-400">Checking storyboard/video workflow dependencies...</div>
+                  )}
+                  {yoloDependencyPanel.status === 'error' && (
+                    <div className="mt-2 text-[10px] text-sf-error">
+                      Dependency check failed{yoloDependencyPanel.error ? ` (${yoloDependencyPanel.error})` : ''}.
+                    </div>
+                  )}
+
+                  <div className="mt-2 space-y-1.5">
+                    {yoloDependencyWorkflowIds.map((workflow) => {
+                      const result = yoloDependencyPanel.byWorkflow?.[workflow]
+                      const isMissing = Boolean(result?.hasPack && result?.hasBlockingIssues)
+                      const rowStatus = !result
+                        ? (yoloDependencyPanel.status === 'checking' ? 'Checking...' : 'Not checked')
+                        : result.status === 'error'
+                          ? 'Check failed'
+                          : result.status === 'no-pack' || !result.hasPack
+                            ? 'No manifest'
+                            : isMissing
+                              ? 'Missing required'
+                              : result.status === 'partial'
+                                ? 'Partially verified'
+                                : 'Ready'
+                      const rowToneClass = isMissing
+                        ? 'text-sf-error'
+                        : result?.status === 'partial'
+                          ? 'text-yellow-400'
+                          : result?.status === 'ready'
+                            ? 'text-green-400'
+                            : 'text-sf-text-muted'
+
+                      return (
+                        <details key={workflow} open={isMissing} className="rounded border border-sf-dark-700 bg-sf-dark-900/50 px-2 py-1">
+                          <summary className="cursor-pointer list-none flex items-center justify-between gap-2 text-[10px]">
+                            <span className="text-sf-text-secondary truncate">{getWorkflowDisplayLabel(workflow)}</span>
+                            <span className={rowToneClass}>{rowStatus}</span>
+                          </summary>
+
+                          {result && (
+                            <div className="mt-1.5 space-y-1 text-[10px]">
+                              {result.missingNodes?.length > 0 && (
+                                <div>
+                                  <div className="text-sf-text-muted mb-0.5">Missing nodes</div>
+                                  <div className="space-y-0.5">
+                                    {result.missingNodes.map((node) => (
+                                      <div key={node.classType} className="text-sf-error break-all">{node.classType}</div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {result.missingModels?.length > 0 && (
+                                <div>
+                                  <div className="text-sf-text-muted mb-0.5">Missing models</div>
+                                  <div className="space-y-0.5">
+                                    {result.missingModels.map((model) => (
+                                      <div key={`${model.classType}:${model.inputKey}:${model.filename}`} className="text-sf-error break-all">
+                                        {model.filename}
+                                        {model.targetSubdir ? (
+                                          <span className="text-sf-text-muted">{` -> ComfyUI/models/${model.targetSubdir}`}</span>
+                                        ) : null}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {result.missingAuth && (
+                                <div className="text-sf-error">Missing Comfy Partner API key in Settings.</div>
+                              )}
+
+                              {result.unresolvedModels?.length > 0 && result.status !== 'missing' && (
+                                <div className="text-yellow-400">
+                                  {result.unresolvedModels.length} model check(s) could not be auto-verified.
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </details>
+                      )
+                    })}
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-3 gap-2">
@@ -3359,19 +3996,33 @@ function GenerateWorkspace() {
                   </button>
                   <button
                     type="button"
-                    onClick={handleQueueYoloStoryboards}
-                    className="px-3 py-2 rounded-lg bg-sf-accent hover:bg-sf-accent-hover text-white text-xs"
+                    onClick={() => { void handleQueueYoloStoryboards() }}
+                    disabled={yoloDependencyCheckInProgress}
+                    className={`px-3 py-2 rounded-lg text-xs ${
+                      yoloDependencyCheckInProgress
+                        ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                        : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
+                    }`}
                   >
                     Queue Storyboards
                   </button>
                   <button
                     type="button"
-                    onClick={handleQueueYoloVideos}
-                    className="px-3 py-2 rounded-lg bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary text-xs"
+                    onClick={() => { void handleQueueYoloVideos() }}
+                    disabled={yoloDependencyCheckInProgress}
+                    className={`px-3 py-2 rounded-lg text-xs ${
+                      yoloDependencyCheckInProgress
+                        ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                        : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
+                    }`}
                   >
                     Queue Video Pass
                   </button>
                 </div>
+
+                {yoloDependencyCheckInProgress && (
+                  <div className="text-[10px] text-yellow-400">Checking YOLO workflow dependencies...</div>
+                )}
 
                 <div className="p-3 rounded-lg bg-sf-dark-800/70 border border-sf-dark-700 text-xs text-sf-text-secondary">
                   <div className="font-medium text-sf-text-primary mb-1">{yoloModeLabel} Plan Status</div>
@@ -3515,15 +4166,25 @@ function GenerateWorkspace() {
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => handleQueueYoloShotStoryboard(selectedYoloScene.id, shot.id)}
-                                      className="px-2 py-1 rounded text-[10px] bg-sf-accent/25 hover:bg-sf-accent/35 border border-sf-accent/40 text-sf-accent whitespace-nowrap"
+                                      onClick={() => { void handleQueueYoloShotStoryboard(selectedYoloScene.id, shot.id) }}
+                                      disabled={yoloDependencyCheckInProgress}
+                                      className={`px-2 py-1 rounded text-[10px] border whitespace-nowrap ${
+                                        yoloDependencyCheckInProgress
+                                          ? 'bg-sf-dark-700 border-sf-dark-600 text-sf-text-muted cursor-not-allowed'
+                                          : 'bg-sf-accent/25 hover:bg-sf-accent/35 border-sf-accent/40 text-sf-accent'
+                                      }`}
                                     >
                                       Queue Shot Storyboard
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => handleQueueYoloShotVideo(selectedYoloScene.id, shot.id)}
-                                      className="px-2 py-1 rounded text-[10px] bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary whitespace-nowrap"
+                                      onClick={() => { void handleQueueYoloShotVideo(selectedYoloScene.id, shot.id) }}
+                                      disabled={yoloDependencyCheckInProgress}
+                                      className={`px-2 py-1 rounded text-[10px] whitespace-nowrap ${
+                                        yoloDependencyCheckInProgress
+                                          ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                                          : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
+                                      }`}
                                     >
                                       {yoloSelectedVideoWorkflowIds.length > 1 ? 'Queue Shot Video (A/B)' : 'Queue Shot Video'}
                                     </button>
@@ -3610,9 +4271,9 @@ function GenerateWorkspace() {
           <div className="flex-shrink-0 p-4 border-b border-sf-dark-700">
             <button
               onClick={handleGenerate}
-              disabled={!isConnected}
+              disabled={isGenerateDisabled}
               className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
-                !isConnected ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                isGenerateDisabled ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
                 : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
               }`}
             >
@@ -3644,6 +4305,129 @@ function GenerateWorkspace() {
                 Clear Queue
               </button>
             </div>
+
+            {generationMode === 'single' && (
+              <div className="mt-3 rounded-lg border border-sf-dark-600 bg-sf-dark-800/60 p-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">Workflow Dependencies</div>
+                  <button
+                    type="button"
+                    onClick={() => { void runWorkflowDependencyCheck() }}
+                    disabled={!isConnected || dependencyCheckInProgress}
+                    className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] border transition-colors ${
+                      !isConnected || dependencyCheckInProgress
+                        ? 'border-sf-dark-600 text-sf-text-muted cursor-not-allowed'
+                        : 'border-sf-dark-500 text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400'
+                    }`}
+                    title="Re-check required nodes/models"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${dependencyCheckInProgress ? 'animate-spin' : ''}`} />
+                    Re-check
+                  </button>
+                </div>
+
+                <div className="mt-1 text-[10px] text-sf-text-muted">{currentWorkflow?.label || workflowId}</div>
+
+                {dependencyCheck.status === 'offline' && (
+                  <div className="mt-2 text-[10px] text-yellow-400">ComfyUI is offline. Start ComfyUI to run dependency checks.</div>
+                )}
+
+                {dependencyCheck.status === 'checking' && (
+                  <div className="mt-2 text-[10px] text-yellow-400">Checking installed nodes and models...</div>
+                )}
+
+                {dependencyCheck.status === 'error' && (
+                  <div className="mt-2 text-[10px] text-sf-error">
+                    Could not validate dependencies ({dependencyCheck.error || 'unknown error'}).
+                  </div>
+                )}
+
+                {dependencyCheck.status === 'no-pack' && (
+                  <div className="mt-2 text-[10px] text-sf-text-muted">
+                    No dependency manifest yet for this workflow. Queueing remains enabled.
+                  </div>
+                )}
+
+                {dependencyCheck.status === 'ready' && (
+                  <div className="mt-2 text-[10px] text-green-400">Ready. Required dependencies were detected.</div>
+                )}
+
+                {dependencyCheck.status === 'partial' && (
+                  <div className="mt-2 text-[10px] text-yellow-400">
+                    Partially verified. Some model lists were not exposed by ComfyUI, so manual verification may be needed.
+                  </div>
+                )}
+
+                {dependencyCheck.status === 'missing' && (
+                  <div className="mt-2 space-y-2">
+                    <div className="text-[10px] text-sf-error">
+                      Missing required dependencies. Queueing is blocked until these are installed.
+                    </div>
+
+                    {dependencyCheck.missingNodes.length > 0 && (
+                      <div className="text-[10px]">
+                        <div className="text-sf-text-muted mb-1">Missing nodes:</div>
+                        <div className="space-y-1">
+                          {dependencyCheck.missingNodes.map((node) => (
+                            <div key={node.classType} className="text-sf-error">{node.classType}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {dependencyCheck.missingModels.length > 0 && (
+                      <div className="text-[10px]">
+                        <div className="text-sf-text-muted mb-1">Missing models:</div>
+                        <div className="space-y-1">
+                          {dependencyCheck.missingModels.map((model) => (
+                            <div key={`${model.classType}:${model.inputKey}:${model.filename}`} className="text-sf-error break-all">
+                              {model.filename}
+                              {model.targetSubdir ? (
+                                <span className="text-sf-text-muted">{` -> ComfyUI/models/${model.targetSubdir}`}</span>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {dependencyCheck.missingAuth && (
+                      <div className="text-[10px] text-sf-error">
+                        Missing Comfy Partner API key in Settings.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {dependencyCheck.unresolvedModels.length > 0 && dependencyCheck.status !== 'missing' && (
+                  <div className="mt-2 text-[10px] text-yellow-400">
+                    {dependencyCheck.unresolvedModels.length} model check(s) could not be auto-verified from ComfyUI metadata.
+                  </div>
+                )}
+
+                {(dependencyCheck.status === 'missing' || dependencyCheck.status === 'partial') && (
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { void handleCopyDependencyReport() }}
+                      className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
+                    >
+                      Copy report
+                    </button>
+                    {dependencyCheck.pack?.docsUrl && (
+                      <a
+                        href={dependencyCheck.pack.docsUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[10px] text-sf-accent hover:text-sf-accent-hover"
+                      >
+                        Open node registry
+                      </a>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {!isConnected && (
               <div className="mt-2 text-[10px] text-sf-error text-center">ComfyUI is not running. Start it to generate.</div>
@@ -3746,6 +4530,8 @@ function GenerateWorkspace() {
                 <>
                   <div><span className="text-sf-text-muted">Category:</span> {category}</div>
                   <div><span className="text-sf-text-muted">Workflow:</span> {currentWorkflow?.label}</div>
+                  <div><span className="text-sf-text-muted">Hardware tier:</span> {currentWorkflowTierMeta?.label || 'Unknown'}</div>
+                  <div><span className="text-sf-text-muted">Runtime:</span> {currentWorkflowRuntimeLabel}</div>
                   <div><span className="text-sf-text-muted">Needs input:</span> {currentWorkflow?.needsImage ? 'Yes (image)' : 'No'}</div>
                   {category === 'video' && (
                     <>
@@ -3768,8 +4554,11 @@ function GenerateWorkspace() {
                   <div><span className="text-sf-text-muted">Creation:</span> {yoloModeLabel}</div>
                   <div><span className="text-sf-text-muted">Profile:</span> {yoloActiveQualityProfile}</div>
                   <div><span className="text-sf-text-muted">Storyboard workflow:</span> {yoloProfile.storyboardWorkflowId}</div>
+                  <div><span className="text-sf-text-muted">Storyboard tier:</span> {formatWorkflowHardwareRuntime(yoloProfile.storyboardWorkflowId)}</div>
                   <div><span className="text-sf-text-muted">Video default:</span> {getWorkflowDisplayLabel(yoloProfile.videoWorkflowId)}</div>
+                  <div><span className="text-sf-text-muted">Video default tier:</span> {formatWorkflowHardwareRuntime(yoloProfile.videoWorkflowId)}</div>
                   <div><span className="text-sf-text-muted">Video queue target:</span> {yoloSelectedVideoWorkflowLabel}</div>
+                  <div><span className="text-sf-text-muted">Video target tier:</span> {yoloVideoTargetTierSummary}</div>
                   <div><span className="text-sf-text-muted">Scenes:</span> {yoloSceneCount}</div>
                   <div><span className="text-sf-text-muted">Planned variants:</span> {yoloVariants.length}</div>
                   <div><span className="text-sf-text-muted">Queue variants:</span> {yoloQueueVariants.length}</div>

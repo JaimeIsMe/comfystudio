@@ -36,12 +36,10 @@ function AssetsPanel() {
   
   // Mask generation state
   const [maskDialogAsset, setMaskDialogAsset] = useState(null) // Asset to generate mask for
-  // Overlay generator modal (matte/letterbox/vignette/grain + Remotion motion overlays)
+  // Overlay generator modal (matte/letterbox/vignette/grain)
   const [overlayModalOpen, setOverlayModalOpen] = useState(false)
   const [overlayModalInitialType, setOverlayModalInitialType] = useState('letterbox')
   const [overlayModalFolderId, setOverlayModalFolderId] = useState(null) // when opened from folder context menu
-  const [overlayModalReplaceAssetId, setOverlayModalReplaceAssetId] = useState(null)
-  const [overlayModalInitialValues, setOverlayModalInitialValues] = useState(null)
   
   // Selected assets (array for multi-select; used for delete and drag-to-folder)
   const [selectedAssetIds, setSelectedAssetIds] = useState([])
@@ -113,7 +111,6 @@ function AssetsPanel() {
     removeAsset, 
     renameAsset, 
     addAsset,
-    updateAsset,
     folders,
     addFolder,
     removeFolder,
@@ -253,49 +250,11 @@ function AssetsPanel() {
 
   const closeOverlayModal = () => {
     setOverlayModalOpen(false)
-    setOverlayModalReplaceAssetId(null)
-    setOverlayModalInitialValues(null)
   }
 
   const openOverlayGenerator = (type = 'letterbox', folderId = null) => {
     setOverlayModalFolderId(folderId)
     setOverlayModalInitialType(type)
-    setOverlayModalReplaceAssetId(null)
-    setOverlayModalInitialValues(null)
-    setOverlayModalOpen(true)
-  }
-
-  const handleEditRemotionOverlay = (assetId) => {
-    const asset = assets.find(a => a.id === assetId)
-    if (!asset || asset.type !== 'video' || asset?.settings?.overlayKind !== 'remotion') return
-
-    const settings = asset.settings || {}
-    const remotion = settings.remotion || {}
-    const timelineSettings = getCurrentTimelineSettings() || { width: 1920, height: 1080 }
-    const width = Math.max(1, Math.min(4096, Math.round(Number(settings.width) || Number(timelineSettings.width) || 1920)))
-    const height = Math.max(1, Math.min(4096, Math.round(Number(settings.height) || Number(timelineSettings.height) || 1080)))
-    const panelOpacityPct = Math.max(
-      5,
-      Math.min(95, Math.round((Number(remotion.panelOpacity) || 0.72) * 100))
-    )
-
-    setOverlayModalFolderId(asset.folderId ?? null)
-    setOverlayModalInitialType('remotion')
-    setOverlayModalReplaceAssetId(asset.id)
-    setOverlayModalInitialValues({
-      name: asset.name || '',
-      useTimelineSize: false,
-      customWidth: width,
-      customHeight: height,
-      motionTemplate: settings.remotionTemplate || 'lower-third',
-      motionTitle: remotion.title || 'YOUR HEADLINE',
-      motionSubtitle: remotion.subtitle || '',
-      motionDuration: Number(asset.duration ?? settings.duration ?? 4) || 4,
-      motionFps: Number(settings.fps ?? 30) || 30,
-      motionAccentColor: remotion.accentColor || '#f59e0b',
-      motionTextColor: remotion.textColor || '#ffffff',
-      motionPanelOpacity: panelOpacityPct,
-    })
     setOverlayModalOpen(true)
   }
 
@@ -533,6 +492,10 @@ function AssetsPanel() {
   const handleToggleVideoAudio = (assetId) => {
     const asset = assets.find(a => a.id === assetId)
     if (!asset || asset.type !== 'video') return
+    if (asset.hasAudio === false) {
+      setContextMenu(null)
+      return
+    }
     const nextEnabled = asset.audioEnabled === false
     setAssetAudioEnabled(assetId, nextEnabled)
     if (!nextEnabled) {
@@ -695,7 +658,10 @@ function AssetsPanel() {
                   key={asset.id}
                   data-is-asset
                   draggable
-                  style={{ paddingLeft: (depth + 1) * 14 }}
+                  style={{
+                    paddingLeft: (depth + 1) * 14,
+                    ...(asset.color ? { borderLeft: `3px solid ${asset.color}` } : {}),
+                  }}
                   onDragStart={(e) => {
                     const data = JSON.stringify(idsToMove)
                     e.dataTransfer.setData('assetId', asset.id)
@@ -709,7 +675,6 @@ function AssetsPanel() {
                   onDoubleClick={() => handleDoubleClick(asset)}
                   onContextMenu={(e) => handleContextMenu(e, asset.id)}
                   className={`grid grid-cols-[minmax(0,1fr)_56px_48px_64px_36px_72px_28px] gap-1 items-center px-1.5 py-1 rounded cursor-pointer transition-colors group ${isSelected ? 'bg-sf-accent/20' : 'hover:bg-sf-dark-800'}`}
-                  style={asset.color ? { borderLeft: `3px solid ${asset.color}` } : {}}
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="w-6 h-6 rounded overflow-hidden bg-sf-dark-700 flex-shrink-0 flex items-center justify-center">
@@ -1361,13 +1326,6 @@ function AssetsPanel() {
                 <span className="w-4 text-center">◇</span>
                 Film grain loop…
               </button>
-              <button
-                onClick={() => { openOverlayGenerator('remotion', null); setContextMenu(null) }}
-                className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
-              >
-                <span className="w-4 text-center">✦</span>
-                Motion graphic (Remotion)…
-              </button>
             </>
           ) : (
             /* Asset menu */
@@ -1379,27 +1337,13 @@ function AssetsPanel() {
             const showThumbnails = asset && canGenerateThumbnails(asset)
             const hasSprite = asset?.sprite?.url
             const isGenerating = asset?.spriteGenerating
-            const showAudioToggle = asset?.type === 'video'
+            const showAudioToggle = asset?.type === 'video' && asset?.hasAudio !== false
             const isAudioDisabled = asset?.audioEnabled === false
-            const isRemotionOverlay = asset?.type === 'video' && asset?.settings?.overlayKind === 'remotion'
             
-            if (!showMask && !showThumbnails && !showAudioToggle && !isRemotionOverlay) return null
+            if (!showMask && !showThumbnails && !showAudioToggle) return null
             
             return (
               <>
-                {isRemotionOverlay && (
-                  <button
-                    onClick={() => {
-                      handleEditRemotionOverlay(contextMenu.assetId)
-                      setContextMenu(null)
-                    }}
-                    className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
-                  >
-                    <Edit3 className="w-3 h-3 text-sf-accent" />
-                    Edit Motion Overlay...
-                  </button>
-                )}
-
                 {/* Toggle audio on video */}
                 {showAudioToggle && (
                   <button
@@ -1514,18 +1458,8 @@ function AssetsPanel() {
         isOpen={overlayModalOpen}
         onClose={closeOverlayModal}
         onAdd={async (asset) => {
-          const replaceAssetId = asset?.replaceAssetId || null
-          const existingAsset = replaceAssetId ? assets.find(a => a.id === replaceAssetId) : null
-          const targetFolderId = existingAsset?.folderId ?? asset.folderId ?? currentFolderId
-
+          const targetFolderId = asset.folderId ?? currentFolderId
           const applyGeneratedAsset = (nextAsset) => {
-            if (replaceAssetId && existingAsset) {
-              updateAsset(replaceAssetId, {
-                ...nextAsset,
-                folderId: targetFolderId,
-              })
-              return
-            }
             addAsset({
               ...nextAsset,
               folderId: targetFolderId,
@@ -1545,20 +1479,18 @@ function AssetsPanel() {
             } catch (err) {
               console.warn('Could not save overlay to project, using blob URL:', err)
               const url = URL.createObjectURL(asset.blob)
-              const { blob: _b, replaceAssetId: _replace, ...rest } = asset
+              const { blob: _b, ...rest } = asset
               applyGeneratedAsset({ ...rest, url })
             }
           } else {
             const url = asset.blob ? URL.createObjectURL(asset.blob) : asset.url
-            const { blob: _b, replaceAssetId: _replace, ...rest } = asset
+            const { blob: _b, ...rest } = asset
             applyGeneratedAsset({ ...rest, url: url || rest.url })
           }
         }}
         timelineSize={getCurrentTimelineSettings() ? { width: getCurrentTimelineSettings().width, height: getCurrentTimelineSettings().height } : { width: 1920, height: 1080 }}
         defaultFolderId={overlayModalFolderId ?? currentFolderId}
         initialType={overlayModalInitialType}
-        replaceAssetId={overlayModalReplaceAssetId}
-        initialValues={overlayModalInitialValues}
       />
       
       {/* Footer with asset count */}

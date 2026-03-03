@@ -6,8 +6,10 @@ import useProjectStore from '../stores/projectStore'
 import { useFrameForAIStore } from '../stores/frameForAIStore'
 import { useTimelinePlayback } from '../hooks/useTimelinePlayback'
 import { captureTimelineFrameAt, getTopmostVideoOrImageClipAtTime } from '../utils/captureTimelineFrame'
+import { getAnimatedTransform } from '../utils/keyframes'
 import VideoLayerRenderer from './VideoLayerRenderer'
 import AudioLayerRenderer from './AudioLayerRenderer'
+import PreviewTransformGizmo from './PreviewTransformGizmo'
 import {
   getPreviewProxyPath,
   computePreviewSignature,
@@ -248,6 +250,11 @@ function PreviewPanel() {
     clips,
     tracks,
     transitions,
+    selectedClipIds,
+    selectClip,
+    updateClipTransform,
+    hasKeyframes,
+    setKeyframe,
     duration: timelineDuration,
     timelineFps,
     previewProxyStatus,
@@ -601,6 +608,87 @@ function PreviewPanel() {
     
     setActiveLayerClips(sortedClips)
   }, [previewMode, playheadPosition, getActiveClipsAtTime, tracks, clips])
+
+  const activeLayerClipById = useMemo(() => {
+    const map = new Map()
+    activeLayerClips.forEach(({ clip, track }) => {
+      map.set(clip.id, { clip, track })
+    })
+    return map
+  }, [activeLayerClips])
+
+  const selectedPreviewClip = useMemo(() => {
+    if (previewMode !== 'timeline') return null
+    const selectedId = selectedClipIds?.[0]
+    if (!selectedId) return null
+    const activeEntry = activeLayerClipById.get(selectedId)
+    if (!activeEntry) return null
+    if (!['video', 'image', 'text'].includes(activeEntry.clip?.type)) return null
+    return clips.find(c => c.id === selectedId) || activeEntry.clip
+  }, [previewMode, selectedClipIds, activeLayerClipById, clips])
+
+  const selectedPreviewClipId = selectedPreviewClip?.id || null
+  const selectedPreviewClipStartTime = selectedPreviewClip?.startTime || 0
+  const selectedPreviewScaleLinked = selectedPreviewClip?.transform?.scaleLinked === true
+  const selectedPreviewClipTime = selectedPreviewClip
+    ? playheadPosition - selectedPreviewClipStartTime
+    : 0
+
+  const selectedPreviewTransform = useMemo(() => {
+    if (!selectedPreviewClip) return null
+    const animated = getAnimatedTransform(selectedPreviewClip, selectedPreviewClipTime)
+    if (animated) return animated
+    return getClipTransform(selectedPreviewClip)
+  }, [selectedPreviewClip, selectedPreviewClipTime, getClipTransform])
+
+  const applyPreviewTransformUpdate = useCallback((updates, saveHistory = false) => {
+    if (!selectedPreviewClipId || !updates || typeof updates !== 'object') return
+    const entries = Object.entries(updates)
+    if (entries.length === 0) return
+
+    const nextUpdates = {}
+    for (const [key, value] of entries) {
+      if (typeof value === 'number') {
+        if (!Number.isFinite(value)) continue
+        nextUpdates[key] = value
+      } else if (typeof value === 'boolean') {
+        nextUpdates[key] = value
+      }
+    }
+
+    if (selectedPreviewScaleLinked) {
+      if ('scaleX' in nextUpdates && !('scaleY' in nextUpdates)) {
+        nextUpdates.scaleY = nextUpdates.scaleX
+      } else if ('scaleY' in nextUpdates && !('scaleX' in nextUpdates)) {
+        nextUpdates.scaleX = nextUpdates.scaleY
+      }
+    }
+
+    const updateKeys = Object.keys(nextUpdates)
+    if (updateKeys.length === 0) return
+
+    const clipTime = playheadPosition - selectedPreviewClipStartTime
+    updateClipTransform(selectedPreviewClipId, nextUpdates, saveHistory)
+    updateKeys.forEach((property) => {
+      if (hasKeyframes(selectedPreviewClipId, property)) {
+        setKeyframe(selectedPreviewClipId, property, clipTime, nextUpdates[property], 'easeInOut', { saveHistory: false })
+      }
+    })
+  }, [selectedPreviewClipId, selectedPreviewScaleLinked, playheadPosition, selectedPreviewClipStartTime, updateClipTransform, hasKeyframes, setKeyframe])
+
+  const handlePreviewTransformChange = useCallback((updates) => {
+    applyPreviewTransformUpdate(updates, false)
+  }, [applyPreviewTransformUpdate])
+
+  const handlePreviewTransformCommit = useCallback((updates) => {
+    applyPreviewTransformUpdate(updates, true)
+  }, [applyPreviewTransformUpdate])
+
+  const handlePreviewTransformInteractionStart = useCallback(() => {
+    if (timelineIsPlaying) {
+      timelineTogglePlay()
+    }
+  }, [timelineIsPlaying, timelineTogglePlay])
 
   // NOTE: Video sync is now handled by VideoLayerRenderer component
 
@@ -1020,6 +1108,19 @@ function PreviewPanel() {
     setIsPanning(false)
     setIsZooming(false)
   }, [])
+
+  const handlePreviewClipPointerDown = useCallback((clip, e) => {
+    if (!clip || previewMode !== 'timeline') return
+    if (isSpaceHeld || isPanning || isZooming) return
+    if (e.button !== 0) return
+    e.stopPropagation()
+    const isShiftHeld = e.shiftKey
+    const isCtrlHeld = e.ctrlKey || e.metaKey
+    selectClip(clip.id, {
+      addToSelection: isShiftHeld,
+      toggleSelection: isCtrlHeld,
+    })
+  }, [previewMode, isSpaceHeld, isPanning, isZooming, selectClip])
   
   // Handle mouse wheel for zooming
   const handleWheel = useCallback((e) => {
@@ -1586,8 +1687,22 @@ function PreviewPanel() {
                       transitionInfo={transitionInfo}
                       getTransitionStyles={getTransitionStyles}
                       getTransitionOverlay={getTransitionOverlay}
+                      onClipPointerDown={handlePreviewClipPointerDown}
                       previewScale={previewScale.uniform}
                     />
+                    {selectedPreviewClip && selectedPreviewTransform && (
+                      <PreviewTransformGizmo
+                        clip={selectedPreviewClip}
+                        transform={selectedPreviewTransform}
+                        buildVideoTransform={buildVideoTransform}
+                        previewScale={previewScale}
+                        zoomScale={getZoomScale()}
+                        disabled={isSpaceHeld || isPanning || isZooming}
+                        onInteractionStart={handlePreviewTransformInteractionStart}
+                        onTransformChange={handlePreviewTransformChange}
+                        onTransformCommit={handlePreviewTransformCommit}
+                      />
+                    )}
                   </>
                 )}
                 
@@ -1705,7 +1820,7 @@ function PreviewPanel() {
                   />
                 ) : (
                   <>
-                    {(currentPreview?.settings?.overlayKind === 'remotion' || currentPreview?.settings?.hasAlpha === true) && (
+                    {currentPreview?.settings?.hasAlpha === true && (
                       <div
                         className="absolute inset-0 pointer-events-none"
                         style={{

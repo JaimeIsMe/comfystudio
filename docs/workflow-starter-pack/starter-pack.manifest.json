@@ -1,0 +1,309 @@
+{
+  "generatedAt": "2026-03-03T00:41:51.037Z",
+  "totalWorkflows": 8,
+  "entries": [
+    {
+      "id": "wan22-i2v",
+      "label": "Image to Video (WAN 2.2)",
+      "category": "video",
+      "description": "Animate an image into video",
+      "tier": "pro",
+      "runtime": "local",
+      "appWorkflowPath": "/workflows/video_wan2_2_14B_i2v.json",
+      "setupWorkflowFile": "workflows/wan22-i2v.comfyui.json",
+      "setupWorkflowStatus": "pending",
+      "requiresComfyOrgApiKey": false,
+      "requiredNodes": [
+        "CLIPLoader",
+        "LoraLoaderModelOnly",
+        "SaveVideo",
+        "UNETLoader",
+        "VAELoader",
+        "WanImageToVideo"
+      ],
+      "requiredModels": [
+        {
+          "filename": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          "targetSubdir": "text_encoders",
+          "classType": "CLIPLoader",
+          "inputKey": "clip_name"
+        },
+        {
+          "filename": "wan_2.1_vae.safetensors",
+          "targetSubdir": "vae",
+          "classType": "VAELoader",
+          "inputKey": "vae_name"
+        },
+        {
+          "filename": "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+          "targetSubdir": "diffusion_models",
+          "classType": "UNETLoader",
+          "inputKey": "unet_name"
+        },
+        {
+          "filename": "wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
+          "targetSubdir": "loras",
+          "classType": "LoraLoaderModelOnly",
+          "inputKey": "lora_name"
+        },
+        {
+          "filename": "wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
+          "targetSubdir": "loras",
+          "classType": "LoraLoaderModelOnly",
+          "inputKey": "lora_name"
+        },
+        {
+          "filename": "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+          "targetSubdir": "diffusion_models",
+          "classType": "UNETLoader",
+          "inputKey": "unet_name"
+        }
+      ]
+    },
+    {
+      "id": "kling-o3-i2v",
+      "label": "Image to Video (Kling O3 Omni)",
+      "category": "video",
+      "description": "Premium image-to-video with Kling 3.0 Omni",
+      "tier": "cloud",
+      "runtime": "cloud",
+      "appWorkflowPath": "/workflows/api_kling_o3_i2v.json",
+      "setupWorkflowFile": "workflows/kling-o3-i2v.comfyui.json",
+      "setupWorkflowStatus": "pending",
+      "requiresComfyOrgApiKey": true,
+      "requiredNodes": [
+        "KlingOmniProImageToVideoNode",
+        "SaveVideo"
+      ],
+      "requiredModels": []
+    },
+    {
+      "id": "multi-angles",
+      "label": "Multiple Angles (Characters)",
+      "category": "image",
+      "description": "Generate 8 camera angles from one character image",
+      "tier": "standard",
+      "runtime": "local",
+      "appWorkflowPath": "/workflows/1_click_multiple_angles.json",
+      "setupWorkflowFile": "workflows/multi-angles.comfyui.json",
+      "setupWorkflowStatus": "pending",
+      "requiresComfyOrgApiKey": false,
+      "requiredNodes": [
+        "SaveImage",
+        "TextEncodeQwenImageEditPlus"
+      ],
+      "requiredModels": [
+        {
+          "filename": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+          "targetSubdir": "text_encoders",
+          "classType": "CLIPLoader",
+          "inputKey": "clip_name"
+        },
+        {
+          "filename": "qwen_image_edit_2509_fp8_e4m3fn.safetensors",
+          "targetSubdir": "diffusion_models",
+          "classType": "UNETLoader",
+          "inputKey": "unet_name"
+        },
+        {
+          "filename": "qwen_image_vae.safetensors",
+          "targetSubdir": "vae",
+          "classType": "VAELoader",
+          "inputKey": "vae_name"
+        },
+        {
+          "filename": "Qwen-Edit-2509-Multiple-angles.safetensors",
+          "targetSubdir": "loras",
+          "classType": "LoraLoaderModelOnly",
+          "inputKey": "lora_name"
+        },
+        {
+          "filename": "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+          "targetSubdir": "loras",
+          "classType": "LoraLoaderModelOnly",
+          "inputKey": "lora_name"
+        }
+      ]
+    },
+    {
+      "id": "multi-angles-scene",
+      "label": "Multiple Angles (Scenes)",
+      "category": "image",
+      "description": "Generate 8 camera angles from one scene image",
+      "tier": "standard",
+      "runtime": "local",
+      "appWorkflowPath": "/workflows/1_click_multiple_scene_angles-v1.0.json",
+      "setupWorkflowFile": "workflows/multi-angles-scene.comfyui.json",
+      "setupWorkflowStatus": "pending",
+      "requiresComfyOrgApiKey": false,
+      "requiredNodes": [
+        "SaveImage",
+        "TextEncodeQwenImageEditPlus"
+      ],
+      "requiredModels": [
+        {
+          "filename": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+          "targetSubdir": "text_encoders",
+          "classType": "CLIPLoader",
+          "inputKey": "clip_name"
+        },
+        {
+          "filename": "qwen_image_edit_2509_fp8_e4m3fn.safetensors",
+          "targetSubdir": "diffusion_models",
+          "classType": "UNETLoader",
+          "inputKey": "unet_name"
+        },
+        {
+          "filename": "qwen_image_vae.safetensors",
+          "targetSubdir": "vae",
+          "classType": "VAELoader",
+          "inputKey": "vae_name"
+        },
+        {
+          "filename": "Qwen-Edit-2509-Multiple-angles.safetensors",
+          "targetSubdir": "loras",
+          "classType": "LoraLoaderModelOnly",
+          "inputKey": "lora_name"
+        },
+        {
+          "filename": "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+          "targetSubdir": "loras",
+          "classType": "LoraLoaderModelOnly",
+          "inputKey": "lora_name"
+        }
+      ]
+    },
+    {
+      "id": "image-edit",
+      "label": "Image Edit",
+      "category": "image",
+      "description": "Edit image with text prompt",
+      "tier": "standard",
+      "runtime": "local",
+      "appWorkflowPath": "/workflows/image_qwen_image_edit_2509.json",
+      "setupWorkflowFile": "workflows/image-edit.comfyui.json",
+      "setupWorkflowStatus": "pending",
+      "requiresComfyOrgApiKey": false,
+      "requiredNodes": [
+        "FluxKontextImageScale",
+        "KSampler",
+        "SaveImage",
+        "TextEncodeQwenImageEditPlus"
+      ],
+      "requiredModels": [
+        {
+          "filename": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+          "targetSubdir": "text_encoders",
+          "classType": "CLIPLoader",
+          "inputKey": "clip_name"
+        },
+        {
+          "filename": "qwen_image_edit_2509_fp8_e4m3fn.safetensors",
+          "targetSubdir": "diffusion_models",
+          "classType": "UNETLoader",
+          "inputKey": "unet_name"
+        },
+        {
+          "filename": "qwen_image_vae.safetensors",
+          "targetSubdir": "vae",
+          "classType": "VAELoader",
+          "inputKey": "vae_name"
+        },
+        {
+          "filename": "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+          "targetSubdir": "loras",
+          "classType": "LoraLoaderModelOnly",
+          "inputKey": "lora_name"
+        }
+      ]
+    },
+    {
+      "id": "z-image-turbo",
+      "label": "Text to Image (Z Image Turbo)",
+      "category": "image",
+      "description": "Generate image from text prompt using Z Image Turbo",
+      "tier": "lite",
+      "runtime": "local",
+      "appWorkflowPath": "/workflows/image_z_image_turbo.json",
+      "setupWorkflowFile": "workflows/z-image-turbo.comfyui.json",
+      "setupWorkflowStatus": "pending",
+      "requiresComfyOrgApiKey": false,
+      "requiredNodes": [
+        "CLIPLoader",
+        "KSampler",
+        "ModelSamplingAuraFlow",
+        "SaveImage",
+        "UNETLoader",
+        "VAELoader"
+      ],
+      "requiredModels": [
+        {
+          "filename": "ae.safetensors",
+          "targetSubdir": "vae",
+          "classType": "VAELoader",
+          "inputKey": "vae_name"
+        },
+        {
+          "filename": "qwen_3_4b.safetensors",
+          "targetSubdir": "text_encoders",
+          "classType": "CLIPLoader",
+          "inputKey": "clip_name"
+        },
+        {
+          "filename": "z_image_turbo_bf16.safetensors",
+          "targetSubdir": "diffusion_models",
+          "classType": "UNETLoader",
+          "inputKey": "unet_name"
+        }
+      ]
+    },
+    {
+      "id": "nano-banana-2",
+      "label": "Text to Image (Nano Banana 2)",
+      "category": "image",
+      "description": "Premium text-to-image with Nano Banana 2",
+      "tier": "cloud",
+      "runtime": "cloud",
+      "appWorkflowPath": "/workflows/api_google_nano_banana2_image_edit.json",
+      "setupWorkflowFile": "workflows/nano-banana-2.comfyui.json",
+      "setupWorkflowStatus": "pending",
+      "requiresComfyOrgApiKey": true,
+      "requiredNodes": [
+        "GeminiNanoBanana2",
+        "SaveImage"
+      ],
+      "requiredModels": []
+    },
+    {
+      "id": "music-gen",
+      "label": "Music Generation",
+      "category": "audio",
+      "description": "Generate music from tags and lyrics",
+      "tier": "lite",
+      "runtime": "local",
+      "appWorkflowPath": "/workflows/music_generation.json",
+      "setupWorkflowFile": "workflows/music-gen.comfyui.json",
+      "setupWorkflowStatus": "pending",
+      "requiresComfyOrgApiKey": false,
+      "requiredNodes": [
+        "SaveAudioMP3",
+        "TextEncodeAceStepAudio1.5",
+        "VAEDecodeAudio"
+      ],
+      "requiredModels": [
+        {
+          "filename": "ace_1.5_vae.safetensors",
+          "targetSubdir": "vae",
+          "classType": "VAELoader",
+          "inputKey": "vae_name"
+        },
+        {
+          "filename": "acestep_v1.5_turbo.safetensors",
+          "targetSubdir": "diffusion_models",
+          "classType": "UNETLoader",
+          "inputKey": "unet_name"
+        }
+      ]
+    }
+  ]
+}

@@ -2,9 +2,22 @@ import { Server, FolderOpen, Palette, Monitor, Save, ChevronDown, ChevronRight, 
 import { useState, useEffect } from 'react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../../stores/projectStore'
 import { getPexelsApiKey, setPexelsApiKey } from '../../services/pexelsSettings'
+import {
+  DEFAULT_COMFY_PORT,
+  checkLocalComfyConnection,
+  getLocalComfyConnectionSync,
+  hydrateLocalComfyConnection,
+  parseLocalComfyPortInput,
+  saveLocalComfyConnectionPort,
+} from '../../services/localComfyConnection'
 
 function SettingsPanel() {
-  const [comfyUrl, setComfyUrl] = useState('http://127.0.0.1:8188')
+  const initialComfyConnection = getLocalComfyConnectionSync()
+  const [comfyPortInput, setComfyPortInput] = useState(String(initialComfyConnection.port || DEFAULT_COMFY_PORT))
+  const [comfyConnectionState, setComfyConnectionState] = useState({
+    status: 'idle',
+    message: `Local endpoint: ${initialComfyConnection.httpBase}`,
+  })
   const [outputPath, setOutputPath] = useState('C:\\Users\\...\\ComfyStudio\\outputs')
   const [workflowPath, setWorkflowPath] = useState('C:\\Users\\...\\ComfyUI\\workflow_API')
   const [theme, setTheme] = useState('dark')
@@ -40,6 +53,18 @@ function SettingsPanel() {
 
   useEffect(() => {
     getPexelsApiKey().then(key => setPexelsApiKeyLocal(key || ''))
+    hydrateLocalComfyConnection().then((connection) => {
+      setComfyPortInput(String(connection.port || DEFAULT_COMFY_PORT))
+      setComfyConnectionState({
+        status: 'idle',
+        message: `Local endpoint: ${connection.httpBase}`,
+      })
+    }).catch(() => {
+      setComfyConnectionState({
+        status: 'error',
+        message: `Could not load local ComfyUI port. Using ${DEFAULT_COMFY_PORT}.`,
+      })
+    })
   }, [])
 
   const toggleSection = (section) => {
@@ -52,10 +77,75 @@ function SettingsPanel() {
     setPexelsApiKey(pexelsApiKey.trim()).catch(console.error)
   }
 
+  const handleSaveComfyConnection = async () => {
+    const result = await saveLocalComfyConnectionPort(comfyPortInput)
+    if (!result.success) {
+      setComfyConnectionState({
+        status: 'error',
+        message: result.error || 'Invalid local ComfyUI configuration.',
+      })
+      return false
+    }
+    setComfyPortInput(String(result.config.port))
+    setComfyConnectionState({
+      status: 'idle',
+      message: `Saved local endpoint: ${result.config.httpBase}`,
+    })
+    return true
+  }
+
+  const handleTestComfyConnection = async () => {
+    const parsed = parseLocalComfyPortInput(comfyPortInput)
+    if (!parsed.success) {
+      setComfyConnectionState({
+        status: 'error',
+        message: parsed.error || 'Invalid local ComfyUI port.',
+      })
+      return
+    }
+    setComfyConnectionState({
+      status: 'testing',
+      message: `Testing localhost:${parsed.port}...`,
+    })
+    const testResult = await checkLocalComfyConnection({ port: parsed.port })
+    if (testResult.ok) {
+      setComfyConnectionState({
+        status: 'success',
+        message: `Connected to ${testResult.httpBase}`,
+      })
+      return
+    }
+    setComfyConnectionState({
+      status: 'error',
+      message: testResult.error || `Could not connect to localhost:${parsed.port}.`,
+    })
+  }
+
+  const handleResetComfyConnection = async () => {
+    setComfyPortInput(String(DEFAULT_COMFY_PORT))
+    const result = await saveLocalComfyConnectionPort(DEFAULT_COMFY_PORT)
+    if (!result.success) {
+      setComfyConnectionState({
+        status: 'error',
+        message: result.error || 'Could not reset local ComfyUI port.',
+      })
+      return
+    }
+    setComfyConnectionState({
+      status: 'idle',
+      message: `Reset to local endpoint: ${result.config.httpBase}`,
+    })
+  }
+
   const handleSaveAllSettings = async () => {
     await setPexelsApiKey(pexelsApiKey.trim())
-    setSettingsSaved(true)
-    setTimeout(() => setSettingsSaved(false), 2000)
+    const connectionSaved = await handleSaveComfyConnection()
+    if (connectionSaved) {
+      setSettingsSaved(true)
+      setTimeout(() => setSettingsSaved(false), 2000)
+    } else {
+      setSettingsSaved(false)
+    }
   }
 
   const Section = ({ id, icon: Icon, title, children }) => {
@@ -170,22 +260,51 @@ function SettingsPanel() {
         <Section id="connection" icon={Server} title="ComfyUI Connection">
           <div className="space-y-2">
             <div>
-              <label className="block text-[10px] text-sf-text-muted mb-1">Server URL</label>
+              <label className="block text-[10px] text-sf-text-muted mb-1">Local ComfyUI Port</label>
               <input
-                type="text"
-                value={comfyUrl}
-                onChange={(e) => setComfyUrl(e.target.value)}
+                type="number"
+                min={1}
+                max={65535}
+                step={1}
+                value={comfyPortInput}
+                onChange={(e) => setComfyPortInput(e.target.value)}
+                onBlur={() => { void handleSaveComfyConnection() }}
+                placeholder={String(DEFAULT_COMFY_PORT)}
                 className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-[11px] text-sf-text-primary focus:outline-none focus:border-sf-accent"
               />
+              <p className="text-[9px] text-sf-text-muted mt-1">
+                Local-only mode. Remote/LAN ComfyUI is disabled in this build.
+              </p>
             </div>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-1.5">
               <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 bg-sf-success rounded-full" />
-                <span className="text-[10px] text-sf-text-muted">Connected</span>
+                <div className={`w-2 h-2 rounded-full ${
+                  comfyConnectionState.status === 'success'
+                    ? 'bg-sf-success'
+                    : comfyConnectionState.status === 'error'
+                      ? 'bg-red-500'
+                      : comfyConnectionState.status === 'testing'
+                        ? 'bg-yellow-400 animate-pulse'
+                        : 'bg-sf-dark-500'
+                }`} />
+                <span className="text-[10px] text-sf-text-muted">{comfyConnectionState.message}</span>
               </div>
-              <button className="px-2 py-1 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors">
-                Test
-              </button>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => { void handleResetComfyConnection() }}
+                  className="px-2 py-1 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
+                >
+                  Reset
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { void handleTestComfyConnection() }}
+                  className="px-2 py-1 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
+                >
+                  Test
+                </button>
+              </div>
             </div>
             <div className="flex items-center justify-between pt-2 border-t border-sf-dark-700 mt-2">
               <div>
