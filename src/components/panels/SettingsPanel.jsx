@@ -28,9 +28,11 @@ function SettingsPanel() {
   const SHOW_COMFYUI_TAB_KEY = 'comfystudio-show-comfyui-tab'
   const [showComfyUiTab, setShowComfyUiTab] = useState(() => {
     try {
-      return localStorage.getItem(SHOW_COMFYUI_TAB_KEY) !== 'false'
+      const stored = localStorage.getItem(SHOW_COMFYUI_TAB_KEY)
+      if (stored === null) return false
+      return stored === 'true'
     } catch {
-      return true
+      return false
     }
   })
   const handleToggleShowComfyUiTab = () => {

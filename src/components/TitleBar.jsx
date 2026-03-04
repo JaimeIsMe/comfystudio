@@ -16,7 +16,7 @@ function TitleBar({
   onTabChange,
   centerInsetLeft = 0,
   centerInsetRight = 0,
-  showComfyUiTab = true,
+  showComfyUiTab = false,
 }) {
   const tabs = showComfyUiTab ? TOP_TABS : TOP_TABS.filter(t => t.id !== 'comfyui')
 

@@ -1,5 +1,5 @@
 import { Upload, FolderOpen, Image, Video, Music, Search, Grid, List, Trash2, Edit3, Play, FileVideo, FileAudio, FileImage, Loader2, FolderPlus, ChevronRight, ChevronDown, ChevronLeft, Home, Minus, Plus, MoreVertical, FolderInput, Wand2, Layers, Film, VolumeX, Volume2, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react'
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import useAssetsStore from '../../stores/assetsStore'
 import useProjectStore from '../../stores/projectStore'
 import useTimelineStore from '../../stores/timelineStore'
@@ -16,6 +16,24 @@ const THUMBNAIL_SIZES = {
   large: { cols: 1, iconSize: 'w-8 h-8', playSize: 'w-8 h-8', badgeSize: 'text-[8px]', nameSize: 'text-[11px]', infoSize: 'text-[10px]' },
 }
 const THUMBNAIL_SIZE_ORDER = ['xs', 'small', 'medium', 'large']
+const FOLDER_TILE_ICON_SIZES = {
+  xs: 'w-10 h-10',
+  small: 'w-12 h-12',
+  medium: 'w-16 h-16',
+  large: 'w-20 h-20',
+}
+let transparentAssetDragImage = null
+
+const getTransparentAssetDragImage = () => {
+  if (transparentAssetDragImage) return transparentAssetDragImage
+  if (typeof document === 'undefined') return null
+
+  const canvas = document.createElement('canvas')
+  canvas.width = 1
+  canvas.height = 1
+  transparentAssetDragImage = canvas
+  return transparentAssetDragImage
+}
 
 function AssetsPanel() {
   const [viewMode, setViewMode] = useState('grid')
@@ -25,7 +43,10 @@ function AssetsPanel() {
   const [editName, setEditName] = useState('')
   const [isImporting, setIsImporting] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
+  const [isAssetDragActive, setIsAssetDragActive] = useState(false)
+  const [assetDragPreview, setAssetDragPreview] = useState(null) // { assetId, clientX, clientY }
   const fileInputRef = useRef(null)
+  const activeAssetDragIdRef = useRef(null)
   
   // Folder state
   const [currentFolderId, setCurrentFolderId] = useState(null) // null = root
@@ -46,14 +67,14 @@ function AssetsPanel() {
   const [dragOverFolderId, setDragOverFolderId] = useState(null) // 'root' | folderId for drop highlight
   // List view: which folder IDs are expanded to show contents inline
   const [expandedFolderIds, setExpandedFolderIds] = useState(() => new Set())
-  // List details view: sort by column (name | type | length | size | source | date), sortDir (asc | desc)
+  // List details view: sort by column (name | type | source | date), sortDir (asc | desc)
   const LIST_SORT_KEY = 'assetsListSort'
   const [listSortBy, setListSortBy] = useState(() => {
     try {
       const s = localStorage.getItem(LIST_SORT_KEY)
       if (s) {
         const { by, dir } = JSON.parse(s)
-        if (['name', 'type', 'length', 'size', 'source', 'date'].includes(by) && (dir === 'asc' || dir === 'desc')) return { by, dir }
+        if (['name', 'type', 'source', 'date'].includes(by) && (dir === 'asc' || dir === 'desc')) return { by, dir }
       }
     } catch (_) {}
     return { by: 'date', dir: 'desc' }
@@ -95,6 +116,68 @@ function AssetsPanel() {
       window.dispatchEvent(new Event('comfystudio-assets-drag-end'))
     } catch (_) {}
   }
+
+  const clearAssetDragPreview = useCallback(() => {
+    activeAssetDragIdRef.current = null
+    setIsAssetDragActive(false)
+    setAssetDragPreview(null)
+  }, [])
+
+  const updateAssetDragPreviewPosition = useCallback((clientX, clientY) => {
+    const activeAssetId = activeAssetDragIdRef.current
+    if (!activeAssetId) return
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return
+    if (clientX === 0 && clientY === 0) return
+
+    const panelBounds = panelRef.current?.getBoundingClientRect()
+    const isInsidePanel = Boolean(
+      panelBounds
+      && clientX >= panelBounds.left
+      && clientX <= panelBounds.right
+      && clientY >= panelBounds.top
+      && clientY <= panelBounds.bottom
+    )
+
+    if (!isInsidePanel) {
+      setAssetDragPreview((prev) => (prev ? null : prev))
+      return
+    }
+
+    setAssetDragPreview((prev) => {
+      if (
+        prev
+        && prev.assetId === activeAssetId
+        && prev.clientX === clientX
+        && prev.clientY === clientY
+      ) {
+        return prev
+      }
+      return { assetId: activeAssetId, clientX, clientY }
+    })
+  }, [])
+
+  const startAssetDrag = useCallback((e, assetId, assetIds) => {
+    const data = JSON.stringify(assetIds)
+    e.dataTransfer.setData('assetId', assetId)
+    e.dataTransfer.setData(ASSET_DRAG_TYPE, data)
+    e.dataTransfer.setData('text/plain', data)
+    e.dataTransfer.effectAllowed = 'copyMove'
+
+    const dragImage = getTransparentAssetDragImage()
+    if (dragImage && typeof e.dataTransfer.setDragImage === 'function') {
+      e.dataTransfer.setDragImage(dragImage, 0, 0)
+    }
+
+    activeAssetDragIdRef.current = assetId
+    setIsAssetDragActive(true)
+    updateAssetDragPreviewPosition(e.clientX, e.clientY)
+    notifyAssetDragStart(assetId, assetIds)
+  }, [updateAssetDragPreviewPosition])
+
+  const endAssetDrag = useCallback(() => {
+    clearAssetDragPreview()
+    notifyAssetDragEnd()
+  }, [clearAssetDragPreview])
 
   // Color palette for folders and assets (null = no color)
   const COLOR_PALETTE = [
@@ -213,25 +296,37 @@ function AssetsPanel() {
   // Handle drag and drop
   const handleDragOver = (e) => {
     e.preventDefault()
+    const isInternalAssetDrag = e.dataTransfer?.types?.includes(ASSET_DRAG_TYPE)
+    if (isInternalAssetDrag) {
+      setIsDragOver(false)
+      updateAssetDragPreviewPosition(e.clientX, e.clientY)
+      return
+    }
     e.stopPropagation()
     setIsDragOver(true)
   }
   
   const handleDragLeave = (e) => {
     e.preventDefault()
-    e.stopPropagation()
+    const isInternalAssetDrag = e.dataTransfer?.types?.includes(ASSET_DRAG_TYPE)
+    if (!isInternalAssetDrag) {
+      e.stopPropagation()
+    }
     setIsDragOver(false)
     if (!e.currentTarget.contains(e.relatedTarget)) setDragOverFolderId(null)
   }
   
   const handleDrop = (e) => {
     e.preventDefault()
-    e.stopPropagation()
+    const isInternalAssetDrag = e.dataTransfer?.types?.includes(ASSET_DRAG_TYPE)
+    if (!isInternalAssetDrag) {
+      e.stopPropagation()
+    }
     setIsDragOver(false)
     setDragOverFolderId(null)
 
     // Ignore internal asset drag (handled by folder drop targets)
-    if (e.dataTransfer.types.includes(ASSET_DRAG_TYPE)) return
+    if (isInternalAssetDrag) return
 
     const files = Array.from(e.dataTransfer.files || [])
     const validFiles = files.filter(f => {
@@ -281,6 +376,43 @@ function AssetsPanel() {
       return inFolder && matchesSearch
     })
   }
+
+  // Count assets recursively so parent folders (e.g. Generated) reflect nested content.
+  const folderDescendantIdsByFolderId = useMemo(() => {
+    const childrenByParent = new Map()
+    for (const folder of (folders || [])) {
+      const parentId = folder?.parentId || null
+      const existing = childrenByParent.get(parentId) || []
+      existing.push(folder.id)
+      childrenByParent.set(parentId, existing)
+    }
+
+    const descendantsByFolder = new Map()
+    for (const folder of (folders || [])) {
+      const descendants = new Set([folder.id])
+      const queue = [folder.id]
+      while (queue.length > 0) {
+        const currentFolderId = queue.shift()
+        const childIds = childrenByParent.get(currentFolderId) || []
+        for (const childId of childIds) {
+          if (descendants.has(childId)) continue
+          descendants.add(childId)
+          queue.push(childId)
+        }
+      }
+      descendantsByFolder.set(folder.id, descendants)
+    }
+
+    return descendantsByFolder
+  }, [folders])
+
+  const getFolderItemCount = useCallback((folderId) => {
+    const descendants = folderDescendantIdsByFolderId.get(folderId)
+    if (!descendants || descendants.size === 0) return 0
+    return assets.reduce((count, asset) => (
+      descendants.has(asset.folderId || null) ? count + 1 : count
+    ), 0)
+  }, [assets, folderDescendantIdsByFolderId])
 
   // Get folder breadcrumb path
   const getFolderPath = () => {
@@ -358,17 +490,7 @@ function AssetsPanel() {
     return date.toLocaleDateString()
   }
 
-  // Format file size (bytes -> KB/MB)
-  const formatFileSize = (bytes) => {
-    if (bytes == null || typeof bytes !== 'number' || bytes <= 0) return '—'
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
-  }
-
   // Asset value getters for sorting and display
-  const getAssetLength = (a) => a.duration ?? a.settings?.duration ?? 0
-  const getAssetSize = (a) => a.size ?? 0
   const getAssetSource = (a) => (a.isImported ? 'IMP' : 'AI')
   const getAssetDate = (a) => new Date(a.createdAt || a.imported || 0).getTime()
   const getAssetTypeLabel = (a) => {
@@ -387,8 +509,6 @@ function AssetsPanel() {
       switch (by) {
         case 'name': va = (a.name || '').toLowerCase(); vb = (b.name || '').toLowerCase(); return mult * (va < vb ? -1 : va > vb ? 1 : 0)
         case 'type': va = getAssetTypeLabel(a); vb = getAssetTypeLabel(b); return mult * (va < vb ? -1 : va > vb ? 1 : 0)
-        case 'length': va = getAssetLength(a); vb = getAssetLength(b); return mult * (va - vb)
-        case 'size': va = getAssetSize(a); vb = getAssetSize(b); return mult * (va - vb)
         case 'source': va = getAssetSource(a); vb = getAssetSource(b); return mult * (va < vb ? -1 : va > vb ? 1 : 0)
         case 'date': default: va = getAssetDate(a); vb = getAssetDate(b); return mult * (va - vb)
       }
@@ -555,6 +675,26 @@ function AssetsPanel() {
     window.addEventListener('click', handleClick)
     return () => window.removeEventListener('click', handleClick)
   }, [contextMenu])
+
+  useEffect(() => {
+    if (!isAssetDragActive) return undefined
+
+    const handleWindowDragOver = (e) => {
+      updateAssetDragPreviewPosition(e.clientX, e.clientY)
+    }
+    const handleWindowDrop = () => clearAssetDragPreview()
+    const handleWindowDragEnd = () => clearAssetDragPreview()
+
+    window.addEventListener('dragover', handleWindowDragOver, true)
+    window.addEventListener('drop', handleWindowDrop, true)
+    window.addEventListener('dragend', handleWindowDragEnd, true)
+
+    return () => {
+      window.removeEventListener('dragover', handleWindowDragOver, true)
+      window.removeEventListener('drop', handleWindowDrop, true)
+      window.removeEventListener('dragend', handleWindowDragEnd, true)
+    }
+  }, [isAssetDragActive, updateAssetDragPreviewPosition, clearAssetDragPreview])
   
   // Move asset(s) to folder
   const handleMoveToFolder = (assetIdOrIds, folderId) => {
@@ -571,6 +711,8 @@ function AssetsPanel() {
     e.preventDefault()
     e.stopPropagation()
     e.dataTransfer.dropEffect = 'move'
+    setIsDragOver(false)
+    updateAssetDragPreviewPosition(e.clientX, e.clientY)
     setDragOverFolderId(folderId)
   }
   const handleFolderDragLeave = (e) => {
@@ -601,6 +743,12 @@ function AssetsPanel() {
   
   // Get thumbnail size config
   const sizeConfig = THUMBNAIL_SIZES[thumbnailSize]
+  const folderTileIconSize = FOLDER_TILE_ICON_SIZES[thumbnailSize] || FOLDER_TILE_ICON_SIZES.medium
+  const listDetailsGridColumns = 'grid-cols-[minmax(0,1fr)_64px_44px_86px_28px]'
+  const dragPreviewAsset = assetDragPreview
+    ? assets.find((asset) => asset.id === assetDragPreview.assetId) || null
+    : null
+  const DragPreviewIcon = dragPreviewAsset ? getIcon(dragPreviewAsset.type) : null
 
   // List view: recursive folder row with expand arrow and inline contents
   const ListFolderRow = ({ folder, depth }) => {
@@ -632,7 +780,7 @@ function AssetsPanel() {
           <FolderOpen className="w-3.5 h-3.5 text-sf-accent flex-shrink-0" />
           <div className="flex-1 min-w-0">
             <p className="text-[11px] text-sf-text-primary truncate">{folder.name}</p>
-            <p className="text-[9px] text-sf-text-muted">{assets.filter(a => a.folderId === folder.id).length} items</p>
+            <p className="text-[9px] text-sf-text-muted">{getFolderItemCount(folder.id)} items</p>
           </div>
           <button
             onClick={(e) => {
@@ -651,8 +799,6 @@ function AssetsPanel() {
               const Icon = getIcon(asset.type)
               const isSelected = selectedAssetIds.includes(asset.id) || currentPreview?.id === asset.id
               const idsToMove = selectedAssetIds.includes(asset.id) ? selectedAssetIds : [asset.id]
-              const lengthSec = getAssetLength(asset)
-              const lengthStr = lengthSec > 0 ? (lengthSec >= 60 ? `${Math.floor(lengthSec / 60)}:${String(Math.floor(lengthSec % 60)).padStart(2, '0')}` : `${lengthSec}s`) : '—'
               return (
                 <div
                   key={asset.id}
@@ -662,19 +808,12 @@ function AssetsPanel() {
                     paddingLeft: (depth + 1) * 14,
                     ...(asset.color ? { borderLeft: `3px solid ${asset.color}` } : {}),
                   }}
-                  onDragStart={(e) => {
-                    const data = JSON.stringify(idsToMove)
-                    e.dataTransfer.setData('assetId', asset.id)
-                    e.dataTransfer.setData(ASSET_DRAG_TYPE, data)
-                    e.dataTransfer.setData('text/plain', data)
-                    e.dataTransfer.effectAllowed = 'copyMove'
-                    notifyAssetDragStart(asset.id, idsToMove)
-                  }}
-                  onDragEnd={notifyAssetDragEnd}
+                  onDragStart={(e) => startAssetDrag(e, asset.id, idsToMove)}
+                  onDragEnd={endAssetDrag}
                   onClick={(e) => handleClick(e, asset)}
                   onDoubleClick={() => handleDoubleClick(asset)}
                   onContextMenu={(e) => handleContextMenu(e, asset.id)}
-                  className={`grid grid-cols-[minmax(0,1fr)_56px_48px_64px_36px_72px_28px] gap-1 items-center px-1.5 py-1 rounded cursor-pointer transition-colors group ${isSelected ? 'bg-sf-accent/20' : 'hover:bg-sf-dark-800'}`}
+                  className={`grid ${listDetailsGridColumns} gap-1 items-center px-1.5 py-1 rounded cursor-pointer transition-colors group ${isSelected ? 'bg-sf-accent/20' : 'hover:bg-sf-dark-800'}`}
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="w-6 h-6 rounded overflow-hidden bg-sf-dark-700 flex-shrink-0 flex items-center justify-center">
@@ -695,8 +834,6 @@ function AssetsPanel() {
                     )}
                   </div>
                   <span className="text-[10px] text-sf-text-muted truncate">{getAssetTypeLabel(asset)}</span>
-                  <span className="text-[10px] text-sf-text-muted tabular-nums">{lengthStr}</span>
-                  <span className="text-[10px] text-sf-text-muted truncate">{formatFileSize(getAssetSize(asset))}</span>
                   <span className={`text-[9px] font-medium px-1 py-0.5 rounded ${asset.isImported ? 'bg-sf-dark-700 text-sf-text-secondary' : 'bg-sf-accent/90 text-white'}`}>{getAssetSource(asset)}</span>
                   <span className="text-[10px] text-sf-text-muted truncate">{formatTime(asset.createdAt)}</span>
                   <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -953,18 +1090,22 @@ function AssetsPanel() {
                 onDragLeave={handleFolderDragLeave}
                 onDrop={(e) => handleFolderDrop(e, folder.id)}
                 onContextMenu={(e) => handleFolderContextMenu(e, folder.id)}
-                className={`aspect-video bg-sf-dark-800 border rounded flex flex-col items-center justify-center cursor-pointer transition-colors group ${
+                className={`bg-sf-dark-800 border rounded cursor-pointer transition-colors group overflow-hidden ${
                   dragOverFolderId === folder.id ? 'border-sf-accent ring-2 ring-sf-accent ring-offset-1 ring-offset-sf-dark-900' : 'border-sf-dark-600 hover:border-sf-dark-500'
                 }`}
                 style={folder.color ? { borderLeftWidth: '4px', borderLeftColor: folder.color } : {}}
               >
-                <FolderOpen className={`${sizeConfig.iconSize} text-sf-accent mb-1`} />
-                <span className={`${sizeConfig.nameSize} text-sf-text-primary truncate max-w-full px-1`}>
-                  {folder.name}
-                </span>
-                <span className={`${sizeConfig.infoSize} text-sf-text-muted`}>
-                  {assets.filter(a => a.folderId === folder.id).length} items
-                </span>
+                <div className="aspect-video bg-gradient-to-b from-sf-dark-700/25 to-sf-dark-900/75 flex items-center justify-center">
+                  <FolderOpen className={`${folderTileIconSize} text-sf-accent/80`} strokeWidth={1.6} />
+                </div>
+                <div className="px-1.5 py-1 border-t border-sf-dark-700/80 bg-sf-dark-900/85 text-center leading-tight">
+                  <span className={`${sizeConfig.nameSize} block text-sf-text-primary truncate`}>
+                    {folder.name}
+                  </span>
+                  <span className={`${sizeConfig.infoSize} text-sf-text-muted`}>
+                    {getFolderItemCount(folder.id)} items
+                  </span>
+                </div>
               </div>
             ))}
             
@@ -979,15 +1120,8 @@ function AssetsPanel() {
                   key={asset.id}
                   data-is-asset
                   draggable
-                  onDragStart={(e) => {
-                    const data = JSON.stringify(idsToMove)
-                    e.dataTransfer.setData('assetId', asset.id)
-                    e.dataTransfer.setData(ASSET_DRAG_TYPE, data)
-                    e.dataTransfer.setData('text/plain', data)
-                    e.dataTransfer.effectAllowed = 'copyMove'
-                    notifyAssetDragStart(asset.id, idsToMove)
-                  }}
-                  onDragEnd={notifyAssetDragEnd}
+                  onDragStart={(e) => startAssetDrag(e, asset.id, idsToMove)}
+                  onDragEnd={endAssetDrag}
                   onClick={(e) => handleClick(e, asset)}
                   onDoubleClick={() => handleDoubleClick(asset)}
                   onContextMenu={(e) => handleContextMenu(e, asset.id)}
@@ -1128,18 +1262,12 @@ function AssetsPanel() {
             )}
 
             {/* Column headers - sortable */}
-            <div className="grid grid-cols-[minmax(0,1fr)_56px_48px_64px_36px_72px_28px] gap-1 px-1.5 py-1 border-b border-sf-dark-700 flex-shrink-0 text-[10px] text-sf-text-muted font-medium">
+            <div className={`grid ${listDetailsGridColumns} gap-1 px-1.5 py-1 border-b border-sf-dark-700 flex-shrink-0 text-[10px] text-sf-text-muted font-medium`}>
               <button type="button" onClick={() => setListSort('name')} className="text-left hover:text-sf-text-primary flex items-center gap-0.5 truncate">
                 Name {listSortBy.by === 'name' ? (listSortBy.dir === 'asc' ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />) : <ArrowUpDown className="w-3 h-3 flex-shrink-0 opacity-50" />}
               </button>
               <button type="button" onClick={() => setListSort('type')} className="text-left hover:text-sf-text-primary flex items-center gap-0.5">
                 Type {listSortBy.by === 'type' ? (listSortBy.dir === 'asc' ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />) : <ArrowUpDown className="w-3 h-3 flex-shrink-0 opacity-50" />}
-              </button>
-              <button type="button" onClick={() => setListSort('length')} className="text-left hover:text-sf-text-primary flex items-center gap-0.5">
-                Length {listSortBy.by === 'length' ? (listSortBy.dir === 'asc' ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />) : <ArrowUpDown className="w-3 h-3 flex-shrink-0 opacity-50" />}
-              </button>
-              <button type="button" onClick={() => setListSort('size')} className="text-left hover:text-sf-text-primary flex items-center gap-0.5">
-                Size {listSortBy.by === 'size' ? (listSortBy.dir === 'asc' ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />) : <ArrowUpDown className="w-3 h-3 flex-shrink-0 opacity-50" />}
               </button>
               <button type="button" onClick={() => setListSort('source')} className="text-left hover:text-sf-text-primary flex items-center gap-0.5">
                 Source {listSortBy.by === 'source' ? (listSortBy.dir === 'asc' ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />) : <ArrowUpDown className="w-3 h-3 flex-shrink-0 opacity-50" />}
@@ -1161,27 +1289,18 @@ function AssetsPanel() {
               const Icon = getIcon(asset.type)
               const isSelected = selectedAssetIds.includes(asset.id) || currentPreview?.id === asset.id
               const idsToMove = selectedAssetIds.includes(asset.id) ? selectedAssetIds : [asset.id]
-              const lengthSec = getAssetLength(asset)
-              const lengthStr = lengthSec > 0 ? (lengthSec >= 60 ? `${Math.floor(lengthSec / 60)}:${String(Math.floor(lengthSec % 60)).padStart(2, '0')}` : `${lengthSec}s`) : '—'
 
               return (
                 <div 
                   key={asset.id}
                   data-is-asset
                   draggable
-                  onDragStart={(e) => {
-                    const data = JSON.stringify(idsToMove)
-                    e.dataTransfer.setData('assetId', asset.id)
-                    e.dataTransfer.setData(ASSET_DRAG_TYPE, data)
-                    e.dataTransfer.setData('text/plain', data)
-                    e.dataTransfer.effectAllowed = 'copyMove'
-                    notifyAssetDragStart(asset.id, idsToMove)
-                  }}
-                  onDragEnd={notifyAssetDragEnd}
+                  onDragStart={(e) => startAssetDrag(e, asset.id, idsToMove)}
+                  onDragEnd={endAssetDrag}
                   onClick={(e) => handleClick(e, asset)}
                   onDoubleClick={() => handleDoubleClick(asset)}
                   onContextMenu={(e) => handleContextMenu(e, asset.id)}
-                  className={`grid grid-cols-[minmax(0,1fr)_56px_48px_64px_36px_72px_28px] gap-1 items-center px-1.5 py-1 rounded cursor-pointer transition-colors group ${
+                  className={`grid ${listDetailsGridColumns} gap-1 items-center px-1.5 py-1 rounded cursor-pointer transition-colors group ${
                     isSelected ? 'bg-sf-accent/20' : 'hover:bg-sf-dark-800'
                   }`}
                   style={asset.color ? { borderLeft: `3px solid ${asset.color}` } : {}}
@@ -1213,8 +1332,6 @@ function AssetsPanel() {
                     )}
                   </div>
                   <span className="text-[10px] text-sf-text-muted truncate">{getAssetTypeLabel(asset)}</span>
-                  <span className="text-[10px] text-sf-text-muted tabular-nums">{lengthStr}</span>
-                  <span className="text-[10px] text-sf-text-muted truncate">{formatFileSize(getAssetSize(asset))}</span>
                   <span className={`text-[9px] font-medium px-1 py-0.5 rounded ${asset.isImported ? 'bg-sf-dark-700 text-sf-text-secondary' : 'bg-sf-accent/90 text-white'}`}>{getAssetSource(asset)}</span>
                   <span className="text-[10px] text-sf-text-muted truncate" title={asset.createdAt}>{formatTime(asset.createdAt)}</span>
                   <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1228,6 +1345,33 @@ function AssetsPanel() {
           </div>
         )}
       </div>
+
+      {/* Asset drag thumbnail: shown only while cursor remains over Assets panel */}
+      {dragPreviewAsset && assetDragPreview && (
+        <div
+          className="fixed z-[70] pointer-events-none bg-sf-dark-800/95 border border-sf-dark-500 rounded-md shadow-lg px-2 py-1.5 max-w-[220px]"
+          style={{
+            left: assetDragPreview.clientX + 14,
+            top: assetDragPreview.clientY + 14,
+          }}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-10 h-7 rounded overflow-hidden bg-sf-dark-700 flex-shrink-0 flex items-center justify-center">
+              {dragPreviewAsset.type === 'video' && dragPreviewAsset.url ? (
+                <video src={dragPreviewAsset.url} className="w-full h-full object-cover" muted preload="metadata" />
+              ) : dragPreviewAsset.type === 'image' && dragPreviewAsset.url ? (
+                <img src={dragPreviewAsset.url} alt="" className="w-full h-full object-cover" />
+              ) : (
+                DragPreviewIcon && <DragPreviewIcon className="w-4 h-4 text-sf-text-muted" />
+              )}
+            </div>
+            <div className="min-w-0">
+              <div className="text-[10px] text-sf-text-primary truncate">{dragPreviewAsset.name}</div>
+              <div className="text-[9px] text-sf-text-muted truncate">{getAssetTypeLabel(dragPreviewAsset)}</div>
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Context Menu */}
       {contextMenu && (

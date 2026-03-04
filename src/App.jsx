@@ -57,9 +57,11 @@ function App() {
 
   const [showComfyUiTab, setShowComfyUiTab] = useState(() => {
     try {
-      return localStorage.getItem(SHOW_COMFYUI_TAB_KEY) !== 'false'
+      const stored = localStorage.getItem(SHOW_COMFYUI_TAB_KEY)
+      if (stored === null) return false
+      return stored === 'true'
     } catch {
-      return true
+      return false
     }
   })
   const [comfyIframeUrl, setComfyIframeUrl] = useState(() => getLocalComfyHttpBaseSync())
@@ -257,15 +259,20 @@ function App() {
             />
           </div>
         )}
+        {/* Generate tab – keep mounted so queue/progress survives tab switches */}
+        <div
+          className="flex-1 flex flex-col min-h-0 overflow-hidden bg-sf-dark-950"
+          style={{ display: mainTab === 'generate' ? 'flex' : 'none' }}
+        >
+          <GenerateWorkspace />
+        </div>
         {mainTab === 'export' ? (
           <ExportPanel />
         ) : mainTab === 'stock' ? (
           <StockPanel />
-        ) : mainTab === 'generate' ? (
-          <GenerateWorkspace />
         ) : mainTab === 'llm-assistant' ? (
           <LLMAssistantWorkspace />
-        ) : mainTab === 'comfyui' ? null : (
+        ) : mainTab === 'comfyui' || mainTab === 'generate' ? null : (
           <>
             {/* Left Panel - Full Height Mode (spans entire left side) */}
             {leftPanelFullHeight && (
