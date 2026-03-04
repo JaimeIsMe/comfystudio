@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Search, Video, Image as ImageIcon, Download, Loader2, ExternalLink, AlertCircle, Play, X } from 'lucide-react'
+import { Search, Video, Image as ImageIcon, Download, Loader2, ExternalLink, AlertCircle, Play, X, Home } from 'lucide-react'
 import useProjectStore from '../stores/projectStore'
 import useAssetsStore from '../stores/assetsStore'
 import { importAsset, isElectron } from '../services/fileSystem'
@@ -216,6 +216,16 @@ function StockPanel() {
 
   const totalPages = Math.ceil(totalResults / PER_PAGE)
   const loadPage = (pageNum) => isDefaultContent ? loadDefaultContent(pageNum) : search(pageNum)
+  const canGoHome = Boolean(searchQuery.trim()) || !isDefaultContent
+
+  const handleGoHome = useCallback(() => {
+    setError(null)
+    setSearchQuery('')
+    setIsDefaultContent(true)
+    setPage(1)
+    setPreviewVideo(null)
+    loadDefaultContent(1)
+  }, [loadDefaultContent])
 
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-sf-dark-950">
@@ -268,6 +278,15 @@ function StockPanel() {
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
             Search
+          </button>
+          <button
+            onClick={handleGoHome}
+            disabled={loading || !canGoHome}
+            className="px-3 py-2 bg-sf-dark-800 border border-sf-dark-600 hover:bg-sf-dark-700 disabled:opacity-50 disabled:cursor-not-allowed text-sf-text-secondary text-sm font-medium rounded-lg flex items-center gap-2 transition-colors"
+            title="Back to popular/trending"
+          >
+            <Home className="w-4 h-4" />
+            Home
           </button>
         </div>
       </div>

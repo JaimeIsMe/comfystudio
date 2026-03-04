@@ -1,6 +1,29 @@
 import { useEffect, useRef, useCallback } from 'react'
 import useTimelineStore from '../stores/timelineStore'
 
+const getSelectedLoopRange = (clips, selectedClipIds) => {
+  if (!Array.isArray(clips) || clips.length === 0) return null
+  if (!Array.isArray(selectedClipIds) || selectedClipIds.length === 0) return null
+
+  const selectedSet = new Set(selectedClipIds)
+  const selectedClips = clips.filter((clip) => selectedSet.has(clip.id))
+  if (selectedClips.length === 0) return null
+
+  let start = Infinity
+  let end = -Infinity
+  for (const clip of selectedClips) {
+    const clipStart = Number(clip.startTime)
+    const clipDuration = Math.max(0, Number(clip.duration) || 0)
+    if (!Number.isFinite(clipStart)) continue
+    const clipEnd = clipStart + clipDuration
+    start = Math.min(start, clipStart)
+    end = Math.max(end, clipEnd)
+  }
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null
+  return { start: Math.max(0, start), end: Math.max(0, end) }
+}
+
 /**
  * Hook to manage timeline playback
  * Advances the playhead and provides playback state
@@ -65,10 +88,14 @@ export function useTimelinePlayback() {
     // Convert to seconds and apply playback rate (supports reverse with negative rate)
     const state = useTimelineStore.getState()
     const { loopMode, inPoint, outPoint } = state
+    const selectionLoopRange = getSelectedLoopRange(state.clips, state.selectedClipIds)
+    const effectiveLoopMode = loopMode === 'loop-selection' && !selectionLoopRange
+      ? 'normal'
+      : loopMode
     
     // For ping-pong mode, apply direction
     let effectiveRate = state.playbackRate
-    if (loopMode === 'ping-pong') {
+    if (effectiveLoopMode === 'ping-pong') {
       effectiveRate = Math.abs(state.playbackRate) * pingPongDirectionRef.current
     }
     
@@ -77,14 +104,19 @@ export function useTimelinePlayback() {
     const endTime = state.getTimelineEndTime()
     
     // Determine loop boundaries
-    const loopStart = (loopMode === 'loop-in-out' && inPoint !== null) ? inPoint : 0
-    const loopEnd = (loopMode === 'loop-in-out' && outPoint !== null) ? outPoint : endTime
+    const loopStart = effectiveLoopMode === 'loop-selection'
+      ? selectionLoopRange.start
+      : ((effectiveLoopMode === 'loop-in-out' && inPoint !== null) ? inPoint : 0)
+    const loopEnd = effectiveLoopMode === 'loop-selection'
+      ? selectionLoopRange.end
+      : ((effectiveLoopMode === 'loop-in-out' && outPoint !== null) ? outPoint : endTime)
     
     // Handle end of timeline (forward playback)
     if (newPosition >= loopEnd && loopEnd > 0 && effectiveRate > 0) {
-      switch (loopMode) {
+      switch (effectiveLoopMode) {
         case 'loop':
         case 'loop-in-out':
+        case 'loop-selection':
           // Loop back to start
           newPosition = loopStart
           break
@@ -105,9 +137,10 @@ export function useTimelinePlayback() {
     
     // Handle start of timeline (reverse playback)
     if (newPosition <= loopStart && effectiveRate < 0) {
-      switch (loopMode) {
+      switch (effectiveLoopMode) {
         case 'loop':
         case 'loop-in-out':
+        case 'loop-selection':
           // Loop to end
           newPosition = loopEnd
           break

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { Play, Pause, SkipBack, SkipForward, Volume2, Film, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ArrowLeftToLine, ArrowRightToLine, Repeat, Repeat1, ArrowLeftRight, Check } from 'lucide-react'
 import useAssetsStore from '../stores/assetsStore'
 import useTimelineStore from '../stores/timelineStore'
@@ -10,12 +10,16 @@ const PLAYBACK_MODES = [
   { id: 'normal', label: 'Normal', description: 'Play once and stop', icon: null },
   { id: 'loop', label: 'Loop', description: 'Loop entire timeline', icon: Repeat },
   { id: 'loop-in-out', label: 'In to Out', description: 'Loop between In/Out points', icon: Repeat1 },
+  { id: 'loop-selection', label: 'Selection', description: 'Loop selected clip range', icon: Film },
   { id: 'ping-pong', label: 'Back and Forth', description: 'Play forward then reverse', icon: ArrowLeftRight },
 ]
 
 function TransportControls() {
   // Track if K is held for slow shuttle
   const [isKHeld, setIsKHeld] = useState(false)
+  // Distinguish Space tap (play/pause) from Space+drag (pan/zoom modifiers)
+  const pendingSpaceToggleRef = useRef(false)
+  const spaceUsedAsModifierRef = useRef(false)
   
   // Context menu state for playback mode
   const [showPlaybackMenu, setShowPlaybackMenu] = useState(false)
@@ -43,6 +47,7 @@ function TransportControls() {
     togglePlay: timelineTogglePlay,
     getTimelineEndTime,
     clips,
+    selectedClipIds,
     playbackRate,
     shuttleMode,
     shuttleForward,
@@ -74,6 +79,37 @@ function TransportControls() {
   const currentTime = timelineMode ? playheadPosition : assetCurrentTime
   const duration = timelineMode ? (endTime || 60) : assetDuration
   const hasContent = timelineMode ? clips.length > 0 : currentPreview !== null
+
+  const selectedLoopRange = useMemo(() => {
+    if (!timelineMode) return null
+    if (!Array.isArray(selectedClipIds) || selectedClipIds.length === 0) return null
+
+    const selectedSet = new Set(selectedClipIds)
+    const selectedTimelineClips = clips.filter((clip) => selectedSet.has(clip.id))
+    if (selectedTimelineClips.length === 0) return null
+
+    let start = Infinity
+    let end = -Infinity
+    for (const clip of selectedTimelineClips) {
+      const clipStart = Number(clip.startTime)
+      const clipDuration = Math.max(0, Number(clip.duration) || 0)
+      if (!Number.isFinite(clipStart)) continue
+      const clipEnd = clipStart + clipDuration
+      start = Math.min(start, clipStart)
+      end = Math.max(end, clipEnd)
+    }
+
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      return null
+    }
+
+    return {
+      start: Math.max(0, start),
+      end: Math.max(0, end),
+      clipCount: selectedTimelineClips.length,
+    }
+  }, [clips, selectedClipIds, timelineMode])
+  const hasSelectedLoopRange = Boolean(selectedLoopRange)
 
   // Frame rate for frame stepping - use actual timeline FPS
   const timelineSettings = getCurrentTimelineSettings()
@@ -205,22 +241,23 @@ function TransportControls() {
         clearInOutPoints()
       }
       
-      // Enter = Play (start playback; only when not already playing)
-      // Skip when keydown target is an input/textarea so inspector number fields don't trigger play
+      // Enter = Play/Pause toggle (legacy shortcut)
       if (e.key === 'Enter' && !e.repeat) {
         const target = e.target
         if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return
-        if (hasContent && !isPlaying) {
+        if (hasContent) {
           e.preventDefault()
           togglePlay()
         }
       }
       
-      // Space = Stop (pause playback)
+      // Space = Play/Pause toggle on keyup.
+      // We defer to keyup so Space+drag (pan/zoom in timeline/preview) doesn't toggle playback.
       if (e.code === 'Space' && !e.repeat) {
-        if (hasContent && isPlaying) {
-          togglePlay()
-        }
+        if (!hasContent) return
+        pendingSpaceToggleRef.current = true
+        spaceUsedAsModifierRef.current = false
+        e.preventDefault()
       }
       
     }
@@ -229,14 +266,32 @@ function TransportControls() {
       if (e.key === 'k' || e.key === 'K') {
         setIsKHeld(false)
       }
+
+      if (e.code === 'Space') {
+        const shouldToggle = pendingSpaceToggleRef.current && !spaceUsedAsModifierRef.current
+        pendingSpaceToggleRef.current = false
+        spaceUsedAsModifierRef.current = false
+        if (shouldToggle && hasContent) {
+          e.preventDefault()
+          togglePlay()
+        }
+      }
+    }
+
+    const handleMouseDown = () => {
+      if (pendingSpaceToggleRef.current) {
+        spaceUsedAsModifierRef.current = true
+      }
     }
     
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('mousedown', handleMouseDown)
     
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('mousedown', handleMouseDown)
     }
   }, [isKHeld, hasContent, isPlaying, togglePlay, shuttleReverse, shuttlePause, shuttleForward, shuttleSlow, setInPoint, setOutPoint, clearInOutPoints, frameBack, frameForward])
 
@@ -397,7 +452,7 @@ function TransportControls() {
                 : 'bg-sf-dark-600 cursor-not-allowed'
             }`}
             disabled={!hasContent}
-            title={`${isPlaying ? 'Pause' : 'Play'} • Enter = Play, Space = Stop • Right-click for playback mode`}
+            title={`${isPlaying ? 'Pause' : 'Play'} • Space/Enter = Play/Pause • Right-click for playback mode`}
           >
             {isPlaying ? (
               <Pause className="w-4 h-4 text-white" />
@@ -425,7 +480,9 @@ function TransportControls() {
               {PLAYBACK_MODES.map((mode) => {
                 const ModeIcon = mode.icon
                 const isActive = loopMode === mode.id
-                const isDisabled = mode.id === 'loop-in-out' && (inPoint === null && outPoint === null)
+                const missingInOutRange = mode.id === 'loop-in-out' && (inPoint === null && outPoint === null)
+                const missingSelectionRange = mode.id === 'loop-selection' && !hasSelectedLoopRange
+                const isDisabled = missingInOutRange || missingSelectionRange
                 
                 return (
                   <button
@@ -456,7 +513,11 @@ function TransportControls() {
                       <div className="font-medium">{mode.label}</div>
                       <div className={`text-[10px] ${isActive ? 'text-sf-accent/70' : 'text-sf-text-muted'}`}>
                         {mode.description}
-                        {mode.id === 'loop-in-out' && isDisabled && ' (set I/O points first)'}
+                        {missingInOutRange && ' (set I/O points first)'}
+                        {missingSelectionRange && ' (select one or more clips first)'}
+                        {mode.id === 'loop-selection' && hasSelectedLoopRange
+                          ? ` (${selectedLoopRange.clipCount} clip${selectedLoopRange.clipCount === 1 ? '' : 's'})`
+                          : ''}
                       </div>
                     </div>
                     {isActive && (

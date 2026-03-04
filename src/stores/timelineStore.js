@@ -194,6 +194,21 @@ const createDefaultClipTransform = () => ({
   blur: 0,
 })
 
+const createHistorySnapshot = (state) => ({
+  clips: JSON.parse(JSON.stringify(state.clips)),
+  tracks: JSON.parse(JSON.stringify(state.tracks)),
+  transitions: JSON.parse(JSON.stringify(state.transitions)),
+  markers: JSON.parse(JSON.stringify(state.markers)),
+  clipCounter: state.clipCounter,
+  transitionCounter: state.transitionCounter,
+  markerCounter: state.markerCounter,
+})
+
+const areHistorySnapshotsEqual = (a, b) => {
+  if (!a || !b) return false
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
 /**
  * Store for managing timeline state
  * Persisted to localStorage for data survival across refreshes
@@ -212,7 +227,7 @@ export const useTimelineStore = create(
   playbackRate: 1, // Playback speed multiplier (negative = reverse)
   shuttleMode: false, // Whether in JKL shuttle mode
   
-  // Playback loop modes: 'normal', 'loop', 'loop-in-out', 'ping-pong'
+  // Playback loop modes: 'normal', 'loop', 'loop-in-out', 'loop-selection', 'ping-pong'
   loopMode: 'normal',
   
   // Tracks (default: 1 video, 1 audio; user can add more)
@@ -283,15 +298,7 @@ export const useTimelineStore = create(
    */
   saveToHistory: () => {
     const state = get()
-    const snapshot = {
-      clips: JSON.parse(JSON.stringify(state.clips)),
-      tracks: JSON.parse(JSON.stringify(state.tracks)),
-      transitions: JSON.parse(JSON.stringify(state.transitions)),
-      markers: JSON.parse(JSON.stringify(state.markers)),
-      clipCounter: state.clipCounter,
-      transitionCounter: state.transitionCounter,
-      markerCounter: state.markerCounter,
-    }
+    const snapshot = createHistorySnapshot(state)
     
     set((state) => {
       // If we're not at the end of history, truncate the "future" states
@@ -299,8 +306,11 @@ export const useTimelineStore = create(
         ? state.history.slice(0, state.historyIndex + 1)
         : [...state.history]
       
-      // Add current state to history
-      newHistory.push(snapshot)
+      // Add current state to history unless it's a duplicate of the last snapshot.
+      const lastSnapshot = newHistory[newHistory.length - 1]
+      if (!lastSnapshot || !areHistorySnapshotsEqual(lastSnapshot, snapshot)) {
+        newHistory.push(snapshot)
+      }
       
       // Limit history size
       if (newHistory.length > MAX_HISTORY_SIZE) {
@@ -309,7 +319,8 @@ export const useTimelineStore = create(
       
       return {
         history: newHistory,
-        historyIndex: newHistory.length - 1
+        // New edits always represent present-time state (outside the history stack).
+        historyIndex: -1
       }
     })
   },
@@ -320,21 +331,30 @@ export const useTimelineStore = create(
   undo: () => {
     const state = get()
     
-    // If historyIndex is -1, we need to save current state first before undoing
+    // If historyIndex is -1, we're at present-time state and need to
+    // step back to the most recent *different* history snapshot.
     if (state.historyIndex === -1 && state.history.length > 0) {
-      // Save current state so we can redo back to it
-      const currentSnapshot = {
-        clips: JSON.parse(JSON.stringify(state.clips)),
-        tracks: JSON.parse(JSON.stringify(state.tracks)),
-        transitions: JSON.parse(JSON.stringify(state.transitions)),
-        markers: JSON.parse(JSON.stringify(state.markers)),
-        clipCounter: state.clipCounter,
-        transitionCounter: state.transitionCounter,
-        markerCounter: state.markerCounter,
+      const currentSnapshot = createHistorySnapshot(state)
+      const lastHistoryIndex = state.history.length - 1
+      let targetHistoryIndex = lastHistoryIndex
+
+      // Skip duplicate end snapshots so Undo never appears to "do nothing".
+      while (
+        targetHistoryIndex >= 0
+        && areHistorySnapshotsEqual(state.history[targetHistoryIndex], currentSnapshot)
+      ) {
+        targetHistoryIndex -= 1
       }
-      
-      const lastHistoryState = state.history[state.history.length - 1]
-      
+
+      if (targetHistoryIndex < 0) {
+        return false
+      }
+
+      const lastHistoryState = state.history[targetHistoryIndex]
+      const historyWithCurrent = areHistorySnapshotsEqual(state.history[lastHistoryIndex], currentSnapshot)
+        ? [...state.history]
+        : [...state.history, currentSnapshot]
+
       set({
         clips: lastHistoryState.clips,
         tracks: lastHistoryState.tracks,
@@ -343,8 +363,8 @@ export const useTimelineStore = create(
         clipCounter: lastHistoryState.clipCounter,
         transitionCounter: lastHistoryState.transitionCounter,
         markerCounter: lastHistoryState.markerCounter || 1,
-        history: [...state.history, currentSnapshot],
-        historyIndex: state.history.length - 1,
+        history: historyWithCurrent,
+        historyIndex: targetHistoryIndex,
         selectedClipIds: [], // Clear selection on undo
         selectedTransitionId: null,
         selectedMarkerId: null,
@@ -1061,10 +1081,8 @@ export const useTimelineStore = create(
     const clip = state.clips.find(c => c.id === clipId)
     if (!clip) return
     
-    // Save to history only on drag end (when resolving overlaps) to avoid flooding history during drag
-    if (resolveOverlaps) {
-      get().saveToHistory()
-    }
+    // History for interactive drags is captured by the UI gesture start.
+    // Keep this mutation history-neutral to avoid no-op undo states.
     
     const fps = state.timelineFps || 24
     const delta = newStartTime - clip.startTime
@@ -1247,10 +1265,8 @@ export const useTimelineStore = create(
    * @param {boolean} resolveOverlaps - Whether to cut overlapping clips (default: false, set true on drag end)
    */
   moveSelectedClips: (deltaTime, newTrackId = null, resolveOverlaps = false) => {
-    // Save to history only on drag end (when resolving overlaps) to avoid flooding history during drag
-    if (resolveOverlaps) {
-      get().saveToHistory()
-    }
+    // History for interactive drags is captured by the UI gesture start.
+    // Keep this mutation history-neutral to avoid no-op undo states.
     
     const fps = get().timelineFps || 24
     set((state) => {
@@ -3447,7 +3463,7 @@ export const useTimelineStore = create(
 
   /**
    * Set playback loop mode
-   * @param {'normal' | 'loop' | 'loop-in-out' | 'ping-pong'} mode
+   * @param {'normal' | 'loop' | 'loop-in-out' | 'loop-selection' | 'ping-pong'} mode
    */
   setLoopMode: (mode) => {
     set({ loopMode: mode })

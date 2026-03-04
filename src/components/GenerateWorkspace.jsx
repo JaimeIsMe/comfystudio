@@ -164,6 +164,33 @@ function summarizeSceneText(value = '', fallback = '') {
   return `${compact.slice(0, 137)}...`
 }
 
+function stripFileExtension(value = '') {
+  return String(value || '').replace(/\.[^/.]+$/, '')
+}
+
+function slugifyNameToken(value = '', options = {}) {
+  const fallback = Object.prototype.hasOwnProperty.call(options, 'fallback')
+    ? String(options.fallback || '')
+    : 'item'
+  const maxLength = Math.max(1, Number(options.maxLength) || 32)
+  let normalized = String(value || '').trim()
+
+  try {
+    normalized = normalized.normalize('NFKD')
+  } catch (_) {
+    // Keep original if unicode normalization is unavailable.
+  }
+
+  const slug = normalized
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase()
+
+  if (!slug) return fallback
+  return slug.slice(0, maxLength)
+}
+
 function buildAdReferenceStyleNotes({
   hasProduct = false,
   hasModel = false,
@@ -1034,9 +1061,11 @@ function GenerateWorkspace() {
 
     const comfyTabVisible = (() => {
       try {
-        return localStorage.getItem('comfystudio-show-comfyui-tab') !== 'false'
+        const stored = localStorage.getItem('comfystudio-show-comfyui-tab')
+        if (stored === null) return false
+        return stored === 'true'
       } catch (_) {
-        return true
+        return false
       }
     })()
     if (!comfyTabVisible) {
@@ -1123,6 +1152,31 @@ function GenerateWorkspace() {
     if (yoloAdModelAsset) anchors.push('Model')
     return `Anchored: ${anchors.join(' + ')} · ${formatReferenceConsistencyLabel(yoloAdConsistency)}`
   }, [yoloAdConsistency, yoloAdHasReferenceAnchors, yoloAdModelAsset, yoloAdProductAsset])
+  const yoloQueueNameLabel = useMemo(() => {
+    if (isYoloMusicMode) {
+      return (
+        String(yoloMusicTitle || '').trim()
+        || String(yoloMusicSubject || '').trim()
+        || summarizeSceneText(yoloMusicStoryIdea, 'music video')
+      )
+    }
+
+    const anchorLabel = [yoloAdProductAsset?.name, yoloAdModelAsset?.name]
+      .map((name) => stripFileExtension(name))
+      .map((name) => String(name || '').trim())
+      .filter(Boolean)
+      .join(' ')
+
+    return anchorLabel || summarizeSceneText(yoloScript, 'director ad')
+  }, [
+    isYoloMusicMode,
+    yoloAdModelAsset?.name,
+    yoloAdProductAsset?.name,
+    yoloMusicStoryIdea,
+    yoloMusicSubject,
+    yoloMusicTitle,
+    yoloScript,
+  ])
 
   const yoloProfile = YOLO_PROFILES[yoloActiveQualityProfile] || YOLO_PROFILES.balanced
   const yoloSelectedVideoWorkflowIds = useMemo(() => {
@@ -1953,6 +2007,7 @@ function GenerateWorkspace() {
         inputFromTimelineFrame: false,
         referenceAssetId1: !isYoloMusicMode ? (yoloAdProductAsset?.id || null) : null,
         referenceAssetId2: !isYoloMusicMode ? (yoloAdModelAsset?.id || null) : null,
+        directorLabel: yoloQueueNameLabel,
         yolo: {
           mode: yoloModeKey,
           stage: 'storyboard',
@@ -1987,6 +2042,7 @@ function GenerateWorkspace() {
     yoloModeKey,
     yoloModeLabel,
     yoloProfile.storyboardWorkflowId,
+    yoloQueueNameLabel,
   ])
 
   const handleQueueYoloStoryboards = useCallback(async () => {
@@ -2119,6 +2175,7 @@ function GenerateWorkspace() {
         seed: Number(seed) + seedOffset,
         referenceAssetId1: null,
         referenceAssetId2: null,
+        directorLabel: yoloQueueNameLabel,
         yolo: {
           mode: yoloModeKey,
           stage: 'video',
@@ -2170,6 +2227,7 @@ function GenerateWorkspace() {
     yoloModeKey,
     yoloModeLabel,
     yoloProfile.videoWorkflowId,
+    yoloQueueNameLabel,
     yoloStoryboardAssetMap,
   ])
 
@@ -2534,15 +2592,29 @@ function GenerateWorkspace() {
     const jobPrompt = job?.prompt || ''
     const jobTags = job?.musicTags || ''
     const autoName = generateName(jobPrompt || jobTags || wfId)
-    const yoloMeta = job?.yolo && typeof job.yolo === 'object' ? { ...job.yolo } : null
-    const yoloNameToken = yoloMeta
-      ? `${yoloMeta.sceneId || 'scene'}_${yoloMeta.shotId || 'shot'}_${String(yoloMeta.angle || 'angle')
-        .replace(/[^a-z0-9]+/gi, '-')
-        .replace(/^-+|-+$/g, '')
-        .toLowerCase()}_t${yoloMeta.take || 1}`
-      : null
-    const yoloModeName = yoloMeta?.mode === 'music' ? 'music' : 'ad'
-    const resolvedName = yoloMeta ? `yolo_${yoloModeName}_${yoloMeta.stage || 'pass'}_${yoloNameToken}` : autoName
+    const directorMeta = job?.yolo && typeof job.yolo === 'object' ? { ...job.yolo } : null
+    const directorModeName = directorMeta?.mode === 'music' ? 'music' : 'ad'
+    const sceneNumber = String(directorMeta?.sceneId || '').match(/\d+/)?.[0] || ''
+    const shotNumber = String(directorMeta?.shotId || '').match(/\d+/)?.[0] || ''
+    const sceneToken = sceneNumber
+      ? `s${sceneNumber.padStart(2, '0')}`
+      : slugifyNameToken(directorMeta?.sceneId, { fallback: 'scene', maxLength: 12 })
+    const shotToken = shotNumber
+      ? `sh${shotNumber.padStart(2, '0')}`
+      : slugifyNameToken(directorMeta?.shotId, { fallback: 'shot', maxLength: 12 })
+    const angleToken = slugifyNameToken(directorMeta?.angle, { fallback: 'angle', maxLength: 20 })
+    const takeToken = `t${Math.max(1, Number(directorMeta?.take) || 1)}`
+    const stageToken = slugifyNameToken(directorMeta?.stage, { fallback: 'pass', maxLength: 14 })
+    const labelToken = slugifyNameToken(
+      stripFileExtension(job?.directorLabel || ''),
+      { fallback: '', maxLength: 28 }
+    )
+    const directorNameToken = [labelToken, stageToken, sceneToken, shotToken, angleToken, takeToken]
+      .filter(Boolean)
+      .join('_')
+    const resolvedName = directorMeta
+      ? `director_${directorModeName}_${directorNameToken}`
+      : autoName
     const jobDuration = job?.duration
     const jobFps = job?.fps
     const jobResolution = job?.resolution
@@ -2565,7 +2637,7 @@ function GenerateWorkspace() {
           url: blobUrl,
           prompt: jobPrompt,
           isImported: true,
-          yolo: yoloMeta || undefined,
+          yolo: directorMeta || undefined,
           folderId: generatedVideoFolderId,
           settings: {
             duration: jobDuration,
@@ -2587,7 +2659,7 @@ function GenerateWorkspace() {
           type: 'video',
           url,
           prompt: jobPrompt,
-          yolo: yoloMeta || undefined,
+          yolo: directorMeta || undefined,
           folderId: generatedVideoFolderId,
           settings: { duration: jobDuration, fps: jobFps, seed: jobSeed }
         })
@@ -2611,7 +2683,7 @@ function GenerateWorkspace() {
             url: blobUrl,
             prompt: jobPrompt,
             isImported: true,
-            yolo: yoloMeta || undefined,
+            yolo: directorMeta || undefined,
             folderId: generatedImageFolderId,
           })
           didImportAny = true
@@ -2623,7 +2695,7 @@ function GenerateWorkspace() {
             type: 'image',
             url,
             prompt: jobPrompt,
-            yolo: yoloMeta || undefined,
+            yolo: directorMeta || undefined,
             folderId: generatedImageFolderId,
           })
           didImportAny = true
@@ -2677,7 +2749,7 @@ function GenerateWorkspace() {
       let uploadedFilename = null
       let referenceFilenames = []
       const outputPrefix = job.workflowId === 'wan22-i2v' || job.workflowId === 'kling-o3-i2v'
-        ? `video/yolo_${String(job.id || Date.now()).replace(/[^a-zA-Z0-9_-]/g, '_')}`
+        ? `video/director_${String(job.id || Date.now()).replace(/[^a-zA-Z0-9_-]/g, '_')}`
         : ''
       // Upload image if needed
       if (job.needsImage) {
@@ -2956,7 +3028,7 @@ function GenerateWorkspace() {
   // Render
   // ============================================
   return (
-    <div className="flex-1 flex flex-col min-w-0 bg-sf-dark-950">
+    <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-sf-dark-950">
       {/* Header */}
       <div className="h-12 flex items-center justify-between px-4 border-b border-sf-dark-700">
         <div className="flex items-center gap-3">
@@ -3009,7 +3081,7 @@ function GenerateWorkspace() {
       </div>
 
       {/* Main 3-column layout */}
-      <div className="flex-1 min-h-0 flex">
+      <div className="flex-1 min-h-0 flex overflow-hidden">
         {/* Left: Input browser (conditional) */}
         {showInputColumn && (
           <div className="w-72 flex-shrink-0 border-r border-sf-dark-700 bg-sf-dark-900">

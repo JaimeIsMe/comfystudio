@@ -268,6 +268,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     updateClipReverse,
     toggleKeyframe,
     setKeyframe,
+    saveToHistory,
     // Effects
     addEffect,
     removeEffect,
@@ -298,6 +299,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   const selectedTransition = selectedTransitionId
     ? transitions.find(t => t.id === selectedTransitionId) || null
     : null
+  const transformHistorySessionClipRef = useRef(null)
+  const adjustmentHistorySessionClipRef = useRef(null)
 
   useEffect(() => {
     if (!selectedClip || selectedClip.type !== 'text') return
@@ -395,12 +398,69 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   const propertyHasKeyframes = useCallback((property) => {
     return selectedClip?.keyframes?.[property]?.length > 0
   }, [selectedClip])
+
+  useEffect(() => {
+    transformHistorySessionClipRef.current = null
+    adjustmentHistorySessionClipRef.current = null
+  }, [selectedClip?.id])
+
+  const hasTransformChanges = useCallback((updates) => {
+    if (!transform || !updates || typeof updates !== 'object') return false
+    return Object.entries(updates).some(([property, nextValue]) => transform[property] !== nextValue)
+  }, [transform])
+
+  const baseAdjustments = useMemo(
+    () => normalizeAdjustmentSettings(selectedClip?.adjustments || {}),
+    [selectedClip?.adjustments]
+  )
+
+  const hasAdjustmentChanges = useCallback((updates) => {
+    if (!updates || typeof updates !== 'object') return false
+    return Object.entries(updates).some(([property, nextValue]) => baseAdjustments[property] !== nextValue)
+  }, [baseAdjustments])
+
+  const applyTransformUpdatesWithHistory = useCallback((updates, keepSessionOpen = false) => {
+    if (!selectedClip || !updates || typeof updates !== 'object') return false
+
+    const hasPendingSession = transformHistorySessionClipRef.current === selectedClip.id
+    const changed = hasTransformChanges(updates)
+    if (!hasPendingSession && !changed) return false
+
+    if (!hasPendingSession) {
+      saveToHistory()
+    }
+    if (changed) {
+      updateClipTransform(selectedClip.id, updates, false)
+    }
+
+    transformHistorySessionClipRef.current = keepSessionOpen ? selectedClip.id : null
+    return true
+  }, [selectedClip, hasTransformChanges, saveToHistory, updateClipTransform])
+
+  const applyAdjustmentUpdatesWithHistory = useCallback((updates, keepSessionOpen = false) => {
+    if (!selectedClip || !updates || typeof updates !== 'object') return false
+
+    const hasPendingSession = adjustmentHistorySessionClipRef.current === selectedClip.id
+    const changed = hasAdjustmentChanges(updates)
+    if (!hasPendingSession && !changed) return false
+
+    if (!hasPendingSession) {
+      saveToHistory()
+    }
+    if (changed) {
+      updateClipAdjustments(selectedClip.id, updates, false)
+    }
+
+    adjustmentHistorySessionClipRef.current = keepSessionOpen ? selectedClip.id : null
+    return true
+  }, [selectedClip, hasAdjustmentChanges, saveToHistory, updateClipAdjustments])
   
   // Update transform handler (doesn't save to history for realtime sliders)
   // Also adds/updates keyframe if property is keyframed
   const handleTransformChange = useCallback((key, value) => {
     if (!selectedClip) return
-    updateClipTransform(selectedClip.id, { [key]: value }, false)
+    const applied = applyTransformUpdatesWithHistory({ [key]: value }, true)
+    if (!applied) return
     
     // If this property has keyframes, also update the keyframe at current time
     if (propertyHasKeyframes(key)) {
@@ -416,13 +476,13 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
         setKeyframe(selectedClip.id, otherKey, clipTime, value, 'easeInOut', { saveHistory: false })
       }
     }
-  }, [selectedClip, updateClipTransform, propertyHasKeyframes, setKeyframe, clipTime, transform])
+  }, [selectedClip, applyTransformUpdatesWithHistory, propertyHasKeyframes, setKeyframe, clipTime, transform])
   
   // Save to history when user finishes editing (on blur or mouse up)
   const handleTransformCommit = useCallback((key, value) => {
     if (!selectedClip) return
-    updateClipTransform(selectedClip.id, { [key]: value }, true)
-  }, [selectedClip, updateClipTransform])
+    applyTransformUpdatesWithHistory({ [key]: value }, false)
+  }, [selectedClip, applyTransformUpdatesWithHistory])
 
   // Reset individual slider to default on double-click
   const handleSliderReset = useCallback((property, defaultValue) => {
@@ -432,13 +492,14 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     const updates = isScale && isLinked
       ? { scaleX: 100, scaleY: 100 }
       : { [property]: defaultValue }
+    const applied = applyTransformUpdatesWithHistory(updates, false)
+    if (!applied) return
     for (const key of Object.keys(updates)) {
       if (propertyHasKeyframes(key)) {
         setKeyframe(selectedClip.id, key, clipTime, updates[key], 'easeInOut', { saveHistory: false })
       }
     }
-    updateClipTransform(selectedClip.id, updates, true)
-  }, [selectedClip, transform?.scaleLinked, propertyHasKeyframes, setKeyframe, clipTime, updateClipTransform])
+  }, [selectedClip, transform?.scaleLinked, applyTransformUpdatesWithHistory, propertyHasKeyframes, setKeyframe, clipTime])
   
   // Reset all transform
   const handleResetTransform = useCallback(() => {
@@ -447,18 +508,24 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   }, [selectedClip, resetClipTransform])
 
   // Shared clip adjustment handlers (video/image/text/adjustment)
-  const handleClipAdjustmentChange = useCallback((key, value, saveHistory = false) => {
+  const handleClipAdjustmentChange = useCallback((key, value) => {
     if (!selectedClip) return
-    updateClipAdjustments(selectedClip.id, { [key]: value }, saveHistory)
+    const applied = applyAdjustmentUpdatesWithHistory({ [key]: value }, true)
+    if (!applied) return
     if (propertyHasKeyframes(key)) {
       setKeyframe(selectedClip.id, key, clipTime, value, 'easeInOut', { saveHistory: false })
     }
-  }, [selectedClip, updateClipAdjustments, propertyHasKeyframes, setKeyframe, clipTime])
+  }, [selectedClip, applyAdjustmentUpdatesWithHistory, propertyHasKeyframes, setKeyframe, clipTime])
 
   const handleClipAdjustmentCommit = useCallback((key, value) => {
     if (!selectedClip) return
-    updateClipAdjustments(selectedClip.id, { [key]: value }, true)
-  }, [selectedClip, updateClipAdjustments])
+    applyAdjustmentUpdatesWithHistory({ [key]: value }, false)
+  }, [selectedClip, applyAdjustmentUpdatesWithHistory])
+
+  const handleClipAdjustmentsReset = useCallback(() => {
+    if (!selectedClip) return
+    applyAdjustmentUpdatesWithHistory(DEFAULT_ADJUSTMENT_SETTINGS, false)
+  }, [selectedClip, applyAdjustmentUpdatesWithHistory])
   
   // Legacy audio data state (for audio clips - will be connected to real data later)
   const [audioData, setAudioData] = useState({
@@ -1443,16 +1510,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     if (!selectedClip || !transform) return null
     const adjustments = animatedAdjustments
 
-    const handleAdjustmentChange = (key, value, saveHistory = false) => {
-      updateClipAdjustments(selectedClip.id, { [key]: value }, saveHistory)
-      if (propertyHasKeyframes(key)) {
-        setKeyframe(selectedClip.id, key, clipTime, value, 'easeInOut', { saveHistory: false })
-      }
-    }
-
-    const handleAdjustmentCommit = (key, value) => {
-      updateClipAdjustments(selectedClip.id, { [key]: value }, true)
-    }
+    const handleAdjustmentChange = (key, value) => handleClipAdjustmentChange(key, value)
+    const handleAdjustmentCommit = (key, value) => handleClipAdjustmentCommit(key, value)
 
     return (
       <>
@@ -1476,7 +1535,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
               Reset Transform
             </button>
             <button
-              onClick={() => updateClipAdjustments(selectedClip.id, DEFAULT_ADJUSTMENT_SETTINGS, true)}
+              onClick={handleClipAdjustmentsReset}
               className="py-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[11px] text-sf-text-secondary hover:text-sf-text-primary transition-colors flex items-center justify-center gap-1.5"
               title="Reset adjustment controls"
             >
@@ -1636,13 +1695,14 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                   <button
                     key={i}
                     onClick={() => {
+                      const applied = applyTransformUpdatesWithHistory({ anchorX: x, anchorY: y }, false)
+                      if (!applied) return
                       if (propertyHasKeyframes('anchorX')) {
                         setKeyframe(selectedClip.id, 'anchorX', clipTime, x, 'easeInOut', { saveHistory: false })
                       }
                       if (propertyHasKeyframes('anchorY')) {
                         setKeyframe(selectedClip.id, 'anchorY', clipTime, y, 'easeInOut', { saveHistory: false })
                       }
-                      updateClipTransform(selectedClip.id, { anchorX: x, anchorY: y }, true)
                     }}
                     className={`h-6 rounded text-[9px] transition-colors ${
                       Math.round(animatedTransform?.anchorX ?? transform.anchorX) === x
@@ -1878,12 +1938,13 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                   cropLeft: 0,
                   cropRight: 0,
                 }
+                const applied = applyTransformUpdatesWithHistory(resetCrop, false)
+                if (!applied) return
                 for (const [property, value] of Object.entries(resetCrop)) {
                   if (propertyHasKeyframes(property)) {
                     setKeyframe(selectedClip.id, property, clipTime, value, 'easeInOut', { saveHistory: false })
                   }
                 }
-                updateClipTransform(selectedClip.id, resetCrop, true)
               }}
               className="w-full text-[10px] text-sf-accent hover:text-sf-accent-hover transition-colors"
             >
@@ -1918,9 +1979,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 max="100"
                 step="1"
                 value={adjustments.brightness}
-                onChange={(e) => handleAdjustmentChange('brightness', Number(e.target.value), false)}
+                onChange={(e) => handleAdjustmentChange('brightness', Number(e.target.value))}
                 onMouseUp={(e) => handleAdjustmentCommit('brightness', Number(e.target.value))}
-                onDoubleClick={() => handleAdjustmentChange('brightness', DEFAULT_ADJUSTMENT_SETTINGS.brightness, true)}
+                onDoubleClick={() => handleAdjustmentCommit('brightness', DEFAULT_ADJUSTMENT_SETTINGS.brightness)}
                 title="Double-click to reset to 0"
                 className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
@@ -1945,9 +2006,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 max="100"
                 step="1"
                 value={adjustments.contrast}
-                onChange={(e) => handleAdjustmentChange('contrast', Number(e.target.value), false)}
+                onChange={(e) => handleAdjustmentChange('contrast', Number(e.target.value))}
                 onMouseUp={(e) => handleAdjustmentCommit('contrast', Number(e.target.value))}
-                onDoubleClick={() => handleAdjustmentChange('contrast', DEFAULT_ADJUSTMENT_SETTINGS.contrast, true)}
+                onDoubleClick={() => handleAdjustmentCommit('contrast', DEFAULT_ADJUSTMENT_SETTINGS.contrast)}
                 title="Double-click to reset to 0"
                 className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
@@ -1972,9 +2033,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 max="100"
                 step="1"
                 value={adjustments.saturation}
-                onChange={(e) => handleAdjustmentChange('saturation', Number(e.target.value), false)}
+                onChange={(e) => handleAdjustmentChange('saturation', Number(e.target.value))}
                 onMouseUp={(e) => handleAdjustmentCommit('saturation', Number(e.target.value))}
-                onDoubleClick={() => handleAdjustmentChange('saturation', DEFAULT_ADJUSTMENT_SETTINGS.saturation, true)}
+                onDoubleClick={() => handleAdjustmentCommit('saturation', DEFAULT_ADJUSTMENT_SETTINGS.saturation)}
                 title="Double-click to reset to 0"
                 className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
@@ -1999,9 +2060,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 max="100"
                 step="1"
                 value={adjustments.gain}
-                onChange={(e) => handleAdjustmentChange('gain', Number(e.target.value), false)}
+                onChange={(e) => handleAdjustmentChange('gain', Number(e.target.value))}
                 onMouseUp={(e) => handleAdjustmentCommit('gain', Number(e.target.value))}
-                onDoubleClick={() => handleAdjustmentChange('gain', DEFAULT_ADJUSTMENT_SETTINGS.gain, true)}
+                onDoubleClick={() => handleAdjustmentCommit('gain', DEFAULT_ADJUSTMENT_SETTINGS.gain)}
                 title="Double-click to reset to 0"
                 className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
@@ -2026,9 +2087,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 max="100"
                 step="1"
                 value={adjustments.gamma}
-                onChange={(e) => handleAdjustmentChange('gamma', Number(e.target.value), false)}
+                onChange={(e) => handleAdjustmentChange('gamma', Number(e.target.value))}
                 onMouseUp={(e) => handleAdjustmentCommit('gamma', Number(e.target.value))}
-                onDoubleClick={() => handleAdjustmentChange('gamma', DEFAULT_ADJUSTMENT_SETTINGS.gamma, true)}
+                onDoubleClick={() => handleAdjustmentCommit('gamma', DEFAULT_ADJUSTMENT_SETTINGS.gamma)}
                 title="Double-click to reset to 0"
                 className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
@@ -2053,9 +2114,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 max="100"
                 step="1"
                 value={adjustments.offset}
-                onChange={(e) => handleAdjustmentChange('offset', Number(e.target.value), false)}
+                onChange={(e) => handleAdjustmentChange('offset', Number(e.target.value))}
                 onMouseUp={(e) => handleAdjustmentCommit('offset', Number(e.target.value))}
-                onDoubleClick={() => handleAdjustmentChange('offset', DEFAULT_ADJUSTMENT_SETTINGS.offset, true)}
+                onDoubleClick={() => handleAdjustmentCommit('offset', DEFAULT_ADJUSTMENT_SETTINGS.offset)}
                 title="Double-click to reset to 0"
                 className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
@@ -2080,9 +2141,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 max="180"
                 step="1"
                 value={adjustments.hue}
-                onChange={(e) => handleAdjustmentChange('hue', Number(e.target.value), false)}
+                onChange={(e) => handleAdjustmentChange('hue', Number(e.target.value))}
                 onMouseUp={(e) => handleAdjustmentCommit('hue', Number(e.target.value))}
-                onDoubleClick={() => handleAdjustmentChange('hue', DEFAULT_ADJUSTMENT_SETTINGS.hue, true)}
+                onDoubleClick={() => handleAdjustmentCommit('hue', DEFAULT_ADJUSTMENT_SETTINGS.hue)}
                 title="Double-click to reset to 0deg"
                 className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
@@ -2107,9 +2168,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 max="50"
                 step="0.25"
                 value={adjustments.blur}
-                onChange={(e) => handleAdjustmentChange('blur', Number(e.target.value), false)}
+                onChange={(e) => handleAdjustmentChange('blur', Number(e.target.value))}
                 onMouseUp={(e) => handleAdjustmentCommit('blur', Number(e.target.value))}
-                onDoubleClick={() => handleAdjustmentChange('blur', DEFAULT_ADJUSTMENT_SETTINGS.blur, true)}
+                onDoubleClick={() => handleAdjustmentCommit('blur', DEFAULT_ADJUSTMENT_SETTINGS.blur)}
                 title="Double-click to reset to 0px"
                 className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
@@ -2187,9 +2248,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
               max="100"
               step="1"
               value={animatedAdjustments.brightness}
-              onChange={(e) => handleClipAdjustmentChange('brightness', Number(e.target.value), false)}
+              onChange={(e) => handleClipAdjustmentChange('brightness', Number(e.target.value))}
               onMouseUp={(e) => handleClipAdjustmentCommit('brightness', Number(e.target.value))}
-              onDoubleClick={() => handleClipAdjustmentChange('brightness', DEFAULT_ADJUSTMENT_SETTINGS.brightness, true)}
+              onDoubleClick={() => handleClipAdjustmentCommit('brightness', DEFAULT_ADJUSTMENT_SETTINGS.brightness)}
               title="Double-click to reset to 0"
               className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
             />
@@ -2214,9 +2275,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
               max="100"
               step="1"
               value={animatedAdjustments.contrast}
-              onChange={(e) => handleClipAdjustmentChange('contrast', Number(e.target.value), false)}
+              onChange={(e) => handleClipAdjustmentChange('contrast', Number(e.target.value))}
               onMouseUp={(e) => handleClipAdjustmentCommit('contrast', Number(e.target.value))}
-              onDoubleClick={() => handleClipAdjustmentChange('contrast', DEFAULT_ADJUSTMENT_SETTINGS.contrast, true)}
+              onDoubleClick={() => handleClipAdjustmentCommit('contrast', DEFAULT_ADJUSTMENT_SETTINGS.contrast)}
               title="Double-click to reset to 0"
               className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
             />
@@ -2241,9 +2302,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
               max="100"
               step="1"
               value={animatedAdjustments.saturation}
-              onChange={(e) => handleClipAdjustmentChange('saturation', Number(e.target.value), false)}
+              onChange={(e) => handleClipAdjustmentChange('saturation', Number(e.target.value))}
               onMouseUp={(e) => handleClipAdjustmentCommit('saturation', Number(e.target.value))}
-              onDoubleClick={() => handleClipAdjustmentChange('saturation', DEFAULT_ADJUSTMENT_SETTINGS.saturation, true)}
+              onDoubleClick={() => handleClipAdjustmentCommit('saturation', DEFAULT_ADJUSTMENT_SETTINGS.saturation)}
               title="Double-click to reset to 0"
               className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
             />
@@ -2268,9 +2329,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
               max="100"
               step="1"
               value={animatedAdjustments.gain}
-              onChange={(e) => handleClipAdjustmentChange('gain', Number(e.target.value), false)}
+              onChange={(e) => handleClipAdjustmentChange('gain', Number(e.target.value))}
               onMouseUp={(e) => handleClipAdjustmentCommit('gain', Number(e.target.value))}
-              onDoubleClick={() => handleClipAdjustmentChange('gain', DEFAULT_ADJUSTMENT_SETTINGS.gain, true)}
+              onDoubleClick={() => handleClipAdjustmentCommit('gain', DEFAULT_ADJUSTMENT_SETTINGS.gain)}
               title="Double-click to reset to 0"
               className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
             />
@@ -2295,9 +2356,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
               max="100"
               step="1"
               value={animatedAdjustments.gamma}
-              onChange={(e) => handleClipAdjustmentChange('gamma', Number(e.target.value), false)}
+              onChange={(e) => handleClipAdjustmentChange('gamma', Number(e.target.value))}
               onMouseUp={(e) => handleClipAdjustmentCommit('gamma', Number(e.target.value))}
-              onDoubleClick={() => handleClipAdjustmentChange('gamma', DEFAULT_ADJUSTMENT_SETTINGS.gamma, true)}
+              onDoubleClick={() => handleClipAdjustmentCommit('gamma', DEFAULT_ADJUSTMENT_SETTINGS.gamma)}
               title="Double-click to reset to 0"
               className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
             />
@@ -2322,9 +2383,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
               max="100"
               step="1"
               value={animatedAdjustments.offset}
-              onChange={(e) => handleClipAdjustmentChange('offset', Number(e.target.value), false)}
+              onChange={(e) => handleClipAdjustmentChange('offset', Number(e.target.value))}
               onMouseUp={(e) => handleClipAdjustmentCommit('offset', Number(e.target.value))}
-              onDoubleClick={() => handleClipAdjustmentChange('offset', DEFAULT_ADJUSTMENT_SETTINGS.offset, true)}
+              onDoubleClick={() => handleClipAdjustmentCommit('offset', DEFAULT_ADJUSTMENT_SETTINGS.offset)}
               title="Double-click to reset to 0"
               className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
             />
@@ -2349,9 +2410,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
               max="180"
               step="1"
               value={animatedAdjustments.hue}
-              onChange={(e) => handleClipAdjustmentChange('hue', Number(e.target.value), false)}
+              onChange={(e) => handleClipAdjustmentChange('hue', Number(e.target.value))}
               onMouseUp={(e) => handleClipAdjustmentCommit('hue', Number(e.target.value))}
-              onDoubleClick={() => handleClipAdjustmentChange('hue', DEFAULT_ADJUSTMENT_SETTINGS.hue, true)}
+              onDoubleClick={() => handleClipAdjustmentCommit('hue', DEFAULT_ADJUSTMENT_SETTINGS.hue)}
               title="Double-click to reset to 0deg"
               className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
             />
@@ -2376,9 +2437,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
               max="50"
               step="0.25"
               value={animatedAdjustments.blur}
-              onChange={(e) => handleClipAdjustmentChange('blur', Number(e.target.value), false)}
+              onChange={(e) => handleClipAdjustmentChange('blur', Number(e.target.value))}
               onMouseUp={(e) => handleClipAdjustmentCommit('blur', Number(e.target.value))}
-              onDoubleClick={() => handleClipAdjustmentChange('blur', DEFAULT_ADJUSTMENT_SETTINGS.blur, true)}
+              onDoubleClick={() => handleClipAdjustmentCommit('blur', DEFAULT_ADJUSTMENT_SETTINGS.blur)}
               title="Double-click to reset to 0px"
               className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
             />

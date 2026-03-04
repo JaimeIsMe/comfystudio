@@ -3,7 +3,7 @@ import {
   Volume2, VolumeX, Lock, Unlock, Eye, EyeOff, 
   Plus, Video, Type, Image as ImageIcon,
   Sparkles, GripVertical, Magnet, ArrowRightLeft, Square, X, Check, Pencil,
-  Undo2, Redo2, Diamond, Zap, AlertTriangle, Loader2, ChevronRight, Maximize2, Flag
+  Diamond, Zap, AlertTriangle, Loader2, ChevronRight, Maximize2, Flag
 } from 'lucide-react'
 import useTimelineStore from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
@@ -77,6 +77,10 @@ const buildWaveformPeaks = (audioBuffer, sampleCount = DEFAULT_WAVEFORM_SAMPLES)
 }
 
 const isNativeMediaUrl = (url) => /^file:\/\//i.test(url) || /^comfystudio:\/\//i.test(url)
+const isAbsoluteMediaPath = (value) => (
+  /^[a-zA-Z]:[\\/]/.test(String(value || ''))
+  || String(value || '').startsWith('/')
+)
 
 const getAudioWaveformData = async (url, sampleCount = DEFAULT_WAVEFORM_SAMPLES) => {
   if (!url) return null
@@ -87,7 +91,11 @@ const getAudioWaveformData = async (url, sampleCount = DEFAULT_WAVEFORM_SAMPLES)
   const loadPromise = (async () => {
     const isElectronRuntime = typeof window !== 'undefined' && window.electronAPI?.isElectron === true
     // In Electron, decode in the main process (ffmpeg) to avoid renderer crashes.
-    if (isElectronRuntime && typeof window.electronAPI?.getAudioWaveform === 'function' && isNativeMediaUrl(url)) {
+    if (
+      isElectronRuntime
+      && typeof window.electronAPI?.getAudioWaveform === 'function'
+      && (isNativeMediaUrl(url) || isAbsoluteMediaPath(url))
+    ) {
       const result = await window.electronAPI.getAudioWaveform(url, { sampleCount })
       if (result?.success && Array.isArray(result.peaks)) {
         return {
@@ -98,8 +106,9 @@ const getAudioWaveformData = async (url, sampleCount = DEFAULT_WAVEFORM_SAMPLES)
       throw new Error(result?.error || 'Failed to extract waveform in main process')
     }
 
-    // Safety: avoid heavyweight decode path in Electron renderer for non-file URLs.
-    if (isElectronRuntime) {
+    // Safety: keep Electron renderer decode path to blob/data URLs only.
+    const isBlobOrDataUrl = /^blob:/i.test(url) || /^data:/i.test(url)
+    if (isElectronRuntime && !isBlobOrDataUrl) {
       return null
     }
 
@@ -129,7 +138,7 @@ function getWaveformPixelCount(clipWidthPx) {
   return Math.min(2048, Math.max(64, Math.round(clipWidthPx)))
 }
 
-function AudioWaveformBars({ clip, clipWidth, clipUrl }) {
+function AudioWaveformBars({ clip, clipWidth, clipUrl, waveformInput = null }) {
   const [waveform, setWaveform] = useState(null)
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 })
   const containerRef = useRef(null)
@@ -138,12 +147,13 @@ function AudioWaveformBars({ clip, clipWidth, clipUrl }) {
   useEffect(() => {
     let cancelled = false
 
-    if (!clipUrl) {
+    const mediaInput = waveformInput || clipUrl
+    if (!mediaInput) {
       setWaveform(null)
       return () => { cancelled = true }
     }
 
-    getAudioWaveformData(clipUrl)
+    getAudioWaveformData(mediaInput)
       .then((data) => {
         if (!cancelled) setWaveform(data)
       })
@@ -154,7 +164,7 @@ function AudioWaveformBars({ clip, clipWidth, clipUrl }) {
     return () => {
       cancelled = true
     }
-  }, [clipUrl])
+  }, [clipUrl, waveformInput])
 
   useEffect(() => {
     const el = containerRef.current
@@ -369,6 +379,7 @@ function Timeline({ onOpenAudioGenerate }) {
   
   // Clip dragging state (moving clips within timeline)
   const [clipDragState, setClipDragState] = useState(null) // { clipId, startX, originalStartTime, originalTrackId }
+  const clipDragHistorySavedRef = useRef(false)
   
   // Marquee selection state
   const [marqueeState, setMarqueeState] = useState(null) // { startX, startY, currentX, currentY, scrollLeft, scrollTop }
@@ -397,6 +408,7 @@ function Timeline({ onOpenAudioGenerate }) {
   const [isPanning, setIsPanning] = useState(false)
   const [panStart, setPanStart] = useState(null) // { x, y, scrollLeft, scrollTop }
   const [isSpaceHeld, setIsSpaceHeld] = useState(false)
+  const spacePanningKeyDownRef = useRef(false)
   
   // Transition types and durations are defined in constants/transitions
   
@@ -695,7 +707,7 @@ function Timeline({ onOpenAudioGenerate }) {
     e.preventDefault()
     
     // Check for spacebar held - start panning
-    if (isSpaceHeld) {
+    if (spacePanningKeyDownRef.current) {
       setIsPanning(true)
       setPanStart({
         x: e.clientX,
@@ -897,12 +909,6 @@ function Timeline({ onOpenAudioGenerate }) {
       const active = document.activeElement
       if (active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable)) return
       
-      // Spacebar - enable panning mode (but don't prevent default if not in timeline)
-      if (e.code === 'Space' && !e.repeat) {
-        // Only enable panning if we're hovering over the timeline
-        setIsSpaceHeld(true)
-      }
-      
       // Ctrl/Cmd + Z - Undo
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
         e.preventDefault()
@@ -1017,23 +1023,55 @@ function Timeline({ onOpenAudioGenerate }) {
         }
       }
     }
-    
-    const handleKeyUp = (e) => {
-      // Release spacebar panning mode
-      if (e.code === 'Space') {
-        setIsSpaceHeld(false)
-        setIsPanning(false)
-        setPanStart(null)
-      }
-    }
-    
+
     window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('keyup', handleKeyUp)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('keyup', handleKeyUp)
     }
   }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedTransitionId, selectedMarkerId, removeSelectedClips, removeTransition, removeMarker, clearSelection, selectMarker, clips, undo, redo, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips])
+
+  // Spacebar panning key state (dedicated listeners so keyup cannot get "stuck")
+  useEffect(() => {
+    const resetSpacePanningState = () => {
+      spacePanningKeyDownRef.current = false
+      setIsSpaceHeld(false)
+      setIsPanning(false)
+      setPanStart(null)
+    }
+
+    const handleSpaceKeyDown = (e) => {
+      if (e.code !== 'Space' || e.repeat) return
+      const active = document.activeElement
+      if (active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable)) return
+      spacePanningKeyDownRef.current = true
+      setIsSpaceHeld(true)
+    }
+
+    const handleSpaceKeyUp = (e) => {
+      if (e.code !== 'Space') return
+      resetSpacePanningState()
+    }
+
+    const handleWindowBlur = () => {
+      resetSpacePanningState()
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) resetSpacePanningState()
+    }
+
+    window.addEventListener('keydown', handleSpaceKeyDown)
+    window.addEventListener('keyup', handleSpaceKeyUp)
+    window.addEventListener('blur', handleWindowBlur)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      window.removeEventListener('keydown', handleSpaceKeyDown)
+      window.removeEventListener('keyup', handleSpaceKeyUp)
+      window.removeEventListener('blur', handleWindowBlur)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [])
 
   // Handle spacebar panning
   useEffect(() => {
@@ -1859,6 +1897,10 @@ function Timeline({ onOpenAudioGenerate }) {
     e.stopPropagation()
     e.preventDefault()
 
+    const isShiftHeld = e.shiftKey
+    const isCtrlHeld = e.ctrlKey || e.metaKey // metaKey for Mac Cmd
+    const hasSelectionModifier = isShiftHeld || isCtrlHeld
+
     const sourceDuration = getSourceDuration(clip)
     const canSlip = e.altKey
       && (clip.type === 'video' || clip.type === 'audio')
@@ -1894,7 +1936,7 @@ function Timeline({ onOpenAudioGenerate }) {
         maxSourceDelta: Math.max(minSourceDelta, maxSourceDelta),
       })
 
-      if (!selectedClipIds.includes(clip.id)) {
+      if (!selectedClipIds.includes(clip.id) && !hasSelectionModifier) {
         selectClip(clip.id)
       }
       return
@@ -1904,6 +1946,7 @@ function Timeline({ onOpenAudioGenerate }) {
     const clipsToMove = selectedClipIds.includes(clip.id) 
       ? clips.filter(c => selectedClipIds.includes(c.id))
       : [clip]
+    clipDragHistorySavedRef.current = false
     
     setClipDragState({
       clipId: clip.id,
@@ -1917,7 +1960,7 @@ function Timeline({ onOpenAudioGenerate }) {
     })
     
     // Only change selection if this clip isn't already selected
-    if (!selectedClipIds.includes(clip.id)) {
+    if (!selectedClipIds.includes(clip.id) && !hasSelectionModifier) {
       selectClip(clip.id)
     }
   }
@@ -1973,6 +2016,12 @@ function Timeline({ onOpenAudioGenerate }) {
       if (!hasMoved) {
         setClipDragState(prev => ({ ...prev, hasMoved: false }))
         return
+      }
+
+      // Save one undo snapshot at the start of an actual drag gesture.
+      if (!clipDragHistorySavedRef.current) {
+        saveToHistory()
+        clipDragHistorySavedRef.current = true
       }
       
       setClipDragState(prev => ({ ...prev, hasMoved: true }))
@@ -2063,6 +2112,7 @@ function Timeline({ onOpenAudioGenerate }) {
       }
       
       setClipDragState(null)
+      clipDragHistorySavedRef.current = false
       clearActiveSnap()
     }
     
@@ -2073,7 +2123,7 @@ function Timeline({ onOpenAudioGenerate }) {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [clipDragState, trimState, slipState, clips, pixelsPerSecond, tracks, videoTracks, moveClip, moveSelectedClips, setSelectedClipsStartTimes, selectedClipIds, snapClipPosition, setActiveSnapTime, clearActiveSnap])
+  }, [clipDragState, trimState, slipState, clips, pixelsPerSecond, tracks, videoTracks, moveClip, moveSelectedClips, setSelectedClipsStartTimes, selectedClipIds, snapClipPosition, setActiveSnapTime, clearActiveSnap, saveToHistory])
 
   // Handle adding transition between adjacent clips - show type menu
   const handleAddTransition = (e, clipA, clipB) => {
@@ -2562,37 +2612,6 @@ function Timeline({ onOpenAudioGenerate }) {
           Ripple
         </button>
         
-        {/* Separator */}
-        <div className="w-px h-4 bg-sf-dark-600" />
-        
-        {/* Undo/Redo Buttons */}
-        <div className="flex items-center gap-0.5">
-          <button
-            onClick={undo}
-            disabled={!canUndo()}
-            className={`p-1 rounded transition-colors ${
-              canUndo() 
-                ? 'hover:bg-sf-dark-600 text-sf-text-secondary' 
-                : 'text-sf-dark-600 cursor-not-allowed'
-            }`}
-            title="Undo (Ctrl+Z)"
-          >
-            <Undo2 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={redo}
-            disabled={!canRedo()}
-            className={`p-1 rounded transition-colors ${
-              canRedo() 
-                ? 'hover:bg-sf-dark-600 text-sf-text-secondary' 
-                : 'text-sf-dark-600 cursor-not-allowed'
-            }`}
-            title="Redo (Ctrl+Shift+Z)"
-          >
-            <Redo2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
-        
         {/* Selection count */}
         {selectedClipIds.length > 1 && (
           <span className="text-[10px] text-sf-accent">{selectedClipIds.length} selected</span>
@@ -2633,11 +2652,8 @@ function Timeline({ onOpenAudioGenerate }) {
             >
               <span className="text-xs">+</span>
             </button>
-            <span className="text-[10px] text-sf-text-muted w-12">{zoom}%</span>
+            <span className="text-[10px] text-sf-text-muted w-12">{Math.round(zoom)}%</span>
           </div>
-          
-          {/* Hints */}
-          <span className="text-[9px] text-sf-text-muted">Ctrl+Scroll=Zoom | Space+Drag=Pan | Alt+Drag(empty)=Marquee | Alt+Drag(clip)=Slip | M=Marker</span>
         </div>
       </div>
 
@@ -2824,6 +2840,10 @@ function Timeline({ onOpenAudioGenerate }) {
             
             const isStereo = track.type === 'audio' && track.channels !== 'mono'
             const headerHeight = getTrackHeight(track)
+            const audioTrackNumber = index + 1
+            const channelLabels = isStereo
+              ? [`A${audioTrackNumber}L`, `A${audioTrackNumber}R`]
+              : [`A${audioTrackNumber}`]
             
             return (
             <div 
@@ -2873,18 +2893,25 @@ function Timeline({ onOpenAudioGenerate }) {
                     </button>
                   </div>
                 ) : (
-                  <span 
-                    className="text-[11px] text-sf-text-primary flex-1 truncate cursor-pointer hover:text-sf-accent"
+                  <div
+                    className="flex-1 min-w-0 cursor-pointer"
                     onDoubleClick={(e) => { e.stopPropagation(); handleStartRename(track) }}
                     title="Double-click to rename"
                   >
-                    {track.name}
-                    {track.type === 'audio' && track.channels && (
-                      <span className="text-[9px] text-sf-text-muted ml-0.5">
-                        ({track.channels})
-                      </span>
-                    )}
-                  </span>
+                    <span className="text-[11px] text-sf-text-primary truncate block leading-tight hover:text-sf-accent">
+                      {track.name}
+                    </span>
+                    <div className="mt-0.5 flex items-center gap-1.5">
+                      {channelLabels.map((label) => (
+                        <span
+                          key={label}
+                          className="px-1 py-0 rounded border border-sf-dark-500 bg-sf-dark-700/70 text-[9px] text-sf-text-muted leading-none"
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
                 )}
               
               <div className="flex items-center gap-0.5">
@@ -2940,12 +2967,6 @@ function Timeline({ onOpenAudioGenerate }) {
                 </button>
               </div>
               </div>
-              {isStereo && (
-                <div className="flex items-center justify-around text-[9px] text-sf-text-muted border-t border-sf-dark-700/80 flex-shrink-0 py-0.5">
-                  <span>L</span>
-                  <span>R</span>
-                </div>
-              )}
               {/* Drag bottom edge to resize track vertically */}
               <div
                 className="absolute bottom-0 left-0 right-0 h-1.5 cursor-ns-resize z-30 group/track-resize"
@@ -3661,13 +3682,19 @@ function Timeline({ onOpenAudioGenerate }) {
                 onDrop={(e) => handleDrop(e, track.id)}
               >
                 {isStereoContent && (
-                  <div className="absolute left-0 right-0 top-1/2 h-px bg-sf-dark-600 z-10 pointer-events-none flex items-center justify-center">
-                    <span className="text-[8px] text-sf-text-muted bg-sf-dark-900 px-1">L / R</span>
-                  </div>
+                  <div className="absolute left-0 right-0 top-1/2 h-px bg-sf-dark-600/80 z-10 pointer-events-none" />
                 )}
                 {trackClips.map((clip) => {
                   const clipWidth = clip.duration * pixelsPerSecond
                   const clipUrl = getClipUrl(clip)
+                  const clipAsset = clip.assetId ? getAssetById(clip.assetId) : null
+                  const nativeWaveformInput = (
+                    (clipAsset?.absolutePath || null)
+                    || (isNativeMediaUrl(clipAsset?.playbackCacheUrl) ? clipAsset.playbackCacheUrl : null)
+                    || (isNativeMediaUrl(clipAsset?.url) ? clipAsset.url : null)
+                    || (isNativeMediaUrl(clip?.url) ? clip.url : null)
+                  )
+                  const waveformInput = nativeWaveformInput || clipUrl
                   
                   return (
                   <div
@@ -3701,6 +3728,7 @@ function Timeline({ onOpenAudioGenerate }) {
                       clip={clip}
                       clipWidth={clipWidth}
                       clipUrl={clipUrl}
+                      waveformInput={waveformInput}
                     />
                     
                     {/* Clip label - top left with background */}

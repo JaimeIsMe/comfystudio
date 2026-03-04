@@ -201,6 +201,7 @@ function PreviewPanel() {
   const viewportRef = useRef(null)
   const panelRef = useRef(null)
   const holdFrameCanvasRef = useRef(null) // Canvas to hold last frame during video src changes
+  const previewTransformHistoryClipRef = useRef(null)
   const [showHoldFrame, setShowHoldFrame] = useState(false) // Whether to show the hold frame canvas
   
   // Track active clips at current playhead position (for overlay display)
@@ -252,6 +253,7 @@ function PreviewPanel() {
     transitions,
     selectedClipIds,
     selectClip,
+    saveToHistory,
     updateClipTransform,
     hasKeyframes,
     setKeyframe,
@@ -634,6 +636,12 @@ function PreviewPanel() {
     ? playheadPosition - selectedPreviewClipStartTime
     : 0
 
+  useEffect(() => {
+    if (previewTransformHistoryClipRef.current !== selectedPreviewClipId) {
+      previewTransformHistoryClipRef.current = null
+    }
+  }, [selectedPreviewClipId])
+
   const selectedPreviewTransform = useMemo(() => {
     if (!selectedPreviewClip) return null
     const animated = getAnimatedTransform(selectedPreviewClip, selectedPreviewClipTime)
@@ -641,7 +649,7 @@ function PreviewPanel() {
     return getClipTransform(selectedPreviewClip)
   }, [selectedPreviewClip, selectedPreviewClipTime, getClipTransform])
 
-  const applyPreviewTransformUpdate = useCallback((updates, saveHistory = false) => {
+  const applyPreviewTransformUpdate = useCallback((updates, finalize = false) => {
     if (!selectedPreviewClipId || !updates || typeof updates !== 'object') return
     const entries = Object.entries(updates)
     if (entries.length === 0) return
@@ -667,17 +675,33 @@ function PreviewPanel() {
     const updateKeys = Object.keys(nextUpdates)
     if (updateKeys.length === 0) return
 
+    const hasChanges = updateKeys.some((property) => selectedPreviewTransform?.[property] !== nextUpdates[property])
+    if (!hasChanges) {
+      if (finalize) {
+        previewTransformHistoryClipRef.current = null
+      }
+      return
+    }
+
+    if (previewTransformHistoryClipRef.current !== selectedPreviewClipId) {
+      saveToHistory()
+      previewTransformHistoryClipRef.current = selectedPreviewClipId
+    }
+
     const clipTime = playheadPosition - selectedPreviewClipStartTime
-    updateClipTransform(selectedPreviewClipId, nextUpdates, saveHistory)
+    updateClipTransform(selectedPreviewClipId, nextUpdates, false)
     updateKeys.forEach((property) => {
       if (hasKeyframes(selectedPreviewClipId, property)) {
         setKeyframe(selectedPreviewClipId, property, clipTime, nextUpdates[property], 'easeInOut', { saveHistory: false })
       }
     })
-  }, [selectedPreviewClipId, selectedPreviewScaleLinked, playheadPosition, selectedPreviewClipStartTime, updateClipTransform, hasKeyframes, setKeyframe])
+    if (finalize) {
+      previewTransformHistoryClipRef.current = null
+    }
+  }, [selectedPreviewClipId, selectedPreviewScaleLinked, selectedPreviewTransform, playheadPosition, selectedPreviewClipStartTime, saveToHistory, updateClipTransform, hasKeyframes, setKeyframe])
 
   const handlePreviewTransformChange = useCallback((updates) => {
-    applyPreviewTransformUpdate(updates, false)
+    applyPreviewTransformUpdate(updates)
   }, [applyPreviewTransformUpdate])
 
   const handlePreviewTransformCommit = useCallback((updates) => {
@@ -685,6 +709,7 @@ function PreviewPanel() {
   }, [applyPreviewTransformUpdate])
 
   const handlePreviewTransformInteractionStart = useCallback(() => {
+    previewTransformHistoryClipRef.current = null
     if (timelineIsPlaying) {
       timelineTogglePlay()
     }
