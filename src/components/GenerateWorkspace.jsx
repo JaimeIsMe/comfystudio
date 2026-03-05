@@ -4,14 +4,16 @@ import {
   ChevronLeft, ChevronRight, Play, Pause, Upload, X, Film, Search,
   FolderOpen, Wand2, Volume2, Mic, Clock, Settings, Terminal, ChevronDown, ChevronUp, PenLine
 } from 'lucide-react'
+import { jsPDF } from 'jspdf'
 import ImageAnnotationModal from './ImageAnnotationModal'
+import ConfirmDialog from './ConfirmDialog'
 import useComfyUI from '../hooks/useComfyUI'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 import { useFrameForAIStore } from '../stores/frameForAIStore'
 import { BUILTIN_WORKFLOW_PATHS } from '../config/workflowRegistry'
 import { comfyui } from '../services/comfyui'
-import { importAsset, isElectron } from '../services/fileSystem'
+import { getProjectFileUrl, importAsset, isElectron } from '../services/fileSystem'
 import { enqueuePlaybackTranscode } from '../services/playbackCache'
 import { buildYoloPlanFromScript, flattenYoloPlanVariants } from '../utils/yoloPlanning'
 import { checkWorkflowDependencies, buildMissingDependencyClipboardText } from '../services/workflowDependencies'
@@ -30,7 +32,6 @@ import {
   YOLO_CAMERA_PRESET_OPTIONS,
   YOLO_PROFILES,
   YOLO_QUEUE_CONFIRM_THRESHOLD,
-  YOLO_VIDEO_WORKFLOW_TARGET_OPTIONS,
   formatWorkflowHardwareRuntime,
   formatWorkflowTierSummary,
   getWorkflowDisplayLabel,
@@ -38,6 +39,23 @@ import {
 } from '../config/generateWorkspaceConfig'
 
 const CATEGORY_ICONS = { video: Video, image: ImageIcon, audio: Music }
+const DIRECTOR_SUBTABS = [
+  {
+    id: 'setup',
+    label: '1. Setup',
+    helper: 'Step 1: set references, quality, and structure.',
+  },
+  {
+    id: 'plan-script',
+    label: '2. Plan & Script',
+    helper: 'Step 2: define script/lyrics and build queueable plan.',
+  },
+  {
+    id: 'scene-shot',
+    label: '3. Scene / Shot Editor',
+    helper: 'Step 3: refine and regenerate individual shots.',
+  },
+]
 
 async function copyTextToClipboard(text) {
   if (navigator?.clipboard?.writeText) {
@@ -653,6 +671,7 @@ function GenerateWorkspace() {
 
   // Director mode state
   const [yoloCreationType, setYoloCreationType] = useState(persistedState?.yoloCreationType || 'ad')
+  const [directorSubTab, setDirectorSubTab] = useState('setup')
   const [yoloScript, setYoloScript] = useState(persistedState?.yoloScript || '')
   const [yoloStyleNotes, setYoloStyleNotes] = useState(persistedState?.yoloStyleNotes || '')
   const [yoloAdProductAssetId, setYoloAdProductAssetId] = useState(persistedState?.yoloAdProductAssetId ?? null)
@@ -663,7 +682,6 @@ function GenerateWorkspace() {
   const [yoloAnglesPerShot, setYoloAnglesPerShot] = useState(persistedState?.yoloAnglesPerShot || 2)
   const [yoloTakesPerAngle, setYoloTakesPerAngle] = useState(persistedState?.yoloTakesPerAngle || 1)
   const [yoloQualityProfile, setYoloQualityProfile] = useState(persistedState?.yoloQualityProfile || 'balanced')
-  const [yoloVideoWorkflowTarget, setYoloVideoWorkflowTarget] = useState(persistedState?.yoloVideoWorkflowTarget || 'profile')
   const [yoloPlan, setYoloPlan] = useState(() => normalizePersistedYoloPlan(persistedState?.yoloPlan || []))
 
   // Director mode music video state
@@ -693,6 +711,9 @@ function GenerateWorkspace() {
   const MAX_CONSECUTIVE_RAPID_FAILS = 3
   const MIN_JOB_INTERVAL_MS = 2000
   const [formError, setFormError] = useState(null)
+  const [creatingStoryboardPdf, setCreatingStoryboardPdf] = useState(false)
+  const [confirmDialog, setConfirmDialog] = useState(null) // { title, message, confirmLabel, cancelLabel, tone }
+  const confirmResolverRef = useRef(null)
   const [openWorkflowHint, setOpenWorkflowHint] = useState('')
   const [yoloDependencyCheckInProgress, setYoloDependencyCheckInProgress] = useState(false)
   const [yoloDependencyPanel, setYoloDependencyPanel] = useState({
@@ -720,6 +741,7 @@ function GenerateWorkspace() {
   const [comfyLogLines, setComfyLogLines] = useState([])
   const comfyLogEndRef = useRef(null)
   const importedMediaSignaturesRef = useRef(new Set())
+  const storyboardPdfBatchesRef = useRef(new Map())
   const COMFY_LOG_MAX = 400
   const addComfyLog = useCallback((type, msg) => {
     const ts = new Date().toLocaleTimeString('en-GB', { hour12: false })
@@ -732,7 +754,7 @@ function GenerateWorkspace() {
   // Hooks
   const { isConnected, wsConnected, queueCount } = useComfyUI()
   const { addAsset, generateName, assets } = useAssetsStore()
-  const { currentProjectHandle } = useProjectStore()
+  const { currentProjectHandle, currentProject } = useProjectStore()
   const frameForAI = useFrameForAIStore((s) => s.frame)
   const clearFrameForAI = useFrameForAIStore((s) => s.clearFrame)
 
@@ -796,7 +818,6 @@ function GenerateWorkspace() {
         yoloAnglesPerShot,
         yoloTakesPerAngle,
         yoloQualityProfile,
-        yoloVideoWorkflowTarget,
         yoloPlan,
         yoloMusicTitle,
         yoloMusicLyrics,
@@ -849,7 +870,6 @@ function GenerateWorkspace() {
     yoloAnglesPerShot,
     yoloTakesPerAngle,
     yoloQualityProfile,
-    yoloVideoWorkflowTarget,
     yoloPlan,
     yoloMusicTitle,
     yoloMusicLyrics,
@@ -936,6 +956,11 @@ function GenerateWorkspace() {
 
   useEffect(() => {
     setFormError(null)
+  }, [generationMode, yoloCreationType])
+
+  useEffect(() => {
+    if (generationMode !== 'yolo') return
+    setDirectorSubTab((prev) => (prev === 'setup' ? prev : 'setup'))
   }, [generationMode, yoloCreationType])
 
   useEffect(() => {
@@ -1116,6 +1141,7 @@ function GenerateWorkspace() {
   const yoloModeKey = isYoloMusicMode ? 'music' : 'ad'
   const yoloModeLabel = isYoloMusicMode ? 'Music Video' : 'Ad'
   const yoloActivePlan = isYoloMusicMode ? yoloMusicPlan : yoloPlan
+  const yoloCanEditScenes = yoloActivePlan.length > 0
   const setYoloActivePlan = isYoloMusicMode ? setYoloMusicPlan : setYoloPlan
   const yoloActiveTargetDuration = isYoloMusicMode ? yoloMusicTargetDuration : yoloTargetDuration
   const yoloActiveShotsPerScene = isYoloMusicMode ? yoloMusicShotsPerScene : yoloShotsPerScene
@@ -1179,15 +1205,19 @@ function GenerateWorkspace() {
   ])
 
   const yoloProfile = YOLO_PROFILES[yoloActiveQualityProfile] || YOLO_PROFILES.balanced
-  const yoloSelectedVideoWorkflowIds = useMemo(() => {
-    if (yoloVideoWorkflowTarget === 'profile') {
-      return [yoloProfile.videoWorkflowId]
+  const yoloStoryboardWorkflowId = useMemo(() => {
+    // Draft storyboards in Ad mode use the local Qwen model+product workflow.
+    if (!isYoloMusicMode && yoloActiveQualityProfile === 'draft') {
+      return 'image-edit-model-product'
     }
-    if (yoloVideoWorkflowTarget === 'wan22-i2v' || yoloVideoWorkflowTarget === 'kling-o3-i2v') {
-      return [yoloVideoWorkflowTarget]
-    }
-    return [yoloProfile.videoWorkflowId]
-  }, [yoloProfile.videoWorkflowId, yoloVideoWorkflowTarget])
+    return yoloProfile.storyboardWorkflowId
+  }, [isYoloMusicMode, yoloActiveQualityProfile, yoloProfile.storyboardWorkflowId])
+  const yoloStoryboardSupportsReferenceAnchors = useMemo(() => (
+    ['nano-banana-2', 'nano-banana-pro', 'image-edit-model-product'].includes(String(yoloStoryboardWorkflowId || '').trim())
+  ), [yoloStoryboardWorkflowId])
+  const yoloSelectedVideoWorkflowIds = useMemo(() => (
+    [yoloProfile.videoWorkflowId]
+  ), [yoloProfile.videoWorkflowId])
   const yoloSelectedVideoWorkflowLabel = useMemo(
     () => yoloSelectedVideoWorkflowIds.map(getWorkflowDisplayLabel).join(' + '),
     [yoloSelectedVideoWorkflowIds]
@@ -1201,18 +1231,18 @@ function GenerateWorkspace() {
     [workflowId]
   )
   const yoloStoryboardTierSummary = useMemo(
-    () => formatWorkflowTierSummary(yoloProfile.storyboardWorkflowId),
-    [yoloProfile.storyboardWorkflowId]
+    () => formatWorkflowTierSummary(yoloStoryboardWorkflowId),
+    [yoloStoryboardWorkflowId]
   )
   const yoloVideoTargetTierSummary = useMemo(
     () => yoloSelectedVideoWorkflowIds.map((id) => formatWorkflowTierSummary(id)).join(' + '),
     [yoloSelectedVideoWorkflowIds]
   )
   const yoloDependencyWorkflowIds = useMemo(() => Array.from(new Set([
-    yoloProfile.storyboardWorkflowId,
+    yoloStoryboardWorkflowId,
     ...yoloSelectedVideoWorkflowIds,
   ].map((workflow) => String(workflow || '').trim()).filter(Boolean))), [
-    yoloProfile.storyboardWorkflowId,
+    yoloStoryboardWorkflowId,
     yoloSelectedVideoWorkflowIds,
   ])
 
@@ -1310,6 +1340,10 @@ function GenerateWorkspace() {
     () => yoloQueueVariants.filter((variant) => yoloStoryboardAssetMap.has(variant.key)).length,
     [yoloQueueVariants, yoloStoryboardAssetMap]
   )
+  const yoloSubTabHelperText = useMemo(
+    () => DIRECTOR_SUBTABS.find((tab) => tab.id === directorSubTab)?.helper || '',
+    [directorSubTab]
+  )
   const yoloSceneStats = useMemo(() => {
     const stats = new Map()
     for (const scene of yoloActivePlan || []) {
@@ -1348,6 +1382,12 @@ function GenerateWorkspace() {
     () => (selectedYoloSceneIndex >= 0 ? yoloActivePlan[selectedYoloSceneIndex] : null),
     [selectedYoloSceneIndex, yoloActivePlan]
   )
+  useEffect(() => {
+    if (generationMode !== 'yolo') return
+    if (directorSubTab === 'scene-shot' && !yoloCanEditScenes) {
+      setDirectorSubTab('plan-script')
+    }
+  }, [directorSubTab, generationMode, yoloCanEditScenes])
   const assetNameById = useMemo(() => {
     const map = new Map()
     for (const asset of assets || []) {
@@ -1504,16 +1544,250 @@ function GenerateWorkspace() {
     if (comfyLogExpanded && comfyLogEndRef.current) comfyLogEndRef.current.scrollIntoView({ behavior: 'smooth' })
   }, [comfyLogExpanded, comfyLogLines])
 
+  const openStoryboardPdfPreview = useCallback((pdfUrl) => {
+    if (!pdfUrl || typeof window === 'undefined') return
+    try {
+      window.open(pdfUrl, '_blank', 'noopener,noreferrer')
+    } catch (_) {
+      // Ignore popup/open failures.
+    }
+  }, [])
+
+  const exportStoryboardPdfBatch = useCallback(async (batch) => {
+    if (!batch || !currentProjectHandle) return null
+    const items = Array.isArray(batch.items) ? batch.items : []
+    if (items.length === 0) return null
+
+    const sortedItems = [...items].sort((a, b) => {
+      const sequenceDiff = (Number(a.sequence) || 0) - (Number(b.sequence) || 0)
+      if (sequenceDiff !== 0) return sequenceDiff
+      return (Number(a.itemIndex) || 0) - (Number(b.itemIndex) || 0)
+    })
+
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter', compress: true })
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const margin = 32
+    const headerHeight = 52
+    const colGap = 18
+    // Landscape layout tuned for 6 storyboard frames per page (3 columns x 2 rows).
+    const rowGap = 12
+    const columns = 3
+    const cardWidth = (pageWidth - (margin * 2) - (colGap * (columns - 1))) / columns
+    const imageHeight = Math.round(cardWidth * (9 / 16))
+    const labelHeight = 14
+    const promptHeight = 36
+    const cardHeight = imageHeight + labelHeight + promptHeight + 10
+    const maxPromptLines = 3
+    // Render each storyboard frame at higher raster DPI to avoid pixelation in the PDF.
+    const pdfRasterScale = Math.max(2, Math.min(5, 220 / 72))
+
+    const loadImage = (src) => new Promise((resolve, reject) => {
+      const img = new window.Image()
+      img.crossOrigin = 'anonymous'
+      img.onload = () => resolve(img)
+      img.onerror = reject
+      img.src = src
+    })
+
+    const drawPageHeader = (pageNumber) => {
+      // Reset header text color each page so later card styling doesn't tint headers.
+      doc.setTextColor(0, 0, 0)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(14)
+      doc.text(
+        `Storyboard ${batch.modeLabel || 'Ad'}`,
+        margin,
+        margin + 14
+      )
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
+      const projectName = String(currentProject?.name || '').trim()
+      const subtitle = projectName
+        ? `Project: ${projectName}`
+        : `Generated ${new Date(batch.createdAt || Date.now()).toLocaleString()}`
+      doc.text(subtitle, margin, margin + 28)
+      doc.text(`Page ${pageNumber}`, margin, margin + 40)
+      doc.setDrawColor(0, 0, 0)
+      doc.line(margin, margin + 46, pageWidth - margin, margin + 46)
+    }
+
+    let pageNumber = 1
+    let row = 0
+    let col = 0
+    let cursorY = margin + headerHeight
+    drawPageHeader(pageNumber)
+
+    for (let index = 0; index < sortedItems.length; index += 1) {
+      const item = sortedItems[index]
+
+      if (cursorY + cardHeight > pageHeight - margin) {
+        doc.addPage()
+        pageNumber += 1
+        row = 0
+        col = 0
+        cursorY = margin + headerHeight
+        drawPageHeader(pageNumber)
+      }
+
+      const cardX = margin + (col * (cardWidth + colGap))
+      const cardY = cursorY
+      const imageX = cardX + 1
+      const imageY = cardY + 1
+      const imageW = cardWidth - 2
+      const imageH = imageHeight
+
+      doc.setDrawColor(90, 90, 90)
+      doc.setFillColor(20, 20, 20)
+      doc.rect(cardX, cardY, cardWidth, imageHeight + labelHeight + promptHeight + 6, 'FD')
+
+      let imagePlaced = false
+      if (item?.url) {
+        try {
+          const img = await loadImage(item.url)
+          const canvas = document.createElement('canvas')
+          canvas.width = Math.max(2, Math.floor(imageW * pdfRasterScale))
+          canvas.height = Math.max(2, Math.floor(imageH * pdfRasterScale))
+          const ctx = canvas.getContext('2d')
+          if (ctx) {
+            ctx.fillStyle = '#111111'
+            ctx.fillRect(0, 0, canvas.width, canvas.height)
+            ctx.imageSmoothingEnabled = true
+            ctx.imageSmoothingQuality = 'high'
+            const scale = Math.min(canvas.width / Math.max(1, img.width), canvas.height / Math.max(1, img.height))
+            const drawW = Math.max(1, Math.round(img.width * scale))
+            const drawH = Math.max(1, Math.round(img.height * scale))
+            const drawX = Math.floor((canvas.width - drawW) / 2)
+            const drawY = Math.floor((canvas.height - drawH) / 2)
+            ctx.drawImage(img, drawX, drawY, drawW, drawH)
+            const dataUrl = canvas.toDataURL('image/png')
+            doc.addImage(dataUrl, 'PNG', imageX, imageY, imageW, imageH)
+            imagePlaced = true
+          }
+        } catch (_) {
+          imagePlaced = false
+        }
+      }
+
+      if (!imagePlaced) {
+        doc.setDrawColor(120, 120, 120)
+        doc.rect(imageX, imageY, imageW, imageH)
+        doc.setFont('helvetica', 'italic')
+        doc.setFontSize(8)
+        doc.setTextColor(180, 180, 180)
+        doc.text('Image unavailable', imageX + 8, imageY + 14)
+      }
+
+      const labelParts = [
+        `#${index + 1}`,
+        item?.sceneId || '',
+        item?.shotId || '',
+        item?.angle || '',
+        item?.take ? `take ${item.take}` : '',
+      ].filter(Boolean)
+      doc.setTextColor(220, 220, 220)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(8)
+      doc.text(labelParts.join(' - '), cardX + 4, cardY + imageHeight + 11)
+
+      const promptText = String(item?.prompt || '').replace(/\s+/g, ' ').trim() || '(no prompt saved)'
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(7)
+      doc.setTextColor(205, 205, 205)
+      const wrapped = doc.splitTextToSize(promptText, cardWidth - 8)
+      const lines = wrapped.slice(0, maxPromptLines)
+      doc.text(lines, cardX + 4, cardY + imageHeight + labelHeight + 10)
+
+      col += 1
+      if (col >= columns) {
+        col = 0
+        row += 1
+        cursorY = margin + headerHeight + (row * (cardHeight + rowGap))
+      }
+    }
+
+    const pdfBlob = doc.output('blob')
+    const labelToken = slugifyNameToken(
+      stripFileExtension(batch.directorLabel || ''),
+      { fallback: 'storyboard', maxLength: 28 }
+    )
+    const dateStamp = new Date(batch.createdAt || Date.now())
+      .toISOString()
+      .replace(/[:.]/g, '-')
+    const fileName = `director_${batch.modeKey || 'ad'}_${labelToken}_storyboard_${dateStamp}.pdf`
+    const file = new File([pdfBlob], fileName, { type: 'application/pdf' })
+    const imported = await importAsset(currentProjectHandle, file, 'images')
+
+    let pdfUrl = null
+    try {
+      if (imported?.path) {
+        pdfUrl = await getProjectFileUrl(currentProjectHandle, imported.path)
+      }
+    } catch (_) {
+      pdfUrl = null
+    }
+    if (!pdfUrl) {
+      pdfUrl = URL.createObjectURL(pdfBlob)
+    }
+
+    return {
+      fileName,
+      relativePath: imported?.path || '',
+      url: pdfUrl,
+      frameCount: sortedItems.length,
+    }
+  }, [currentProject?.name, currentProjectHandle])
+
+  const finalizeStoryboardPdfBatchForJob = useCallback(async () => {
+    // Automatic storyboard PDF export is disabled.
+    // Users now explicitly generate PDFs with the "Create Storyboard PDF" button.
+  }, [])
+
   const enqueueJob = useCallback((job) => {
     setGenerationQueue(prev => [...prev, job])
   }, [])
 
-  const confirmLargeQueueBatch = useCallback((jobCount, label) => {
-    if (jobCount <= YOLO_QUEUE_CONFIRM_THRESHOLD) return true
-    return window.confirm(
-      `You are about to queue ${jobCount} ${label} jobs. Continue?\n\nTip: use smaller shot/angle/take counts for quicker test batches.`
-    )
+  const requestConfirm = useCallback(({
+    title = 'Confirm action',
+    message = '',
+    confirmLabel = 'Confirm',
+    cancelLabel = 'Cancel',
+    tone = 'danger',
+  }) => {
+    if (confirmResolverRef.current) {
+      confirmResolverRef.current(false)
+      confirmResolverRef.current = null
+    }
+    return new Promise((resolve) => {
+      confirmResolverRef.current = resolve
+      setConfirmDialog({ title, message, confirmLabel, cancelLabel, tone })
+    })
   }, [])
+
+  const resolveConfirmDialog = useCallback((accepted) => {
+    setConfirmDialog(null)
+    const resolve = confirmResolverRef.current
+    confirmResolverRef.current = null
+    if (resolve) resolve(Boolean(accepted))
+  }, [])
+
+  useEffect(() => () => {
+    if (confirmResolverRef.current) {
+      confirmResolverRef.current(false)
+      confirmResolverRef.current = null
+    }
+  }, [])
+
+  const confirmLargeQueueBatch = useCallback(async (jobCount, label) => {
+    if (jobCount <= YOLO_QUEUE_CONFIRM_THRESHOLD) return true
+    return requestConfirm({
+      title: 'Large queue batch',
+      message: `You are about to queue ${jobCount} ${label} jobs.\n\nTip: use smaller shot/angle/take counts for quicker test batches.`,
+      confirmLabel: 'Queue jobs',
+      cancelLabel: 'Cancel',
+      tone: 'primary',
+    })
+  }, [requestConfirm])
 
   const getExistingYoloStageKeys = useCallback((stage) => (
     new Set(
@@ -1532,11 +1806,15 @@ function GenerateWorkspace() {
   const handleClearGenerationQueue = useCallback(async () => {
     if (generationQueue.length === 0) return
     const hasActiveJobs = generationQueue.some((job) => ACTIVE_JOB_STATUSES.includes(job.status))
-    const confirmed = window.confirm(
-      hasActiveJobs
+    const confirmed = await requestConfirm({
+      title: 'Clear queue?',
+      message: hasActiveJobs
         ? `Clear ${generationQueue.length} jobs and interrupt the active generation?`
-        : `Clear ${generationQueue.length} queued/completed jobs from this session?`
-    )
+        : `Clear ${generationQueue.length} queued/completed jobs from this session?`,
+      confirmLabel: 'Clear queue',
+      cancelLabel: 'Keep queue',
+      tone: 'danger',
+    })
     if (!confirmed) return
 
     if (hasActiveJobs) {
@@ -1551,11 +1829,12 @@ function GenerateWorkspace() {
     setActiveJobId(null)
     processingRef.current = false
     startedJobIdsRef.current.clear()
+    storyboardPdfBatchesRef.current.clear()
     queuePausedRef.current = false
     consecutiveRapidFailsRef.current = 0
     setFormError(null)
     addComfyLog('status', 'Generation queue cleared')
-  }, [addComfyLog, generationQueue])
+  }, [addComfyLog, generationQueue, requestConfirm])
 
   const handleResumeQueue = useCallback(() => {
     const pausedIds = queueRef.current
@@ -1744,6 +2023,13 @@ function GenerateWorkspace() {
   const buildActiveYoloPlan = useCallback(() => (
     isYoloMusicMode ? buildYoloMusicPlan() : buildYoloAdPlan()
   ), [buildYoloAdPlan, buildYoloMusicPlan, isYoloMusicMode])
+  const handleBuildActiveYoloPlan = useCallback(() => {
+    const nextPlan = buildActiveYoloPlan()
+    if (Array.isArray(nextPlan) && nextPlan.length > 0) {
+      setDirectorSubTab('scene-shot')
+    }
+    return nextPlan
+  }, [buildActiveYoloPlan])
 
   const updateYoloScene = useCallback((sceneId, updater) => {
     setYoloActivePlan((prevPlan) => prevPlan.map((scene) => {
@@ -1934,7 +2220,7 @@ function GenerateWorkspace() {
     }))
   }, [updateYoloShot])
 
-  const queueYoloStoryboardVariants = useCallback((variants, options = {}) => {
+  const queueYoloStoryboardVariants = useCallback(async (variants, options = {}) => {
     const {
       allowExistingDoneKeys = false,
       skipConfirm = false,
@@ -1972,9 +2258,12 @@ function GenerateWorkspace() {
       return 0
     }
 
-    if (!skipConfirm && !confirmLargeQueueBatch(variantsToQueue.length, 'storyboard')) {
-      setFormError('Queue cancelled')
-      return 0
+    if (!skipConfirm) {
+      const confirmed = await confirmLargeQueueBatch(variantsToQueue.length, 'storyboard')
+      if (!confirmed) {
+        setFormError('Queue cancelled')
+        return 0
+      }
     }
 
     const extractNumericId = (value, fallback = 1) => {
@@ -1982,11 +2271,18 @@ function GenerateWorkspace() {
       const parsed = match ? Number(match[0]) : fallback
       return Number.isFinite(parsed) ? parsed : fallback
     }
+    const usesModelProductStoryboardWorkflow = yoloStoryboardWorkflowId === 'image-edit-model-product'
+    const storyboardInputAsset = usesModelProductStoryboardWorkflow
+      ? (yoloAdModelAsset || yoloAdProductAsset || null)
+      : null
     const jobs = variantsToQueue.map((variant, index) => {
       const sceneNum = extractNumericId(variant.sceneId, index + 1)
       const shotNum = extractNumericId(variant.shotId, 1)
-      const strictSeed = Number(seed) + sceneNum
-      const mediumSeed = Number(seed) + (sceneNum * 100) + (shotNum * 10)
+      const angleNum = extractNumericId(variant.angle, 1)
+      const takeNum = extractNumericId(variant.take, 1)
+      // Keep consistency behavior, but ensure each take gets a distinct seed.
+      const strictSeed = Number(seed) + (sceneNum * 1000) + (shotNum * 10) + takeNum
+      const mediumSeed = Number(seed) + (sceneNum * 100000) + (shotNum * 1000) + (angleNum * 100) + (takeNum * 10)
       const softSeed = Number(seed) + index + 1
       const storyboardSeed = (
         yoloAdConsistency === 'strict'
@@ -1997,13 +2293,13 @@ function GenerateWorkspace() {
       )
       return createQueuedJob({
         category: 'image',
-        workflowId: yoloProfile.storyboardWorkflowId,
-        workflowLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel} Storyboard (${yoloProfile.storyboardWorkflowId})`,
-        needsImage: false,
+        workflowId: yoloStoryboardWorkflowId,
+        workflowLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel} Storyboard (${yoloStoryboardWorkflowId})`,
+        needsImage: usesModelProductStoryboardWorkflow,
         prompt: variant.storyboardPrompt || variant.prompt,
         seed: storyboardSeed,
-        inputAssetId: null,
-        inputAssetName: '',
+        inputAssetId: storyboardInputAsset?.id || null,
+        inputAssetName: storyboardInputAsset?.name || '',
         inputFromTimelineFrame: false,
         referenceAssetId1: !isYoloMusicMode ? (yoloAdProductAsset?.id || null) : null,
         referenceAssetId2: !isYoloMusicMode ? (yoloAdModelAsset?.id || null) : null,
@@ -2037,11 +2333,13 @@ function GenerateWorkspace() {
     seed,
     yoloActiveQualityProfile,
     yoloAdConsistency,
+    yoloAdModelAsset,
     yoloAdModelAsset?.id,
+    yoloAdProductAsset,
     yoloAdProductAsset?.id,
     yoloModeKey,
     yoloModeLabel,
-    yoloProfile.storyboardWorkflowId,
+    yoloStoryboardWorkflowId,
     yoloQueueNameLabel,
   ])
 
@@ -2049,15 +2347,23 @@ function GenerateWorkspace() {
     if (!isConnected) return
     if (
       !isYoloMusicMode &&
-      yoloAdHasReferenceAnchors &&
-      yoloProfile.storyboardWorkflowId !== 'nano-banana-2' &&
-      yoloProfile.storyboardWorkflowId !== 'nano-banana-pro'
+      yoloStoryboardWorkflowId === 'image-edit-model-product' &&
+      !yoloAdModelAsset &&
+      !yoloAdProductAsset
     ) {
-      setFormError('Product/model references require Balanced or Premium profile (Nano Banana 2 storyboards).')
+      setFormError('Draft storyboard workflow needs at least a model or product reference image.')
+      return
+    }
+    if (
+      !isYoloMusicMode &&
+      yoloAdHasReferenceAnchors &&
+      !yoloStoryboardSupportsReferenceAnchors
+    ) {
+      setFormError(`Product/model references are not supported by ${getWorkflowDisplayLabel(yoloStoryboardWorkflowId)} storyboards.`)
       return
     }
     const depsOk = await validateDependenciesForQueue(
-      [yoloProfile.storyboardWorkflowId],
+      [yoloStoryboardWorkflowId],
       `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} storyboard pass`
     )
     if (!depsOk) return
@@ -2066,7 +2372,7 @@ function GenerateWorkspace() {
     if (!planToUse) return
 
     const variants = flattenYoloPlanVariants(planToUse)
-    queueYoloStoryboardVariants(variants, {
+    await queueYoloStoryboardVariants(variants, {
       allowExistingDoneKeys: false,
       skipConfirm: false,
       sourceLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} storyboard pass`,
@@ -2078,15 +2384,35 @@ function GenerateWorkspace() {
     queueYoloStoryboardVariants,
     validateDependenciesForQueue,
     yoloActivePlan,
+    yoloAdModelAsset,
     yoloAdHasReferenceAnchors,
-    yoloProfile.storyboardWorkflowId,
+    yoloAdProductAsset,
+    yoloStoryboardSupportsReferenceAnchors,
+    yoloStoryboardWorkflowId,
     yoloModeLabel,
   ])
 
   const handleQueueYoloShotStoryboard = useCallback(async (sceneId, shotId) => {
     if (!isConnected) return
+    if (
+      !isYoloMusicMode &&
+      yoloAdHasReferenceAnchors &&
+      !yoloStoryboardSupportsReferenceAnchors
+    ) {
+      setFormError(`Product/model references are not supported by ${getWorkflowDisplayLabel(yoloStoryboardWorkflowId)} storyboards.`)
+      return
+    }
+    if (
+      !isYoloMusicMode &&
+      yoloStoryboardWorkflowId === 'image-edit-model-product' &&
+      !yoloAdModelAsset &&
+      !yoloAdProductAsset
+    ) {
+      setFormError('Draft storyboard workflow needs at least a model or product reference image.')
+      return
+    }
     const depsOk = await validateDependenciesForQueue(
-      [yoloProfile.storyboardWorkflowId],
+      [yoloStoryboardWorkflowId],
       `storyboard re-render for ${sceneId} ${shotId}`
     )
     if (!depsOk) return
@@ -2101,7 +2427,7 @@ function GenerateWorkspace() {
       return
     }
 
-    queueYoloStoryboardVariants(variants, {
+    await queueYoloStoryboardVariants(variants, {
       allowExistingDoneKeys: true,
       skipConfirm: true,
       sourceLabel: `Queued storyboard re-render for ${sceneId} ${shotId}`,
@@ -2109,13 +2435,18 @@ function GenerateWorkspace() {
   }, [
     buildActiveYoloPlan,
     isConnected,
+    isYoloMusicMode,
     queueYoloStoryboardVariants,
     validateDependenciesForQueue,
     yoloActivePlan,
-    yoloProfile.storyboardWorkflowId,
+    yoloAdHasReferenceAnchors,
+    yoloAdModelAsset,
+    yoloAdProductAsset,
+    yoloStoryboardSupportsReferenceAnchors,
+    yoloStoryboardWorkflowId,
   ])
 
-  const queueYoloVideoVariants = useCallback((variants, options = {}) => {
+  const queueYoloVideoVariants = useCallback(async (variants, options = {}) => {
     const {
       allowExistingDoneKeys = false,
       skipConfirm = false,
@@ -2207,9 +2538,12 @@ function GenerateWorkspace() {
       return 0
     }
 
-    if (!skipConfirm && !confirmLargeQueueBatch(jobs.length, 'video')) {
-      setFormError('Queue cancelled')
-      return 0
+    if (!skipConfirm) {
+      const confirmed = await confirmLargeQueueBatch(jobs.length, 'video')
+      if (!confirmed) {
+        setFormError('Queue cancelled')
+        return 0
+      }
     }
 
     setGenerationQueue(prev => [...prev, ...jobs])
@@ -2251,7 +2585,8 @@ function GenerateWorkspace() {
 
     if (targets.length > 1) {
       const estimatedJobs = variants.length * targets.length
-      if (!confirmLargeQueueBatch(estimatedJobs, 'video')) {
+      const confirmed = await confirmLargeQueueBatch(estimatedJobs, 'video')
+      if (!confirmed) {
         setFormError('Queue cancelled')
         return
       }
@@ -2259,7 +2594,7 @@ function GenerateWorkspace() {
 
     let totalQueued = 0
     for (const targetWorkflowId of targets) {
-      totalQueued += queueYoloVideoVariants(variants, {
+      totalQueued += await queueYoloVideoVariants(variants, {
         workflowId: targetWorkflowId,
         allowExistingDoneKeys: false,
         skipConfirm: targets.length > 1,
@@ -2279,6 +2614,117 @@ function GenerateWorkspace() {
     yoloActivePlan,
     yoloSelectedVideoWorkflowIds,
     yoloModeLabel,
+  ])
+
+  const handleCreateStoryboardPdf = useCallback(async () => {
+    if (creatingStoryboardPdf) return
+    if (!currentProjectHandle) {
+      setFormError('Open a project folder first so storyboard PDFs can be saved.')
+      addComfyLog('error', 'Storyboard PDF export requires an open project folder.')
+      return
+    }
+
+    const items = []
+    const seenAssetIds = new Set()
+
+    for (let index = 0; index < yoloQueueVariants.length; index += 1) {
+      const variant = yoloQueueVariants[index]
+      const asset = yoloStoryboardAssetMap.get(variant?.key)
+      if (!asset?.url) continue
+      if (asset?.id && seenAssetIds.has(asset.id)) continue
+      if (asset?.id) seenAssetIds.add(asset.id)
+      items.push({
+        assetId: asset.id || variant?.key || `storyboard-${index + 1}`,
+        url: asset.url,
+        prompt: String(asset.prompt || variant?.storyboardPrompt || variant?.prompt || '').trim(),
+        sequence: index + 1,
+        itemIndex: index,
+        sceneId: String(variant?.sceneId || asset?.yolo?.sceneId || ''),
+        shotId: String(variant?.shotId || asset?.yolo?.shotId || ''),
+        angle: String(variant?.angle || asset?.yolo?.angle || ''),
+        take: Number(variant?.take ?? asset?.yolo?.take) || null,
+      })
+    }
+
+    // If the active plan is empty, still allow exporting from any latest storyboard frames.
+    if (items.length === 0) {
+      const extractNumericOrder = (value) => {
+        const match = String(value || '').match(/\d+/)
+        const parsed = match ? Number(match[0]) : Number.POSITIVE_INFINITY
+        return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY
+      }
+      const fallbackAssets = Array.from(yoloStoryboardAssetMap.values()).sort((a, b) => {
+        const sceneDiff = extractNumericOrder(a?.yolo?.sceneId) - extractNumericOrder(b?.yolo?.sceneId)
+        if (sceneDiff !== 0) return sceneDiff
+        const shotDiff = extractNumericOrder(a?.yolo?.shotId) - extractNumericOrder(b?.yolo?.shotId)
+        if (shotDiff !== 0) return shotDiff
+        const angleDiff = extractNumericOrder(a?.yolo?.angle) - extractNumericOrder(b?.yolo?.angle)
+        if (angleDiff !== 0) return angleDiff
+        const takeDiff = (Number(a?.yolo?.take) || 0) - (Number(b?.yolo?.take) || 0)
+        if (takeDiff !== 0) return takeDiff
+        return new Date(a?.createdAt || 0).getTime() - new Date(b?.createdAt || 0).getTime()
+      })
+      for (let index = 0; index < fallbackAssets.length; index += 1) {
+        const asset = fallbackAssets[index]
+        if (!asset?.url) continue
+        if (asset?.id && seenAssetIds.has(asset.id)) continue
+        if (asset?.id) seenAssetIds.add(asset.id)
+        items.push({
+          assetId: asset.id || `storyboard-fallback-${index + 1}`,
+          url: asset.url,
+          prompt: String(asset.prompt || '').trim(),
+          sequence: index + 1,
+          itemIndex: index,
+          sceneId: String(asset?.yolo?.sceneId || ''),
+          shotId: String(asset?.yolo?.shotId || ''),
+          angle: String(asset?.yolo?.angle || ''),
+          take: Number(asset?.yolo?.take) || null,
+        })
+      }
+    }
+
+    if (items.length === 0) {
+      setFormError('No storyboard images found yet. Queue or re-render storyboards first, then create the PDF.')
+      addComfyLog('error', 'Storyboard PDF export skipped: no storyboard images available.')
+      return
+    }
+
+    setCreatingStoryboardPdf(true)
+    setFormError(null)
+    addComfyLog('status', `Creating storyboard PDF from ${items.length} frame${items.length === 1 ? '' : 's'}...`)
+    try {
+      const exported = await exportStoryboardPdfBatch({
+        id: `manual_storyboard_${Date.now()}`,
+        createdAt: Date.now(),
+        modeKey: yoloModeKey,
+        modeLabel: yoloModeLabel,
+        directorLabel: yoloQueueNameLabel,
+        items,
+      })
+
+      if (!exported) {
+        throw new Error('Storyboard PDF export did not return a file.')
+      }
+      addComfyLog('ok', `Storyboard PDF saved: ${exported.fileName}`)
+      openStoryboardPdfPreview(exported.url)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error || 'Storyboard PDF export failed')
+      setFormError(`Storyboard PDF export failed: ${message}`)
+      addComfyLog('error', `Storyboard PDF export failed: ${message}`)
+    } finally {
+      setCreatingStoryboardPdf(false)
+    }
+  }, [
+    addComfyLog,
+    creatingStoryboardPdf,
+    currentProjectHandle,
+    exportStoryboardPdfBatch,
+    openStoryboardPdfPreview,
+    yoloModeKey,
+    yoloModeLabel,
+    yoloQueueNameLabel,
+    yoloQueueVariants,
+    yoloStoryboardAssetMap,
   ])
 
   const handleQueueYoloShotVideo = useCallback(async (sceneId, shotId) => {
@@ -2301,7 +2747,7 @@ function GenerateWorkspace() {
 
     let totalQueued = 0
     for (const targetWorkflowId of yoloSelectedVideoWorkflowIds) {
-      totalQueued += queueYoloVideoVariants(variants, {
+      totalQueued += await queueYoloVideoVariants(variants, {
         workflowId: targetWorkflowId,
         allowExistingDoneKeys: true,
         skipConfirm: true,
@@ -2390,6 +2836,7 @@ function GenerateWorkspace() {
       if (!fn) return null
       return { filename: fn, subfolder: getSubfolder(item), outputType: getOutputType(item) }
     }
+    const isInputOutputType = (info) => String(info?.outputType || '').toLowerCase() === 'input'
     const scoreOutput = (info) => {
       const outputType = String(info?.outputType || '').toLowerCase()
       const subfolder = String(info?.subfolder || '').toLowerCase()
@@ -2431,7 +2878,7 @@ function GenerateWorkspace() {
             const items = nodeOut[key]
             if (Array.isArray(items) && items.length > 0) {
               const info = pickBestFromItems(items, (entry) => (
-                isVideoFilename(entry.filename) && matchesExpectedPrefix(entry.filename)
+                isVideoFilename(entry.filename) && matchesExpectedPrefix(entry.filename) && !isInputOutputType(entry)
               ))
               if (info) {
                 console.log(`[pollForResult] Found video in node ${nodeId}.${key}:`, info)
@@ -2446,7 +2893,7 @@ function GenerateWorkspace() {
             const val = nodeOut[key]
             if (Array.isArray(val) && val.length > 0) {
               const info = pickBestFromItems(val, (entry) => (
-                isVideoFilename(entry.filename) && matchesExpectedPrefix(entry.filename)
+                isVideoFilename(entry.filename) && matchesExpectedPrefix(entry.filename) && !isInputOutputType(entry)
               ))
               if (info && isVideoFilename(info.filename)) {
                 console.log(`[pollForResult] Found video in node ${nodeId}.${key} (by extension):`, info)
@@ -2466,7 +2913,12 @@ function GenerateWorkspace() {
           if (Array.isArray(nodeOut.images)) {
             for (const img of nodeOut.images) {
               const info = extractFromItem(img)
-              if (info && !isVideoFilename(info.filename)) {
+              if (
+                info &&
+                isImageFilename(info.filename) &&
+                matchesExpectedPrefix(info.filename) &&
+                !isInputOutputType(info)
+              ) {
                 images.push({ type: 'image', ...info })
               }
             }
@@ -2479,7 +2931,7 @@ function GenerateWorkspace() {
             if (Array.isArray(val) && val.length > 0) {
               for (const item of val) {
                 const info = extractFromItem(item)
-                if (info && isImageFilename(info.filename) && matchesExpectedPrefix(info.filename)) {
+                if (info && isImageFilename(info.filename) && matchesExpectedPrefix(info.filename) && !isInputOutputType(info)) {
                   images.push({ type: 'image', ...info })
                 }
               }
@@ -2500,7 +2952,7 @@ function GenerateWorkspace() {
           if (nodeOut.audio) {
             const aud = Array.isArray(nodeOut.audio) ? nodeOut.audio[0] : nodeOut.audio
             const info = extractFromItem(aud)
-            if (info && matchesExpectedPrefix(info.filename)) {
+            if (info && matchesExpectedPrefix(info.filename) && !isInputOutputType(info)) {
               console.log(`[pollForResult] Found audio in node ${nodeId}:`, info)
               return { type: 'audio', ...info }
             }
@@ -2512,7 +2964,7 @@ function GenerateWorkspace() {
             const val = nodeOut[key]
             if (Array.isArray(val) && val.length > 0) {
               const info = extractFromItem(val[0])
-              if (info && isAudioFilename(info.filename) && matchesExpectedPrefix(info.filename)) {
+              if (info && isAudioFilename(info.filename) && matchesExpectedPrefix(info.filename) && !isInputOutputType(info)) {
                 console.log(`[pollForResult] Found audio in node ${nodeId}.${key} (by extension):`, info)
                 return { type: 'audio', ...info }
               }
@@ -2544,7 +2996,7 @@ function GenerateWorkspace() {
                 for (const key of Object.keys(nodeOut)) {
                   const val = nodeOut[key]
                   if (Array.isArray(val) && val.length > 0) {
-                    const info = pickBestFromItems(val, (entry) => matchesExpectedPrefix(entry.filename))
+                    const info = pickBestFromItems(val, (entry) => matchesExpectedPrefix(entry.filename) && !isInputOutputType(entry))
                     if (info) {
                       console.log(`[pollForResult] Retry found result in node ${nodeId}.${key}:`, info)
                       // Determine type by extension
@@ -2578,8 +3030,9 @@ function GenerateWorkspace() {
 
   // Save generation result to project assets
   const saveGenerationResult = async (result, wfId, job) => {
-    if (!currentProjectHandle) return false
+    if (!currentProjectHandle) return { didImportAny: false, importedAssets: [] }
     let didImportAny = false
+    const importedAssets = []
 
     const markImportedSignature = (type, filename, subfolder = '', outputType = 'output') => {
       if (!filename) return false
@@ -2623,7 +3076,7 @@ function GenerateWorkspace() {
     if (result.type === 'video') {
       if (markImportedSignature('video', result.filename, result.subfolder, result.outputType)) {
         addComfyLog('status', `Skipped duplicate video import: ${result.filename}`)
-        return false
+        return { didImportAny: false, importedAssets }
       }
       const generatedVideoFolderId = ensureAssetFolderPath(GENERATED_ASSET_FOLDERS.video)
       try {
@@ -2646,6 +3099,7 @@ function GenerateWorkspace() {
             seed: jobSeed
           }
         })
+        if (newAsset) importedAssets.push(newAsset)
         didImportAny = true
         if (isElectron() && currentProjectHandle && newAsset?.absolutePath) {
           enqueuePlaybackTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
@@ -2654,7 +3108,7 @@ function GenerateWorkspace() {
         console.error('Failed to save video:', err)
         // Fallback: use ComfyUI URL
         const url = comfyui.getMediaUrl(result.filename, result.subfolder, result.outputType)
-        addAsset({
+        const fallbackAsset = addAsset({
           name: resolvedName,
           type: 'video',
           url,
@@ -2663,6 +3117,7 @@ function GenerateWorkspace() {
           folderId: generatedVideoFolderId,
           settings: { duration: jobDuration, fps: jobFps, seed: jobSeed }
         })
+        if (fallbackAsset) importedAssets.push(fallbackAsset)
         didImportAny = true
       }
     } else if (result.type === 'images') {
@@ -2676,7 +3131,7 @@ function GenerateWorkspace() {
           const imageFile = await comfyui.downloadImage(img.filename, img.subfolder, img.outputType)
           const assetInfo = await importAsset(currentProjectHandle, imageFile, 'images')
           const blobUrl = URL.createObjectURL(imageFile)
-          addAsset({
+          const newAsset = addAsset({
             ...assetInfo,
             name: `${resolvedName}_${img.filename}`,
             type: 'image',
@@ -2686,11 +3141,12 @@ function GenerateWorkspace() {
             yolo: directorMeta || undefined,
             folderId: generatedImageFolderId,
           })
+          if (newAsset) importedAssets.push(newAsset)
           didImportAny = true
         } catch (err) {
           console.warn('Failed to save image:', err)
           const url = comfyui.getMediaUrl(img.filename, img.subfolder, img.outputType)
-          addAsset({
+          const fallbackAsset = addAsset({
             name: `${resolvedName}_${img.filename}`,
             type: 'image',
             url,
@@ -2698,13 +3154,14 @@ function GenerateWorkspace() {
             yolo: directorMeta || undefined,
             folderId: generatedImageFolderId,
           })
+          if (fallbackAsset) importedAssets.push(fallbackAsset)
           didImportAny = true
         }
       }
     } else if (result.type === 'audio') {
       if (markImportedSignature('audio', result.filename, result.subfolder, result.outputType)) {
         addComfyLog('status', `Skipped duplicate audio import: ${result.filename}`)
-        return false
+        return { didImportAny: false, importedAssets }
       }
       const generatedAudioFolderId = ensureAssetFolderPath(GENERATED_ASSET_FOLDERS.audio)
       try {
@@ -2714,7 +3171,7 @@ function GenerateWorkspace() {
         const file = new File([blob], result.filename, { type: 'audio/mpeg' })
         const assetInfo = await importAsset(currentProjectHandle, file, 'audio')
         const blobUrl = URL.createObjectURL(file)
-        addAsset({
+        const newAsset = addAsset({
           ...assetInfo,
           name: autoName,
           type: 'audio',
@@ -2724,11 +3181,12 @@ function GenerateWorkspace() {
           folderId: generatedAudioFolderId,
           settings: { duration: job?.musicDuration, bpm: job?.bpm, keyscale: job?.keyscale }
         })
+        if (newAsset) importedAssets.push(newAsset)
         didImportAny = true
       } catch (err) {
         console.warn('Failed to save audio:', err)
         const url = comfyui.getMediaUrl(result.filename, result.subfolder, result.outputType)
-        addAsset({
+        const fallbackAsset = addAsset({
           name: autoName,
           type: 'audio',
           url,
@@ -2736,21 +3194,34 @@ function GenerateWorkspace() {
           folderId: generatedAudioFolderId,
           settings: { duration: job?.musicDuration, bpm: job?.bpm },
         })
+        if (fallbackAsset) importedAssets.push(fallbackAsset)
         didImportAny = true
       }
     }
-    return didImportAny
+    return { didImportAny, importedAssets }
   }
 
   const runJob = useCallback(async (job) => {
     updateJob(job.id, { status: 'uploading', progress: 5, error: null })
+    let importedAssets = []
 
     try {
       let uploadedFilename = null
       let referenceFilenames = []
-      const outputPrefix = job.workflowId === 'wan22-i2v' || job.workflowId === 'kling-o3-i2v'
-        ? `video/director_${String(job.id || Date.now()).replace(/[^a-zA-Z0-9_-]/g, '_')}`
-        : ''
+      const outputToken = String(job.id || Date.now()).replace(/[^a-zA-Z0-9_-]/g, '_')
+      const outputPrefix = (
+        job.workflowId === 'wan22-i2v' || job.workflowId === 'kling-o3-i2v'
+          ? `video/director_${outputToken}`
+          : (
+            job.workflowId === 'image-edit' ||
+            job.workflowId === 'image-edit-model-product' ||
+            job.workflowId === 'z-image-turbo' ||
+            job.workflowId === 'nano-banana-2' ||
+            job.workflowId === 'nano-banana-pro'
+          )
+            ? `image/comfystudio_${outputToken}`
+            : ''
+      )
       // Upload image if needed
       if (job.needsImage) {
         let fileToUpload = null
@@ -2780,6 +3251,7 @@ function GenerateWorkspace() {
       // Upload optional reference images for workflows that support them
       const supportsReferenceImages = (
         job.workflowId === 'image-edit' ||
+        job.workflowId === 'image-edit-model-product' ||
         job.workflowId === 'nano-banana-2' ||
         job.workflowId === 'nano-banana-pro'
       )
@@ -2874,17 +3346,20 @@ function GenerateWorkspace() {
           })
           break
         case 'image-edit':
+        case 'image-edit-model-product':
           modifiedWorkflow = modifyQwenImageEdit2509Workflow(workflowJson, {
             prompt: job.prompt,
             inputImage: uploadedFilename,
             seed: job.seed,
             referenceImages: referenceFilenames,
+            filenamePrefix: outputPrefix || 'image/ComfyStudio_edit',
           })
           break
         case 'z-image-turbo':
           modifiedWorkflow = modifyZImageTurboWorkflow(workflowJson, {
             prompt: job.prompt,
             seed: job.seed,
+            filenamePrefix: outputPrefix || 'image/z_image_turbo',
           })
           break
         case 'nano-banana-2':
@@ -2898,6 +3373,7 @@ function GenerateWorkspace() {
                 : '16:9'
             ),
             referenceImages: referenceFilenames,
+            filenamePrefix: outputPrefix || 'image/nano_banana_2',
           })
           break
         case 'music-gen':
@@ -2932,8 +3408,9 @@ function GenerateWorkspace() {
       // Save result to assets
       if (result) {
         updateJob(job.id, { status: 'saving', progress: 95 })
-        const importedAny = await saveGenerationResult(result, job.workflowId, job)
-        if (!importedAny) {
+        const saveResult = await saveGenerationResult(result, job.workflowId, job)
+        importedAssets = saveResult?.importedAssets || []
+        if (!saveResult?.didImportAny) {
           throw new Error('Generation returned a stale/duplicate output; job was not imported. Queue paused for safety.')
         }
         updateJob(job.id, { status: 'done', progress: 100 })
@@ -2954,8 +3431,10 @@ function GenerateWorkspace() {
         error: msg,
         progress: 0
       })
+    } finally {
+      await finalizeStoryboardPdfBatchForJob(job, importedAssets)
     }
-  }, [assets, updateJob, saveGenerationResult, pollForResult, addComfyLog])
+  }, [assets, updateJob, saveGenerationResult, pollForResult, addComfyLog, finalizeStoryboardPdfBatchForJob])
 
   const processQueue = useCallback(async () => {
     if (processingRef.current) return
@@ -3486,447 +3965,512 @@ function GenerateWorkspace() {
                   </button>
                 </div>
 
-                {yoloCreationType === 'ad' ? (
-                  <>
-                    <div>
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Ad Script</label>
-                      <textarea
-                        value={yoloScript}
-                        onChange={e => setYoloScript(e.target.value)}
-                        rows={10}
-                        className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y"
-                        placeholder="Paste your full ad script here. Separate scenes with blank lines, or use Scene 1 / Scene 2 headings."
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Style / Brand Notes (optional)</label>
-                      <textarea
-                        value={yoloStyleNotes}
-                        onChange={e => setYoloStyleNotes(e.target.value)}
-                        rows={3}
-                        className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y"
-                        placeholder="e.g. premium skincare brand, warm daylight, soft contrast, modern typography."
-                      />
-                    </div>
-
-                    <div className="p-3 rounded-lg bg-sf-dark-800/70 border border-sf-dark-700">
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Reference Anchors (optional)</label>
-                      <p className="mt-1 text-[10px] text-sf-text-muted">
-                        Add a product image and/or model image to keep ad identity consistent across storyboard shots.
-                      </p>
-                      <div className="mt-2 grid grid-cols-2 gap-2">
-                        <select
-                          value={yoloAdProductAssetId || ''}
-                          onChange={e => setYoloAdProductAssetId(e.target.value || null)}
-                          className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
-                        >
-                          <option value="">Product image (none)</option>
-                          {assets.filter((asset) => asset.type === 'image').map((asset) => (
-                            <option key={asset.id} value={asset.id}>{asset.name}</option>
-                          ))}
-                        </select>
-                        <select
-                          value={yoloAdModelAssetId || ''}
-                          onChange={e => setYoloAdModelAssetId(e.target.value || null)}
-                          className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
-                        >
-                          <option value="">Model image (none)</option>
-                          {assets.filter((asset) => asset.type === 'image').map((asset) => (
-                            <option key={asset.id} value={asset.id}>{asset.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="mt-2">
-                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Consistency Strength</label>
-                        <select
-                          value={yoloAdConsistency}
-                          onChange={e => setYoloAdConsistency(e.target.value)}
-                          className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                        >
-                          {Object.entries(YOLO_AD_REFERENCE_CONSISTENCY_OPTIONS).map(([value, label]) => (
-                            <option key={value} value={value}>{label}</option>
-                          ))}
-                        </select>
-                        {yoloAdHasReferenceAnchors && yoloQualityProfile === 'draft' && (
-                          <div className="mt-1 text-[10px] text-yellow-400">
-                            Draft profile ignores reference anchors. Use Balanced or Premium for product/model locking.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Target Duration (s)</label>
-                        <input
-                          type="number"
-                          min={5}
-                          max={300}
-                          value={yoloTargetDuration}
-                          onChange={e => setYoloTargetDuration(Number(e.target.value) || 5)}
-                          className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Shots / Scene</label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={12}
-                          value={yoloShotsPerScene}
-                          onChange={e => setYoloShotsPerScene(Number(e.target.value) || 1)}
-                          className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Angles / Shot</label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={8}
-                          value={yoloAnglesPerShot}
-                          onChange={e => setYoloAnglesPerShot(Number(e.target.value) || 1)}
-                          className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Takes / Angle</label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={4}
-                          value={yoloTakesPerAngle}
-                          onChange={e => setYoloTakesPerAngle(Number(e.target.value) || 1)}
-                          className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Quality Profile</label>
-                      <select
-                        value={yoloQualityProfile}
-                        onChange={e => setYoloQualityProfile(e.target.value)}
-                        className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                      >
-                        <option value="draft">Draft (fast)</option>
-                        <option value="balanced">Balanced</option>
-                        <option value="premium">Premium</option>
-                      </select>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div>
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Song Title (optional)</label>
-                      <input
-                        type="text"
-                        value={yoloMusicTitle}
-                        onChange={e => setYoloMusicTitle(e.target.value)}
-                        className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                        placeholder="e.g. Midnight Waves"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Song Lyrics</label>
-                      <textarea
-                        value={yoloMusicLyrics}
-                        onChange={e => setYoloMusicLyrics(e.target.value)}
-                        rows={8}
-                        className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y"
-                        placeholder="Paste full lyrics. Each line helps create a visual beat sequence."
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Story Arc (optional)</label>
-                      <textarea
-                        value={yoloMusicStoryIdea}
-                        onChange={e => setYoloMusicStoryIdea(e.target.value)}
-                        rows={2}
-                        className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y"
-                        placeholder="e.g. starts intimate, builds into kinetic city-night energy, ends in sunrise release."
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Subject / Performer</label>
-                        <textarea
-                          value={yoloMusicSubject}
-                          onChange={e => setYoloMusicSubject(e.target.value)}
-                          rows={2}
-                          className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary resize-y"
-                          placeholder="e.g. female vocalist, silver jacket, short dark hair."
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Scene Palette</label>
-                        <textarea
-                          value={yoloMusicScenePalette}
-                          onChange={e => setYoloMusicScenePalette(e.target.value)}
-                          rows={2}
-                          className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary resize-y"
-                          placeholder="e.g. neon alley, rooftop, tunnel, dawn shoreline."
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Style Notes</label>
-                      <textarea
-                        value={yoloMusicStyleNotes}
-                        onChange={e => setYoloMusicStyleNotes(e.target.value)}
-                        rows={2}
-                        className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y"
-                        placeholder="e.g. cinematic handheld, high contrast, subtle lens bloom, energetic edits."
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Target Duration (s)</label>
-                        <input
-                          type="number"
-                          min={5}
-                          max={300}
-                          value={yoloMusicTargetDuration}
-                          onChange={e => setYoloMusicTargetDuration(Number(e.target.value) || 5)}
-                          className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Shots / Scene</label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={12}
-                          value={yoloMusicShotsPerScene}
-                          onChange={e => setYoloMusicShotsPerScene(Number(e.target.value) || 1)}
-                          className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Angles / Shot</label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={8}
-                          value={yoloMusicAnglesPerShot}
-                          onChange={e => setYoloMusicAnglesPerShot(Number(e.target.value) || 1)}
-                          className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Takes / Angle</label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={4}
-                          value={yoloMusicTakesPerAngle}
-                          onChange={e => setYoloMusicTakesPerAngle(Number(e.target.value) || 1)}
-                          className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Quality Profile</label>
-                      <select
-                        value={yoloMusicQualityProfile}
-                        onChange={e => setYoloMusicQualityProfile(e.target.value)}
-                        className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                      >
-                        <option value="draft">Draft (fast)</option>
-                        <option value="balanced">Balanced</option>
-                        <option value="premium">Premium</option>
-                      </select>
-                    </div>
-                  </>
-                )}
-
-                <div className="mt-1 text-[10px] text-sf-text-muted">
-                  Storyboard: <span className="text-sf-text-secondary">{yoloProfile.storyboardWorkflowId}</span> · Video profile default: <span className="text-sf-text-secondary">{getWorkflowDisplayLabel(yoloProfile.videoWorkflowId)}</span>
-                </div>
-                <div className="text-[10px] text-sf-text-muted">
-                  Storyboard tier: <span className="text-sf-text-secondary">{yoloStoryboardTierSummary}</span>
-                </div>
-                <div>
-                  <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Video Queue Target</label>
-                  <select
-                    value={yoloVideoWorkflowTarget}
-                    onChange={e => setYoloVideoWorkflowTarget(e.target.value)}
-                    className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/40 p-2">
+                  <div
+                    role="tablist"
+                    aria-label="Director workflow steps"
+                    className="flex items-center gap-1 p-1 rounded-lg bg-sf-dark-800 border border-sf-dark-700"
                   >
-                    {YOLO_VIDEO_WORKFLOW_TARGET_OPTIONS.map((opt) => (
-                      <option key={opt.id} value={opt.id}>{opt.label}</option>
-                    ))}
-                  </select>
-                  <div className="mt-1 text-[10px] text-sf-text-muted">
-                    Queue Video Pass / Queue Shot Video will use: <span className="text-sf-text-secondary">{yoloSelectedVideoWorkflowLabel}</span>
-                  </div>
-                  <div className="mt-1 text-[10px] text-sf-text-muted">
-                    Queue target tier: <span className="text-sf-text-secondary">{yoloVideoTargetTierSummary}</span>
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/50 p-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">{DIRECTOR_MODE_BETA_LABEL} dependencies</div>
-                    <button
-                      type="button"
-                      onClick={() => { void runYoloDependencySnapshotCheck() }}
-                      disabled={!isConnected || yoloDependencyPanel.status === 'checking' || yoloDependencyCheckInProgress}
-                      className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] border transition-colors ${
-                        !isConnected || yoloDependencyPanel.status === 'checking' || yoloDependencyCheckInProgress
-                          ? 'border-sf-dark-600 text-sf-text-muted cursor-not-allowed'
-                          : 'border-sf-dark-500 text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400'
-                      }`}
-                    >
-                      <RefreshCw className={`w-3 h-3 ${
-                        yoloDependencyPanel.status === 'checking' || yoloDependencyCheckInProgress ? 'animate-spin' : ''
-                      }`} />
-                      Re-check
-                    </button>
-                  </div>
-
-                  {yoloDependencyPanel.status === 'offline' && (
-                    <div className="mt-2 text-[10px] text-yellow-400">ComfyUI is offline. Start ComfyUI to verify dependencies.</div>
-                  )}
-                  {yoloDependencyPanel.status === 'checking' && (
-                    <div className="mt-2 text-[10px] text-yellow-400">Checking storyboard/video workflow dependencies...</div>
-                  )}
-                  {yoloDependencyPanel.status === 'error' && (
-                    <div className="mt-2 text-[10px] text-sf-error">
-                      Dependency check failed{yoloDependencyPanel.error ? ` (${yoloDependencyPanel.error})` : ''}.
-                    </div>
-                  )}
-
-                  <div className="mt-2 space-y-1.5">
-                    {yoloDependencyWorkflowIds.map((workflow) => {
-                      const result = yoloDependencyPanel.byWorkflow?.[workflow]
-                      const isMissing = Boolean(result?.hasPack && result?.hasBlockingIssues)
-                      const rowStatus = !result
-                        ? (yoloDependencyPanel.status === 'checking' ? 'Checking...' : 'Not checked')
-                        : result.status === 'error'
-                          ? 'Check failed'
-                          : result.status === 'no-pack' || !result.hasPack
-                            ? 'No manifest'
-                            : isMissing
-                              ? 'Missing required'
-                              : result.status === 'partial'
-                                ? 'Partially verified'
-                                : 'Ready'
-                      const rowToneClass = isMissing
-                        ? 'text-sf-error'
-                        : result?.status === 'partial'
-                          ? 'text-yellow-400'
-                          : result?.status === 'ready'
-                            ? 'text-green-400'
-                            : 'text-sf-text-muted'
-
+                    {DIRECTOR_SUBTABS.map((tab) => {
+                      const isActive = directorSubTab === tab.id
+                      const isDisabled = tab.id === 'scene-shot' && !yoloCanEditScenes
                       return (
-                        <details key={workflow} open={isMissing} className="rounded border border-sf-dark-700 bg-sf-dark-900/50 px-2 py-1">
-                          <summary className="cursor-pointer list-none flex items-center justify-between gap-2 text-[10px]">
-                            <span className="text-sf-text-secondary truncate">{getWorkflowDisplayLabel(workflow)}</span>
-                            <span className={rowToneClass}>{rowStatus}</span>
-                          </summary>
-
-                          {result && (
-                            <div className="mt-1.5 space-y-1 text-[10px]">
-                              {result.missingNodes?.length > 0 && (
-                                <div>
-                                  <div className="text-sf-text-muted mb-0.5">Missing nodes</div>
-                                  <div className="space-y-0.5">
-                                    {result.missingNodes.map((node) => (
-                                      <div key={node.classType} className="text-sf-error break-all">{node.classType}</div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {result.missingModels?.length > 0 && (
-                                <div>
-                                  <div className="text-sf-text-muted mb-0.5">Missing models</div>
-                                  <div className="space-y-0.5">
-                                    {result.missingModels.map((model) => (
-                                      <div key={`${model.classType}:${model.inputKey}:${model.filename}`} className="text-sf-error break-all">
-                                        {model.filename}
-                                        {model.targetSubdir ? (
-                                          <span className="text-sf-text-muted">{` -> ComfyUI/models/${model.targetSubdir}`}</span>
-                                        ) : null}
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {result.missingAuth && (
-                                <div className="text-sf-error">Missing Comfy Partner API key in Settings.</div>
-                              )}
-
-                              {result.unresolvedModels?.length > 0 && result.status !== 'missing' && (
-                                <div className="text-yellow-400">
-                                  {result.unresolvedModels.length} model check(s) could not be auto-verified.
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </details>
+                        <button
+                          key={tab.id}
+                          type="button"
+                          role="tab"
+                          aria-selected={isActive}
+                          disabled={isDisabled}
+                          onClick={() => setDirectorSubTab(tab.id)}
+                          title={isDisabled ? 'Build a plan first to edit scenes and shots' : ''}
+                          className={`flex-1 px-3 py-1.5 rounded text-xs transition-colors ${
+                            isDisabled
+                              ? 'text-sf-text-muted/60 cursor-not-allowed'
+                              : isActive
+                                ? 'bg-sf-accent text-white'
+                                : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700'
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
                       )
                     })}
                   </div>
+                  <div className="mt-2 text-[10px] text-sf-text-muted">
+                    {yoloSubTabHelperText}
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    type="button"
-                    onClick={buildActiveYoloPlan}
-                    className="px-3 py-2 rounded-lg bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary text-xs"
-                  >
-                    Build Plan
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { void handleQueueYoloStoryboards() }}
-                    disabled={yoloDependencyCheckInProgress}
-                    className={`px-3 py-2 rounded-lg text-xs ${
-                      yoloDependencyCheckInProgress
-                        ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
-                        : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
-                    }`}
-                  >
-                    Queue Storyboards
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { void handleQueueYoloVideos() }}
-                    disabled={yoloDependencyCheckInProgress}
-                    className={`px-3 py-2 rounded-lg text-xs ${
-                      yoloDependencyCheckInProgress
-                        ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
-                        : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
-                    }`}
-                  >
-                    Queue Video Pass
-                  </button>
-                </div>
+                {yoloCreationType === 'ad' ? (
+                  <>
+                    {directorSubTab === 'plan-script' && (
+                      <>
+                        <div>
+                          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Ad Script</label>
+                          <textarea
+                            value={yoloScript}
+                            onChange={e => setYoloScript(e.target.value)}
+                            rows={10}
+                            className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y"
+                            placeholder="Paste your full ad script here. Separate scenes with blank lines, or use Scene 1 / Scene 2 headings."
+                          />
+                        </div>
 
-                {yoloDependencyCheckInProgress && (
-                  <div className="text-[10px] text-yellow-400">Checking {DIRECTOR_MODE_BETA_LABEL} workflow dependencies...</div>
+                        <div>
+                          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Style / Brand Notes (optional)</label>
+                          <textarea
+                            value={yoloStyleNotes}
+                            onChange={e => setYoloStyleNotes(e.target.value)}
+                            rows={3}
+                            className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y"
+                            placeholder="e.g. premium skincare brand, warm daylight, soft contrast, modern typography."
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {directorSubTab === 'setup' && (
+                      <>
+                        <div className="p-3 rounded-lg bg-sf-dark-800/70 border border-sf-dark-700">
+                          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Reference Anchors (optional)</label>
+                          <p className="mt-1 text-[10px] text-sf-text-muted">
+                            Add a product image and/or model image to keep ad identity consistent across storyboard shots.
+                          </p>
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <select
+                              value={yoloAdProductAssetId || ''}
+                              onChange={e => setYoloAdProductAssetId(e.target.value || null)}
+                              className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                            >
+                              <option value="">Product image (none)</option>
+                              {assets.filter((asset) => asset.type === 'image').map((asset) => (
+                                <option key={asset.id} value={asset.id}>{asset.name}</option>
+                              ))}
+                            </select>
+                            <select
+                              value={yoloAdModelAssetId || ''}
+                              onChange={e => setYoloAdModelAssetId(e.target.value || null)}
+                              className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                            >
+                              <option value="">Model image (none)</option>
+                              {assets.filter((asset) => asset.type === 'image').map((asset) => (
+                                <option key={asset.id} value={asset.id}>{asset.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="mt-2">
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Consistency Strength</label>
+                            <select
+                              value={yoloAdConsistency}
+                              onChange={e => setYoloAdConsistency(e.target.value)}
+                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                            >
+                              {Object.entries(YOLO_AD_REFERENCE_CONSISTENCY_OPTIONS).map(([value, label]) => (
+                                <option key={value} value={value}>{label}</option>
+                              ))}
+                            </select>
+                            {yoloAdHasReferenceAnchors && !yoloStoryboardSupportsReferenceAnchors && (
+                              <div className="mt-1 text-[10px] text-yellow-400">
+                                The selected storyboard workflow does not support product/model anchors.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Target Duration (s)</label>
+                            <input
+                              type="number"
+                              min={5}
+                              max={300}
+                              value={yoloTargetDuration}
+                              onChange={e => setYoloTargetDuration(Number(e.target.value) || 5)}
+                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Shots / Scene</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={12}
+                              value={yoloShotsPerScene}
+                              onChange={e => setYoloShotsPerScene(Number(e.target.value) || 1)}
+                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Angles / Shot</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={8}
+                              value={yoloAnglesPerShot}
+                              onChange={e => setYoloAnglesPerShot(Number(e.target.value) || 1)}
+                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Takes / Angle</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={4}
+                              value={yoloTakesPerAngle}
+                              onChange={e => setYoloTakesPerAngle(Number(e.target.value) || 1)}
+                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Quality Profile</label>
+                          <select
+                            value={yoloQualityProfile}
+                            onChange={e => setYoloQualityProfile(e.target.value)}
+                            className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                          >
+                            <option value="draft">Draft (fast)</option>
+                            <option value="balanced">Balanced</option>
+                            <option value="premium">Premium</option>
+                          </select>
+                        </div>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {directorSubTab === 'plan-script' && (
+                      <>
+                        <div>
+                          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Song Title (optional)</label>
+                          <input
+                            type="text"
+                            value={yoloMusicTitle}
+                            onChange={e => setYoloMusicTitle(e.target.value)}
+                            className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                            placeholder="e.g. Midnight Waves"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Song Lyrics</label>
+                          <textarea
+                            value={yoloMusicLyrics}
+                            onChange={e => setYoloMusicLyrics(e.target.value)}
+                            rows={8}
+                            className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y"
+                            placeholder="Paste full lyrics. Each line helps create a visual beat sequence."
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Story Arc (optional)</label>
+                          <textarea
+                            value={yoloMusicStoryIdea}
+                            onChange={e => setYoloMusicStoryIdea(e.target.value)}
+                            rows={2}
+                            className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y"
+                            placeholder="e.g. starts intimate, builds into kinetic city-night energy, ends in sunrise release."
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Subject / Performer</label>
+                            <textarea
+                              value={yoloMusicSubject}
+                              onChange={e => setYoloMusicSubject(e.target.value)}
+                              rows={2}
+                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary resize-y"
+                              placeholder="e.g. female vocalist, silver jacket, short dark hair."
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Scene Palette</label>
+                            <textarea
+                              value={yoloMusicScenePalette}
+                              onChange={e => setYoloMusicScenePalette(e.target.value)}
+                              rows={2}
+                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary resize-y"
+                              placeholder="e.g. neon alley, rooftop, tunnel, dawn shoreline."
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Style Notes</label>
+                          <textarea
+                            value={yoloMusicStyleNotes}
+                            onChange={e => setYoloMusicStyleNotes(e.target.value)}
+                            rows={2}
+                            className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y"
+                            placeholder="e.g. cinematic handheld, high contrast, subtle lens bloom, energetic edits."
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {directorSubTab === 'setup' && (
+                      <>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Target Duration (s)</label>
+                            <input
+                              type="number"
+                              min={5}
+                              max={300}
+                              value={yoloMusicTargetDuration}
+                              onChange={e => setYoloMusicTargetDuration(Number(e.target.value) || 5)}
+                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Shots / Scene</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={12}
+                              value={yoloMusicShotsPerScene}
+                              onChange={e => setYoloMusicShotsPerScene(Number(e.target.value) || 1)}
+                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Angles / Shot</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={8}
+                              value={yoloMusicAnglesPerShot}
+                              onChange={e => setYoloMusicAnglesPerShot(Number(e.target.value) || 1)}
+                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Takes / Angle</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={4}
+                              value={yoloMusicTakesPerAngle}
+                              onChange={e => setYoloMusicTakesPerAngle(Number(e.target.value) || 1)}
+                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Quality Profile</label>
+                          <select
+                            value={yoloMusicQualityProfile}
+                            onChange={e => setYoloMusicQualityProfile(e.target.value)}
+                            className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                          >
+                            <option value="draft">Draft (fast)</option>
+                            <option value="balanced">Balanced</option>
+                            <option value="premium">Premium</option>
+                          </select>
+                        </div>
+                      </>
+                    )}
+                  </>
                 )}
 
-                <div className="p-3 rounded-lg bg-sf-dark-800/70 border border-sf-dark-700 text-xs text-sf-text-secondary">
-                  <div className="font-medium text-sf-text-primary mb-1">{yoloModeLabel} Plan Status</div>
-                  <div>Scenes: {yoloSceneCount}</div>
-                  <div>Planned variants: {yoloVariants.length}</div>
-                  <div>Queue variants: {yoloQueueVariants.length}</div>
-                  <div>Storyboard frames ready: {yoloStoryboardReadyCount} / {yoloQueueVariants.length}</div>
-                </div>
+                {directorSubTab === 'setup' && (
+                  <>
+                    <div className="mt-1 text-[10px] text-sf-text-muted">
+                      Storyboard: <span className="text-sf-text-secondary">{yoloStoryboardWorkflowId}</span> · Video profile default: <span className="text-sf-text-secondary">{getWorkflowDisplayLabel(yoloProfile.videoWorkflowId)}</span>
+                    </div>
+                    <div className="text-[10px] text-sf-text-muted">
+                      Storyboard tier: <span className="text-sf-text-secondary">{yoloStoryboardTierSummary}</span>
+                    </div>
+                    <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 px-2.5 py-2">
+                      <div className="text-[10px] text-sf-text-muted">
+                        Video pass uses profile default: <span className="text-sf-text-secondary">{yoloSelectedVideoWorkflowLabel}</span>
+                      </div>
+                      <div className="mt-1 text-[10px] text-sf-text-muted">
+                        Video tier: <span className="text-sf-text-secondary">{yoloVideoTargetTierSummary}</span>
+                      </div>
+                    </div>
 
-                {yoloActivePlan.length > 0 && (
+                    <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/50 p-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">{DIRECTOR_MODE_BETA_LABEL} dependencies</div>
+                        <button
+                          type="button"
+                          onClick={() => { void runYoloDependencySnapshotCheck() }}
+                          disabled={!isConnected || yoloDependencyPanel.status === 'checking' || yoloDependencyCheckInProgress}
+                          className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] border transition-colors ${
+                            !isConnected || yoloDependencyPanel.status === 'checking' || yoloDependencyCheckInProgress
+                              ? 'border-sf-dark-600 text-sf-text-muted cursor-not-allowed'
+                              : 'border-sf-dark-500 text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400'
+                          }`}
+                        >
+                          <RefreshCw className={`w-3 h-3 ${
+                            yoloDependencyPanel.status === 'checking' || yoloDependencyCheckInProgress ? 'animate-spin' : ''
+                          }`} />
+                          Re-check
+                        </button>
+                      </div>
+
+                      {yoloDependencyPanel.status === 'offline' && (
+                        <div className="mt-2 text-[10px] text-yellow-400">ComfyUI is offline. Start ComfyUI to verify dependencies.</div>
+                      )}
+                      {yoloDependencyPanel.status === 'checking' && (
+                        <div className="mt-2 text-[10px] text-yellow-400">Checking storyboard/video workflow dependencies...</div>
+                      )}
+                      {yoloDependencyPanel.status === 'error' && (
+                        <div className="mt-2 text-[10px] text-sf-error">
+                          Dependency check failed{yoloDependencyPanel.error ? ` (${yoloDependencyPanel.error})` : ''}.
+                        </div>
+                      )}
+
+                      <div className="mt-2 space-y-1.5">
+                        {yoloDependencyWorkflowIds.map((workflow) => {
+                          const result = yoloDependencyPanel.byWorkflow?.[workflow]
+                          const isMissing = Boolean(result?.hasPack && result?.hasBlockingIssues)
+                          const rowStatus = !result
+                            ? (yoloDependencyPanel.status === 'checking' ? 'Checking...' : 'Not checked')
+                            : result.status === 'error'
+                              ? 'Check failed'
+                              : result.status === 'no-pack' || !result.hasPack
+                                ? 'No manifest'
+                                : isMissing
+                                  ? 'Missing required'
+                                  : result.status === 'partial'
+                                    ? 'Partially verified'
+                                    : 'Ready'
+                          const rowToneClass = isMissing
+                            ? 'text-sf-error'
+                            : result?.status === 'partial'
+                              ? 'text-yellow-400'
+                              : result?.status === 'ready'
+                                ? 'text-green-400'
+                                : 'text-sf-text-muted'
+
+                          return (
+                            <details key={workflow} open={isMissing} className="rounded border border-sf-dark-700 bg-sf-dark-900/50 px-2 py-1">
+                              <summary className="cursor-pointer list-none flex items-center justify-between gap-2 text-[10px]">
+                                <span className="text-sf-text-secondary truncate">{getWorkflowDisplayLabel(workflow)}</span>
+                                <span className={rowToneClass}>{rowStatus}</span>
+                              </summary>
+
+                              {result && (
+                                <div className="mt-1.5 space-y-1 text-[10px]">
+                                  {result.missingNodes?.length > 0 && (
+                                    <div>
+                                      <div className="text-sf-text-muted mb-0.5">Missing nodes</div>
+                                      <div className="space-y-0.5">
+                                        {result.missingNodes.map((node) => (
+                                          <div key={node.classType} className="text-sf-error break-all">{node.classType}</div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {result.missingModels?.length > 0 && (
+                                    <div>
+                                      <div className="text-sf-text-muted mb-0.5">Missing models</div>
+                                      <div className="space-y-0.5">
+                                        {result.missingModels.map((model) => (
+                                          <div key={`${model.classType}:${model.inputKey}:${model.filename}`} className="text-sf-error break-all">
+                                            {model.filename}
+                                            {model.targetSubdir ? (
+                                              <span className="text-sf-text-muted">{` -> ComfyUI/models/${model.targetSubdir}`}</span>
+                                            ) : null}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {result.missingAuth && (
+                                    <div className="text-sf-error">Missing Comfy Partner API key in Settings.</div>
+                                  )}
+
+                                  {result.unresolvedModels?.length > 0 && result.status !== 'missing' && (
+                                    <div className="text-yellow-400">
+                                      {result.unresolvedModels.length} model check(s) could not be auto-verified.
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </details>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {directorSubTab === 'plan-script' && (
+                  <>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      <button
+                        type="button"
+                        onClick={handleBuildActiveYoloPlan}
+                        className="px-3 py-2 rounded-lg bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary text-xs"
+                      >
+                        Build Plan
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { void handleQueueYoloStoryboards() }}
+                        disabled={yoloDependencyCheckInProgress}
+                        className={`px-3 py-2 rounded-lg text-xs ${
+                          yoloDependencyCheckInProgress
+                            ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                            : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
+                        }`}
+                      >
+                        Queue Storyboards
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { void handleQueueYoloVideos() }}
+                        disabled={yoloDependencyCheckInProgress}
+                        className={`px-3 py-2 rounded-lg text-xs ${
+                          yoloDependencyCheckInProgress
+                            ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                            : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
+                        }`}
+                      >
+                        Queue Video Pass
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { void handleCreateStoryboardPdf() }}
+                        disabled={creatingStoryboardPdf || yoloStoryboardAssetMap.size === 0}
+                        className={`px-3 py-2 rounded-lg text-xs inline-flex items-center justify-center gap-1 ${
+                          creatingStoryboardPdf || yoloStoryboardAssetMap.size === 0
+                            ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                            : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
+                        }`}
+                        title={yoloStoryboardAssetMap.size === 0 ? 'Generate storyboard images first' : 'Create a PDF from the latest storyboard frames'}
+                      >
+                        {creatingStoryboardPdf && <Loader2 className="w-3 h-3 animate-spin" />}
+                        {creatingStoryboardPdf ? 'Creating PDF...' : 'Create Storyboard PDF'}
+                      </button>
+                    </div>
+
+                    {yoloDependencyCheckInProgress && (
+                      <div className="text-[10px] text-yellow-400">Checking {DIRECTOR_MODE_BETA_LABEL} workflow dependencies...</div>
+                    )}
+
+                    <div className="p-3 rounded-lg bg-sf-dark-800/70 border border-sf-dark-700 text-xs text-sf-text-secondary">
+                      <div className="font-medium text-sf-text-primary mb-1">{yoloModeLabel} Plan Status</div>
+                      <div>Scenes: {yoloSceneCount}</div>
+                      <div>Planned variants: {yoloVariants.length}</div>
+                      <div>Queue variants: {yoloQueueVariants.length}</div>
+                      <div>Storyboard frames ready: {yoloStoryboardReadyCount} / {yoloQueueVariants.length}</div>
+                    </div>
+                  </>
+                )}
+
+                {directorSubTab === 'scene-shot' && (
+                  yoloCanEditScenes ? (
                   <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4">
                     <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 p-3 h-fit sticky top-2">
                       <div className="text-[10px] text-sf-text-muted uppercase tracking-wider">Scene Navigator</div>
@@ -4154,6 +4698,19 @@ function GenerateWorkspace() {
                       )}
                     </div>
                   </div>
+                  ) : (
+                    <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 p-3 text-xs text-sf-text-secondary space-y-2">
+                      <div className="font-medium text-sf-text-primary">Build a plan to unlock Scene / Shot Editor</div>
+                      <div>Go to Step 2 (Plan & Script), click Build Plan, then return here to refine scenes and shots.</div>
+                      <button
+                        type="button"
+                        onClick={() => setDirectorSubTab('plan-script')}
+                        className="px-3 py-1.5 rounded bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary text-[11px]"
+                      >
+                        Go to Plan & Script
+                      </button>
+                    </div>
+                  )
                 )}
               </>
             )}
@@ -4161,7 +4718,7 @@ function GenerateWorkspace() {
         </div>
 
         {/* Right: Progress + Generate */}
-        <div className="w-80 flex-shrink-0 border-l border-sf-dark-700 bg-sf-dark-900 flex flex-col">
+        <div className="w-80 flex-shrink-0 min-h-0 border-l border-sf-dark-700 bg-sf-dark-900 flex flex-col overflow-y-auto">
           <div className="flex-shrink-0 p-4 border-b border-sf-dark-700">
             <button
               onClick={handleGenerate}
@@ -4417,7 +4974,7 @@ function GenerateWorkspace() {
           )}
 
           {/* Info panel */}
-          <div className="flex-1 overflow-auto p-4">
+          <div className="p-4">
             <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">Workflow Info</div>
             <div className="space-y-2 text-[11px] text-sf-text-secondary">
               {generationMode === 'single' ? (
@@ -4447,8 +5004,8 @@ function GenerateWorkspace() {
                   <div><span className="text-sf-text-muted">Mode:</span> {DIRECTOR_MODE_BETA_LABEL}</div>
                   <div><span className="text-sf-text-muted">Creation:</span> {yoloModeLabel}</div>
                   <div><span className="text-sf-text-muted">Profile:</span> {yoloActiveQualityProfile}</div>
-                  <div><span className="text-sf-text-muted">Storyboard workflow:</span> {yoloProfile.storyboardWorkflowId}</div>
-                  <div><span className="text-sf-text-muted">Storyboard tier:</span> {formatWorkflowHardwareRuntime(yoloProfile.storyboardWorkflowId)}</div>
+                  <div><span className="text-sf-text-muted">Storyboard workflow:</span> {yoloStoryboardWorkflowId}</div>
+                  <div><span className="text-sf-text-muted">Storyboard tier:</span> {formatWorkflowHardwareRuntime(yoloStoryboardWorkflowId)}</div>
                   <div><span className="text-sf-text-muted">Video default:</span> {getWorkflowDisplayLabel(yoloProfile.videoWorkflowId)}</div>
                   <div><span className="text-sf-text-muted">Video default tier:</span> {formatWorkflowHardwareRuntime(yoloProfile.videoWorkflowId)}</div>
                   <div><span className="text-sf-text-muted">Video queue target:</span> {yoloSelectedVideoWorkflowLabel}</div>
@@ -4506,6 +5063,16 @@ function GenerateWorkspace() {
         initialImageUrl={annotationInitialUrl}
         otherImageAssets={assets.filter(a => a.type === 'image')}
         onUseAsRef={handleAnnotationUseAsRef}
+      />
+      <ConfirmDialog
+        isOpen={Boolean(confirmDialog)}
+        title={confirmDialog?.title || 'Confirm action'}
+        message={confirmDialog?.message || ''}
+        confirmLabel={confirmDialog?.confirmLabel || 'Confirm'}
+        cancelLabel={confirmDialog?.cancelLabel || 'Cancel'}
+        tone={confirmDialog?.tone || 'danger'}
+        onConfirm={() => resolveConfirmDialog(true)}
+        onCancel={() => resolveConfirmDialog(false)}
       />
     </div>
   )
