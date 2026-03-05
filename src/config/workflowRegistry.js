@@ -28,6 +28,7 @@ export const BUILTIN_WORKFLOW_PATHS = {
   'multi-angles': '/workflows/1_click_multiple_angles.json',
   'multi-angles-scene': '/workflows/1_click_multiple_scene_angles-v1.0.json',
   'image-edit': '/workflows/image_qwen_image_edit_2509.json',
+  'image-edit-model-product': '/workflows/image_qwen_image_edit_2509_Model_and_Product.json',
   'z-image-turbo': '/workflows/image_z_image_turbo.json',
   'nano-banana-2': '/workflows/api_google_nano_banana2_image_edit.json',
   'nano-banana-pro': '/workflows/api_google_nano_banana2_image_edit.json', // legacy id alias

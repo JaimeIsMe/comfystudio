@@ -82,6 +82,7 @@ export const YOLO_VIDEO_WORKFLOW_TARGET_OPTIONS = Object.freeze([
 const WORKFLOW_DISPLAY_LABELS = Object.freeze({
   'wan22-i2v': 'WAN 2.2',
   'kling-o3-i2v': 'Kling O3 Omni',
+  'image-edit-model-product': 'Qwen Image Edit 2509 (Model + Product)',
 })
 
 export const OPEN_COMFY_TAB_EVENT = 'comfystudio-open-comfyui-tab'
@@ -127,6 +128,12 @@ const WORKFLOW_HARDWARE = Object.freeze({
     recommendedVramGb: 8,
   },
   'image-edit': {
+    tierId: 'standard',
+    runtime: 'local',
+    minimumVramGb: 12,
+    recommendedVramGb: 16,
+  },
+  'image-edit-model-product': {
     tierId: 'standard',
     runtime: 'local',
     minimumVramGb: 12,

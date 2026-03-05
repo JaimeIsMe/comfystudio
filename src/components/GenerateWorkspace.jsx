@@ -43,7 +43,7 @@ const DIRECTOR_SUBTABS = [
   {
     id: 'setup',
     label: '1. Setup',
-    helper: 'Step 1: set references, quality, and structure.',
+    helper: 'Step 1: Structure, Quality, and Set References.',
   },
   {
     id: 'plan-script',
@@ -739,6 +739,8 @@ function GenerateWorkspace() {
   const dependencyCheckVersionRef = useRef(0)
   const [comfyLogExpanded, setComfyLogExpanded] = useState(false)
   const [comfyLogLines, setComfyLogLines] = useState([])
+  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false)
+  const [workflowInfoExpanded, setWorkflowInfoExpanded] = useState(true)
   const comfyLogEndRef = useRef(null)
   const importedMediaSignaturesRef = useRef(new Set())
   const storyboardPdfBatchesRef = useRef(new Map())
@@ -1340,10 +1342,12 @@ function GenerateWorkspace() {
     () => yoloQueueVariants.filter((variant) => yoloStoryboardAssetMap.has(variant.key)).length,
     [yoloQueueVariants, yoloStoryboardAssetMap]
   )
-  const yoloSubTabHelperText = useMemo(
-    () => DIRECTOR_SUBTABS.find((tab) => tab.id === directorSubTab)?.helper || '',
+  const yoloSubTabMeta = useMemo(
+    () => DIRECTOR_SUBTABS.find((tab) => tab.id === directorSubTab) || DIRECTOR_SUBTABS[0],
     [directorSubTab]
   )
+  const yoloSubTabHelperText = yoloSubTabMeta?.helper || ''
+  const yoloSubTabTitle = yoloSubTabMeta?.label || ''
   const yoloSceneStats = useMemo(() => {
     const stats = new Map()
     for (const scene of yoloActivePlan || []) {
@@ -3577,8 +3581,8 @@ function GenerateWorkspace() {
           </div>
         )}
 
-        {/* Center: Settings */}
-        <div className="flex-1 min-w-0 overflow-auto p-4">
+        {/* Center: Settings - extra left padding in yolo mode when sidebar visible to center content with header tabs */}
+        <div className={`flex-1 min-w-0 overflow-auto p-4 ${generationMode === 'yolo' && !rightSidebarCollapsed ? 'pl-40' : ''}`}>
           <div className={`mx-auto space-y-4 ${generationMode === 'yolo' ? 'max-w-6xl' : 'max-w-2xl'}`}>
             {/* Timeline frame from editor (Extend with AI / Starting keyframe for AI) */}
             {frameForAI && generationMode === 'single' && (
@@ -3996,8 +4000,13 @@ function GenerateWorkspace() {
                       )
                     })}
                   </div>
-                  <div className="mt-2 text-[10px] text-sf-text-muted">
-                    {yoloSubTabHelperText}
+                  <div className="mt-2 rounded-lg border border-sf-accent/40 bg-gradient-to-r from-sf-accent/20 via-sf-dark-800/90 to-sf-dark-900/90 px-3 py-2.5 text-center ring-1 ring-sf-accent/20 shadow-sm">
+                    <div className="text-[10px] uppercase tracking-[0.12em] text-sf-accent/90 font-semibold">
+                      Current Step: {yoloSubTabTitle}
+                    </div>
+                    <div className="mt-1 text-sm md:text-base font-semibold leading-snug text-sf-text-primary">
+                      {yoloSubTabHelperText}
+                    </div>
                   </div>
                 </div>
 
@@ -4031,8 +4040,90 @@ function GenerateWorkspace() {
 
                     {directorSubTab === 'setup' && (
                       <>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
+                          <div className="p-3 rounded-lg bg-sf-dark-800/45 border border-sf-dark-700">
+                            <div className="text-[10px] text-sf-text-muted uppercase tracking-wider">Structure</div>
+                            <p className="mt-1 text-[10px] text-sf-text-muted">
+                              Set ad length and shot density first.
+                            </p>
+                            <div className="mt-2 grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Target Duration (s)</label>
+                                <input
+                                  type="number"
+                                  min={5}
+                                  max={300}
+                                  value={yoloTargetDuration}
+                                  onChange={e => setYoloTargetDuration(Number(e.target.value) || 5)}
+                                  className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Shots Per Scene</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={12}
+                                  value={yoloShotsPerScene}
+                                  onChange={e => setYoloShotsPerScene(Number(e.target.value) || 1)}
+                                  className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Angles Per Shot</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={8}
+                                  value={yoloAnglesPerShot}
+                                  onChange={e => setYoloAnglesPerShot(Number(e.target.value) || 1)}
+                                  className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Takes Per Angle</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={4}
+                                  value={yoloTakesPerAngle}
+                                  onChange={e => setYoloTakesPerAngle(Number(e.target.value) || 1)}
+                                  className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="p-3 rounded-lg bg-sf-dark-800/45 border border-sf-dark-700">
+                            <div className="text-[10px] text-sf-text-muted uppercase tracking-wider">Quality</div>
+                            <p className="mt-1 text-[10px] text-sf-text-muted">
+                              Choose speed versus fidelity.
+                            </p>
+                            <div className="mt-2">
+                              <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Quality Profile</label>
+                              <select
+                                value={yoloQualityProfile}
+                                onChange={e => setYoloQualityProfile(e.target.value)}
+                                className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                              >
+                                <option value="draft">Draft (fast)</option>
+                                <option value="balanced">Balanced</option>
+                                <option value="premium">Premium</option>
+                              </select>
+                            </div>
+                            <div className="mt-2.5 rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 px-2.5 py-2">
+                              <div className="text-[10px] text-sf-text-muted">
+                                Video pass uses profile default: <span className="text-sf-text-secondary">{yoloSelectedVideoWorkflowLabel}</span>
+                              </div>
+                              <div className="mt-1 text-[10px] text-sf-text-muted">
+                                Video tier: <span className="text-sf-text-secondary">{yoloVideoTargetTierSummary}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
                         <div className="p-3 rounded-lg bg-sf-dark-800/70 border border-sf-dark-700">
-                          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Reference Anchors (optional)</label>
+                          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Set References (optional)</label>
                           <p className="mt-1 text-[10px] text-sf-text-muted">
                             Add a product image and/or model image to keep ad identity consistent across storyboard shots.
                           </p>
@@ -4075,66 +4166,6 @@ function GenerateWorkspace() {
                               </div>
                             )}
                           </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Target Duration (s)</label>
-                            <input
-                              type="number"
-                              min={5}
-                              max={300}
-                              value={yoloTargetDuration}
-                              onChange={e => setYoloTargetDuration(Number(e.target.value) || 5)}
-                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Shots / Scene</label>
-                            <input
-                              type="number"
-                              min={1}
-                              max={12}
-                              value={yoloShotsPerScene}
-                              onChange={e => setYoloShotsPerScene(Number(e.target.value) || 1)}
-                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Angles / Shot</label>
-                            <input
-                              type="number"
-                              min={1}
-                              max={8}
-                              value={yoloAnglesPerShot}
-                              onChange={e => setYoloAnglesPerShot(Number(e.target.value) || 1)}
-                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Takes / Angle</label>
-                            <input
-                              type="number"
-                              min={1}
-                              max={4}
-                              value={yoloTakesPerAngle}
-                              onChange={e => setYoloTakesPerAngle(Number(e.target.value) || 1)}
-                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                            />
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Quality Profile</label>
-                          <select
-                            value={yoloQualityProfile}
-                            onChange={e => setYoloQualityProfile(e.target.value)}
-                            className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                          >
-                            <option value="draft">Draft (fast)</option>
-                            <option value="balanced">Balanced</option>
-                            <option value="premium">Premium</option>
-                          </select>
                         </div>
                       </>
                     )}
@@ -4227,7 +4258,7 @@ function GenerateWorkspace() {
                             />
                           </div>
                           <div>
-                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Shots / Scene</label>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Shots Per Scene</label>
                             <input
                               type="number"
                               min={1}
@@ -4238,7 +4269,7 @@ function GenerateWorkspace() {
                             />
                           </div>
                           <div>
-                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Angles / Shot</label>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Angles Per Shot</label>
                             <input
                               type="number"
                               min={1}
@@ -4249,7 +4280,7 @@ function GenerateWorkspace() {
                             />
                           </div>
                           <div>
-                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Takes / Angle</label>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Takes Per Angle</label>
                             <input
                               type="number"
                               min={1}
@@ -4280,20 +4311,16 @@ function GenerateWorkspace() {
 
                 {directorSubTab === 'setup' && (
                   <>
-                    <div className="mt-1 text-[10px] text-sf-text-muted">
-                      Storyboard: <span className="text-sf-text-secondary">{yoloStoryboardWorkflowId}</span> · Video profile default: <span className="text-sf-text-secondary">{getWorkflowDisplayLabel(yoloProfile.videoWorkflowId)}</span>
-                    </div>
-                    <div className="text-[10px] text-sf-text-muted">
-                      Storyboard tier: <span className="text-sf-text-secondary">{yoloStoryboardTierSummary}</span>
-                    </div>
-                    <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 px-2.5 py-2">
-                      <div className="text-[10px] text-sf-text-muted">
-                        Video pass uses profile default: <span className="text-sf-text-secondary">{yoloSelectedVideoWorkflowLabel}</span>
+                    {isYoloMusicMode && (
+                      <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 px-2.5 py-2">
+                        <div className="text-[10px] text-sf-text-muted">
+                          Video pass uses profile default: <span className="text-sf-text-secondary">{yoloSelectedVideoWorkflowLabel}</span>
+                        </div>
+                        <div className="mt-1 text-[10px] text-sf-text-muted">
+                          Video tier: <span className="text-sf-text-secondary">{yoloVideoTargetTierSummary}</span>
+                        </div>
                       </div>
-                      <div className="mt-1 text-[10px] text-sf-text-muted">
-                        Video tier: <span className="text-sf-text-secondary">{yoloVideoTargetTierSummary}</span>
-                      </div>
-                    </div>
+                    )}
 
                     <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/50 p-2.5">
                       <div className="flex items-center justify-between gap-2">
@@ -4717,8 +4744,31 @@ function GenerateWorkspace() {
           </div>
         </div>
 
-        {/* Right: Progress + Generate */}
-        <div className="w-80 flex-shrink-0 min-h-0 border-l border-sf-dark-700 bg-sf-dark-900 flex flex-col overflow-y-auto">
+        {/* Right: Progress + Generate (collapsible) */}
+        <div className={`${rightSidebarCollapsed ? 'w-12' : 'w-80'} flex-shrink-0 min-h-0 border-l border-sf-dark-700 bg-sf-dark-900 flex flex-col overflow-hidden transition-all duration-200`}>
+          {rightSidebarCollapsed ? (
+            <button
+              type="button"
+              onClick={() => setRightSidebarCollapsed(false)}
+              className="flex flex-col items-center justify-center py-4 px-2 text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-800 transition-colors"
+              title="Expand queue panel"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+          ) : (
+          <>
+          <div className="flex-shrink-0 flex items-center justify-between gap-2 p-2 border-b border-sf-dark-700">
+            <span className="text-[10px] text-sf-text-muted uppercase tracking-wider truncate">Queue</span>
+            <button
+              type="button"
+              onClick={() => setRightSidebarCollapsed(true)}
+              className="p-1 rounded text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700 transition-colors flex-shrink-0"
+              title="Collapse panel"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
           <div className="flex-shrink-0 p-4 border-b border-sf-dark-700">
             <button
               onClick={handleGenerate}
@@ -4973,9 +5023,17 @@ function GenerateWorkspace() {
             </div>
           )}
 
-          {/* Info panel */}
+          {/* Info panel (collapsible) */}
           <div className="p-4">
-            <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">Workflow Info</div>
+            <button
+              type="button"
+              onClick={() => setWorkflowInfoExpanded(prev => !prev)}
+              className="w-full flex items-center justify-between gap-2 text-left text-[10px] text-sf-text-muted uppercase tracking-wider mb-2 hover:text-sf-text-primary transition-colors"
+            >
+              Workflow Info
+              {workflowInfoExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            </button>
+            {workflowInfoExpanded && (
             <div className="space-y-2 text-[11px] text-sf-text-secondary">
               {generationMode === 'single' ? (
                 <>
@@ -5017,7 +5075,11 @@ function GenerateWorkspace() {
                 </>
               )}
             </div>
+            )}
           </div>
+          </div>
+          </>
+          )}
         </div>
       </div>
 

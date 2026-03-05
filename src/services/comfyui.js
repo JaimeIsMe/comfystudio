@@ -717,20 +717,46 @@ export function modifyQwenImageEdit2509Workflow(workflow, options = {}) {
     inputImage = '',
     seed = Math.floor(Math.random() * 1000000000000),
     referenceImages = [],
+    filenamePrefix = '',
   } = options
 
   const modified = JSON.parse(JSON.stringify(workflow))
   const ref1 = referenceImages[0]
   const ref2 = referenceImages[1]
+  const hasDedicatedModelAndProductLoaders = Object.values(modified).some((node) => {
+    if (!node || typeof node !== 'object') return false
+    if (node.class_type !== 'LoadImage' || !node.inputs || !('image' in node.inputs)) return false
+    const title = String(node?._meta?.title || '')
+    return /load\s*model/i.test(title)
+  }) && Object.values(modified).some((node) => {
+    if (!node || typeof node !== 'object') return false
+    if (node.class_type !== 'LoadImage' || !node.inputs || !('image' in node.inputs)) return false
+    const title = String(node?._meta?.title || '')
+    return /load\s*product/i.test(title)
+  })
 
   for (const [nodeId, node] of Object.entries(modified)) {
     if (!node || typeof node !== 'object') continue
     const title = (node._meta && node._meta.title) ? String(node._meta.title) : ''
     const cls = node.class_type || ''
 
-    // Main image: first LoadImage gets the main input; only set if we haven't added ref nodes yet
+    // Main image handling:
+    // - default workflows: set main LoadImage from inputImage
+    // - model/product workflow: map dedicated loaders from model + product refs
     if (cls === 'LoadImage' && node.inputs && 'image' in node.inputs) {
-      node.inputs.image = inputImage
+      if (hasDedicatedModelAndProductLoaders) {
+        if (/load\s*model/i.test(title)) {
+          const modelImage = inputImage || ref2 || ref1
+          if (modelImage) node.inputs.image = modelImage
+        } else if (/load\s*product/i.test(title)) {
+          const productImage = ref1 || ref2 || inputImage
+          if (productImage) node.inputs.image = productImage
+        } else if (inputImage) {
+          node.inputs.image = inputImage
+        }
+      } else {
+        node.inputs.image = inputImage
+      }
     }
     // Text prompt: node with string/prompt/text or value (only if node looks like a prompt node)
     if (node.inputs) {
@@ -739,40 +765,52 @@ export function modifyQwenImageEdit2509Workflow(workflow, options = {}) {
       if (key) node.inputs[key] = prompt
       else if (valueKey) node.inputs[valueKey] = prompt
     }
-    // Seed: Image Edit node or any node with seed (e.g. the Qwen edit node)
-    if (node.inputs && 'seed' in node.inputs && (title.includes('Image Edit') || title.includes('Qwen') || cls.includes('Edit'))) {
+    // Seed: apply to edit-specific nodes and sampler nodes.
+    // The 2509 workflows use KSampler seed directly, so this must be updated per take.
+    const isSeedTargetNode = (
+      title.includes('Image Edit') ||
+      title.includes('Qwen') ||
+      cls.includes('Edit') ||
+      cls === 'KSampler' ||
+      title.includes('KSampler') ||
+      cls.includes('Sampler')
+    )
+    if (node.inputs && 'seed' in node.inputs && isSeedTargetNode) {
       node.inputs.seed = seed
     }
     // Save Image: set prefix
     if (cls === 'SaveImage' && node.inputs && 'filename_prefix' in node.inputs) {
-      node.inputs.filename_prefix = node.inputs.filename_prefix || 'ComfyStudio_edit'
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'image/ComfyStudio_edit'
     }
   }
 
-  // Optional reference images: add LoadImage nodes and wire image2/image3 on any node that has them
-  if (ref1) {
-    modified['ref_img_1'] = {
-      class_type: 'LoadImage',
-      inputs: { image: ref1 },
-      _meta: { title: 'Load Image (ref 1)' },
+  // Optional reference images: default qwen-edit workflows wire refs into image2/image3.
+  // Dedicated model/product workflows already consume refs via their own loader nodes.
+  if (!hasDedicatedModelAndProductLoaders) {
+    if (ref1) {
+      modified['ref_img_1'] = {
+        class_type: 'LoadImage',
+        inputs: { image: ref1 },
+        _meta: { title: 'Load Image (ref 1)' },
+      }
     }
-  }
-  if (ref2) {
-    modified['ref_img_2'] = {
-      class_type: 'LoadImage',
-      inputs: { image: ref2 },
-      _meta: { title: 'Load Image (ref 2)' },
+    if (ref2) {
+      modified['ref_img_2'] = {
+        class_type: 'LoadImage',
+        inputs: { image: ref2 },
+        _meta: { title: 'Load Image (ref 2)' },
+      }
     }
-  }
-  // Wire refs into node that accepts them (e.g. TextEncodeQwenImageEditPlus).
-  // Export often omits image2/image3 when unconnected, so set them if we have refs.
-  for (const node of Object.values(modified)) {
-    if (!node?.inputs) continue
-    const hasImage1 = 'image1' in node.inputs
-    const isQwenEdit = (node.class_type === 'TextEncodeQwenImageEditPlus') || ((node._meta?.title || '').includes('Image Edit') && hasImage1)
-    if (!isQwenEdit) continue
-    if (ref1) node.inputs.image2 = ['ref_img_1', 0]
-    if (ref2) node.inputs.image3 = ['ref_img_2', 0]
+    // Wire refs into node that accepts them (e.g. TextEncodeQwenImageEditPlus).
+    // Export often omits image2/image3 when unconnected, so set them if we have refs.
+    for (const node of Object.values(modified)) {
+      if (!node?.inputs) continue
+      const hasImage1 = 'image1' in node.inputs
+      const isQwenEdit = (node.class_type === 'TextEncodeQwenImageEditPlus') || ((node._meta?.title || '').includes('Image Edit') && hasImage1)
+      if (!isQwenEdit) continue
+      if (ref1) node.inputs.image2 = ['ref_img_1', 0]
+      if (ref2) node.inputs.image3 = ['ref_img_2', 0]
+    }
   }
 
   return modified
@@ -786,6 +824,7 @@ export function modifyZImageTurboWorkflow(workflow, options = {}) {
   const {
     prompt = '',
     seed = Math.floor(Math.random() * 1000000000000),
+    filenamePrefix = '',
   } = options
 
   const modified = JSON.parse(JSON.stringify(workflow))
@@ -797,6 +836,9 @@ export function modifyZImageTurboWorkflow(workflow, options = {}) {
     }
     if (node.class_type === 'KSampler' && 'seed' in node.inputs) {
       node.inputs.seed = seed
+    }
+    if (node.class_type === 'SaveImage' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'image/z_image_turbo'
     }
   }
 

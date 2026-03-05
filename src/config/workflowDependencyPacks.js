@@ -32,6 +32,13 @@ const QWEN_IMAGE_EDIT_SHARED_MODELS = Object.freeze([
   },
 ])
 
+const QWEN_IMAGE_EDIT_REQUIRED_NODES = Object.freeze([
+  { classType: 'TextEncodeQwenImageEditPlus' },
+  { classType: 'FluxKontextImageScale' },
+  { classType: 'KSampler' },
+  { classType: 'SaveImage' },
+])
+
 export const WORKFLOW_DEPENDENCY_PACKS = Object.freeze({
   'wan22-i2v': Object.freeze({
     id: 'wan22-i2v',
@@ -146,11 +153,17 @@ export const WORKFLOW_DEPENDENCY_PACKS = Object.freeze({
   'image-edit': Object.freeze({
     id: 'image-edit',
     displayName: 'Qwen Image Edit',
+    requiredNodes: QWEN_IMAGE_EDIT_REQUIRED_NODES,
+    requiredModels: QWEN_IMAGE_EDIT_SHARED_MODELS,
+    docsUrl: COMFY_REGISTRY_URL,
+  }),
+
+  'image-edit-model-product': Object.freeze({
+    id: 'image-edit-model-product',
+    displayName: 'Qwen Image Edit (Model + Product)',
     requiredNodes: Object.freeze([
-      { classType: 'TextEncodeQwenImageEditPlus' },
-      { classType: 'FluxKontextImageScale' },
-      { classType: 'KSampler' },
-      { classType: 'SaveImage' },
+      ...QWEN_IMAGE_EDIT_REQUIRED_NODES,
+      { classType: 'ImageResizeKJv2' },
     ]),
     requiredModels: QWEN_IMAGE_EDIT_SHARED_MODELS,
     docsUrl: COMFY_REGISTRY_URL,
@@ -222,6 +235,10 @@ export const WORKFLOW_DEPENDENCY_PACKS = Object.freeze({
 
 export function getWorkflowDependencyPack(workflowId) {
   const normalized = String(workflowId || '').trim()
-  const canonicalId = normalized === 'nano-banana-pro' ? 'nano-banana-2' : normalized
+  const canonicalId = (
+    normalized === 'nano-banana-pro'
+      ? 'nano-banana-2'
+      : normalized
+  )
   return WORKFLOW_DEPENDENCY_PACKS[canonicalId] || null
 }

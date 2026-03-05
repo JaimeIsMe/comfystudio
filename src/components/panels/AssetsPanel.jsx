@@ -7,6 +7,7 @@ import { importAsset, isElectron, writeGeneratedOverlayToProject } from '../../s
 import { enqueuePlaybackTranscode } from '../../services/playbackCache'
 import MaskGenerationDialog from '../MaskGenerationDialog'
 import OverlayGeneratorModal from '../OverlayGeneratorModal'
+import ConfirmDialog from '../ConfirmDialog'
 
 // Thumbnail size presets (xs = extra small for denser grid)
 const THUMBNAIL_SIZES = {
@@ -61,6 +62,8 @@ function AssetsPanel() {
   const [overlayModalOpen, setOverlayModalOpen] = useState(false)
   const [overlayModalInitialType, setOverlayModalInitialType] = useState('letterbox')
   const [overlayModalFolderId, setOverlayModalFolderId] = useState(null) // when opened from folder context menu
+  const [confirmDialog, setConfirmDialog] = useState(null) // { title, message, confirmLabel, cancelLabel, tone }
+  const confirmResolverRef = useRef(null)
   
   // Selected assets (array for multi-select; used for delete and drag-to-folder)
   const [selectedAssetIds, setSelectedAssetIds] = useState([])
@@ -549,11 +552,43 @@ function AssetsPanel() {
     setSelectedAssetIds([asset.id])
     setPreview(asset)
   }
+
+  const requestConfirm = useCallback(({
+    title = 'Confirm action',
+    message = '',
+    confirmLabel = 'Confirm',
+    cancelLabel = 'Cancel',
+    tone = 'danger',
+  }) => {
+    if (confirmResolverRef.current) {
+      confirmResolverRef.current(false)
+      confirmResolverRef.current = null
+    }
+    return new Promise((resolve) => {
+      confirmResolverRef.current = resolve
+      setConfirmDialog({ title, message, confirmLabel, cancelLabel, tone })
+    })
+  }, [])
+
+  const resolveConfirmDialog = useCallback((accepted) => {
+    setConfirmDialog(null)
+    const resolve = confirmResolverRef.current
+    confirmResolverRef.current = null
+    if (resolve) resolve(Boolean(accepted))
+  }, [])
+
+  useEffect(() => () => {
+    if (confirmResolverRef.current) {
+      confirmResolverRef.current(false)
+      confirmResolverRef.current = null
+    }
+  }, [])
   
   // Keyboard handler for Delete/Backspace (and Escape to clear selection)
   useEffect(() => {
-    const handleKeyDown = (e) => {
+    const handleKeyDown = async (e) => {
       if (!panelRef.current?.contains(document.activeElement) && document.activeElement !== panelRef.current) return
+      if (confirmDialog) return
       const active = document.activeElement
       if (editingId || (active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable))) return
 
@@ -568,7 +603,14 @@ function AssetsPanel() {
         e.preventDefault()
         e.stopPropagation()
         const count = selectedAssetIds.length
-        if (confirm(count === 1 ? 'Delete this asset?' : `Delete ${count} selected assets?`)) {
+        const confirmed = await requestConfirm({
+          title: count === 1 ? 'Delete asset?' : 'Delete selected assets?',
+          message: count === 1 ? 'Delete this asset?' : `Delete ${count} selected assets?`,
+          confirmLabel: count === 1 ? 'Delete asset' : 'Delete assets',
+          cancelLabel: 'Keep',
+          tone: 'danger',
+        })
+        if (confirmed) {
           selectedAssetIds.forEach(id => removeAsset(id))
           setSelectedAssetIds([])
         }
@@ -576,7 +618,7 @@ function AssetsPanel() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedAssetIds, editingId, removeAsset])
+  }, [selectedAssetIds, editingId, removeAsset, requestConfirm, confirmDialog])
   
   // Handle folder click
   const handleFolderClick = (folderId) => {
@@ -601,12 +643,32 @@ function AssetsPanel() {
   }
 
   // Handle delete
-  const handleDelete = (e, id) => {
+  const handleDelete = async (e, id) => {
     e.stopPropagation()
-    if (confirm('Delete this asset?')) {
+    const confirmed = await requestConfirm({
+      title: 'Delete asset?',
+      message: 'Delete this asset?',
+      confirmLabel: 'Delete asset',
+      cancelLabel: 'Keep',
+      tone: 'danger',
+    })
+    if (confirmed) {
       removeAsset(id)
     }
   }
+
+  const handleDeleteFolder = useCallback(async (folderId, folderName) => {
+    const confirmed = await requestConfirm({
+      title: 'Delete folder?',
+      message: `Delete folder "${folderName}"?`,
+      confirmLabel: 'Delete folder',
+      cancelLabel: 'Keep',
+      tone: 'danger',
+    })
+    if (!confirmed) return false
+    removeFolder(folderId)
+    return true
+  }, [removeFolder, requestConfirm])
 
   // Toggle audio on a video asset
   const handleToggleVideoAudio = (assetId) => {
@@ -783,9 +845,9 @@ function AssetsPanel() {
             <p className="text-[9px] text-sf-text-muted">{getFolderItemCount(folder.id)} items</p>
           </div>
           <button
-            onClick={(e) => {
+            onClick={async (e) => {
               e.stopPropagation()
-              if (confirm(`Delete folder "${folder.name}"?`)) removeFolder(folder.id)
+              await handleDeleteFolder(folder.id, folder.name)
             }}
             className="p-0.5 opacity-0 group-hover:opacity-100 hover:bg-sf-error rounded transition-opacity"
           >
@@ -1411,9 +1473,11 @@ function AssetsPanel() {
               </button>
               <div className="border-t border-sf-dark-600 my-1" />
               <button
-                onClick={() => {
+                onClick={async () => {
                   const folder = folders?.find(f => f.id === contextMenu.folderId)
-                  if (folder && confirm(`Delete folder "${folder.name}"?`)) removeFolder(contextMenu.folderId)
+                  if (folder) {
+                    await handleDeleteFolder(contextMenu.folderId, folder.name)
+                  }
                   setContextMenu(null)
                 }}
                 className="w-full px-3 py-1.5 text-left text-xs text-sf-error hover:bg-sf-dark-700 flex items-center gap-2"
@@ -1588,6 +1652,17 @@ function AssetsPanel() {
         </div>
       )}
       
+      <ConfirmDialog
+        isOpen={Boolean(confirmDialog)}
+        title={confirmDialog?.title || 'Confirm action'}
+        message={confirmDialog?.message || ''}
+        confirmLabel={confirmDialog?.confirmLabel || 'Confirm'}
+        cancelLabel={confirmDialog?.cancelLabel || 'Cancel'}
+        tone={confirmDialog?.tone || 'danger'}
+        onConfirm={() => resolveConfirmDialog(true)}
+        onCancel={() => resolveConfirmDialog(false)}
+      />
+
       {/* Mask Generation Dialog */}
       {maskDialogAsset && (
         <MaskGenerationDialog
