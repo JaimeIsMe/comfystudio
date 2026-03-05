@@ -47,8 +47,8 @@ const DIRECTOR_SUBTABS = [
   },
   {
     id: 'plan-script',
-    label: '2. Plan & Script',
-    helper: 'Step 2: define script/lyrics and build queueable plan.',
+    label: '2. Script',
+    helper: 'Step 2: define script/lyrics, then build your plan.',
   },
   {
     id: 'scene-shot',
@@ -1173,13 +1173,6 @@ function GenerateWorkspace() {
     yoloAdModelAsset,
     yoloAdProductAsset,
   ])
-  const yoloAdReferenceBadgeText = useMemo(() => {
-    if (!yoloAdHasReferenceAnchors) return ''
-    const anchors = []
-    if (yoloAdProductAsset) anchors.push('Product')
-    if (yoloAdModelAsset) anchors.push('Model')
-    return `Anchored: ${anchors.join(' + ')} · ${formatReferenceConsistencyLabel(yoloAdConsistency)}`
-  }, [yoloAdConsistency, yoloAdHasReferenceAnchors, yoloAdModelAsset, yoloAdProductAsset])
   const yoloQueueNameLabel = useMemo(() => {
     if (isYoloMusicMode) {
       return (
@@ -1239,6 +1232,31 @@ function GenerateWorkspace() {
   const yoloVideoTargetTierSummary = useMemo(
     () => yoloSelectedVideoWorkflowIds.map((id) => formatWorkflowTierSummary(id)).join(' + '),
     [yoloSelectedVideoWorkflowIds]
+  )
+  const yoloAdQualityProfileMappings = [
+    { id: 'draft', label: 'Draft', imageWorkflowId: 'image-edit-model-product', videoWorkflowId: 'wan22-i2v' },
+    { id: 'balanced', label: 'Balanced', imageWorkflowId: 'nano-banana-2', videoWorkflowId: 'wan22-i2v' },
+    { id: 'premium', label: 'Premium', imageWorkflowId: 'nano-banana-2', videoWorkflowId: 'kling-o3-i2v' },
+  ].map((profile) => {
+    const imageLabel = profile.imageWorkflowId === 'image-edit-model-product'
+      ? 'Qwen Image Edit 2509'
+      : profile.imageWorkflowId === 'nano-banana-2'
+        ? 'Nano Banana 2'
+        : getWorkflowDisplayLabel(profile.imageWorkflowId)
+    const videoLabel = profile.videoWorkflowId === 'kling-o3-i2v'
+      ? 'Kling 3.0'
+      : getWorkflowDisplayLabel(profile.videoWorkflowId)
+
+    return {
+      ...profile,
+      imageLabel,
+      videoLabel,
+    }
+  })
+  const yoloSelectedAdQualityProfileMapping = (
+    yoloAdQualityProfileMappings.find((profile) => profile.id === yoloQualityProfile)
+    || yoloAdQualityProfileMappings[1]
+    || null
   )
   const yoloDependencyWorkflowIds = useMemo(() => Array.from(new Set([
     yoloStoryboardWorkflowId,
@@ -2035,21 +2053,6 @@ function GenerateWorkspace() {
     return nextPlan
   }, [buildActiveYoloPlan])
 
-  const updateYoloScene = useCallback((sceneId, updater) => {
-    setYoloActivePlan((prevPlan) => prevPlan.map((scene) => {
-      if (scene.id !== sceneId) return scene
-      const updatedScene = typeof updater === 'function'
-        ? updater(scene)
-        : { ...scene, ...updater }
-      return {
-        ...updatedScene,
-        shots: (updatedScene.shots || []).map((shot, shotIndex) => (
-          normalizeShotForScene(updatedScene.id || scene.id, shot, shotIndex, shot)
-        )),
-      }
-    }))
-  }, [setYoloActivePlan])
-
   const updateYoloShot = useCallback((sceneId, shotId, updater) => {
     setYoloActivePlan((prevPlan) => prevPlan.map((scene) => {
       if (scene.id !== sceneId) return scene
@@ -2063,130 +2066,6 @@ function GenerateWorkspace() {
       return { ...scene, shots: nextShots }
     }))
   }, [setYoloActivePlan])
-
-  const regenerateYoloScene = useCallback((sceneId) => {
-    setYoloActivePlan((prevPlan) => {
-      const sceneIndex = prevPlan.findIndex((scene) => scene.id === sceneId)
-      if (sceneIndex === -1) return prevPlan
-
-      const scene = prevPlan[sceneIndex]
-      const existingDuration = (scene.shots || []).reduce(
-        (sum, shot) => sum + (Number(shot.durationSeconds) || 0),
-        0
-      )
-      const fallbackSceneDuration = Number(yoloActiveTargetDuration) / Math.max(1, prevPlan.length)
-      const regeneratedScene = buildYoloPlanFromScript(scene.rawText || scene.summary || '', {
-        targetDurationSeconds: existingDuration > 0 ? existingDuration : fallbackSceneDuration,
-        shotsPerScene: yoloActiveShotsPerScene,
-        anglesPerShot: yoloActiveAnglesPerShot,
-        takesPerAngle: yoloActiveTakesPerAngle,
-        styleNotes: yoloActiveStyleNotes || scene.styleNotes || '',
-        variationSeed: Math.floor(Math.random() * 10000),
-      })[0]
-
-      if (!regeneratedScene) return prevPlan
-
-      const nextShots = (regeneratedScene.shots || []).map((generatedShot, shotIndex) => {
-        const currentShot = scene.shots?.[shotIndex]
-        return normalizeShotForScene(scene.id, generatedShot, shotIndex, currentShot || generatedShot)
-      })
-
-      const nextScene = {
-        ...scene,
-        summary: regeneratedScene.summary || scene.summary,
-        styleNotes: yoloActiveStyleNotes || regeneratedScene.styleNotes || scene.styleNotes,
-        rawText: scene.rawText || regeneratedScene.rawText || '',
-        shots: nextShots,
-      }
-
-      return prevPlan.map((entry, idx) => (idx === sceneIndex ? nextScene : entry))
-    })
-    setFormError(null)
-  }, [
-    setYoloActivePlan,
-    yoloActiveAnglesPerShot,
-    yoloActiveShotsPerScene,
-    yoloActiveStyleNotes,
-    yoloActiveTakesPerAngle,
-    yoloActiveTargetDuration,
-  ])
-
-  const regenerateYoloShot = useCallback((sceneId, shotId) => {
-    setYoloActivePlan((prevPlan) => {
-      const sceneIndex = prevPlan.findIndex((scene) => scene.id === sceneId)
-      if (sceneIndex === -1) return prevPlan
-      const scene = prevPlan[sceneIndex]
-
-      const shotIndex = (scene.shots || []).findIndex((shot) => shot.id === shotId)
-      if (shotIndex === -1) return prevPlan
-
-      const currentShot = scene.shots[shotIndex]
-
-      const existingDuration = (scene.shots || []).reduce(
-        (sum, shot) => sum + (Number(shot.durationSeconds) || 0),
-        0
-      )
-      const fallbackSceneDuration = Number(yoloActiveTargetDuration) / Math.max(1, prevPlan.length)
-      const regeneratedScene = buildYoloPlanFromScript(scene.rawText || scene.summary || '', {
-        targetDurationSeconds: existingDuration > 0 ? existingDuration : fallbackSceneDuration,
-        shotsPerScene: yoloActiveShotsPerScene,
-        anglesPerShot: yoloActiveAnglesPerShot,
-        takesPerAngle: yoloActiveTakesPerAngle,
-        styleNotes: yoloActiveStyleNotes || scene.styleNotes || '',
-        variationSeed: Math.floor(Math.random() * 10000),
-      })[0]
-
-      const regeneratedShot = regeneratedScene?.shots?.[shotIndex]
-      if (!regeneratedShot) return prevPlan
-
-      const replacementShot = normalizeShotForScene(
-        scene.id,
-        {
-          ...currentShot,
-          imageBeat: regeneratedShot.imageBeat || regeneratedShot.beat,
-          videoBeat: regeneratedShot.videoBeat || regeneratedShot.beat,
-          beat: regeneratedShot.videoBeat || regeneratedShot.beat,
-          angles: regeneratedShot.angles,
-          durationSeconds: regeneratedShot.durationSeconds,
-          takesPerAngle: regeneratedShot.takesPerAngle,
-        },
-        shotIndex,
-        currentShot
-      )
-
-      const nextShots = scene.shots.map((shot, idx) => (
-        idx === shotIndex
-          ? replacementShot
-          : normalizeShotForScene(scene.id, shot, idx, shot)
-      ))
-
-      return prevPlan.map((entry, idx) => (
-        idx === sceneIndex
-          ? {
-            ...scene,
-            summary: regeneratedScene.summary || scene.summary,
-            shots: nextShots,
-          }
-          : entry
-      ))
-    })
-    setFormError(null)
-  }, [
-    setYoloActivePlan,
-    yoloActiveAnglesPerShot,
-    yoloActiveShotsPerScene,
-    yoloActiveStyleNotes,
-    yoloActiveTakesPerAngle,
-    yoloActiveTargetDuration,
-  ])
-
-  const handleYoloSceneRawTextChange = useCallback((sceneId, value) => {
-    updateYoloScene(sceneId, (scene) => ({
-      ...scene,
-      rawText: value,
-      summary: summarizeSceneText(value, scene.summary || ''),
-    }))
-  }, [updateYoloScene])
 
   const handleYoloShotImageBeatChange = useCallback((sceneId, shotId, value) => {
     updateYoloShot(sceneId, shotId, (shot) => ({ ...shot, imageBeat: value }))
@@ -3608,6 +3487,7 @@ function GenerateWorkspace() {
                       </button>
                     </div>
                   </div>
+
                 </div>
               </div>
             )}
@@ -4040,8 +3920,8 @@ function GenerateWorkspace() {
 
                     {directorSubTab === 'setup' && (
                       <>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
-                          <div className="p-3 rounded-lg bg-sf-dark-800/45 border border-sf-dark-700">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
+                          <div className="h-full p-3 rounded-lg bg-sf-dark-800/45 border border-sf-dark-700">
                             <div className="text-[10px] text-sf-text-muted uppercase tracking-wider">Structure</div>
                             <p className="mt-1 text-[10px] text-sf-text-muted">
                               Set ad length and shot density first.
@@ -4094,7 +3974,7 @@ function GenerateWorkspace() {
                             </div>
                           </div>
 
-                          <div className="p-3 rounded-lg bg-sf-dark-800/45 border border-sf-dark-700">
+                          <div className="h-full p-3 rounded-lg bg-sf-dark-800/45 border border-sf-dark-700">
                             <div className="text-[10px] text-sf-text-muted uppercase tracking-wider">Quality</div>
                             <p className="mt-1 text-[10px] text-sf-text-muted">
                               Choose speed versus fidelity.
@@ -4111,14 +3991,24 @@ function GenerateWorkspace() {
                                 <option value="premium">Premium</option>
                               </select>
                             </div>
-                            <div className="mt-2.5 rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 px-2.5 py-2">
-                              <div className="text-[10px] text-sf-text-muted">
-                                Video pass uses profile default: <span className="text-sf-text-secondary">{yoloSelectedVideoWorkflowLabel}</span>
-                              </div>
-                              <div className="mt-1 text-[10px] text-sf-text-muted">
-                                Video tier: <span className="text-sf-text-secondary">{yoloVideoTargetTierSummary}</span>
+                            <div className="mt-2.5 rounded-lg border border-sf-dark-700 bg-sf-dark-800/35 px-2.5 py-2">
+                              <div>
+                                {yoloSelectedAdQualityProfileMapping && (
+                                  <div className="rounded border border-sf-accent/50 bg-sf-accent/10 px-2 py-1.5 text-[10px] text-sf-text-primary">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="uppercase tracking-wider font-medium">{yoloSelectedAdQualityProfileMapping.label}</span>
+                                      <span className="text-[9px] uppercase tracking-wider text-sf-accent">Selected</span>
+                                    </div>
+                                    <div className="mt-0.5">
+                                      <span className="text-sf-text-muted">Image:</span> {yoloSelectedAdQualityProfileMapping.imageLabel}
+                                      <span className="mx-1.5 text-sf-text-muted/60">|</span>
+                                      <span className="text-sf-text-muted">Video:</span> {yoloSelectedAdQualityProfileMapping.videoLabel}
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             </div>
+
                           </div>
                         </div>
 
@@ -4429,59 +4319,38 @@ function GenerateWorkspace() {
                         })}
                       </div>
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setDirectorSubTab('plan-script')}
+                      className="w-full px-3 py-2 rounded-lg bg-sf-accent hover:bg-sf-accent-hover text-white text-xs"
+                    >
+                      Next: Script
+                    </button>
                   </>
                 )}
 
                 {directorSubTab === 'plan-script' && (
                   <>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <div className="grid grid-cols-1 gap-2">
                       <button
                         type="button"
                         onClick={handleBuildActiveYoloPlan}
-                        className="px-3 py-2 rounded-lg bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary text-xs"
+                        className="px-3 py-2 rounded-lg bg-sf-accent hover:bg-sf-accent-hover text-white text-xs"
                       >
                         Build Plan
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => { void handleQueueYoloStoryboards() }}
-                        disabled={yoloDependencyCheckInProgress}
-                        className={`px-3 py-2 rounded-lg text-xs ${
-                          yoloDependencyCheckInProgress
-                            ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
-                            : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
-                        }`}
-                      >
-                        Queue Storyboards
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { void handleQueueYoloVideos() }}
-                        disabled={yoloDependencyCheckInProgress}
-                        className={`px-3 py-2 rounded-lg text-xs ${
-                          yoloDependencyCheckInProgress
-                            ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
-                            : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
-                        }`}
-                      >
-                        Queue Video Pass
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { void handleCreateStoryboardPdf() }}
-                        disabled={creatingStoryboardPdf || yoloStoryboardAssetMap.size === 0}
-                        className={`px-3 py-2 rounded-lg text-xs inline-flex items-center justify-center gap-1 ${
-                          creatingStoryboardPdf || yoloStoryboardAssetMap.size === 0
-                            ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
-                            : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
-                        }`}
-                        title={yoloStoryboardAssetMap.size === 0 ? 'Generate storyboard images first' : 'Create a PDF from the latest storyboard frames'}
-                      >
-                        {creatingStoryboardPdf && <Loader2 className="w-3 h-3 animate-spin" />}
-                        {creatingStoryboardPdf ? 'Creating PDF...' : 'Create Storyboard PDF'}
-                      </button>
+                      <div className="text-[10px] text-sf-text-muted">
+                        Build plan, then continue in Scene / Shot Editor for storyboard, video, and PDF actions.
+                      </div>
                     </div>
 
+                  </>
+                )}
+
+                {directorSubTab === 'scene-shot' && (
+                  yoloCanEditScenes ? (
+                  <div className="space-y-3">
                     {yoloDependencyCheckInProgress && (
                       <div className="text-[10px] text-yellow-400">Checking {DIRECTOR_MODE_BETA_LABEL} workflow dependencies...</div>
                     )}
@@ -4493,11 +4362,10 @@ function GenerateWorkspace() {
                       <div>Queue variants: {yoloQueueVariants.length}</div>
                       <div>Storyboard frames ready: {yoloStoryboardReadyCount} / {yoloQueueVariants.length}</div>
                     </div>
-                  </>
-                )}
+                    <div className="text-[10px] text-yellow-300/90 leading-relaxed">
+                      Tip: Scene text is reference-only. Feel free to refine Image Action, Video Action, camera preset, duration, and takes before creating stills or videos.
+                    </div>
 
-                {directorSubTab === 'scene-shot' && (
-                  yoloCanEditScenes ? (
                   <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4">
                     <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 p-3 h-fit sticky top-2">
                       <div className="text-[10px] text-sf-text-muted uppercase tracking-wider">Scene Navigator</div>
@@ -4532,79 +4400,19 @@ function GenerateWorkspace() {
                     <div className="space-y-3">
                       {selectedYoloScene && (
                         <div key={selectedYoloScene.id} className="p-3 rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 space-y-2">
-                          <div className="flex flex-wrap items-start justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <div className="text-xs font-semibold text-sf-text-primary">
-                                {selectedYoloScene.id}
-                                {selectedYoloSceneIndex >= 0 ? ` (${selectedYoloSceneIndex + 1}/${yoloActivePlan.length})` : ''}
-                              </div>
-                              {!isYoloMusicMode && yoloAdHasReferenceAnchors && (
-                                <span
-                                  className="px-1.5 py-0.5 rounded border border-sf-accent/30 bg-sf-accent/15 text-[10px] text-sf-accent whitespace-nowrap"
-                                  title={yoloAdReferenceBadgeText}
-                                >
-                                  {yoloAdReferenceBadgeText}
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap items-center justify-end gap-2">
-                              <button
-                                type="button"
-                                disabled={selectedYoloSceneIndex <= 0}
-                                onClick={() => setSelectedYoloSceneId(yoloActivePlan[selectedYoloSceneIndex - 1]?.id || null)}
-                                className={`px-2 py-1 rounded text-[10px] whitespace-nowrap ${
-                                  selectedYoloSceneIndex <= 0
-                                    ? 'bg-sf-dark-800 text-sf-text-muted cursor-not-allowed'
-                                    : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
-                                }`}
-                              >
-                                Prev Scene
-                              </button>
-                              <button
-                                type="button"
-                                disabled={selectedYoloSceneIndex < 0 || selectedYoloSceneIndex >= yoloActivePlan.length - 1}
-                                onClick={() => setSelectedYoloSceneId(yoloActivePlan[selectedYoloSceneIndex + 1]?.id || null)}
-                                className={`px-2 py-1 rounded text-[10px] whitespace-nowrap ${
-                                  selectedYoloSceneIndex < 0 || selectedYoloSceneIndex >= yoloActivePlan.length - 1
-                                    ? 'bg-sf-dark-800 text-sf-text-muted cursor-not-allowed'
-                                    : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
-                                }`}
-                              >
-                                Next Scene
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => regenerateYoloScene(selectedYoloScene.id)}
-                                className="px-2 py-1 rounded bg-sf-dark-700 hover:bg-sf-dark-600 text-[10px] text-sf-text-secondary whitespace-nowrap"
-                              >
-                                Regenerate Scene
-                              </button>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="text-xs font-semibold text-sf-text-primary">
+                              {selectedYoloScene.id}
+                              {selectedYoloSceneIndex >= 0 ? ` (${selectedYoloSceneIndex + 1}/${yoloActivePlan.length})` : ''}
                             </div>
                           </div>
 
                           <div>
-                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Scene Summary (auto)</label>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Scene</label>
                             <div className="mt-1 w-full bg-sf-dark-900 border border-sf-dark-700 rounded px-2 py-1 text-xs text-sf-text-secondary">
-                              {selectedYoloScene.summary || 'Auto-generated from scene script'}
+                              {selectedYoloScene.rawText || selectedYoloScene.summary || 'Scene details'}
                             </div>
                           </div>
-
-                          <details className="rounded border border-sf-dark-700 bg-sf-dark-900/50 p-2">
-                            <summary className="cursor-pointer text-[10px] text-sf-text-muted uppercase tracking-wider select-none">
-                              Advanced: Scene Script (optional)
-                            </summary>
-                            <div className="mt-2">
-                              <textarea
-                                value={selectedYoloScene.rawText || ''}
-                                onChange={e => handleYoloSceneRawTextChange(selectedYoloScene.id, e.target.value)}
-                                rows={2}
-                                className="w-full bg-sf-dark-900 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary resize-y"
-                              />
-                              <div className="mt-1 text-[10px] text-sf-text-muted">
-                                Edit only when you need to change full scene context for both storyboard and video.
-                              </div>
-                            </div>
-                          </details>
 
                           <div className="space-y-2">
                             {(selectedYoloScene.shots || []).map((shot) => (
@@ -4612,34 +4420,19 @@ function GenerateWorkspace() {
                                 <div className="flex flex-wrap items-start justify-between gap-2">
                                   <div className="flex items-center gap-2 min-w-0">
                                     <div className="text-[11px] text-sf-text-primary">{shot.id}</div>
-                                    {!isYoloMusicMode && yoloAdHasReferenceAnchors && (
-                                      <span
-                                        className="px-1.5 py-0.5 rounded border border-sf-accent/30 bg-sf-accent/15 text-[9px] text-sf-accent whitespace-nowrap"
-                                        title={yoloAdReferenceBadgeText}
-                                      >
-                                        {yoloAdReferenceBadgeText}
-                                      </span>
-                                    )}
                                   </div>
                                   <div className="flex flex-wrap items-center justify-end gap-2">
                                     <button
                                       type="button"
-                                      onClick={() => regenerateYoloShot(selectedYoloScene.id, shot.id)}
-                                      className="px-2 py-1 rounded text-[10px] bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary whitespace-nowrap"
-                                    >
-                                      Regenerate Shot
-                                    </button>
-                                    <button
-                                      type="button"
                                       onClick={() => { void handleQueueYoloShotStoryboard(selectedYoloScene.id, shot.id) }}
                                       disabled={yoloDependencyCheckInProgress}
-                                      className={`px-2 py-1 rounded text-[10px] border whitespace-nowrap ${
+                                      className={`px-2 py-1 rounded text-[10px] whitespace-nowrap ${
                                         yoloDependencyCheckInProgress
-                                          ? 'bg-sf-dark-700 border-sf-dark-600 text-sf-text-muted cursor-not-allowed'
-                                          : 'bg-sf-accent/25 hover:bg-sf-accent/35 border-sf-accent/40 text-sf-accent'
+                                          ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                                          : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
                                       }`}
                                     >
-                                      Queue Shot Storyboard
+                                      Create Shot Still
                                     </button>
                                     <button
                                       type="button"
@@ -4648,17 +4441,17 @@ function GenerateWorkspace() {
                                       className={`px-2 py-1 rounded text-[10px] whitespace-nowrap ${
                                         yoloDependencyCheckInProgress
                                           ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
-                                          : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
+                                          : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
                                       }`}
                                     >
-                                      {yoloSelectedVideoWorkflowIds.length > 1 ? 'Queue Shot Video (A/B)' : 'Queue Shot Video'}
+                                      {yoloSelectedVideoWorkflowIds.length > 1 ? 'Create Shot Video (A/B)' : 'Create Shot Video'}
                                     </button>
                                   </div>
                                 </div>
 
                                 <div className="space-y-2">
                                   <div>
-                                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Image Keyframe (Storyboard only)</label>
+                                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Image Action</label>
                                     <input
                                       type="text"
                                       value={shot.imageBeat || shot.beat || ''}
@@ -4667,7 +4460,7 @@ function GenerateWorkspace() {
                                     />
                                   </div>
                                   <div>
-                                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Video Action (Video only)</label>
+                                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Video Action</label>
                                     <input
                                       type="text"
                                       value={shot.videoBeat || shot.beat || ''}
@@ -4725,16 +4518,65 @@ function GenerateWorkspace() {
                       )}
                     </div>
                   </div>
+                    <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/50 p-3">
+                      <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">Batch Create (All Scenes & Shots)</div>
+                      <div className="mt-1 text-[10px] text-sf-text-muted">
+                        These actions run across the full plan, not just the selected shot.
+                      </div>
+                      <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => { void handleQueueYoloStoryboards() }}
+                          disabled={yoloDependencyCheckInProgress}
+                          title={yoloDependencyCheckInProgress ? 'Wait for dependency check to finish' : 'Queues still-image jobs for all shots in this plan'}
+                          className={`px-3 py-2 rounded-lg text-xs ${
+                            yoloDependencyCheckInProgress
+                              ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                              : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
+                          }`}
+                        >
+                          Create Shot Stills
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { void handleCreateStoryboardPdf() }}
+                          disabled={creatingStoryboardPdf || yoloStoryboardAssetMap.size === 0}
+                          className={`px-3 py-2 rounded-lg text-xs inline-flex items-center justify-center gap-1 ${
+                            creatingStoryboardPdf || yoloStoryboardAssetMap.size === 0
+                              ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                              : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
+                          }`}
+                          title={yoloStoryboardAssetMap.size === 0 ? 'Generate storyboard images first' : 'Create a PDF from the latest storyboard frames'}
+                        >
+                          {creatingStoryboardPdf && <Loader2 className="w-3 h-3 animate-spin" />}
+                          {creatingStoryboardPdf ? 'Creating PDF...' : 'Create Storyboard PDF'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { void handleQueueYoloVideos() }}
+                          disabled={yoloDependencyCheckInProgress}
+                          title={yoloDependencyCheckInProgress ? 'Wait for dependency check to finish' : 'Queues video generation jobs for all shots in this plan'}
+                          className={`px-3 py-2 rounded-lg text-xs ${
+                            yoloDependencyCheckInProgress
+                              ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                              : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
+                          }`}
+                        >
+                          Create Videos
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                   ) : (
                     <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 p-3 text-xs text-sf-text-secondary space-y-2">
                       <div className="font-medium text-sf-text-primary">Build a plan to unlock Scene / Shot Editor</div>
-                      <div>Go to Step 2 (Plan & Script), click Build Plan, then return here to refine scenes and shots.</div>
+                      <div>Go to Step 2 (Script), click Build Plan, then return here to refine scenes and shots.</div>
                       <button
                         type="button"
                         onClick={() => setDirectorSubTab('plan-script')}
                         className="px-3 py-1.5 rounded bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary text-[11px]"
                       >
-                        Go to Plan & Script
+                        Go to Script
                       </button>
                     </div>
                   )
