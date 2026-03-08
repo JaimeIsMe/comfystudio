@@ -160,7 +160,11 @@ function AssetsPanel() {
   }, [])
 
   const startAssetDrag = useCallback((e, assetId, assetIds) => {
-    const data = JSON.stringify(assetIds)
+    const orderedAssetIds = [
+      assetId,
+      ...(Array.isArray(assetIds) ? assetIds : []).filter((id) => id && id !== assetId),
+    ]
+    const data = JSON.stringify(orderedAssetIds)
     e.dataTransfer.setData('assetId', assetId)
     e.dataTransfer.setData(ASSET_DRAG_TYPE, data)
     e.dataTransfer.setData('text/plain', data)
@@ -174,7 +178,7 @@ function AssetsPanel() {
     activeAssetDragIdRef.current = assetId
     setIsAssetDragActive(true)
     updateAssetDragPreviewPosition(e.clientX, e.clientY)
-    notifyAssetDragStart(assetId, assetIds)
+    notifyAssetDragStart(assetId, orderedAssetIds)
   }, [updateAssetDragPreviewPosition])
 
   const endAssetDrag = useCallback(() => {

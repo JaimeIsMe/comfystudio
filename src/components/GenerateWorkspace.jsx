@@ -76,6 +76,23 @@ const YOLO_AD_STAGE_TIER_OPTIONS = Object.freeze({
   ]),
 })
 
+const DIRECTOR_SCRIPT_TEMPLATE = `Scene 1: Neon Arrival
+Scene context: Futuristic transit terminal, blue and coral neon, reflective black tile, premium cinematic sneaker ad.
+
+Shot 1:
+Shot type: Wide shot
+Keyframe prompt: Wide shot of the model stepping through sliding glass doors into a futuristic transit terminal, blue and coral neon reflecting across glossy black tile, coral-and-cream sneaker clearly visible.
+Motion prompt: Starting from this exact keyframe, the model takes 2 confident steps forward while neon reflections slide across the floor. Keep the sneaker, outfit, and terminal lighting consistent.
+Camera: Gentle backward tracking shot
+Duration: 3
+
+Shot 2:
+Shot type: Close-up
+Keyframe prompt: Close-up of the sneaker landing on reflective black tile, sharp product detail, dramatic neon reflections, premium commercial lighting.
+Motion prompt: Starting from this exact close-up, the foot lands fully and rolls forward slightly while reflections shimmer across the tile surface.
+Camera: Locked close-up with subtle micro push-in
+Duration: 2`
+
 async function copyTextToClipboard(text) {
   if (navigator?.clipboard?.writeText) {
     await navigator.clipboard.writeText(text)
@@ -320,6 +337,8 @@ function normalizeShotForScene(sceneId, shot, shotIndex, fallback = {}) {
   const fallbackBeat = String(fallback?.videoBeat || fallback?.imageBeat || fallback?.beat || '').trim()
   const imageBeat = String(shot?.imageBeat || shot?.beat || fallback?.imageBeat || fallback?.beat || '').trim()
   const videoBeat = String(shot?.videoBeat || shot?.beat || fallback?.videoBeat || fallbackBeat).trim()
+  const shotType = String(shot?.shotType || fallback?.shotType || '').trim()
+  const cameraDirection = String(shot?.cameraDirection || fallback?.cameraDirection || '').trim()
   const duration = clampNumberValue(
     shot?.durationSeconds,
     2,
@@ -339,6 +358,8 @@ function normalizeShotForScene(sceneId, shot, shotIndex, fallback = {}) {
     beat: videoBeat, // Legacy alias retained for old persisted plans.
     imageBeat,
     videoBeat,
+    shotType,
+    cameraDirection,
     durationSeconds: Number(duration.toFixed(2)),
     takesPerAngle: Math.round(takes),
     angles: parsedAngles.length > 0 ? parsedAngles : (fallbackAngles.length > 0 ? fallbackAngles : ['Medium shot']),
@@ -735,6 +756,7 @@ function GenerateWorkspace() {
   const [yoloCreationType, setYoloCreationType] = useState(persistedState?.yoloCreationType || 'ad')
   const [directorSubTab, setDirectorSubTab] = useState('setup')
   const [yoloScript, setYoloScript] = useState(persistedState?.yoloScript || '')
+  const [directorFormatExpanded, setDirectorFormatExpanded] = useState(false)
   const [yoloStyleNotes, setYoloStyleNotes] = useState(persistedState?.yoloStyleNotes || '')
   const [yoloAdProductAssetId, setYoloAdProductAssetId] = useState(persistedState?.yoloAdProductAssetId ?? null)
   const [yoloAdModelAssetId, setYoloAdModelAssetId] = useState(persistedState?.yoloAdModelAssetId ?? null)
@@ -1872,16 +1894,16 @@ function GenerateWorkspace() {
       doc.setTextColor(0, 0, 0)
       doc.setFont('helvetica', 'bold')
       doc.setFontSize(14)
+      const projectName = String(currentProject?.name || '').trim()
       doc.text(
-        `Keyframes ${batch.modeLabel || 'Ad'}`,
+        projectName || `Storyboard ${batch.modeLabel || 'Ad'}`,
         margin,
         margin + 14
       )
       doc.setFont('helvetica', 'normal')
       doc.setFontSize(9)
-      const projectName = String(currentProject?.name || '').trim()
       const subtitle = projectName
-        ? `Project: ${projectName}`
+        ? `${batch.modeLabel || 'Ad'} storyboard`
         : `Generated ${new Date(batch.createdAt || Date.now()).toLocaleString()}`
       doc.text(subtitle, margin, margin + 28)
       doc.text(`Page ${pageNumber}`, margin, margin + 40)
@@ -1955,17 +1977,11 @@ function GenerateWorkspace() {
         doc.text('Image unavailable', imageX + 8, imageY + 14)
       }
 
-      const labelParts = [
-        `#${index + 1}`,
-        item?.sceneId || '',
-        item?.shotId || '',
-        item?.angle || '',
-        item?.take ? `take ${item.take}` : '',
-      ].filter(Boolean)
+      const labelText = String(item?.shotId || item?.sceneId || '').trim().toLowerCase() || `shot_${index + 1}`
       doc.setTextColor(220, 220, 220)
       doc.setFont('helvetica', 'bold')
       doc.setFontSize(8)
-      doc.text(labelParts.join(' - '), cardX + 4, cardY + imageHeight + 11)
+      doc.text(labelText, cardX + 4, cardY + imageHeight + 11)
 
       const promptText = String(item?.prompt || '').replace(/\s+/g, ' ').trim() || '(no prompt saved)'
       doc.setFont('helvetica', 'normal')
@@ -2017,7 +2033,7 @@ function GenerateWorkspace() {
 
   const finalizeStoryboardPdfBatchForJob = useCallback(async () => {
     // Automatic keyframe PDF export is disabled.
-    // Users now explicitly generate PDFs with the "Create Keyframe PDF" button.
+    // Users now explicitly generate PDFs with the "Create Storyboard PDF" button.
   }, [])
 
   const enqueueJob = useCallback((job) => {
@@ -2330,11 +2346,21 @@ function GenerateWorkspace() {
     updateYoloShot(sceneId, shotId, (shot) => ({ ...shot, videoBeat: value, beat: value }))
   }, [updateYoloShot])
 
+  const handleYoloShotCameraDirectionChange = useCallback((sceneId, shotId, value) => {
+    updateYoloShot(sceneId, shotId, (shot) => ({ ...shot, cameraDirection: value }))
+  }, [updateYoloShot])
+
   const handleYoloShotCameraPresetChange = useCallback((sceneId, shotId, presetId) => {
     updateYoloShot(sceneId, shotId, (shot) => {
       const targetCount = Math.max(1, Number(shot?.angles?.length) || Number(yoloActiveAnglesPerShot) || 1)
       if (presetId === 'auto') {
-        return { ...shot, cameraPresetId: 'auto' }
+        return {
+          ...shot,
+          cameraPresetId: 'auto',
+          angles: String(shot?.shotType || '').trim()
+            ? [String(shot.shotType).trim()]
+            : shot.angles,
+        }
       }
       return {
         ...shot,
@@ -4211,14 +4237,53 @@ function GenerateWorkspace() {
                     {directorSubTab === 'plan-script' && (
                       <>
                         <div>
-                          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Ad Script</label>
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Ad Script</label>
+                            <button
+                              type="button"
+                              onClick={() => { void copyTextToClipboard(DIRECTOR_SCRIPT_TEMPLATE) }}
+                              className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
+                            >
+                              Copy Template
+                            </button>
+                          </div>
                           <textarea
                             value={yoloScript}
                             onChange={e => setYoloScript(e.target.value)}
                             rows={10}
                             className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y"
-                            placeholder="Paste your full ad script here. Separate scenes with blank lines, or use Scene 1 / Scene 2 headings."
+                            placeholder="Paste your director script here. Recommended: Scene 1 + Scene context + Shot 1 + Shot type + Keyframe prompt + Motion prompt + Camera + Duration."
                           />
+                          <div className="mt-2 rounded-lg border border-sf-dark-700 bg-sf-dark-800/45 p-3">
+                            <button
+                              type="button"
+                              onClick={() => setDirectorFormatExpanded((prev) => !prev)}
+                              className="flex w-full items-center justify-between gap-2 text-left"
+                            >
+                              <span className="text-[10px] uppercase tracking-wider text-yellow-400">Recommended Director Format</span>
+                              {directorFormatExpanded ? (
+                                <ChevronDown className="h-3.5 w-3.5 text-sf-text-muted" />
+                              ) : (
+                                <ChevronRight className="h-3.5 w-3.5 text-sf-text-muted" />
+                              )}
+                            </button>
+                            {directorFormatExpanded && (
+                              <>
+                                <div className="mt-1 text-[10px] text-sf-text-muted">
+                                  Ask your AI to return this exact structure. Director Mode will use explicit shots, prompts, camera notes, and duration when they are present.
+                                </div>
+                                <textarea
+                                  readOnly
+                                  value={DIRECTOR_SCRIPT_TEMPLATE}
+                                  rows={14}
+                                  spellCheck={false}
+                                  onFocus={(event) => event.target.select()}
+                                  onClick={(event) => event.target.select()}
+                                  className="mt-2 w-full resize-y overflow-auto rounded border border-sf-dark-700 bg-sf-dark-900/70 p-2 font-mono text-[10px] leading-5 text-sf-text-secondary focus:outline-none focus:border-sf-accent"
+                                />
+                              </>
+                            )}
+                          </div>
                         </div>
 
                         <div>
@@ -4861,7 +4926,7 @@ function GenerateWorkspace() {
                       <div>Keyframes ready: {yoloStoryboardReadyCount} / {yoloQueueVariants.length}</div>
                     </div>
                     <div className="text-[10px] text-yellow-300/90 leading-relaxed">
-                      Tip: Scene text is reference-only. Feel free to refine Image Action, Video Action, camera preset, duration, and takes before creating keyframes or videos.
+                      Tip: Scene text is reference-only. Refine the keyframe prompt, motion prompt, camera direction, camera preset, duration, and takes before creating keyframes or videos.
                     </div>
 
                   <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4">
@@ -4908,7 +4973,7 @@ function GenerateWorkspace() {
                           <div>
                             <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Scene</label>
                             <div className="mt-1 w-full bg-sf-dark-900 border border-sf-dark-700 rounded px-2 py-1 text-xs text-sf-text-secondary">
-                              {selectedYoloScene.rawText || selectedYoloScene.summary || 'Scene details'}
+                              {selectedYoloScene.contextText || selectedYoloScene.summary || selectedYoloScene.rawText || 'Scene details'}
                             </div>
                           </div>
 
@@ -4960,7 +5025,7 @@ function GenerateWorkspace() {
 
                                 <div className="space-y-2">
                                   <div>
-                                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Image Action</label>
+                                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Keyframe Prompt</label>
                                     <input
                                       type="text"
                                       value={shot.imageBeat || shot.beat || ''}
@@ -4969,12 +5034,22 @@ function GenerateWorkspace() {
                                     />
                                   </div>
                                   <div>
-                                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Video Action</label>
+                                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Motion Prompt</label>
                                     <input
                                       type="text"
                                       value={shot.videoBeat || shot.beat || ''}
                                       onChange={e => handleYoloShotVideoBeatChange(selectedYoloScene.id, shot.id, e.target.value)}
                                       className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Camera Direction</label>
+                                    <input
+                                      type="text"
+                                      value={shot.cameraDirection || ''}
+                                      onChange={e => handleYoloShotCameraDirectionChange(selectedYoloScene.id, shot.id, e.target.value)}
+                                      className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                                      placeholder="e.g. subtle push-in, locked close-up, gentle backward tracking"
                                     />
                                   </div>
                                 </div>
@@ -5065,7 +5140,7 @@ function GenerateWorkspace() {
                               title={yoloStoryboardAssetMap.size === 0 ? 'Generate keyframe images first' : 'Create a PDF from the latest keyframe images'}
                             >
                               {creatingStoryboardPdf && <Loader2 className="w-3 h-3 animate-spin" />}
-                              {creatingStoryboardPdf ? 'Creating PDF...' : 'Create Keyframe PDF'}
+                              {creatingStoryboardPdf ? 'Creating PDF...' : 'Create Storyboard PDF'}
                             </button>
                             <button
                               type="button"

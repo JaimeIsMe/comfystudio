@@ -288,6 +288,7 @@ function Timeline({ onOpenAudioGenerate }) {
   const [dragClip, setDragClip] = useState(null)
   const [dropTarget, setDropTarget] = useState(null)
   const [draggedAssetId, setDraggedAssetId] = useState(null)
+  const [draggedAssetIds, setDraggedAssetIds] = useState([])
   const [assetDropPreview, setAssetDropPreview] = useState(null) // { assetId, trackId, startTime, duration, assetType, name, willCreateTrack }
   const dragOverRafRef = useRef(null)
   const pendingAssetDragOverRef = useRef(null)
@@ -1107,13 +1108,18 @@ function Timeline({ onOpenAudioGenerate }) {
   useEffect(() => {
     const handleAssetDragStart = (e) => {
       const nextAssetId = e?.detail?.assetId
+      const nextAssetIds = Array.isArray(e?.detail?.assetIds)
+        ? e.detail.assetIds.filter((id) => typeof id === 'string' && id)
+        : []
       if (typeof nextAssetId === 'string' && nextAssetId) {
         setDraggedAssetId(nextAssetId)
       }
+      setDraggedAssetIds(nextAssetIds)
     }
     const handleAssetDragEnd = () => {
       cancelPendingAssetDragOver()
       setDraggedAssetId(null)
+      setDraggedAssetIds([])
       setDropTarget(null)
       setAssetDropPreview(null)
       clearActiveSnap()
@@ -1130,6 +1136,7 @@ function Timeline({ onOpenAudioGenerate }) {
     const clearDropFeedback = () => {
       cancelPendingAssetDragOver()
       setDraggedAssetId(null)
+      setDraggedAssetIds([])
       setDropTarget(null)
       setAssetDropPreview(null)
       clearActiveSnap()
@@ -1195,22 +1202,31 @@ function Timeline({ onOpenAudioGenerate }) {
     }
   }
 
-  const getDraggedAssetId = (dataTransfer) => {
-    if (draggedAssetId) return draggedAssetId
-    if (!dataTransfer) return draggedAssetId
+  const getDraggedAssetIds = (dataTransfer) => {
+    if (Array.isArray(draggedAssetIds) && draggedAssetIds.length > 0) return draggedAssetIds
+    if (!dataTransfer) return draggedAssetIds
     const directId = dataTransfer.getData('assetId')
-    if (directId) return directId
+    const customPayload = dataTransfer.getData('application/x-comfystudio-asset-ids')
     const plainText = dataTransfer.getData('text/plain')
-    if (!plainText) return draggedAssetId
+    const raw = customPayload || plainText
+    if (!raw) {
+      return directId ? [directId] : draggedAssetIds
+    }
     try {
-      const parsed = JSON.parse(plainText)
+      const parsed = JSON.parse(raw)
       if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
-        return parsed[0]
+        return parsed.filter((id) => typeof id === 'string' && id)
       }
     } catch (_) {
-      if (plainText.startsWith('asset-')) return plainText
+      if (directId) return [directId]
+      if (raw.startsWith('asset-')) return [raw]
     }
-    return draggedAssetId
+    return directId ? [directId] : draggedAssetIds
+  }
+
+  const getDraggedAssetId = (dataTransfer) => {
+    const assetIds = getDraggedAssetIds(dataTransfer)
+    return Array.isArray(assetIds) && assetIds.length > 0 ? assetIds[0] : null
   }
 
   const getDropStartTimeFromClientX = (clientX, laneLeft) => {
@@ -1450,28 +1466,34 @@ function Timeline({ onOpenAudioGenerate }) {
     setAssetDropPreview(null)
     clearActiveSnap()
     
-    const assetId = getDraggedAssetId(e.dataTransfer)
-    if (!assetId) return
-    
-    const asset = assetsById.get(assetId)
-    if (!asset) return
-    
-    const rawStartTime = getDropStartTime(e)
-    const { targetTrackId } = resolveDropTrackForAsset(asset, trackId, { allowCreateTrack: true })
+    const assetIds = getDraggedAssetIds(e.dataTransfer)
+    if (!Array.isArray(assetIds) || assetIds.length === 0) return
 
-    // Check if asset type matches target track type
-    const latestTracks = useTimelineStore.getState().tracks
-    const track = latestTracks.find(t => t.id === targetTrackId) || tracks.find(t => t.id === targetTrackId)
-    if (!track) return
-    
-    if (canDropAssetOnTrack(asset, track)) {
-      const duration = getDropPreviewDuration(asset, rawStartTime)
-      const { startTime } = getSnappedDropStartTime(rawStartTime, duration)
-      addClip(targetTrackId, asset, startTime, timelineFps)
-      setPreviewMode('timeline')
-      if (assetIsPlaying) {
-        setAssetIsPlaying(false)
-      }
+    const droppedAssets = assetIds
+      .map((assetId) => assetsById.get(assetId))
+      .filter(Boolean)
+    if (droppedAssets.length === 0) return
+
+    let nextStartTime = getDropStartTime(e)
+    let insertedAny = false
+
+    for (const asset of droppedAssets) {
+      const { targetTrackId } = resolveDropTrackForAsset(asset, trackId, { allowCreateTrack: true })
+
+      // Check if asset type matches target track type
+      const latestTracks = useTimelineStore.getState().tracks
+      const track = latestTracks.find(t => t.id === targetTrackId) || tracks.find(t => t.id === targetTrackId)
+      if (!track || !canDropAssetOnTrack(asset, track)) continue
+
+      const duration = getDropPreviewDuration(asset, nextStartTime)
+      const { startTime } = insertedAny
+        ? { startTime: nextStartTime }
+        : getSnappedDropStartTime(nextStartTime, duration)
+      const insertedClip = addClip(targetTrackId, asset, startTime, timelineFps)
+      if (!insertedClip) continue
+
+      insertedAny = true
+      nextStartTime = insertedClip.startTime + insertedClip.duration
 
       // If this is a video asset with an audio stream enabled, also add an audio clip.
       let shouldAddAudioClip = false
@@ -1490,8 +1512,15 @@ function Timeline({ onOpenAudioGenerate }) {
         const audioTrack = latestTracksAfterDrop.find(t => t.type === 'audio' && !t.locked)
         if (audioTrack) {
           const audioAsset = { ...asset, type: 'audio' }
-          addClip(audioTrack.id, audioAsset, startTime, timelineFps)
+          addClip(audioTrack.id, audioAsset, insertedClip.startTime, timelineFps)
         }
+      }
+    }
+
+    if (insertedAny) {
+      setPreviewMode('timeline')
+      if (assetIsPlaying) {
+        setAssetIsPlaying(false)
       }
     }
   }

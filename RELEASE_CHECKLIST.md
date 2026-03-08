@@ -36,6 +36,8 @@ Update this file as process changes so future chats and future contributors can 
 - [ ] Confirm no local settings files are tracked (keys should remain local only).
 - [ ] Confirm no auth-bearing URLs were committed (query params with keys/tokens).
 - [ ] Confirm workflow JSON files do not include real credentials.
+- [ ] Confirm no user projects, exported media, or local test assets are bundled into the repo or release artifacts.
+- [ ] Confirm no copyrighted brand/reference images were accidentally left in workflow JSON defaults, docs screenshots, or example assets.
 
 Notes:
 - Comfy API key and Pexels key are designed to be stored locally (Electron user data / localStorage), not in git.
@@ -88,6 +90,7 @@ npm run starter-pack:build
 ### Editor and Timeline
 
 - [ ] Drag asset to timeline and scrub/hover without major CPU spikes.
+- [ ] Drag multiple selected assets from Assets panel to timeline and confirm all selected clips are inserted in sequence.
 - [ ] Video without audio does not auto-create audio clip.
 - [ ] Video with audio does create audio clip.
 - [ ] Preview transform controls work (move, rotate, scale) and commit correctly.
@@ -99,6 +102,10 @@ npm run starter-pack:build
 - [ ] Director Mode beta queueing also blocks on missing dependencies and shows details.
 - [ ] "Open in ComfyUI" behavior is clear to user (tab switch + workflow guidance).
 - [ ] Generate docs/help buttons open the correct page for current mode/workflow.
+- [ ] Single workflow cloud estimate renders credits + USD and only appears for cloud workflows.
+- [ ] Director Mode cloud estimate renders credits + USD for selected workflows and handles dynamic pricing copy cleanly.
+- [ ] Structured Director script format populates scene context, keyframe prompt, motion prompt, camera direction, and duration after `Build Plan`.
+- [ ] `Create Storyboard PDF` export works and uses project title + simplified shot IDs.
 
 ### Effects and Media
 
@@ -138,14 +145,26 @@ npm run electron:build:linux
 - [ ] Install/run artifact on a clean machine or VM.
 - [ ] Verify first-launch flow and basic generation path.
 
+### Cross-Platform Dev Startup Gate (Open Source Critical)
+
+- [ ] Validate fresh startup on Windows (clean clone or clean unzip): `npm install` then `npm run electron:dev`.
+- [ ] Validate fresh startup on macOS (clean clone or clean unzip): `npm install` then `npm run electron:dev`.
+- [ ] Confirm CSS toolchain config loads on both platforms (no PostCSS/Tailwind config parse errors such as `Unexpected token 'export'`).
+- [ ] Confirm Generate tab and Director flow open without startup errors on both platforms.
+- [ ] Record tested Node/npm versions for Windows and macOS in release notes.
+- [ ] Linux validation remains optional until explicitly in release scope.
+
 ---
 
 ## 7) Documentation and Release Notes
 
 - [ ] Update root `README.md` if behavior/workflow requirements changed.
+- [ ] Keep setup docs explicit for both macOS and Windows quick-start (`npm install`, `npm run electron:dev`).
 - [ ] Ensure hardware tier guidance still matches actual workflows.
 - [ ] Ensure starter pack docs are current (`docs/workflow-starter-pack/README.md`).
 - [ ] Publish/update a single user manual entry point (quick start + deep dive).
+- [ ] Document the Director Mode structured script template with at least one copy/paste example.
+- [ ] Document cloud estimate behavior: credits, approximate USD conversion, and when dynamic pricing labels appear.
 - [ ] Write release notes with:
   - major features/fixes
   - known limitations
@@ -176,6 +195,9 @@ npm run electron:build:linux
 - [ ] Confirm no private/internal-only files are tracked.
 - [ ] Confirm dependency/licensing obligations are documented.
 - [ ] Confirm packaged binaries and large assets are expected and intentional.
+- [ ] Fill out public repo metadata (`package.json` author/repository/homepage/bugs as applicable).
+- [ ] Add community files appropriate for public contributions (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md` or equivalent support policy).
+- [ ] Confirm screenshots/demo media intended for the repo are safe to publish publicly.
 
 ---
 
