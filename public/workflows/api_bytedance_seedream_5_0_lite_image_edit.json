@@ -1,0 +1,71 @@
+{
+  "25": {
+    "inputs": {
+      "model": "seedream 5.0 lite",
+      "prompt": "A futuristic transit terminal glows with blue and coral neon as the model steps through sliding glass doors.",
+      "size_preset": "2560x1440 (16:9)",
+      "width": 2048,
+      "height": 2048,
+      "sequential_image_generation": "disabled",
+      "max_images": 1,
+      "seed": 1571474427,
+      "watermark": false,
+      "fail_on_partial": true,
+      "image": [
+        "31",
+        0
+      ]
+    },
+    "class_type": "ByteDanceSeedreamNode",
+    "_meta": {
+      "title": "ByteDance Seedream 4.5"
+    }
+  },
+  "26": {
+    "inputs": {
+      "filename_prefix": "Seedream5.0_lite",
+      "images": [
+        "25",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "29": {
+    "inputs": {
+      "image": "teenager.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "31": {
+    "inputs": {
+      "images.image0": [
+        "29",
+        0
+      ],
+      "images.image1": [
+        "32",
+        0
+      ]
+    },
+    "class_type": "BatchImagesNode",
+    "_meta": {
+      "title": "Batch Images"
+    }
+  },
+  "32": {
+    "inputs": {
+      "image": "WMNS+AIR+JORDAN+1+LOW.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  }
+}

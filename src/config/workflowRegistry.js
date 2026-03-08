@@ -13,11 +13,15 @@ export const WORKFLOW_CATEGORIES = {
 export const BUILTIN_WORKFLOWS = [
   { id: 'wan22-i2v', label: 'Image to Video (WAN 2.2)', category: 'video', needsImage: true, description: 'Animate an image into video', file: 'video_wan2_2_14B_i2v.json' },
   { id: 'kling-o3-i2v', label: 'Image to Video (Kling O3 Omni)', category: 'video', needsImage: true, description: 'Premium image-to-video with Kling 3.0 Omni', file: 'api_kling_o3_i2v.json' },
+  { id: 'grok-video-i2v', label: 'Image to Video (Grok Imagine Video)', category: 'video', needsImage: true, description: 'Cloud image-to-video with Grok Imagine Video Beta', file: 'api_grok_video.json' },
+  { id: 'vidu-q2-i2v', label: 'Image to Video (Vidu Q2)', category: 'video', needsImage: true, description: 'Cloud image-to-video with Vidu Q2 Pro Fast', file: 'api_vidu_q2_i2v.json' },
   { id: 'multi-angles', label: 'Multiple Angles (Characters)', category: 'image', needsImage: true, description: 'Generate 8 camera angles from one character image', file: '1_click_multiple_angles.json' },
   { id: 'multi-angles-scene', label: 'Multiple Angles (Scenes)', category: 'image', needsImage: true, description: 'Generate 8 camera angles from one scene image', file: '1_click_multiple_scene_angles-v1.0.json' },
   { id: 'image-edit', label: 'Image Edit', category: 'image', needsImage: true, description: 'Edit image with text prompt', file: 'image_qwen_image_edit_2509.json' },
   { id: 'z-image-turbo', label: 'Text to Image (Z Image Turbo)', category: 'image', needsImage: false, description: 'Generate image from text prompt using Z Image Turbo', file: 'image_z_image_turbo.json' },
   { id: 'nano-banana-2', label: 'Text to Image (Nano Banana 2)', category: 'image', needsImage: false, description: 'Premium text-to-image with Nano Banana 2', file: 'api_google_nano_banana2_image_edit.json' },
+  { id: 'grok-text-to-image', label: 'Text to Image (Grok Imagine)', category: 'image', needsImage: false, description: 'Cloud text-to-image using Grok Imagine Image Beta', file: 'api_grok_text_to_image.json' },
+  { id: 'seedream-5-lite-image-edit', label: 'Image Edit (Seedream 5.0 Lite)', category: 'image', needsImage: true, description: 'Cloud image edit with ByteDance Seedream 5.0 Lite', file: 'api_bytedance_seedream_5_0_lite_image_edit.json' },
   { id: 'music-gen', label: 'Music Generation', category: 'audio', needsImage: false, description: 'Generate music from tags and lyrics', file: 'music_generation.json' },
 ]
 
@@ -25,12 +29,16 @@ export const BUILTIN_WORKFLOWS = [
 export const BUILTIN_WORKFLOW_PATHS = {
   'wan22-i2v': '/workflows/video_wan2_2_14B_i2v.json',
   'kling-o3-i2v': '/workflows/api_kling_o3_i2v.json',
+  'grok-video-i2v': '/workflows/api_grok_video.json',
+  'vidu-q2-i2v': '/workflows/api_vidu_q2_i2v.json',
   'multi-angles': '/workflows/1_click_multiple_angles.json',
   'multi-angles-scene': '/workflows/1_click_multiple_scene_angles-v1.0.json',
   'image-edit': '/workflows/image_qwen_image_edit_2509.json',
   'image-edit-model-product': '/workflows/image_qwen_image_edit_2509_Model_and_Product.json',
   'z-image-turbo': '/workflows/image_z_image_turbo.json',
   'nano-banana-2': '/workflows/api_google_nano_banana2_image_edit.json',
+  'grok-text-to-image': '/workflows/api_grok_text_to_image.json',
+  'seedream-5-lite-image-edit': '/workflows/api_bytedance_seedream_5_0_lite_image_edit.json',
   'nano-banana-pro': '/workflows/api_google_nano_banana2_image_edit.json', // legacy id alias
   'music-gen': '/workflows/music_generation.json',
 }

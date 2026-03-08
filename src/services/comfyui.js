@@ -12,6 +12,63 @@ import {
 const COMFY_ORG_API_KEY_SETTING_KEY = 'comfyApiKeyComfyOrg';
 const COMFY_ORG_API_KEY_LOCAL_KEY = 'comfystudio-comfy-api-key';
 
+function parseNumericLike(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const normalized = value.replace(/,/g, '').trim()
+    if (!normalized) return null
+    const parsed = Number(normalized)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return null
+}
+
+function extractCreditBalanceFromPayload(payload) {
+  if (!payload || typeof payload !== 'object') return null
+
+  const preferredExactKeys = new Set([
+    'credits',
+    'credit_balance',
+    'creditbalance',
+    'remaining_credits',
+    'remainingcredits',
+    'available_credits',
+    'availablecredits',
+  ])
+
+  const fallbackKeyPattern = /(credit|balance)/i
+  const queue = [payload]
+  const visited = new Set()
+
+  while (queue.length > 0) {
+    const current = queue.shift()
+    if (!current || typeof current !== 'object') continue
+    if (visited.has(current)) continue
+    visited.add(current)
+
+    for (const [rawKey, rawValue] of Object.entries(current)) {
+      const key = String(rawKey || '').trim()
+      const normalizedKey = key.toLowerCase().replace(/[\s-]/g, '')
+
+      if (preferredExactKeys.has(normalizedKey)) {
+        const parsed = parseNumericLike(rawValue)
+        if (parsed !== null) return parsed
+      }
+
+      if (fallbackKeyPattern.test(key)) {
+        const parsed = parseNumericLike(rawValue)
+        if (parsed !== null) return parsed
+      }
+
+      if (rawValue && typeof rawValue === 'object') {
+        queue.push(rawValue)
+      }
+    }
+  }
+
+  return null
+}
+
 class ComfyUIService {
   constructor() {
     this.ws = null;
@@ -266,6 +323,104 @@ class ComfyUIService {
       // Ignore storage access errors.
     }
     return ''
+  }
+
+  /**
+   * Best-effort credit balance lookup for Comfy partner credits.
+   * Returns status + optional numeric credits when exposed by backend/API.
+   */
+  async getComfyOrgCreditBalance() {
+    const apiKey = await this.getComfyOrgApiKey()
+    if (!apiKey) {
+      return {
+        status: 'missing-key',
+        credits: null,
+        source: '',
+        error: 'Comfy Partner API key not configured.',
+        payload: null,
+      }
+    }
+
+    const localBase = this.getHttpBase()
+    const candidateUrls = [
+      `${localBase}/api/user`,
+      `${localBase}/api/account`,
+      'https://api.comfy.org/api/user',
+    ]
+
+    const failures = []
+    for (const url of candidateUrls) {
+      try {
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 6000)
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'X-API-Key': apiKey,
+          },
+          signal: controller.signal,
+        })
+        clearTimeout(timeout)
+
+        if (!response.ok) {
+          failures.push({ url, status: response.status, message: `${response.status}` })
+          continue
+        }
+
+        const payload = await response.json()
+        const credits = extractCreditBalanceFromPayload(payload)
+        return {
+          status: credits === null ? 'available-no-credit-field' : 'ok',
+          credits,
+          source: url,
+          error: '',
+          payload,
+        }
+      } catch (error) {
+        failures.push({
+          url,
+          status: null,
+          message: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+
+    const statusCodes = failures
+      .map((failure) => Number(failure?.status))
+      .filter((code) => Number.isFinite(code))
+    const hasAuthFailure = statusCodes.some((code) => code === 401 || code === 403)
+    const hasNotSupported = statusCodes.length > 0 && statusCodes.every((code) => code === 404 || code === 405)
+
+    if (hasAuthFailure) {
+      return {
+        status: 'auth-failed',
+        credits: null,
+        source: '',
+        error: 'Credit endpoints rejected the current API key.',
+        payload: null,
+      }
+    }
+
+    if (hasNotSupported) {
+      return {
+        status: 'not-supported',
+        credits: null,
+        source: '',
+        error: 'Credit balance endpoint is not exposed by this ComfyUI server.',
+        payload: null,
+      }
+    }
+
+    const firstFailure = failures[0] || null
+    return {
+      status: 'unavailable',
+      credits: null,
+      source: '',
+      error: firstFailure?.message || 'No supported credit endpoint responded.',
+      payload: null,
+    }
   }
 
   /**
@@ -846,6 +1001,146 @@ export function modifyZImageTurboWorkflow(workflow, options = {}) {
 }
 
 /**
+ * Workflow modifier for Grok text-to-image.
+ * Expects GrokImageNode + SaveImage in the workflow JSON.
+ */
+export function modifyGrokTextToImageWorkflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    seed = Math.floor(Math.random() * 1000000000000),
+    model = 'grok-imagine-image-beta',
+    width = 1024,
+    height = 1024,
+    filenamePrefix = 'image/grok_text_to_image',
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const safeAspectRatio = resolveClosestAspectRatio(width, height)
+  const longestEdge = Math.max(Number(width) || 0, Number(height) || 0)
+  const safeResolution = longestEdge >= 1800 ? '2K' : '1K'
+
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+
+    if (node.class_type === 'GrokImageNode') {
+      if ('model' in node.inputs) node.inputs.model = model
+      if ('prompt' in node.inputs) node.inputs.prompt = prompt
+      if ('seed' in node.inputs) node.inputs.seed = seed
+      if ('aspect_ratio' in node.inputs) node.inputs.aspect_ratio = safeAspectRatio
+      if ('resolution' in node.inputs) node.inputs.resolution = safeResolution
+      if ('number_of_images' in node.inputs) node.inputs.number_of_images = 1
+    }
+
+    if (node.class_type === 'SaveImage' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'image/grok_text_to_image'
+    }
+  }
+
+  return modified
+}
+
+/**
+ * Workflow modifier for ByteDance Seedream 5.0 Lite image edit.
+ * Expects ByteDanceSeedreamNode + SaveImage, with optional LoadImage/BatchImagesNode refs.
+ * referenceImages order: [productImage?, modelImage?] from Director Mode.
+ */
+export function modifySeedream5LiteImageEditWorkflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    seed = Math.floor(Math.random() * 1000000000000),
+    inputImage = '',
+    width = 2048,
+    height = 2048,
+    model = 'seedream 5.0 lite',
+    filenamePrefix = 'image/seedream_5_lite',
+    referenceImages = [],
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const numericWidth = Math.max(256, Math.round(Number(width) || 0))
+  const numericHeight = Math.max(256, Math.round(Number(height) || 0))
+  const validReferences = (Array.isArray(referenceImages) ? referenceImages : [])
+    .map((name) => String(name || '').trim())
+    .filter(Boolean)
+    .slice(0, 2)
+
+  // Director Mode passes [product, model]. Prefer model first when both exist.
+  const productReference = validReferences[0] || ''
+  const modelReference = validReferences[1] || ''
+  const orderedReferenceImages = [modelReference, productReference].filter(Boolean)
+  const selectedReferenceImages = orderedReferenceImages.length > 0
+    ? orderedReferenceImages
+    : (inputImage ? [String(inputImage).trim()] : [])
+
+  const getUniqueNodeId = (baseId) => {
+    let nextId = baseId
+    let suffix = 1
+    while (modified[nextId]) {
+      nextId = `${baseId}_${suffix}`
+      suffix += 1
+    }
+    return nextId
+  }
+
+  let seedreamNode = null
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+
+    if (node.class_type === 'ByteDanceSeedreamNode') {
+      seedreamNode = node
+      if ('model' in node.inputs) node.inputs.model = model
+      if ('prompt' in node.inputs) node.inputs.prompt = prompt
+      if ('seed' in node.inputs) node.inputs.seed = seed
+      if ('width' in node.inputs && Number.isFinite(numericWidth)) node.inputs.width = numericWidth
+      if ('height' in node.inputs && Number.isFinite(numericHeight)) node.inputs.height = numericHeight
+      if ('max_images' in node.inputs) node.inputs.max_images = 1
+      if ('sequential_image_generation' in node.inputs) node.inputs.sequential_image_generation = 'disabled'
+    }
+
+    if (node.class_type === 'SaveImage' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'image/seedream_5_lite'
+    }
+  }
+
+  if (!seedreamNode) return modified
+
+  if (selectedReferenceImages.length === 0) {
+    if (Object.prototype.hasOwnProperty.call(seedreamNode.inputs, 'image')) {
+      delete seedreamNode.inputs.image
+    }
+    return modified
+  }
+
+  const loadNodeIds = selectedReferenceImages.map((filename, index) => {
+    const loadNodeId = getUniqueNodeId(`seedream_ref_${index + 1}`)
+    modified[loadNodeId] = {
+      class_type: 'LoadImage',
+      inputs: { image: filename },
+      _meta: { title: `Load Image (Seedream ref ${index + 1})` },
+    }
+    return loadNodeId
+  })
+
+  if (loadNodeIds.length === 1) {
+    seedreamNode.inputs.image = [loadNodeIds[0], 0]
+    return modified
+  }
+
+  const batchNodeId = getUniqueNodeId('seedream_ref_batch')
+  modified[batchNodeId] = {
+    class_type: 'BatchImagesNode',
+    inputs: {
+      'images.image0': [loadNodeIds[0], 0],
+      'images.image1': [loadNodeIds[1], 0],
+    },
+    _meta: { title: 'Batch Images' },
+  }
+  seedreamNode.inputs.image = [batchNodeId, 0]
+
+  return modified
+}
+
+/**
  * Workflow modifier for Nano Banana 2.
  * Supports both GeminiNanoBanana2 (new) and GeminiImage2Node (legacy) nodes.
  */
@@ -971,6 +1266,102 @@ function resolveClosestAspectRatio(width, height) {
   }
 
   return best.label
+}
+
+/**
+ * Workflow modifier for Grok Imagine Video image-to-video.
+ * Expects LoadImage + GrokVideoNode + SaveVideo in the workflow JSON.
+ */
+export function modifyGrokVideoI2VWorkflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    inputImage = '',
+    width = 1280,
+    height = 720,
+    duration = 5,
+    seed = Math.floor(Math.random() * 1000000000000),
+    model = 'grok-imagine-video-beta',
+    filenamePrefix = 'video/grok_video_i2v',
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const parsedDuration = Number(duration)
+  const safeDuration = Number.isFinite(parsedDuration) && parsedDuration > 0
+    ? Math.max(1, Math.round(parsedDuration))
+    : 5
+  const aspectRatio = resolveClosestAspectRatio(width, height)
+  const resolution = Number(height) >= 1080 ? '1080p' : '720p'
+
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+
+    if (node.class_type === 'LoadImage' && 'image' in node.inputs) {
+      node.inputs.image = inputImage
+    }
+
+    if (node.class_type === 'GrokVideoNode') {
+      if ('model' in node.inputs) node.inputs.model = model
+      if ('prompt' in node.inputs) node.inputs.prompt = prompt
+      if ('resolution' in node.inputs) node.inputs.resolution = resolution
+      if ('aspect_ratio' in node.inputs) node.inputs.aspect_ratio = aspectRatio
+      if ('duration' in node.inputs) node.inputs.duration = safeDuration
+      if ('seed' in node.inputs) node.inputs.seed = seed
+    }
+
+    if (node.class_type === 'SaveVideo' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'video/grok_video_i2v'
+    }
+  }
+
+  return modified
+}
+
+/**
+ * Workflow modifier for Vidu Q2 image-to-video.
+ * Expects LoadImage + Vidu2ImageToVideoNode + SaveVideo in the workflow JSON.
+ */
+export function modifyViduQ2I2VWorkflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    inputImage = '',
+    width = 1280,
+    height = 720,
+    duration = 5,
+    seed = Math.floor(Math.random() * 1000000000000),
+    model = 'viduq2-pro-fast',
+    movementAmplitude = 'auto',
+    filenamePrefix = 'video/vidu_q2_i2v',
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const parsedDuration = Number(duration)
+  const safeDuration = Number.isFinite(parsedDuration) && parsedDuration > 0
+    ? Math.max(1, Math.round(parsedDuration))
+    : 5
+  const resolution = Number(height) >= 1080 ? '1080p' : '720p'
+
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+
+    if (node.class_type === 'LoadImage' && 'image' in node.inputs) {
+      node.inputs.image = inputImage
+    }
+
+    if (node.class_type === 'Vidu2ImageToVideoNode') {
+      if ('model' in node.inputs) node.inputs.model = model
+      if ('prompt' in node.inputs) node.inputs.prompt = prompt
+      if ('duration' in node.inputs) node.inputs.duration = safeDuration
+      if ('seed' in node.inputs) node.inputs.seed = seed
+      if ('resolution' in node.inputs) node.inputs.resolution = resolution
+      if ('movement_amplitude' in node.inputs) node.inputs.movement_amplitude = movementAmplitude
+    }
+
+    if (node.class_type === 'SaveVideo' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'video/vidu_q2_i2v'
+    }
+  }
+
+  return modified
 }
 
 /**

@@ -1,0 +1,44 @@
+{
+  "1": {
+    "inputs": {
+      "model": "grok-imagine-video-beta",
+      "prompt": "Cinematic dolly in on a white sci-fi mech suit against a dark background. The detailed helmet armor mechanically unfolds and retracts, revealing a human face inside. High resolution, intricate mechanical movements, photorealistic.",
+      "resolution": "720p",
+      "aspect_ratio": "auto",
+      "duration": 6,
+      "seed": 880926991,
+      "image": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "GrokVideoNode",
+    "_meta": {
+      "title": "Grok Video"
+    }
+  },
+  "2": {
+    "inputs": {
+      "filename_prefix": "video/Grok",
+      "format": "auto",
+      "codec": "auto",
+      "video": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  },
+  "3": {
+    "inputs": {
+      "image": "sci-fi_mech.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  }
+}

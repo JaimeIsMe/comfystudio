@@ -14,7 +14,7 @@
   },
   "16": {
     "inputs": {
-      "image": "PaulM.jpg"
+      "image": "model_placeholder.jpg"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -43,7 +43,7 @@
   },
   "24": {
     "inputs": {
-      "image": "Redbull_Original_Energydrinkcity.webp"
+      "image": "product_placeholder.jpg"
     },
     "class_type": "LoadImage",
     "_meta": {

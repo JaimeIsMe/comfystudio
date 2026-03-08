@@ -4,6 +4,12 @@
  */
 
 const COMFY_REGISTRY_URL = 'https://registry.comfy.org'
+const NANO_BANANA_2_FALLBACK_ESTIMATED_CREDITS = Object.freeze({
+  // Resolution-dependent partner-node pricing currently spans roughly $0.0696-$0.123 per image.
+  // Converted using Comfy's documented 211 credits = $1 rate.
+  min: 14.6856,
+  max: 25.953,
+})
 
 const QWEN_IMAGE_EDIT_SHARED_MODELS = Object.freeze([
   {
@@ -104,11 +110,61 @@ export const WORKFLOW_DEPENDENCY_PACKS = Object.freeze({
     docsUrl: COMFY_REGISTRY_URL,
   }),
 
+  'grok-video-i2v': Object.freeze({
+    id: 'grok-video-i2v',
+    displayName: 'Grok Imagine Video',
+    requiredNodes: Object.freeze([
+      { classType: 'GrokVideoNode' },
+      { classType: 'SaveVideo' },
+    ]),
+    requiredModels: Object.freeze([]),
+    requiresComfyOrgApiKey: true,
+    docsUrl: COMFY_REGISTRY_URL,
+  }),
+
+  'vidu-q2-i2v': Object.freeze({
+    id: 'vidu-q2-i2v',
+    displayName: 'Vidu Q2 Image-to-Video',
+    requiredNodes: Object.freeze([
+      { classType: 'Vidu2ImageToVideoNode' },
+      { classType: 'SaveVideo' },
+    ]),
+    requiredModels: Object.freeze([]),
+    requiresComfyOrgApiKey: true,
+    docsUrl: COMFY_REGISTRY_URL,
+  }),
+
   'nano-banana-2': Object.freeze({
     id: 'nano-banana-2',
     displayName: 'Nano Banana 2',
     requiredNodes: Object.freeze([
       { classType: 'GeminiNanoBanana2' },
+      { classType: 'SaveImage' },
+    ]),
+    requiredModels: Object.freeze([]),
+    requiresComfyOrgApiKey: true,
+    fallbackEstimatedCredits: NANO_BANANA_2_FALLBACK_ESTIMATED_CREDITS,
+    docsUrl: COMFY_REGISTRY_URL,
+  }),
+
+  'grok-text-to-image': Object.freeze({
+    id: 'grok-text-to-image',
+    displayName: 'Grok Imagine',
+    requiredNodes: Object.freeze([
+      { classType: 'GrokImageNode' },
+      { classType: 'SaveImage' },
+    ]),
+    requiredModels: Object.freeze([]),
+    requiresComfyOrgApiKey: true,
+    docsUrl: COMFY_REGISTRY_URL,
+  }),
+
+  'seedream-5-lite-image-edit': Object.freeze({
+    id: 'seedream-5-lite-image-edit',
+    displayName: 'Seedream 5.0 Lite Image Edit',
+    requiredNodes: Object.freeze([
+      { classType: 'ByteDanceSeedreamNode' },
+      { classType: 'BatchImagesNode' },
       { classType: 'SaveImage' },
     ]),
     requiredModels: Object.freeze([]),

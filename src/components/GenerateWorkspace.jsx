@@ -28,13 +28,16 @@ import {
   SHOT_CATEGORIES,
   VIDEO_DURATION_PRESETS,
   WORKFLOWS,
+  YOLO_AD_PROFILES,
+  YOLO_AD_PROFILE_RUNTIME_OPTIONS,
   YOLO_AD_REFERENCE_CONSISTENCY_OPTIONS,
   YOLO_CAMERA_PRESET_OPTIONS,
-  YOLO_PROFILES,
+  YOLO_MUSIC_PROFILES,
   YOLO_QUEUE_CONFIRM_THRESHOLD,
   formatWorkflowHardwareRuntime,
   formatWorkflowTierSummary,
   getWorkflowDisplayLabel,
+  getWorkflowHardwareInfo,
   getWorkflowTierMeta,
 } from '../config/generateWorkspaceConfig'
 
@@ -52,10 +55,26 @@ const DIRECTOR_SUBTABS = [
   },
   {
     id: 'scene-shot',
-    label: '3. Scene / Shot Editor',
-    helper: 'Step 3: refine and regenerate individual shots.',
+    label: '3. Keyframes',
+    helper: 'Step 3: review shots and create keyframe images.',
+  },
+  {
+    id: 'video-pass',
+    label: '4. Videos',
+    helper: 'Step 4: create videos from keyframe images.',
   },
 ]
+
+const YOLO_AD_STAGE_TIER_OPTIONS = Object.freeze({
+  local: Object.freeze([
+    { id: 'low', label: 'Low VRAM' },
+    { id: 'quality', label: 'Quality' },
+  ]),
+  cloud: Object.freeze([
+    { id: 'low', label: 'Low Cost' },
+    { id: 'quality', label: 'Quality' },
+  ]),
+})
 
 async function copyTextToClipboard(text) {
   if (navigator?.clipboard?.writeText) {
@@ -76,6 +95,49 @@ async function copyTextToClipboard(text) {
 function formatCountLabel(count, singular, plural = `${singular}s`) {
   const value = Number(count) || 0
   return `${value} ${value === 1 ? singular : plural}`
+}
+
+function formatCreditsValue(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return 'Unknown'
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(numeric)
+}
+
+const COMFY_CREDITS_PER_USD = 211
+
+function formatUsdValue(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return 'Unknown'
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 3,
+  }).format(numeric)
+}
+
+function formatUsdRangeFromCredits(estimatedCredits, multiplier = 1) {
+  if (!estimatedCredits || typeof estimatedCredits !== 'object') return 'Unknown'
+  const min = Number(estimatedCredits.min)
+  const max = Number(estimatedCredits.max)
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return 'Unknown'
+  const scaledMin = min * Math.max(0, Number(multiplier) || 0)
+  const scaledMax = max * Math.max(0, Number(multiplier) || 0)
+  const usdMin = scaledMin / COMFY_CREDITS_PER_USD
+  const usdMax = scaledMax / COMFY_CREDITS_PER_USD
+  if (Math.abs(usdMax - usdMin) < 1e-9) return `~${formatUsdValue(usdMin)}`
+  return `~${formatUsdValue(usdMin)}-${formatUsdValue(usdMax)}`
+}
+
+function formatCreditsRange(estimatedCredits, multiplier = 1) {
+  if (!estimatedCredits || typeof estimatedCredits !== 'object') return 'Unknown'
+  const min = Number(estimatedCredits.min)
+  const max = Number(estimatedCredits.max)
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return 'Unknown'
+  const scaledMin = min * Math.max(0, Number(multiplier) || 0)
+  const scaledMax = max * Math.max(0, Number(multiplier) || 0)
+  if (Math.abs(scaledMax - scaledMin) < 1e-9) return `${formatCreditsValue(scaledMin)} credits`
+  return `${formatCreditsValue(scaledMin)}-${formatCreditsValue(scaledMax)} credits`
 }
 
 function summarizeBlockingDependency(checkResult) {
@@ -241,7 +303,7 @@ function buildAdReferenceStyleNotes({
   } else {
     notes.push('Consistency mode: medium. Balance identity consistency with natural cinematic variation.')
   }
-  notes.push('Storyboard rule: render a single continuous frame per prompt (no split-screen, no collage, no storyboard grids).')
+  notes.push('Keyframe rule: render a single continuous frame per prompt (no split-screen, no collage, no storyboard grids).')
 
   return notes.join(' ')
 }
@@ -681,7 +743,40 @@ function GenerateWorkspace() {
   const [yoloShotsPerScene, setYoloShotsPerScene] = useState(persistedState?.yoloShotsPerScene || 3)
   const [yoloAnglesPerShot, setYoloAnglesPerShot] = useState(persistedState?.yoloAnglesPerShot || 2)
   const [yoloTakesPerAngle, setYoloTakesPerAngle] = useState(persistedState?.yoloTakesPerAngle || 1)
-  const [yoloQualityProfile, setYoloQualityProfile] = useState(persistedState?.yoloQualityProfile || 'balanced')
+  const [yoloAdStoryboardSource, setYoloAdStoryboardSource] = useState(() => {
+    const saved = String(persistedState?.yoloAdStoryboardSource || '').trim().toLowerCase()
+    if (saved === 'local' || saved === 'cloud') return saved
+    const legacyOverride = String(persistedState?.yoloAdStoryboardRuntimeOverride || '').trim().toLowerCase()
+    if (legacyOverride === 'local' || legacyOverride === 'cloud') return legacyOverride
+    return persistedState?.yoloAdProfileRuntime === 'cloud' ? 'cloud' : 'local'
+  })
+  const [yoloAdVideoSource, setYoloAdVideoSource] = useState(() => {
+    const saved = String(persistedState?.yoloAdVideoSource || '').trim().toLowerCase()
+    if (saved === 'local' || saved === 'cloud') return saved
+    const legacyOverride = String(persistedState?.yoloAdVideoRuntimeOverride || '').trim().toLowerCase()
+    if (legacyOverride === 'local' || legacyOverride === 'cloud') return legacyOverride
+    return persistedState?.yoloAdProfileRuntime === 'cloud' ? 'cloud' : 'local'
+  })
+  const [yoloAdStoryboardTier, setYoloAdStoryboardTier] = useState(() => {
+    const saved = String(persistedState?.yoloAdStoryboardTier || '').trim().toLowerCase()
+    if (saved === 'low' || saved === 'quality') return saved
+    if (saved === 'draft') return 'low'
+    if (saved === 'balanced' || saved === 'premium') return 'quality'
+    const legacyProfile = String(persistedState?.yoloQualityProfile || '').trim().toLowerCase()
+    if (legacyProfile === 'draft') return 'low'
+    if (legacyProfile === 'balanced' || legacyProfile === 'premium') return 'quality'
+    return 'low'
+  })
+  const [yoloAdVideoTier, setYoloAdVideoTier] = useState(() => {
+    const saved = String(persistedState?.yoloAdVideoTier || '').trim().toLowerCase()
+    if (saved === 'low' || saved === 'quality') return saved
+    if (saved === 'draft') return 'low'
+    if (saved === 'balanced' || saved === 'premium') return 'quality'
+    const legacyProfile = String(persistedState?.yoloQualityProfile || '').trim().toLowerCase()
+    if (legacyProfile === 'draft') return 'low'
+    if (legacyProfile === 'balanced' || legacyProfile === 'premium') return 'quality'
+    return 'low'
+  })
   const [yoloPlan, setYoloPlan] = useState(() => normalizePersistedYoloPlan(persistedState?.yoloPlan || []))
 
   // Director mode music video state
@@ -819,7 +914,10 @@ function GenerateWorkspace() {
         yoloShotsPerScene,
         yoloAnglesPerShot,
         yoloTakesPerAngle,
-        yoloQualityProfile,
+        yoloAdStoryboardSource,
+        yoloAdVideoSource,
+        yoloAdStoryboardTier,
+        yoloAdVideoTier,
         yoloPlan,
         yoloMusicTitle,
         yoloMusicLyrics,
@@ -871,7 +969,10 @@ function GenerateWorkspace() {
     yoloShotsPerScene,
     yoloAnglesPerShot,
     yoloTakesPerAngle,
-    yoloQualityProfile,
+    yoloAdStoryboardSource,
+    yoloAdVideoSource,
+    yoloAdStoryboardTier,
+    yoloAdVideoTier,
     yoloPlan,
     yoloMusicTitle,
     yoloMusicLyrics,
@@ -1150,7 +1251,6 @@ function GenerateWorkspace() {
   const yoloActiveAnglesPerShot = isYoloMusicMode ? yoloMusicAnglesPerShot : yoloAnglesPerShot
   const yoloActiveTakesPerAngle = isYoloMusicMode ? yoloMusicTakesPerAngle : yoloTakesPerAngle
   const yoloActiveStyleNotes = isYoloMusicMode ? yoloMusicStyleNotes : yoloStyleNotes
-  const yoloActiveQualityProfile = isYoloMusicMode ? yoloMusicQualityProfile : yoloQualityProfile
   const yoloAdProductAsset = useMemo(
     () => assets.find((asset) => asset?.id === yoloAdProductAssetId && asset?.type === 'image') || null,
     [assets, yoloAdProductAssetId]
@@ -1199,20 +1299,85 @@ function GenerateWorkspace() {
     yoloScript,
   ])
 
-  const yoloProfile = YOLO_PROFILES[yoloActiveQualityProfile] || YOLO_PROFILES.balanced
-  const yoloStoryboardWorkflowId = useMemo(() => {
-    // Draft storyboards in Ad mode use the local Qwen model+product workflow.
-    if (!isYoloMusicMode && yoloActiveQualityProfile === 'draft') {
-      return 'image-edit-model-product'
-    }
-    return yoloProfile.storyboardWorkflowId
-  }, [isYoloMusicMode, yoloActiveQualityProfile, yoloProfile.storyboardWorkflowId])
+  const normalizeYoloAdSource = (value) => (
+    String(value || '').trim().toLowerCase() === 'cloud' ? 'cloud' : 'local'
+  )
+  const normalizeYoloAdTier = (value) => {
+    const normalized = String(value || '').trim().toLowerCase()
+    if (normalized === 'low' || normalized === 'quality') return normalized
+    if (normalized === 'draft') return 'low'
+    if (normalized === 'balanced' || normalized === 'premium') return 'quality'
+    return 'low'
+  }
+  const yoloAdRuntimeOptions = YOLO_AD_PROFILE_RUNTIME_OPTIONS
+  const yoloNormalizedAdStoryboardTier = normalizeYoloAdTier(yoloAdStoryboardTier)
+  const yoloNormalizedAdVideoTier = normalizeYoloAdTier(yoloAdVideoTier)
+  const yoloStoryboardProfileRuntime = !isYoloMusicMode
+    ? normalizeYoloAdSource(yoloAdStoryboardSource)
+    : null
+  const yoloVideoProfileRuntime = !isYoloMusicMode
+    ? normalizeYoloAdSource(yoloAdVideoSource)
+    : null
+  const yoloStoryboardUsesCloudTier = !isYoloMusicMode && yoloStoryboardProfileRuntime === 'cloud'
+  const yoloVideoUsesCloudTier = !isYoloMusicMode && yoloVideoProfileRuntime === 'cloud'
+  const yoloStoryboardProfileRuntimeMeta = !isYoloMusicMode
+    ? (yoloAdRuntimeOptions.find((runtime) => runtime.id === yoloStoryboardProfileRuntime) || null)
+    : null
+  const yoloVideoProfileRuntimeMeta = !isYoloMusicMode
+    ? (yoloAdRuntimeOptions.find((runtime) => runtime.id === yoloVideoProfileRuntime) || null)
+    : null
+  const yoloStoryboardTierOptions = !isYoloMusicMode
+    ? (YOLO_AD_STAGE_TIER_OPTIONS[yoloStoryboardProfileRuntime] || YOLO_AD_STAGE_TIER_OPTIONS.local)
+    : []
+  const yoloVideoTierOptions = !isYoloMusicMode
+    ? (YOLO_AD_STAGE_TIER_OPTIONS[yoloVideoProfileRuntime] || YOLO_AD_STAGE_TIER_OPTIONS.local)
+    : []
+  const yoloSelectedStoryboardTierMeta = !isYoloMusicMode
+    ? (yoloStoryboardTierOptions.find((option) => option.id === yoloNormalizedAdStoryboardTier) || null)
+    : null
+  const yoloSelectedVideoTierMeta = !isYoloMusicMode
+    ? (yoloVideoTierOptions.find((option) => option.id === yoloNormalizedAdVideoTier) || null)
+    : null
+  const yoloAdStoryboardProfilesForRuntime = (
+    !isYoloMusicMode
+      ? (YOLO_AD_PROFILES[yoloStoryboardProfileRuntime] || YOLO_AD_PROFILES.local)
+      : YOLO_AD_PROFILES.local
+  )
+  const yoloAdVideoProfilesForRuntime = (
+    !isYoloMusicMode
+      ? (YOLO_AD_PROFILES[yoloVideoProfileRuntime] || YOLO_AD_PROFILES.local)
+      : YOLO_AD_PROFILES.local
+  )
+  const yoloMusicProfile = YOLO_MUSIC_PROFILES[yoloMusicQualityProfile] || YOLO_MUSIC_PROFILES.balanced
+  const yoloAdStoryboardProfile = (
+    yoloAdStoryboardProfilesForRuntime[yoloNormalizedAdStoryboardTier]
+    || yoloAdStoryboardProfilesForRuntime.quality
+    || yoloAdStoryboardProfilesForRuntime.low
+    || {}
+  )
+  const yoloAdVideoProfile = (
+    yoloAdVideoProfilesForRuntime[yoloNormalizedAdVideoTier]
+    || yoloAdVideoProfilesForRuntime.quality
+    || yoloAdVideoProfilesForRuntime.low
+    || {}
+  )
+  const yoloStoryboardWorkflowId = String(
+    isYoloMusicMode
+      ? yoloMusicProfile?.storyboardWorkflowId
+      : yoloAdStoryboardProfile?.storyboardWorkflowId
+  ).trim()
+  const yoloDefaultVideoWorkflowId = String(
+    isYoloMusicMode
+      ? yoloMusicProfile?.videoWorkflowId
+      : yoloAdVideoProfile?.videoWorkflowId
+  ).trim()
   const yoloStoryboardSupportsReferenceAnchors = useMemo(() => (
-    ['nano-banana-2', 'nano-banana-pro', 'image-edit-model-product'].includes(String(yoloStoryboardWorkflowId || '').trim())
+    ['nano-banana-2', 'nano-banana-pro', 'image-edit-model-product', 'seedream-5-lite-image-edit'].includes(String(yoloStoryboardWorkflowId || '').trim())
   ), [yoloStoryboardWorkflowId])
-  const yoloSelectedVideoWorkflowIds = useMemo(() => (
-    [yoloProfile.videoWorkflowId]
-  ), [yoloProfile.videoWorkflowId])
+  const yoloSelectedVideoWorkflowIds = useMemo(
+    () => (yoloDefaultVideoWorkflowId ? [yoloDefaultVideoWorkflowId] : []),
+    [yoloDefaultVideoWorkflowId]
+  )
   const yoloSelectedVideoWorkflowLabel = useMemo(
     () => yoloSelectedVideoWorkflowIds.map(getWorkflowDisplayLabel).join(' + '),
     [yoloSelectedVideoWorkflowIds]
@@ -1221,10 +1386,15 @@ function GenerateWorkspace() {
     () => getWorkflowTierMeta(workflowId),
     [workflowId]
   )
+  const currentWorkflowRuntime = useMemo(
+    () => getWorkflowHardwareInfo(workflowId)?.runtime || '',
+    [workflowId]
+  )
   const currentWorkflowRuntimeLabel = useMemo(
     () => formatWorkflowHardwareRuntime(workflowId),
     [workflowId]
   )
+  const currentWorkflowUsesCloud = currentWorkflowRuntime === 'cloud'
   const yoloStoryboardTierSummary = useMemo(
     () => formatWorkflowTierSummary(yoloStoryboardWorkflowId),
     [yoloStoryboardWorkflowId]
@@ -1233,31 +1403,41 @@ function GenerateWorkspace() {
     () => yoloSelectedVideoWorkflowIds.map((id) => formatWorkflowTierSummary(id)).join(' + '),
     [yoloSelectedVideoWorkflowIds]
   )
-  const yoloAdQualityProfileMappings = [
-    { id: 'draft', label: 'Draft', imageWorkflowId: 'image-edit-model-product', videoWorkflowId: 'wan22-i2v' },
-    { id: 'balanced', label: 'Balanced', imageWorkflowId: 'nano-banana-2', videoWorkflowId: 'wan22-i2v' },
-    { id: 'premium', label: 'Premium', imageWorkflowId: 'nano-banana-2', videoWorkflowId: 'kling-o3-i2v' },
-  ].map((profile) => {
-    const imageLabel = profile.imageWorkflowId === 'image-edit-model-product'
+  const yoloSelectedAdStageRouting = useMemo(() => {
+    if (isYoloMusicMode) return null
+    const imageWorkflowId = String(yoloAdStoryboardProfile?.storyboardWorkflowId || '').trim()
+    const videoWorkflowId = String(yoloAdVideoProfile?.videoWorkflowId || '').trim()
+    const imageLabel = imageWorkflowId === 'image-edit-model-product'
       ? 'Qwen Image Edit 2509'
-      : profile.imageWorkflowId === 'nano-banana-2'
+      : imageWorkflowId === 'nano-banana-2'
         ? 'Nano Banana 2'
-        : getWorkflowDisplayLabel(profile.imageWorkflowId)
-    const videoLabel = profile.videoWorkflowId === 'kling-o3-i2v'
+        : getWorkflowDisplayLabel(imageWorkflowId)
+    const videoLabel = videoWorkflowId === 'kling-o3-i2v'
       ? 'Kling 3.0'
-      : getWorkflowDisplayLabel(profile.videoWorkflowId)
-
+      : getWorkflowDisplayLabel(videoWorkflowId)
     return {
-      ...profile,
+      imageWorkflowId,
+      videoWorkflowId,
       imageLabel,
       videoLabel,
+      storyboardSourceLabel: yoloStoryboardProfileRuntimeMeta?.label || yoloStoryboardProfileRuntime,
+      videoSourceLabel: yoloVideoProfileRuntimeMeta?.label || yoloVideoProfileRuntime,
+      storyboardTierLabel: yoloSelectedStoryboardTierMeta?.label || yoloNormalizedAdStoryboardTier,
+      videoTierLabel: yoloSelectedVideoTierMeta?.label || yoloNormalizedAdVideoTier,
     }
-  })
-  const yoloSelectedAdQualityProfileMapping = (
-    yoloAdQualityProfileMappings.find((profile) => profile.id === yoloQualityProfile)
-    || yoloAdQualityProfileMappings[1]
-    || null
-  )
+  }, [
+    isYoloMusicMode,
+    yoloAdStoryboardProfile,
+    yoloAdVideoProfile,
+    yoloStoryboardProfileRuntimeMeta,
+    yoloStoryboardProfileRuntime,
+    yoloVideoProfileRuntimeMeta,
+    yoloVideoProfileRuntime,
+    yoloSelectedStoryboardTierMeta,
+    yoloNormalizedAdStoryboardTier,
+    yoloSelectedVideoTierMeta,
+    yoloNormalizedAdVideoTier,
+  ])
   const yoloDependencyWorkflowIds = useMemo(() => Array.from(new Set([
     yoloStoryboardWorkflowId,
     ...yoloSelectedVideoWorkflowIds,
@@ -1360,12 +1540,87 @@ function GenerateWorkspace() {
     () => yoloQueueVariants.filter((variant) => yoloStoryboardAssetMap.has(variant.key)).length,
     [yoloQueueVariants, yoloStoryboardAssetMap]
   )
+  const yoloCloudCreditRows = useMemo(() => {
+    const rows = []
+    const keyframeRunCount = yoloQueueVariants.length
+    const keyframeWorkflowId = String(yoloStoryboardWorkflowId || '').trim()
+    if (keyframeWorkflowId) {
+      const keyframeCheck = yoloDependencyPanel.byWorkflow?.[keyframeWorkflowId] || null
+      const keyframeRuntime = getWorkflowHardwareInfo(keyframeWorkflowId)?.runtime || ''
+      rows.push({
+        id: `keyframes:${keyframeWorkflowId}`,
+        stageLabel: 'Keyframes',
+        workflowId: keyframeWorkflowId,
+        workflowLabel: getWorkflowDisplayLabel(keyframeWorkflowId),
+        runCount: keyframeRunCount,
+        isCloud: keyframeRuntime === 'cloud',
+        estimatedCredits: keyframeCheck?.estimatedCredits || null,
+        hasPriceMetadata: Boolean(keyframeCheck?.hasPriceMetadata),
+      })
+    }
+
+    yoloSelectedVideoWorkflowIds.forEach((videoWorkflowId, index) => {
+      const normalized = String(videoWorkflowId || '').trim()
+      if (!normalized) return
+      const videoCheck = yoloDependencyPanel.byWorkflow?.[normalized] || null
+      const videoRuntime = getWorkflowHardwareInfo(normalized)?.runtime || ''
+      rows.push({
+        id: `video:${normalized}:${index}`,
+        stageLabel: yoloSelectedVideoWorkflowIds.length > 1 ? `Video ${index + 1}` : 'Video',
+        workflowId: normalized,
+        workflowLabel: getWorkflowDisplayLabel(normalized),
+        runCount: yoloQueueVariants.length,
+        isCloud: videoRuntime === 'cloud',
+        estimatedCredits: videoCheck?.estimatedCredits || null,
+        hasPriceMetadata: Boolean(videoCheck?.hasPriceMetadata),
+      })
+    })
+    return rows
+  }, [
+    yoloDependencyPanel.byWorkflow,
+    yoloQueueVariants.length,
+    yoloSelectedVideoWorkflowIds,
+    yoloStoryboardWorkflowId,
+  ])
+  const yoloCloudCreditProjection = useMemo(() => {
+    let minTotal = 0
+    let maxTotal = 0
+    let hasAnyCloudRows = false
+    let hasKnownCloudEstimates = false
+    let hasUnknownCloudEstimates = false
+
+    for (const row of yoloCloudCreditRows) {
+      if (!row?.isCloud) continue
+      hasAnyCloudRows = true
+      const estimate = row?.estimatedCredits
+      const runCount = Math.max(0, Number(row?.runCount) || 0)
+      const min = Number(estimate?.min)
+      const max = Number(estimate?.max)
+      if (!Number.isFinite(min) || !Number.isFinite(max)) {
+        hasUnknownCloudEstimates = true
+        continue
+      }
+      hasKnownCloudEstimates = true
+      minTotal += min * runCount
+      maxTotal += max * runCount
+    }
+
+    return {
+      hasAnyCloudRows,
+      hasKnownCloudEstimates,
+      hasUnknownCloudEstimates,
+      minTotal,
+      maxTotal,
+    }
+  }, [yoloCloudCreditRows])
   const yoloSubTabMeta = useMemo(
     () => DIRECTOR_SUBTABS.find((tab) => tab.id === directorSubTab) || DIRECTOR_SUBTABS[0],
     [directorSubTab]
   )
   const yoloSubTabHelperText = yoloSubTabMeta?.helper || ''
   const yoloSubTabTitle = yoloSubTabMeta?.label || ''
+  const isYoloStillsStep = directorSubTab === 'scene-shot'
+  const isYoloVideoStep = directorSubTab === 'video-pass'
   const yoloSceneStats = useMemo(() => {
     const stats = new Map()
     for (const scene of yoloActivePlan || []) {
@@ -1406,7 +1661,7 @@ function GenerateWorkspace() {
   )
   useEffect(() => {
     if (generationMode !== 'yolo') return
-    if (directorSubTab === 'scene-shot' && !yoloCanEditScenes) {
+    if ((directorSubTab === 'scene-shot' || directorSubTab === 'video-pass') && !yoloCanEditScenes) {
       setDirectorSubTab('plan-script')
     }
   }, [directorSubTab, generationMode, yoloCanEditScenes])
@@ -1592,7 +1847,7 @@ function GenerateWorkspace() {
     const margin = 32
     const headerHeight = 52
     const colGap = 18
-    // Landscape layout tuned for 6 storyboard frames per page (3 columns x 2 rows).
+    // Landscape layout tuned for 6 keyframe images per page (3 columns x 2 rows).
     const rowGap = 12
     const columns = 3
     const cardWidth = (pageWidth - (margin * 2) - (colGap * (columns - 1))) / columns
@@ -1601,7 +1856,7 @@ function GenerateWorkspace() {
     const promptHeight = 36
     const cardHeight = imageHeight + labelHeight + promptHeight + 10
     const maxPromptLines = 3
-    // Render each storyboard frame at higher raster DPI to avoid pixelation in the PDF.
+    // Render each keyframe image at higher raster DPI to avoid pixelation in the PDF.
     const pdfRasterScale = Math.max(2, Math.min(5, 220 / 72))
 
     const loadImage = (src) => new Promise((resolve, reject) => {
@@ -1618,7 +1873,7 @@ function GenerateWorkspace() {
       doc.setFont('helvetica', 'bold')
       doc.setFontSize(14)
       doc.text(
-        `Storyboard ${batch.modeLabel || 'Ad'}`,
+        `Keyframes ${batch.modeLabel || 'Ad'}`,
         margin,
         margin + 14
       )
@@ -1731,12 +1986,12 @@ function GenerateWorkspace() {
     const pdfBlob = doc.output('blob')
     const labelToken = slugifyNameToken(
       stripFileExtension(batch.directorLabel || ''),
-      { fallback: 'storyboard', maxLength: 28 }
+      { fallback: 'keyframes', maxLength: 28 }
     )
     const dateStamp = new Date(batch.createdAt || Date.now())
       .toISOString()
       .replace(/[:.]/g, '-')
-    const fileName = `director_${batch.modeKey || 'ad'}_${labelToken}_storyboard_${dateStamp}.pdf`
+    const fileName = `director_${batch.modeKey || 'ad'}_${labelToken}_keyframes_${dateStamp}.pdf`
     const file = new File([pdfBlob], fileName, { type: 'application/pdf' })
     const imported = await importAsset(currentProjectHandle, file, 'images')
 
@@ -1761,8 +2016,8 @@ function GenerateWorkspace() {
   }, [currentProject?.name, currentProjectHandle])
 
   const finalizeStoryboardPdfBatchForJob = useCallback(async () => {
-    // Automatic storyboard PDF export is disabled.
-    // Users now explicitly generate PDFs with the "Create Storyboard PDF" button.
+    // Automatic keyframe PDF export is disabled.
+    // Users now explicitly generate PDFs with the "Create Keyframe PDF" button.
   }, [])
 
   const enqueueJob = useCallback((job) => {
@@ -2107,7 +2362,7 @@ function GenerateWorkspace() {
     const {
       allowExistingDoneKeys = false,
       skipConfirm = false,
-      sourceLabel = `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} storyboard pass`,
+      sourceLabel = `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} keyframe pass`,
     } = options
 
     if (!Array.isArray(variants) || variants.length === 0) {
@@ -2136,13 +2391,13 @@ function GenerateWorkspace() {
       setFormError(
         allowExistingDoneKeys
           ? 'Selected shot is already queued/running. Wait for it to finish, then try again.'
-          : 'All selected storyboard variants are already in this queue/run.'
+          : 'All selected keyframe variants are already in this queue/run.'
       )
       return 0
     }
 
     if (!skipConfirm) {
-      const confirmed = await confirmLargeQueueBatch(variantsToQueue.length, 'storyboard')
+      const confirmed = await confirmLargeQueueBatch(variantsToQueue.length, 'keyframe')
       if (!confirmed) {
         setFormError('Queue cancelled')
         return 0
@@ -2177,7 +2432,7 @@ function GenerateWorkspace() {
       return createQueuedJob({
         category: 'image',
         workflowId: yoloStoryboardWorkflowId,
-        workflowLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel} Storyboard (${yoloStoryboardWorkflowId})`,
+        workflowLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel} Keyframe (${yoloStoryboardWorkflowId})`,
         needsImage: usesModelProductStoryboardWorkflow,
         prompt: variant.storyboardPrompt || variant.prompt,
         seed: storyboardSeed,
@@ -2196,7 +2451,8 @@ function GenerateWorkspace() {
           angle: variant.angle,
           take: variant.take,
           durationSeconds: variant.durationSeconds,
-          profile: yoloActiveQualityProfile,
+          profile: isYoloMusicMode ? yoloMusicQualityProfile : yoloNormalizedAdStoryboardTier,
+          profileRuntime: !isYoloMusicMode ? yoloStoryboardProfileRuntime : null,
           referenceConsistency: !isYoloMusicMode ? yoloAdConsistency : null,
         },
       })
@@ -2214,14 +2470,16 @@ function GenerateWorkspace() {
     getExistingYoloStageKeys,
     isYoloMusicMode,
     seed,
-    yoloActiveQualityProfile,
     yoloAdConsistency,
     yoloAdModelAsset,
     yoloAdModelAsset?.id,
+    yoloMusicQualityProfile,
+    yoloNormalizedAdStoryboardTier,
     yoloAdProductAsset,
     yoloAdProductAsset?.id,
     yoloModeKey,
     yoloModeLabel,
+    yoloStoryboardProfileRuntime,
     yoloStoryboardWorkflowId,
     yoloQueueNameLabel,
   ])
@@ -2230,11 +2488,11 @@ function GenerateWorkspace() {
     if (!isConnected) return
     if (
       !isYoloMusicMode &&
-      yoloStoryboardWorkflowId === 'image-edit-model-product' &&
+      ['image-edit-model-product', 'seedream-5-lite-image-edit'].includes(String(yoloStoryboardWorkflowId || '').trim()) &&
       !yoloAdModelAsset &&
       !yoloAdProductAsset
     ) {
-      setFormError('Draft storyboard workflow needs at least a model or product reference image.')
+      setFormError('Selected keyframe workflow needs at least a model or product reference image.')
       return
     }
     if (
@@ -2242,12 +2500,12 @@ function GenerateWorkspace() {
       yoloAdHasReferenceAnchors &&
       !yoloStoryboardSupportsReferenceAnchors
     ) {
-      setFormError(`Product/model references are not supported by ${getWorkflowDisplayLabel(yoloStoryboardWorkflowId)} storyboards.`)
+      setFormError(`Product/model references are not supported by ${getWorkflowDisplayLabel(yoloStoryboardWorkflowId)} keyframes.`)
       return
     }
     const depsOk = await validateDependenciesForQueue(
       [yoloStoryboardWorkflowId],
-      `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} storyboard pass`
+      `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} keyframe pass`
     )
     if (!depsOk) return
 
@@ -2258,7 +2516,7 @@ function GenerateWorkspace() {
     await queueYoloStoryboardVariants(variants, {
       allowExistingDoneKeys: false,
       skipConfirm: false,
-      sourceLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} storyboard pass`,
+      sourceLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} keyframe pass`,
     })
   }, [
     buildActiveYoloPlan,
@@ -2282,21 +2540,21 @@ function GenerateWorkspace() {
       yoloAdHasReferenceAnchors &&
       !yoloStoryboardSupportsReferenceAnchors
     ) {
-      setFormError(`Product/model references are not supported by ${getWorkflowDisplayLabel(yoloStoryboardWorkflowId)} storyboards.`)
+      setFormError(`Product/model references are not supported by ${getWorkflowDisplayLabel(yoloStoryboardWorkflowId)} keyframes.`)
       return
     }
     if (
       !isYoloMusicMode &&
-      yoloStoryboardWorkflowId === 'image-edit-model-product' &&
+      ['image-edit-model-product', 'seedream-5-lite-image-edit'].includes(String(yoloStoryboardWorkflowId || '').trim()) &&
       !yoloAdModelAsset &&
       !yoloAdProductAsset
     ) {
-      setFormError('Draft storyboard workflow needs at least a model or product reference image.')
+      setFormError('Selected keyframe workflow needs at least a model or product reference image.')
       return
     }
     const depsOk = await validateDependenciesForQueue(
       [yoloStoryboardWorkflowId],
-      `storyboard re-render for ${sceneId} ${shotId}`
+      `keyframe re-render for ${sceneId} ${shotId}`
     )
     if (!depsOk) return
 
@@ -2306,14 +2564,14 @@ function GenerateWorkspace() {
     const variants = flattenYoloPlanVariants(planToUse)
       .filter((variant) => variant.sceneId === sceneId && variant.shotId === shotId)
     if (variants.length === 0) {
-      setFormError(`No storyboard variants found for ${sceneId} ${shotId}.`)
+      setFormError(`No keyframe variants found for ${sceneId} ${shotId}.`)
       return
     }
 
     await queueYoloStoryboardVariants(variants, {
       allowExistingDoneKeys: true,
       skipConfirm: true,
-      sourceLabel: `Queued storyboard re-render for ${sceneId} ${shotId}`,
+      sourceLabel: `Queued keyframe re-render for ${sceneId} ${shotId}`,
     })
   }, [
     buildActiveYoloPlan,
@@ -2333,7 +2591,7 @@ function GenerateWorkspace() {
     const {
       allowExistingDoneKeys = false,
       skipConfirm = false,
-      workflowId = yoloProfile.videoWorkflowId,
+      workflowId = yoloDefaultVideoWorkflowId,
       suppressEmptyError = false,
       sourceLabel = `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} video pass`,
     } = options
@@ -2401,7 +2659,8 @@ function GenerateWorkspace() {
           angle: variant.angle,
           take: variant.take,
           durationSeconds: variant.durationSeconds,
-          profile: yoloActiveQualityProfile,
+          profile: isYoloMusicMode ? yoloMusicQualityProfile : yoloNormalizedAdVideoTier,
+          profileRuntime: !isYoloMusicMode ? yoloVideoProfileRuntime : null,
         },
       }))
     }
@@ -2415,7 +2674,7 @@ function GenerateWorkspace() {
                 ? 'Selected shot video is already queued/running. Wait for it to finish, then try again.'
                 : 'All selected video variants are already in this queue/run.'
             )
-            : 'No storyboard assets found yet. Queue or re-render storyboards first, then queue video.'
+            : 'No keyframe images found yet. Queue or re-render keyframes first, then queue video.'
         )
       }
       return 0
@@ -2430,7 +2689,7 @@ function GenerateWorkspace() {
     }
 
     setGenerationQueue(prev => [...prev, ...jobs])
-    setFormError(missing > 0 ? `Queued ${jobs.length} video jobs (${missing} variants still missing storyboard frames)` : null)
+    setFormError(missing > 0 ? `Queued ${jobs.length} video jobs (${missing} variants still missing keyframe images)` : null)
     addComfyLog('status', `${sourceLabel} queued: ${jobs.length} job${jobs.length === 1 ? '' : 's'}${missing > 0 ? ` (${missing} missing)` : ''}`)
     return jobs.length
   }, [
@@ -2439,11 +2698,14 @@ function GenerateWorkspace() {
     createQueuedJob,
     generationQueue,
     getExistingYoloStageKeys,
+    isYoloMusicMode,
     seed,
-    yoloActiveQualityProfile,
+    yoloDefaultVideoWorkflowId,
+    yoloMusicQualityProfile,
+    yoloNormalizedAdVideoTier,
+    yoloVideoProfileRuntime,
     yoloModeKey,
     yoloModeLabel,
-    yoloProfile.videoWorkflowId,
     yoloQueueNameLabel,
     yoloStoryboardAssetMap,
   ])
@@ -2502,8 +2764,8 @@ function GenerateWorkspace() {
   const handleCreateStoryboardPdf = useCallback(async () => {
     if (creatingStoryboardPdf) return
     if (!currentProjectHandle) {
-      setFormError('Open a project folder first so storyboard PDFs can be saved.')
-      addComfyLog('error', 'Storyboard PDF export requires an open project folder.')
+      setFormError('Open a project folder first so keyframe PDFs can be saved.')
+      addComfyLog('error', 'Keyframe PDF export requires an open project folder.')
       return
     }
 
@@ -2529,7 +2791,7 @@ function GenerateWorkspace() {
       })
     }
 
-    // If the active plan is empty, still allow exporting from any latest storyboard frames.
+    // If the active plan is empty, still allow exporting from any latest keyframe images.
     if (items.length === 0) {
       const extractNumericOrder = (value) => {
         const match = String(value || '').match(/\d+/)
@@ -2567,17 +2829,17 @@ function GenerateWorkspace() {
     }
 
     if (items.length === 0) {
-      setFormError('No storyboard images found yet. Queue or re-render storyboards first, then create the PDF.')
-      addComfyLog('error', 'Storyboard PDF export skipped: no storyboard images available.')
+      setFormError('No keyframe images found yet. Queue or re-render keyframes first, then create the PDF.')
+      addComfyLog('error', 'Keyframe PDF export skipped: no keyframe images available.')
       return
     }
 
     setCreatingStoryboardPdf(true)
     setFormError(null)
-    addComfyLog('status', `Creating storyboard PDF from ${items.length} frame${items.length === 1 ? '' : 's'}...`)
+    addComfyLog('status', `Creating keyframe PDF from ${items.length} frame${items.length === 1 ? '' : 's'}...`)
     try {
       const exported = await exportStoryboardPdfBatch({
-        id: `manual_storyboard_${Date.now()}`,
+        id: `manual_keyframe_${Date.now()}`,
         createdAt: Date.now(),
         modeKey: yoloModeKey,
         modeLabel: yoloModeLabel,
@@ -2586,14 +2848,14 @@ function GenerateWorkspace() {
       })
 
       if (!exported) {
-        throw new Error('Storyboard PDF export did not return a file.')
+        throw new Error('Keyframe PDF export did not return a file.')
       }
-      addComfyLog('ok', `Storyboard PDF saved: ${exported.fileName}`)
+      addComfyLog('ok', `Keyframe PDF saved: ${exported.fileName}`)
       openStoryboardPdfPreview(exported.url)
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error || 'Storyboard PDF export failed')
-      setFormError(`Storyboard PDF export failed: ${message}`)
-      addComfyLog('error', `Storyboard PDF export failed: ${message}`)
+      const message = error instanceof Error ? error.message : String(error || 'Keyframe PDF export failed')
+      setFormError(`Keyframe PDF export failed: ${message}`)
+      addComfyLog('error', `Keyframe PDF export failed: ${message}`)
     } finally {
       setCreatingStoryboardPdf(false)
     }
@@ -2665,7 +2927,7 @@ function GenerateWorkspace() {
       return
     }
     const usingTimelineFrame = !!frameForAI?.file && (
-      workflowId === 'wan22-i2v' || workflowId === 'kling-o3-i2v'
+      workflowId === 'wan22-i2v' || workflowId === 'kling-o3-i2v' || workflowId === 'grok-video-i2v' || workflowId === 'vidu-q2-i2v'
     )
     if (currentWorkflow?.needsImage && !selectedAsset && !usingTimelineFrame) {
       setFormError('Please select an input asset or use a timeline frame first')
@@ -2887,7 +3149,7 @@ function GenerateWorkspace() {
                       if (isAudioFilename(info.filename)) return { type: 'audio', ...info }
                       if (isImageFilename(info.filename)) return { type: 'images', items: [{ type: 'image', ...info }] }
                       // Unknown extension - assume video for video workflows
-                      if (['wan22-i2v', 'kling-o3-i2v'].includes(wfId)) return { type: 'video', ...info }
+                      if (['wan22-i2v', 'kling-o3-i2v', 'grok-video-i2v', 'vidu-q2-i2v'].includes(wfId)) return { type: 'video', ...info }
                       return { type: 'images', items: [{ type: 'image', ...info }] }
                     }
                   }
@@ -3093,13 +3355,15 @@ function GenerateWorkspace() {
       let referenceFilenames = []
       const outputToken = String(job.id || Date.now()).replace(/[^a-zA-Z0-9_-]/g, '_')
       const outputPrefix = (
-        job.workflowId === 'wan22-i2v' || job.workflowId === 'kling-o3-i2v'
+        job.workflowId === 'wan22-i2v' || job.workflowId === 'kling-o3-i2v' || job.workflowId === 'grok-video-i2v' || job.workflowId === 'vidu-q2-i2v'
           ? `video/director_${outputToken}`
           : (
             job.workflowId === 'image-edit' ||
             job.workflowId === 'image-edit-model-product' ||
+            job.workflowId === 'seedream-5-lite-image-edit' ||
             job.workflowId === 'z-image-turbo' ||
             job.workflowId === 'nano-banana-2' ||
+            job.workflowId === 'grok-text-to-image' ||
             job.workflowId === 'nano-banana-pro'
           )
             ? `image/comfystudio_${outputToken}`
@@ -3135,6 +3399,7 @@ function GenerateWorkspace() {
       const supportsReferenceImages = (
         job.workflowId === 'image-edit' ||
         job.workflowId === 'image-edit-model-product' ||
+        job.workflowId === 'seedream-5-lite-image-edit' ||
         job.workflowId === 'nano-banana-2' ||
         job.workflowId === 'nano-banana-pro'
       )
@@ -3187,6 +3452,10 @@ function GenerateWorkspace() {
         modifyQwenImageEdit2509Workflow,
         modifyZImageTurboWorkflow,
         modifyNanoBanana2Workflow,
+        modifyGrokTextToImageWorkflow,
+        modifySeedream5LiteImageEditWorkflow,
+        modifyGrokVideoI2VWorkflow,
+        modifyViduQ2I2VWorkflow,
         modifyKlingO3I2VWorkflow,
         modifyMusicWorkflow
       } = await import('../services/comfyui')
@@ -3219,6 +3488,28 @@ function GenerateWorkspace() {
             seed: job.seed,
             generateAudio: false,
             filenamePrefix: outputPrefix || 'video/kling_o3_i2v',
+          })
+          break
+        case 'grok-video-i2v':
+          modifiedWorkflow = modifyGrokVideoI2VWorkflow(workflowJson, {
+            prompt: job.prompt,
+            inputImage: uploadedFilename,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            duration: job.duration,
+            seed: job.seed,
+            filenamePrefix: outputPrefix || 'video/grok_video_i2v',
+          })
+          break
+        case 'vidu-q2-i2v':
+          modifiedWorkflow = modifyViduQ2I2VWorkflow(workflowJson, {
+            prompt: job.prompt,
+            inputImage: uploadedFilename,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            duration: job.duration,
+            seed: job.seed,
+            filenamePrefix: outputPrefix || 'video/vidu_q2_i2v',
           })
           break
         case 'multi-angles':
@@ -3257,6 +3548,26 @@ function GenerateWorkspace() {
             ),
             referenceImages: referenceFilenames,
             filenamePrefix: outputPrefix || 'image/nano_banana_2',
+          })
+          break
+        case 'grok-text-to-image':
+          modifiedWorkflow = modifyGrokTextToImageWorkflow(workflowJson, {
+            prompt: job.prompt,
+            seed: job.seed,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            filenamePrefix: outputPrefix || 'image/grok_text_to_image',
+          })
+          break
+        case 'seedream-5-lite-image-edit':
+          modifiedWorkflow = modifySeedream5LiteImageEditWorkflow(workflowJson, {
+            prompt: job.prompt,
+            seed: job.seed,
+            inputImage: uploadedFilename,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            referenceImages: referenceFilenames,
+            filenamePrefix: outputPrefix || 'image/seedream_5_lite',
           })
           break
         case 'music-gen':
@@ -3680,9 +3991,9 @@ function GenerateWorkspace() {
                   <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={3}
                     className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-none"
                     placeholder={
-                      workflowId === 'image-edit'
+                      workflowId === 'image-edit' || workflowId === 'seedream-5-lite-image-edit'
                         ? 'Describe the edit (e.g. remove person on left or change color of car)'
-                        : (workflowId === 'z-image-turbo' || workflowId === 'nano-banana-2' || workflowId === 'nano-banana-pro')
+                        : (workflowId === 'z-image-turbo' || workflowId === 'nano-banana-2' || workflowId === 'grok-text-to-image' || workflowId === 'nano-banana-pro')
                           ? 'Describe the image you want to generate...'
                           : 'Camera angle prompts are preset for this workflow'
                     }
@@ -3857,7 +4168,12 @@ function GenerateWorkspace() {
                   >
                     {DIRECTOR_SUBTABS.map((tab) => {
                       const isActive = directorSubTab === tab.id
-                      const isDisabled = tab.id === 'scene-shot' && !yoloCanEditScenes
+                      const needsPlan = tab.id === 'scene-shot' || tab.id === 'video-pass'
+                      const needsStoryboard = tab.id === 'video-pass' && yoloStoryboardReadyCount === 0
+                      const isDisabled = (needsPlan && !yoloCanEditScenes) || needsStoryboard
+                      const disabledTitle = !yoloCanEditScenes
+                        ? 'Build a plan first to unlock this step'
+                        : 'Create at least one keyframe to unlock Videos'
                       return (
                         <button
                           key={tab.id}
@@ -3866,7 +4182,7 @@ function GenerateWorkspace() {
                           aria-selected={isActive}
                           disabled={isDisabled}
                           onClick={() => setDirectorSubTab(tab.id)}
-                          title={isDisabled ? 'Build a plan first to edit scenes and shots' : ''}
+                          title={isDisabled ? disabledTitle : ''}
                           className={`flex-1 px-3 py-1.5 rounded text-xs transition-colors ${
                             isDisabled
                               ? 'text-sf-text-muted/60 cursor-not-allowed'
@@ -3979,31 +4295,111 @@ function GenerateWorkspace() {
                             <p className="mt-1 text-[10px] text-sf-text-muted">
                               Choose speed versus fidelity.
                             </p>
-                            <div className="mt-2">
-                              <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Quality Profile</label>
-                              <select
-                                value={yoloQualityProfile}
-                                onChange={e => setYoloQualityProfile(e.target.value)}
-                                className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
-                              >
-                                <option value="draft">Draft (fast)</option>
-                                <option value="balanced">Balanced</option>
-                                <option value="premium">Premium</option>
-                              </select>
-                            </div>
-                            <div className="mt-2.5 rounded-lg border border-sf-dark-700 bg-sf-dark-800/35 px-2.5 py-2">
-                              <div>
-                                {yoloSelectedAdQualityProfileMapping && (
-                                  <div className="rounded border border-sf-accent/50 bg-sf-accent/10 px-2 py-1.5 text-[10px] text-sf-text-primary">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="uppercase tracking-wider font-medium">{yoloSelectedAdQualityProfileMapping.label}</span>
-                                      <span className="text-[9px] uppercase tracking-wider text-sf-accent">Selected</span>
+                            <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-2">
+                              <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/35 px-2 py-1.5">
+                                <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">Keyframes (Images)</div>
+                                <div className="mt-1 grid grid-cols-2 gap-1 rounded border border-sf-dark-700 bg-sf-dark-900/40 p-0.5">
+                                  {yoloAdRuntimeOptions.map((runtimeOption) => {
+                                    const isSelected = yoloStoryboardProfileRuntime === runtimeOption.id
+                                    return (
+                                      <button
+                                        key={`storyboard-${runtimeOption.id}`}
+                                        type="button"
+                                        onClick={() => setYoloAdStoryboardSource(runtimeOption.id)}
+                                        className={`rounded px-2 py-1 text-[10px] transition-colors ${
+                                          isSelected
+                                            ? 'bg-sf-accent text-white'
+                                            : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-800'
+                                        }`}
+                                      >
+                                        {runtimeOption.label}
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                                {yoloStoryboardUsesCloudTier ? (
+                                  <>
+                                    <div className="mt-1 text-[10px] text-sf-text-muted uppercase tracking-wider">Cloud Tier</div>
+                                    <div className="mt-0.5 grid grid-cols-2 gap-1">
+                                      {yoloStoryboardTierOptions.map((tierOption) => {
+                                        const isSelectedTier = yoloNormalizedAdStoryboardTier === tierOption.id
+                                        return (
+                                          <button
+                                            key={`storyboard-tier-${tierOption.id}`}
+                                            type="button"
+                                            onClick={() => setYoloAdStoryboardTier(tierOption.id)}
+                                            className={`rounded px-2 py-1 text-[10px] transition-colors ${
+                                              isSelectedTier
+                                                ? 'bg-sf-accent text-white'
+                                                : 'border border-sf-dark-600 text-sf-text-muted hover:text-sf-text-primary hover:border-sf-dark-500'
+                                            }`}
+                                          >
+                                            {tierOption.label}
+                                          </button>
+                                        )
+                                      })}
                                     </div>
-                                    <div className="mt-0.5">
-                                      <span className="text-sf-text-muted">Image:</span> {yoloSelectedAdQualityProfileMapping.imageLabel}
-                                      <span className="mx-1.5 text-sf-text-muted/60">|</span>
-                                      <span className="text-sf-text-muted">Video:</span> {yoloSelectedAdQualityProfileMapping.videoLabel}
+                                    <div className="mt-1 text-[10px] text-sf-text-muted">
+                                      Workflow: <span className="text-sf-text-secondary">{yoloSelectedAdStageRouting?.imageLabel || getWorkflowDisplayLabel(yoloStoryboardWorkflowId)}</span>
                                     </div>
+                                  </>
+                                ) : (
+                                  <div className="mt-1 text-[10px] text-sf-text-muted">
+                                    Local workflow: <span className="text-sf-text-secondary">{yoloSelectedAdStageRouting?.imageLabel || getWorkflowDisplayLabel(yoloStoryboardWorkflowId)}</span>
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/35 px-2 py-1.5">
+                                <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">Video</div>
+                                <div className="mt-1 grid grid-cols-2 gap-1 rounded border border-sf-dark-700 bg-sf-dark-900/40 p-0.5">
+                                  {yoloAdRuntimeOptions.map((runtimeOption) => {
+                                    const isSelected = yoloVideoProfileRuntime === runtimeOption.id
+                                    return (
+                                      <button
+                                        key={`video-${runtimeOption.id}`}
+                                        type="button"
+                                        onClick={() => setYoloAdVideoSource(runtimeOption.id)}
+                                        className={`rounded px-2 py-1 text-[10px] transition-colors ${
+                                          isSelected
+                                            ? 'bg-sf-accent text-white'
+                                            : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-800'
+                                        }`}
+                                      >
+                                        {runtimeOption.label}
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                                {yoloVideoUsesCloudTier ? (
+                                  <>
+                                    <div className="mt-1 text-[10px] text-sf-text-muted uppercase tracking-wider">Cloud Tier</div>
+                                    <div className="mt-0.5 grid grid-cols-2 gap-1">
+                                      {yoloVideoTierOptions.map((tierOption) => {
+                                        const isSelectedTier = yoloNormalizedAdVideoTier === tierOption.id
+                                        return (
+                                          <button
+                                            key={`video-tier-${tierOption.id}`}
+                                            type="button"
+                                            onClick={() => setYoloAdVideoTier(tierOption.id)}
+                                            className={`rounded px-2 py-1 text-[10px] transition-colors ${
+                                              isSelectedTier
+                                                ? 'bg-sf-accent text-white'
+                                                : 'border border-sf-dark-600 text-sf-text-muted hover:text-sf-text-primary hover:border-sf-dark-500'
+                                            }`}
+                                          >
+                                            {tierOption.label}
+                                          </button>
+                                        )
+                                      })}
+                                    </div>
+                                    <div className="mt-1 text-[10px] text-sf-text-muted">
+                                      Workflow: <span className="text-sf-text-secondary">{yoloSelectedAdStageRouting?.videoLabel || getWorkflowDisplayLabel(yoloDefaultVideoWorkflowId)}</span>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div className="mt-1 text-[10px] text-sf-text-muted">
+                                    Local workflow: <span className="text-sf-text-secondary">{yoloSelectedAdStageRouting?.videoLabel || getWorkflowDisplayLabel(yoloDefaultVideoWorkflowId)}</span>
                                   </div>
                                 )}
                               </div>
@@ -4015,7 +4411,7 @@ function GenerateWorkspace() {
                         <div className="p-3 rounded-lg bg-sf-dark-800/70 border border-sf-dark-700">
                           <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Set References (optional)</label>
                           <p className="mt-1 text-[10px] text-sf-text-muted">
-                            Add a product image and/or model image to keep ad identity consistent across storyboard shots.
+                            Add a product image and/or model image to keep ad identity consistent across keyframe shots.
                           </p>
                           <div className="mt-2 grid grid-cols-2 gap-2">
                             <select
@@ -4052,7 +4448,7 @@ function GenerateWorkspace() {
                             </select>
                             {yoloAdHasReferenceAnchors && !yoloStoryboardSupportsReferenceAnchors && (
                               <div className="mt-1 text-[10px] text-yellow-400">
-                                The selected storyboard workflow does not support product/model anchors.
+                                The selected keyframe workflow does not support product/model anchors.
                               </div>
                             )}
                           </div>
@@ -4217,7 +4613,9 @@ function GenerateWorkspace() {
                         <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">{DIRECTOR_MODE_BETA_LABEL} dependencies</div>
                         <button
                           type="button"
-                          onClick={() => { void runYoloDependencySnapshotCheck() }}
+                          onClick={() => {
+                            void runYoloDependencySnapshotCheck()
+                          }}
                           disabled={!isConnected || yoloDependencyPanel.status === 'checking' || yoloDependencyCheckInProgress}
                           className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] border transition-colors ${
                             !isConnected || yoloDependencyPanel.status === 'checking' || yoloDependencyCheckInProgress
@@ -4307,6 +4705,26 @@ function GenerateWorkspace() {
                                     <div className="text-sf-error">Missing Comfy Partner API key in Settings.</div>
                                   )}
 
+                                  {result.hasPriceMetadata && (
+                                    <div>
+                                      <div className="text-sf-text-muted mb-0.5">Price metadata</div>
+                                      {result.estimatedCredits ? (
+                                        <div className="text-amber-300">
+                                          Estimated per run: {formatCreditsRange(result.estimatedCredits, 1)}
+                                        </div>
+                                      ) : (
+                                        <div className="text-yellow-400">
+                                          Price badge found, but numeric credits could not be parsed.
+                                        </div>
+                                      )}
+                                      {result.badgeSummaries?.slice(0, 2).map((entry, idx) => (
+                                        <div key={`${entry.classType}:${idx}`} className="text-sf-text-muted break-all">
+                                          {entry.classType}: {entry.text}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+
                                   {result.unresolvedModels?.length > 0 && result.status !== 'missing' && (
                                     <div className="text-yellow-400">
                                       {result.unresolvedModels.length} model check(s) could not be auto-verified.
@@ -4317,6 +4735,86 @@ function GenerateWorkspace() {
                             </details>
                           )
                         })}
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/50 p-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">Cloud credits (estimate)</div>
+                      </div>
+
+                      <div className="mt-2 text-[10px] text-sf-text-secondary space-y-1.5">
+                        {yoloCloudCreditRows.map((row) => {
+                          const runCountLabel = `${Math.max(0, Number(row.runCount) || 0)} run${Math.max(0, Number(row.runCount) || 0) === 1 ? '' : 's'}`
+                          const lineLabel = `${row.stageLabel} (${row.workflowLabel})`
+                          if (!row.isCloud) {
+                            return (
+                              <div key={row.id} className="flex items-center justify-between gap-2">
+                                <span className="truncate">{lineLabel}</span>
+                                <span className="text-sf-text-muted">Local (no credits)</span>
+                              </div>
+                            )
+                          }
+                          if (row.estimatedCredits) {
+                            return (
+                              <div key={row.id} className="space-y-0.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="truncate">{lineLabel}</span>
+                                  <span className="flex items-center gap-1 text-amber-300 whitespace-nowrap">
+                                    <span>
+                                      {formatCreditsRange(row.estimatedCredits, 1)} / run
+                                      <span className="text-sf-text-muted"> ({formatUsdRangeFromCredits(row.estimatedCredits, 1)} / run)</span>
+                                    </span>
+                                    {row.hasPriceMetadata && (
+                                      <span className="text-yellow-400">(dynamic pricing)</span>
+                                    )}
+                                  </span>
+                                </div>
+                                <div className="text-sf-text-muted">
+                                  Plan ({runCountLabel}): {formatCreditsRange(row.estimatedCredits, row.runCount)} ({formatUsdRangeFromCredits(row.estimatedCredits, row.runCount)})
+                                </div>
+                              </div>
+                            )
+                          }
+                          return (
+                            <div key={row.id} className="flex items-center justify-between gap-2">
+                              <span className="truncate">{lineLabel}</span>
+                              <span className="text-yellow-400">
+                                {row.hasPriceMetadata ? 'Dynamic pricing (estimate unavailable)' : 'No credit metadata'}
+                              </span>
+                            </div>
+                          )
+                        })}
+
+                        {yoloCloudCreditProjection.hasAnyCloudRows ? (
+                          <div className="pt-1.5 border-t border-sf-dark-700">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-sf-text-muted">Projected cloud total (current plan)</span>
+                              <span className="text-amber-300">
+                                {yoloCloudCreditProjection.hasKnownCloudEstimates
+                                  ? (
+                                    yoloCloudCreditProjection.hasUnknownCloudEstimates
+                                      ? `${formatCreditsRange({ min: yoloCloudCreditProjection.minTotal, max: yoloCloudCreditProjection.maxTotal }, 1)} (${formatUsdRangeFromCredits({ min: yoloCloudCreditProjection.minTotal, max: yoloCloudCreditProjection.maxTotal }, 1)}) + unknown`
+                                      : `${formatCreditsRange({ min: yoloCloudCreditProjection.minTotal, max: yoloCloudCreditProjection.maxTotal }, 1)} (${formatUsdRangeFromCredits({ min: yoloCloudCreditProjection.minTotal, max: yoloCloudCreditProjection.maxTotal }, 1)})`
+                                  )
+                                  : 'Unknown'}
+                              </span>
+                            </div>
+                            {yoloCloudCreditProjection.hasUnknownCloudEstimates && (
+                              <div className="mt-0.5 text-yellow-400">
+                                Some selected cloud workflows have unknown credit estimates.
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="pt-1.5 border-t border-sf-dark-700 text-sf-text-muted">
+                            No cloud workflows selected.
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="mt-2 text-[9px] text-sf-text-muted">
+                        Estimates are derived from workflow node price metadata when available. USD values use 211 credits = $1. Final billing can vary by runtime provider settings.
                       </div>
                     </div>
 
@@ -4341,14 +4839,14 @@ function GenerateWorkspace() {
                         Build Plan
                       </button>
                       <div className="text-[10px] text-sf-text-muted">
-                        Build plan, then continue in Scene / Shot Editor for storyboard, video, and PDF actions.
+                        Build plan, then continue through Keyframes and Videos for batch generation.
                       </div>
                     </div>
 
                   </>
                 )}
 
-                {directorSubTab === 'scene-shot' && (
+                {(isYoloStillsStep || isYoloVideoStep) && (
                   yoloCanEditScenes ? (
                   <div className="space-y-3">
                     {yoloDependencyCheckInProgress && (
@@ -4360,10 +4858,10 @@ function GenerateWorkspace() {
                       <div>Scenes: {yoloSceneCount}</div>
                       <div>Planned variants: {yoloVariants.length}</div>
                       <div>Queue variants: {yoloQueueVariants.length}</div>
-                      <div>Storyboard frames ready: {yoloStoryboardReadyCount} / {yoloQueueVariants.length}</div>
+                      <div>Keyframes ready: {yoloStoryboardReadyCount} / {yoloQueueVariants.length}</div>
                     </div>
                     <div className="text-[10px] text-yellow-300/90 leading-relaxed">
-                      Tip: Scene text is reference-only. Feel free to refine Image Action, Video Action, camera preset, duration, and takes before creating stills or videos.
+                      Tip: Scene text is reference-only. Feel free to refine Image Action, Video Action, camera preset, duration, and takes before creating keyframes or videos.
                     </div>
 
                   <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4">
@@ -4389,7 +4887,7 @@ function GenerateWorkspace() {
                                 Shots: {stats.shotCount}
                               </div>
                               <div className="text-[9px] opacity-80">
-                                Storyboards: {stats.readyCount}/{stats.variantCount}
+                                Keyframes: {stats.readyCount}/{stats.variantCount}
                               </div>
                             </button>
                           )
@@ -4415,37 +4913,48 @@ function GenerateWorkspace() {
                           </div>
 
                           <div className="space-y-2">
-                            {(selectedYoloScene.shots || []).map((shot) => (
+                            {(selectedYoloScene.shots || []).map((shot) => {
+                              const hasShotStoryboardFrame = yoloQueueVariants.some((variant) => (
+                                variant.sceneId === selectedYoloScene.id
+                                && variant.shotId === shot.id
+                                && yoloStoryboardAssetMap.has(variant.key)
+                              ))
+                              return (
                               <div key={shot.id} className="rounded border border-sf-dark-700 bg-sf-dark-900/70 p-2 space-y-2">
                                 <div className="flex flex-wrap items-start justify-between gap-2">
                                   <div className="flex items-center gap-2 min-w-0">
                                     <div className="text-[11px] text-sf-text-primary">{shot.id}</div>
                                   </div>
                                   <div className="flex flex-wrap items-center justify-end gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => { void handleQueueYoloShotStoryboard(selectedYoloScene.id, shot.id) }}
-                                      disabled={yoloDependencyCheckInProgress}
-                                      className={`px-2 py-1 rounded text-[10px] whitespace-nowrap ${
-                                        yoloDependencyCheckInProgress
-                                          ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
-                                          : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
-                                      }`}
-                                    >
-                                      Create Shot Still
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => { void handleQueueYoloShotVideo(selectedYoloScene.id, shot.id) }}
-                                      disabled={yoloDependencyCheckInProgress}
-                                      className={`px-2 py-1 rounded text-[10px] whitespace-nowrap ${
-                                        yoloDependencyCheckInProgress
-                                          ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
-                                          : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
-                                      }`}
-                                    >
-                                      {yoloSelectedVideoWorkflowIds.length > 1 ? 'Create Shot Video (A/B)' : 'Create Shot Video'}
-                                    </button>
+                                    {isYoloStillsStep && (
+                                      <button
+                                        type="button"
+                                        onClick={() => { void handleQueueYoloShotStoryboard(selectedYoloScene.id, shot.id) }}
+                                        disabled={yoloDependencyCheckInProgress}
+                                        className={`px-2 py-1 rounded text-[10px] whitespace-nowrap ${
+                                          yoloDependencyCheckInProgress
+                                            ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                                            : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
+                                        }`}
+                                      >
+                                        Create Keyframe
+                                      </button>
+                                    )}
+                                    {isYoloVideoStep && (
+                                      <button
+                                        type="button"
+                                        onClick={() => { void handleQueueYoloShotVideo(selectedYoloScene.id, shot.id) }}
+                                        disabled={yoloDependencyCheckInProgress || !hasShotStoryboardFrame}
+                                        title={!hasShotStoryboardFrame ? 'Create this shot keyframe first' : ''}
+                                        className={`px-2 py-1 rounded text-[10px] whitespace-nowrap ${
+                                          yoloDependencyCheckInProgress || !hasShotStoryboardFrame
+                                            ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                                            : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
+                                        }`}
+                                      >
+                                        {yoloSelectedVideoWorkflowIds.length > 1 ? 'Create Shot Video (A/B)' : 'Create Shot Video'}
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
 
@@ -4512,65 +5021,97 @@ function GenerateWorkspace() {
                                   </div>
                                 </div>
                               </div>
-                            ))}
+                              )
+                            })}
                           </div>
                         </div>
                       )}
                     </div>
                   </div>
                     <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/50 p-3">
-                      <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">Batch Create (All Scenes & Shots)</div>
-                      <div className="mt-1 text-[10px] text-sf-text-muted">
-                        These actions run across the full plan, not just the selected shot.
+                      <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">
+                        {isYoloStillsStep ? 'Batch Create Keyframes (All Scenes & Shots)' : 'Batch Create Videos (All Scenes & Shots)'}
                       </div>
-                      <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => { void handleQueueYoloStoryboards() }}
-                          disabled={yoloDependencyCheckInProgress}
-                          title={yoloDependencyCheckInProgress ? 'Wait for dependency check to finish' : 'Queues still-image jobs for all shots in this plan'}
-                          className={`px-3 py-2 rounded-lg text-xs ${
-                            yoloDependencyCheckInProgress
-                              ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
-                              : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
-                          }`}
-                        >
-                          Create Shot Stills
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => { void handleCreateStoryboardPdf() }}
-                          disabled={creatingStoryboardPdf || yoloStoryboardAssetMap.size === 0}
-                          className={`px-3 py-2 rounded-lg text-xs inline-flex items-center justify-center gap-1 ${
-                            creatingStoryboardPdf || yoloStoryboardAssetMap.size === 0
-                              ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
-                              : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
-                          }`}
-                          title={yoloStoryboardAssetMap.size === 0 ? 'Generate storyboard images first' : 'Create a PDF from the latest storyboard frames'}
-                        >
-                          {creatingStoryboardPdf && <Loader2 className="w-3 h-3 animate-spin" />}
-                          {creatingStoryboardPdf ? 'Creating PDF...' : 'Create Storyboard PDF'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => { void handleQueueYoloVideos() }}
-                          disabled={yoloDependencyCheckInProgress}
-                          title={yoloDependencyCheckInProgress ? 'Wait for dependency check to finish' : 'Queues video generation jobs for all shots in this plan'}
-                          className={`px-3 py-2 rounded-lg text-xs ${
-                            yoloDependencyCheckInProgress
-                              ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
-                              : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
-                          }`}
-                        >
-                          Create Videos
-                        </button>
+                      <div className="mt-1 text-[10px] text-sf-text-muted">
+                        {isYoloStillsStep
+                          ? 'These actions run across the full plan, not just the selected shot.'
+                          : `Keyframes ready: ${yoloStoryboardReadyCount}/${yoloQueueVariants.length}. Videos use keyframe images.`}
+                      </div>
+                      <div className={`mt-2 grid grid-cols-1 gap-2 ${isYoloStillsStep ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
+                        {isYoloStillsStep ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => { void handleQueueYoloStoryboards() }}
+                              disabled={yoloDependencyCheckInProgress}
+                              title={yoloDependencyCheckInProgress ? 'Wait for dependency check to finish' : 'Queues still-image jobs for all shots in this plan'}
+                              className={`px-3 py-2 rounded-lg text-xs ${
+                                yoloDependencyCheckInProgress
+                                  ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                                  : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
+                              }`}
+                            >
+                              Create Keyframes
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { void handleCreateStoryboardPdf() }}
+                              disabled={creatingStoryboardPdf || yoloStoryboardAssetMap.size === 0}
+                              className={`px-3 py-2 rounded-lg text-xs inline-flex items-center justify-center gap-1 ${
+                                creatingStoryboardPdf || yoloStoryboardAssetMap.size === 0
+                                  ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                                  : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'
+                              }`}
+                              title={yoloStoryboardAssetMap.size === 0 ? 'Generate keyframe images first' : 'Create a PDF from the latest keyframe images'}
+                            >
+                              {creatingStoryboardPdf && <Loader2 className="w-3 h-3 animate-spin" />}
+                              {creatingStoryboardPdf ? 'Creating PDF...' : 'Create Keyframe PDF'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDirectorSubTab('video-pass')}
+                              disabled={yoloStoryboardReadyCount === 0}
+                              title={yoloStoryboardReadyCount === 0 ? 'Create at least one keyframe first' : 'Continue to Videos step'}
+                              className={`px-3 py-2 rounded-lg text-xs ${
+                                yoloStoryboardReadyCount === 0
+                                  ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                                  : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
+                              }`}
+                            >
+                              Next: Videos
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setDirectorSubTab('scene-shot')}
+                              className="px-3 py-2 rounded-lg text-xs bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary"
+                            >
+                              Back: Keyframes
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { void handleQueueYoloVideos() }}
+                              disabled={yoloDependencyCheckInProgress || yoloStoryboardReadyCount === 0}
+                              title={yoloDependencyCheckInProgress ? 'Wait for dependency check to finish' : yoloStoryboardReadyCount === 0 ? 'Create keyframes first' : 'Queues video generation jobs for all shots in this plan'}
+                              className={`px-3 py-2 rounded-lg text-xs ${
+                                yoloDependencyCheckInProgress || yoloStoryboardReadyCount === 0
+                                  ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+                                  : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
+                              }`}
+                            >
+                              Create Videos
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
                   ) : (
                     <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 p-3 text-xs text-sf-text-secondary space-y-2">
-                      <div className="font-medium text-sf-text-primary">Build a plan to unlock Scene / Shot Editor</div>
-                      <div>Go to Step 2 (Script), click Build Plan, then return here to refine scenes and shots.</div>
+                      <div className="font-medium text-sf-text-primary">Build a plan to unlock Keyframes and Videos</div>
+                      <div>Go to Step 2 (Script), click Build Plan, then continue into Steps 3 and 4.</div>
                       <button
                         type="button"
                         onClick={() => setDirectorSubTab('plan-script')}
@@ -4622,7 +5163,7 @@ function GenerateWorkspace() {
             >
               <Sparkles className="w-4 h-4" />
               {generationMode === 'yolo'
-                ? `Queue ${yoloModeLabel} Storyboards`
+                ? `Queue ${yoloModeLabel} Keyframes`
                 : `Queue ${category === 'video' ? 'Video' : category === 'image' ? 'Image' : 'Audio'}`}
             </button>
             <div className="mt-2 flex gap-2">
@@ -4883,6 +5424,27 @@ function GenerateWorkspace() {
                   <div><span className="text-sf-text-muted">Workflow:</span> {currentWorkflow?.label}</div>
                   <div><span className="text-sf-text-muted">Hardware tier:</span> {currentWorkflowTierMeta?.label || 'Unknown'}</div>
                   <div><span className="text-sf-text-muted">Runtime:</span> {currentWorkflowRuntimeLabel}</div>
+                  {currentWorkflowUsesCloud && (
+                    <div>
+                      <span className="text-sf-text-muted">Cloud estimate / run:</span>{' '}
+                      {dependencyCheck.status === 'checking'
+                        ? 'Checking pricing...'
+                        : dependencyCheck?.estimatedCredits
+                          ? (
+                            <>
+                              {formatCreditsRange(dependencyCheck.estimatedCredits, 1)} ({formatUsdRangeFromCredits(dependencyCheck.estimatedCredits, 1)})
+                              {dependencyCheck?.hasPriceMetadata && (
+                                <span className="text-yellow-400"> (dynamic pricing)</span>
+                              )}
+                            </>
+                          )
+                          : (
+                            dependencyCheck?.hasPriceMetadata
+                              ? 'Dynamic pricing (estimate unavailable)'
+                              : 'No credit metadata'
+                          )}
+                    </div>
+                  )}
                   <div><span className="text-sf-text-muted">Needs input:</span> {currentWorkflow?.needsImage ? 'Yes (image)' : 'No'}</div>
                   {category === 'video' && (
                     <>
@@ -4903,17 +5465,47 @@ function GenerateWorkspace() {
                 <>
                   <div><span className="text-sf-text-muted">Mode:</span> {DIRECTOR_MODE_BETA_LABEL}</div>
                   <div><span className="text-sf-text-muted">Creation:</span> {yoloModeLabel}</div>
-                  <div><span className="text-sf-text-muted">Profile:</span> {yoloActiveQualityProfile}</div>
-                  <div><span className="text-sf-text-muted">Storyboard workflow:</span> {yoloStoryboardWorkflowId}</div>
-                  <div><span className="text-sf-text-muted">Storyboard tier:</span> {formatWorkflowHardwareRuntime(yoloStoryboardWorkflowId)}</div>
-                  <div><span className="text-sf-text-muted">Video default:</span> {getWorkflowDisplayLabel(yoloProfile.videoWorkflowId)}</div>
-                  <div><span className="text-sf-text-muted">Video default tier:</span> {formatWorkflowHardwareRuntime(yoloProfile.videoWorkflowId)}</div>
+                  {!isYoloMusicMode && (
+                    <>
+                      <div>
+                        <span className="text-sf-text-muted">Keyframe source:</span> {yoloStoryboardProfileRuntimeMeta?.label || yoloStoryboardProfileRuntime}
+                      </div>
+                      {yoloStoryboardUsesCloudTier ? (
+                        <div>
+                          <span className="text-sf-text-muted">Keyframe cloud tier:</span> {yoloSelectedStoryboardTierMeta?.label || yoloNormalizedAdStoryboardTier}
+                        </div>
+                      ) : (
+                        <div>
+                          <span className="text-sf-text-muted">Keyframe local workflow:</span> {yoloSelectedAdStageRouting?.imageLabel || getWorkflowDisplayLabel(yoloStoryboardWorkflowId)}
+                        </div>
+                      )}
+                      <div>
+                        <span className="text-sf-text-muted">Video source:</span> {yoloVideoProfileRuntimeMeta?.label || yoloVideoProfileRuntime}
+                      </div>
+                      {yoloVideoUsesCloudTier ? (
+                        <div>
+                          <span className="text-sf-text-muted">Video cloud tier:</span> {yoloSelectedVideoTierMeta?.label || yoloNormalizedAdVideoTier}
+                        </div>
+                      ) : (
+                        <div>
+                          <span className="text-sf-text-muted">Video local workflow:</span> {yoloSelectedAdStageRouting?.videoLabel || getWorkflowDisplayLabel(yoloDefaultVideoWorkflowId)}
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {isYoloMusicMode && (
+                    <div><span className="text-sf-text-muted">Profile:</span> {yoloMusicQualityProfile}</div>
+                  )}
+                  <div><span className="text-sf-text-muted">Keyframe workflow:</span> {yoloStoryboardWorkflowId}</div>
+                  <div><span className="text-sf-text-muted">Keyframe runtime:</span> {formatWorkflowHardwareRuntime(yoloStoryboardWorkflowId)}</div>
+                  <div><span className="text-sf-text-muted">Video default:</span> {getWorkflowDisplayLabel(yoloDefaultVideoWorkflowId)}</div>
+                  <div><span className="text-sf-text-muted">Video runtime:</span> {formatWorkflowHardwareRuntime(yoloDefaultVideoWorkflowId)}</div>
                   <div><span className="text-sf-text-muted">Video queue target:</span> {yoloSelectedVideoWorkflowLabel}</div>
                   <div><span className="text-sf-text-muted">Video target tier:</span> {yoloVideoTargetTierSummary}</div>
                   <div><span className="text-sf-text-muted">Scenes:</span> {yoloSceneCount}</div>
                   <div><span className="text-sf-text-muted">Planned variants:</span> {yoloVariants.length}</div>
                   <div><span className="text-sf-text-muted">Queue variants:</span> {yoloQueueVariants.length}</div>
-                  <div><span className="text-sf-text-muted">Storyboard ready:</span> {yoloStoryboardReadyCount}/{yoloQueueVariants.length}</div>
+                  <div><span className="text-sf-text-muted">Keyframes ready:</span> {yoloStoryboardReadyCount}/{yoloQueueVariants.length}</div>
                 </>
               )}
             </div>

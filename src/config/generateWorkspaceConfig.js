@@ -17,10 +17,14 @@ export const WORKFLOWS = {
   video: [
     { id: 'wan22-i2v', label: 'Image to Video (WAN 2.2)', needsImage: true, description: 'Animate an image into video' },
     { id: 'kling-o3-i2v', label: 'Image to Video (Kling O3 Omni)', needsImage: true, description: 'Premium image-to-video with Kling 3.0 Omni' },
+    { id: 'grok-video-i2v', label: 'Image to Video (Grok Imagine Video)', needsImage: true, description: 'Cloud image-to-video with Grok Imagine Video Beta' },
+    { id: 'vidu-q2-i2v', label: 'Image to Video (Vidu Q2)', needsImage: true, description: 'Cloud image-to-video with Vidu Q2 Pro Fast' },
   ],
   image: [
     { id: 'z-image-turbo', label: 'Text to Image (Z Image Turbo)', needsImage: false, description: 'Generate image from text prompt using Z Image Turbo' },
     { id: 'nano-banana-2', label: 'Text to Image (Nano Banana 2)', needsImage: false, description: 'Premium text-to-image with Nano Banana 2' },
+    { id: 'grok-text-to-image', label: 'Text to Image (Grok Imagine)', needsImage: false, description: 'Cloud text-to-image using Grok Imagine Image Beta' },
+    { id: 'seedream-5-lite-image-edit', label: 'Image Edit (Seedream 5.0 Lite)', needsImage: true, description: 'Cloud image edit with ByteDance Seedream 5.0 Lite' },
     { id: 'multi-angles', label: 'Multiple Angles (Characters)', needsImage: true, description: 'Generate 8 camera angles from one character image' },
     { id: 'multi-angles-scene', label: 'Multiple Angles (Scenes)', needsImage: true, description: 'Generate 8 camera angles from one scene image' },
     { id: 'image-edit', label: 'Image Edit', needsImage: true, description: 'Edit image with text prompt (e.g. remove person on left, change color of car)' },
@@ -32,20 +36,56 @@ export const WORKFLOWS = {
 
 export const DIRECTOR_MODE_BETA_LABEL = 'Director Mode beta'
 
-export const YOLO_PROFILES = {
-  draft: {
+export const YOLO_AD_PROFILE_RUNTIME_OPTIONS = Object.freeze([
+  {
+    id: 'local',
+    label: 'Local',
+    description: 'Run local ComfyUI workflows on your own GPU hardware.',
+  },
+  {
+    id: 'cloud',
+    label: 'Cloud',
+    description: 'Run paid partner-node APIs (credit-based) for cloud inference.',
+  },
+])
+
+export const YOLO_AD_PROFILES = Object.freeze({
+  local: Object.freeze({
+    low: Object.freeze({
+      storyboardWorkflowId: 'image-edit-model-product',
+      videoWorkflowId: 'wan22-i2v',
+    }),
+    quality: Object.freeze({
+      storyboardWorkflowId: 'image-edit-model-product',
+      videoWorkflowId: 'wan22-i2v',
+    }),
+  }),
+  cloud: Object.freeze({
+    low: Object.freeze({
+      storyboardWorkflowId: 'seedream-5-lite-image-edit',
+      videoWorkflowId: 'vidu-q2-i2v',
+    }),
+    quality: Object.freeze({
+      storyboardWorkflowId: 'nano-banana-2',
+      videoWorkflowId: 'grok-video-i2v',
+    }),
+  }),
+})
+
+export const YOLO_MUSIC_PROFILES = Object.freeze({
+  draft: Object.freeze({
     storyboardWorkflowId: 'z-image-turbo',
     videoWorkflowId: 'wan22-i2v',
-  },
-  balanced: {
+  }),
+  balanced: Object.freeze({
     storyboardWorkflowId: 'nano-banana-2',
     videoWorkflowId: 'wan22-i2v',
-  },
-  premium: {
+  }),
+  premium: Object.freeze({
     storyboardWorkflowId: 'nano-banana-2',
     videoWorkflowId: 'kling-o3-i2v',
-  },
-}
+  }),
+})
 
 export const VIDEO_DURATION_PRESETS = [2, 3, 5, 8]
 export const YOLO_QUEUE_CONFIRM_THRESHOLD = 10
@@ -77,11 +117,17 @@ export const YOLO_VIDEO_WORKFLOW_TARGET_OPTIONS = Object.freeze([
   { id: 'profile', label: 'Profile default' },
   { id: 'wan22-i2v', label: 'WAN 2.2' },
   { id: 'kling-o3-i2v', label: 'Kling O3 Omni' },
+  { id: 'grok-video-i2v', label: 'Grok Imagine Video' },
+  { id: 'vidu-q2-i2v', label: 'Vidu Q2' },
 ])
 
 const WORKFLOW_DISPLAY_LABELS = Object.freeze({
   'wan22-i2v': 'WAN 2.2',
   'kling-o3-i2v': 'Kling O3 Omni',
+  'grok-video-i2v': 'Grok Imagine Video',
+  'vidu-q2-i2v': 'Vidu Q2',
+  'grok-text-to-image': 'Grok Imagine',
+  'seedream-5-lite-image-edit': 'Seedream 5.0 Lite',
   'image-edit-model-product': 'Qwen Image Edit 2509 (Model + Product)',
 })
 
@@ -161,7 +207,23 @@ const WORKFLOW_HARDWARE = Object.freeze({
     tierId: 'cloud',
     runtime: 'cloud',
   },
+  'grok-text-to-image': {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
   'kling-o3-i2v': {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
+  'grok-video-i2v': {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
+  'vidu-q2-i2v': {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
+  'seedream-5-lite-image-edit': {
     tierId: 'cloud',
     runtime: 'cloud',
   },

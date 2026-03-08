@@ -1,0 +1,45 @@
+{
+  "37": {
+    "inputs": {
+      "filename_prefix": "video/vidu_q2_i2v",
+      "format": "auto",
+      "codec": "auto",
+      "video-preview": "",
+      "video": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  },
+  "39": {
+    "inputs": {
+      "model": "viduq2-pro-fast",
+      "prompt": "man walks slowly to camera and shows off his shoes",
+      "duration": 5,
+      "seed": 1352722057,
+      "resolution": "1080p",
+      "movement_amplitude": "auto",
+      "image": [
+        "40",
+        0
+      ]
+    },
+    "class_type": "Vidu2ImageToVideoNode",
+    "_meta": {
+      "title": "Vidu2 Image-to-Video Generation"
+    }
+  },
+  "40": {
+    "inputs": {
+      "image": "comfystudio_job_1772676146856_b7ydco_00001_.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  }
+}

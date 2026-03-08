@@ -1,0 +1,29 @@
+{
+  "2": {
+    "inputs": {
+      "model": "grok-imagine-image-beta",
+      "prompt": "Cinematic portrait of a young woman with dark hair and bangs in a vibrant, neon-lit Japanese arcade at night.",
+      "aspect_ratio": "1:1",
+      "number_of_images": 1,
+      "seed": 1071301683,
+      "resolution": "1K"
+    },
+    "class_type": "GrokImageNode",
+    "_meta": {
+      "title": "Grok Image"
+    }
+  },
+  "3": {
+    "inputs": {
+      "filename_prefix": "Grok",
+      "images": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}
