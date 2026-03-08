@@ -16,7 +16,7 @@ import {
 const COMFY_ORG_API_KEY_SETTING_KEY = 'comfyApiKeyComfyOrg'
 const COMFY_ORG_API_KEY_LOCAL_KEY = 'comfystudio-comfy-api-key'
 
-function GeneralTab() {
+function GeneralTab({ initialSection = null }) {
   const initialComfyConnection = getLocalComfyConnectionSync()
   const [comfyPortInput, setComfyPortInput] = useState(String(initialComfyConnection.port || DEFAULT_COMFY_PORT))
   const [comfyConnectionState, setComfyConnectionState] = useState({
@@ -93,6 +93,13 @@ function GeneralTab() {
       }
     })()
   }, [])
+
+  useEffect(() => {
+    if (!initialSection) return
+    setExpandedSections((prev) => (
+      prev.includes(initialSection) ? prev : [...prev, initialSection]
+    ))
+  }, [initialSection])
 
   const toggleSection = (section) => {
     setExpandedSections(prev =>
@@ -475,7 +482,7 @@ function GeneralTab() {
   )
 }
 
-export default function SettingsModal({ isOpen, onClose }) {
+export default function SettingsModal({ isOpen, onClose, initialSection = null }) {
   if (!isOpen) return null
 
   return (
@@ -501,7 +508,7 @@ export default function SettingsModal({ isOpen, onClose }) {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 min-h-0">
-          <GeneralTab />
+          <GeneralTab initialSection={initialSection} />
         </div>
       </div>
     </div>

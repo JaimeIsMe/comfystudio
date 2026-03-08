@@ -13,6 +13,7 @@ import InspectorPanel from './components/InspectorPanel'
 import ResizeHandle from './components/ResizeHandle'
 import AudioGenerateModal from './components/AudioGenerateModal'
 import SettingsModal from './components/SettingsModal'
+import GettingStartedModal from './components/GettingStartedModal'
 import WelcomeScreen from './components/WelcomeScreen'
 import BottomBar from './components/BottomBar'
 import useProjectStore from './stores/projectStore'
@@ -26,6 +27,8 @@ function App() {
   const [audioModalOpen, setAudioModalOpen] = useState(false)
   const [audioModalType, setAudioModalType] = useState('music')
   const [settingsModalOpen, setSettingsModalOpen] = useState(false)
+  const [settingsInitialSection, setSettingsInitialSection] = useState(null)
+  const [gettingStartedOpen, setGettingStartedOpen] = useState(false)
   const [selectedItem, setSelectedItem] = useState({ type: 'shot', id: '2.1' })
   const [mainTab, setMainTab] = useState('editor')
   const [bottomEditorView, setBottomEditorView] = useState('timeline')
@@ -153,7 +156,15 @@ function App() {
   const rightSidebarWidth = isFullScreenTab ? 0 : editorRightInset
   
   // Project state
-  const { currentProject, initialize, isLoading, saveProject, autoSaveEnabled, autoSaveInterval } = useProjectStore()
+  const {
+    currentProject,
+    defaultProjectsLocation,
+    initialize,
+    isLoading,
+    saveProject,
+    autoSaveEnabled,
+    autoSaveInterval,
+  } = useProjectStore()
   
   // Initialize project store on mount
   useEffect(() => {
@@ -225,6 +236,34 @@ function App() {
     setAudioModalType(type)
     setAudioModalOpen(true)
   }
+
+  const closeGettingStarted = useCallback(() => {
+    setGettingStartedOpen(false)
+  }, [])
+
+  const openSettingsModal = useCallback((section = null) => {
+    setSettingsInitialSection(section)
+    setSettingsModalOpen(true)
+  }, [])
+
+  const handleOpenSettingsFromBottomBar = useCallback(() => {
+    setMainTab('editor')
+    openSettingsModal()
+  }, [openSettingsModal])
+
+  const handleOpenGettingStarted = useCallback(() => {
+    setGettingStartedOpen(true)
+  }, [])
+
+  const handleNavigateFromGettingStarted = useCallback((tabId) => {
+    setMainTab(tabId)
+    closeGettingStarted()
+  }, [closeGettingStarted])
+
+  const handleOpenSettingsFromGettingStarted = useCallback((section = null) => {
+    openSettingsModal(section)
+    closeGettingStarted()
+  }, [closeGettingStarted, openSettingsModal])
 
   // Show welcome screen if no project is open
   if (!currentProject) {
@@ -431,10 +470,8 @@ function App() {
       {/* Bottom bar: settings menu + undo/redo */}
       <BottomBar
         projectName={currentProject?.name}
-        onOpenSettings={() => {
-          setMainTab('editor')
-          setSettingsModalOpen(true)
-        }}
+        onOpenSettings={handleOpenSettingsFromBottomBar}
+        onOpenGettingStarted={handleOpenGettingStarted}
       />
 
       {/* Audio Generate Modal */}
@@ -447,7 +484,19 @@ function App() {
       {/* Settings Modal */}
       <SettingsModal
         isOpen={settingsModalOpen}
-        onClose={() => setSettingsModalOpen(false)}
+        onClose={() => {
+          setSettingsModalOpen(false)
+          setSettingsInitialSection(null)
+        }}
+        initialSection={settingsInitialSection}
+      />
+      <GettingStartedModal
+        isOpen={gettingStartedOpen}
+        onClose={closeGettingStarted}
+        projectName={currentProject?.name}
+        defaultProjectsLocation={defaultProjectsLocation}
+        onOpenSettings={handleOpenSettingsFromGettingStarted}
+        onNavigate={handleNavigateFromGettingStarted}
       />
     </div>
   )
