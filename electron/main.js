@@ -9,7 +9,7 @@ const ffmpegPath = require('ffmpeg-static')
 const ffprobeStatic = require('ffprobe-static')
 const ffprobePath = ffprobeStatic?.path || ffprobeStatic
 
-const isDev = process.env.NODE_ENV !== 'production'
+const isDev = !app.isPackaged
 
 // App icon (build/icon.png) – used for window and taskbar/dock
 const iconPath = path.join(__dirname, '..', 'build', 'icon.png')
