@@ -396,10 +396,14 @@ function PreviewPanel() {
   const [letterbox, setLetterbox] = useState('none')
   const [showGuidesDropdown, setShowGuidesDropdown] = useState(false)
   
-  // Info overlay visibility (load from localStorage, default to true)
+  // Info overlay visibility (load from localStorage, default to off)
   const [showInfoOverlay, setShowInfoOverlay] = useState(() => {
-    const saved = localStorage.getItem('previewShowInfoOverlay')
-    return saved !== null ? JSON.parse(saved) : true
+    try {
+      const saved = localStorage.getItem('previewShowInfoOverlay')
+      return saved !== null ? JSON.parse(saved) : false
+    } catch {
+      return false
+    }
   })
   const [autoSmoothPreviewEnabled, setAutoSmoothPreviewEnabled] = useState(() => {
     try {
@@ -411,7 +415,11 @@ function PreviewPanel() {
   
   // Persist info overlay preference
   useEffect(() => {
-    localStorage.setItem('previewShowInfoOverlay', JSON.stringify(showInfoOverlay))
+    try {
+      localStorage.setItem('previewShowInfoOverlay', JSON.stringify(showInfoOverlay))
+    } catch {
+      // Ignore localStorage errors.
+    }
   }, [showInfoOverlay])
   useEffect(() => {
     try {
