@@ -126,7 +126,7 @@ npm run starter-pack:build
 npm install
 ```
 
-- [ ] Production web build:
+- [x] Production web build:
 
 ```bash
 npm run build
@@ -158,13 +158,13 @@ npm run electron:build:linux
 
 ## 7) Documentation and Release Notes
 
-- [ ] Update root `README.md` if behavior/workflow requirements changed.
-- [ ] Keep setup docs explicit for both macOS and Windows quick-start (`npm install`, `npm run electron:dev`).
+- [x] Update root `README.md` if behavior/workflow requirements changed.
+- [x] Keep setup docs explicit for both macOS and Windows quick-start (`npm install`, `npm run electron:dev`).
 - [ ] Ensure hardware tier guidance still matches actual workflows.
 - [ ] Ensure starter pack docs are current (`docs/workflow-starter-pack/README.md`).
-- [ ] Publish/update a single user manual entry point (quick start + deep dive).
-- [ ] Document the Director Mode structured script template with at least one copy/paste example.
-- [ ] Document cloud estimate behavior: credits, approximate USD conversion, and when dynamic pricing labels appear.
+- [x] Publish/update a single user manual entry point (quick start + deep dive).
+- [x] Document the Director Mode structured script template with at least one copy/paste example.
+- [x] Document cloud estimate behavior: credits, approximate USD conversion, and when dynamic pricing labels appear.
 - [ ] Write release notes with:
   - major features/fixes
   - known limitations
@@ -179,25 +179,29 @@ npm run electron:build:linux
 - [ ] Link directly from Generate docs to dependency troubleshooting and starter pack instructions.
 - [ ] Ensure docs links work in packaged builds (external URL or bundled local docs fallback).
 
-### First-Run Onboarding Tutorial (Planned Requirement)
+### Getting Started Guide
 
-- [ ] Implement first-launch guided tour (skippable) for new users.
-- [ ] Tutorial must cover: create/open project, select project/output folder path, set ComfyUI port, test connection, and basic Generate flow.
+- [x] Implement manual `Getting Started` guide accessible from `ComfyStudio > Getting Started`.
+- [x] Guide covers projects folder, ComfyUI port, connection test, workflow setup expectations, and a basic app tour.
 - [ ] Include clear "where files go" guidance (models/nodes/workflows/output folders).
-- [ ] Add `Replay tutorial` in Settings/Help so users can run onboarding again later.
+- [x] Add a replayable entry point so users can reopen onboarding later.
 - [ ] Verify onboarding works on a clean user profile and does not block normal usage.
 
 ---
 
 ## 8) Open Source Readiness
 
-- [ ] Confirm license is present and accurate.
+- [x] Confirm license is present and accurate.
 - [ ] Confirm no private/internal-only files are tracked.
 - [ ] Confirm dependency/licensing obligations are documented.
 - [ ] Confirm packaged binaries and large assets are expected and intentional.
 - [ ] Fill out public repo metadata (`package.json` author/repository/homepage/bugs as applicable).
-- [ ] Add community files appropriate for public contributions (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md` or equivalent support policy).
+- [x] Add community files appropriate for public contributions (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md` or equivalent support policy).
 - [ ] Confirm screenshots/demo media intended for the repo are safe to publish publicly.
+
+Notes:
+- `package.json` author is now populated.
+- `repository`, `homepage`, and `bugs` should be added once the public repo URL exists.
 
 ---
 
