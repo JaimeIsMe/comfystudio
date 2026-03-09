@@ -136,11 +136,15 @@
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "nsis": {
+      "artifactName": "${productName}-${version}-setup-${arch}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable-${arch}.${ext}"
     },
     "dmg": {
       "contents": [
