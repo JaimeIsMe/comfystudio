@@ -114,7 +114,10 @@
       ],
       "icon": "build/icon.icns",
       "category": "public.app-category.video",
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "notarize": {
+        "teamId": "4T66ZQ5AC3"
+      }
     },
     "linux": {
       "target": [
