@@ -8,6 +8,11 @@ dist/
 dist-electron/
 build/
 out/
+!build/
+build/*
+!build/icon.png
+!build/icon.icns
+!build/icon.ico
 
 # Environment files
 .env

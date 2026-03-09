@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "icons:generate": "icon-gen -i build/icon.png -o build --ico --ico-name icon --icns --icns-name icon",
     "preview": "vite preview",
     "electron": "electron .",
     "electron:dev": "concurrently -k \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && electron .\"",
@@ -54,6 +55,7 @@
     "concurrently": "^8.2.2",
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1",
+    "icon-gen": "^5.0.0",
     "postcss": "^8.4.32",
     "tailwindcss": "^3.3.6",
     "vite": "^5.0.8",
@@ -97,7 +99,7 @@
           ]
         }
       ],
-      "icon": "build/icon.png",
+      "icon": "build/icon.ico",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "mac": {
@@ -136,9 +138,9 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "installerIcon": "build/icon.png",
-      "uninstallerIcon": "build/icon.png",
-      "installerHeaderIcon": "build/icon.png"
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
     },
     "dmg": {
       "contents": [
