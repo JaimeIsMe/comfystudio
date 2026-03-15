@@ -37,13 +37,13 @@ Advanced ComfyUI users can also optionally download the `Workflow Starter Pack` 
 - Generate images, videos, and audio through curated local or cloud workflows.
 - Use Director Mode to turn structured script input into keyframes and video shots.
 - Search Pexels stock footage and stills directly from the app.
-- Refine prompts locally with LM Studio.
+- Refine prompts with LM Studio (local) or MiniMax (cloud).
 
 ## Core Product Decisions
 
 - ComfyUI is local-only in this build. Remote and LAN ComfyUI targets are intentionally disabled.
 - The default ComfyUI endpoint is `http://127.0.0.1:8188`, but users can override the port in Settings.
-- LM Studio integration is local-only.
+- LM Studio integration is local-only. MiniMax cloud LLM is also available as an alternative.
 - Generate includes dependency preflight checks before queueing workflows.
 
 ## Desktop App Requirements
@@ -57,6 +57,7 @@ Optional integrations:
 - Pexels API key for the `Stock` tab
 - Comfy account API key for paid partner-node workflows
 - LM Studio for local prompt assistance in the `LLM` tab
+- MiniMax API key for cloud-based prompt assistance (alternative to LM Studio)
 
 ## First Run
 
@@ -162,14 +163,23 @@ The `Stock` tab uses Pexels.
 
 ### LLM
 
-The `LLM` tab connects to LM Studio.
+The `LLM` tab supports two providers:
+
+**LM Studio (Local)**
 
 - Start LM Studio locally.
 - Enable the local API server.
 - Load a model.
 - Use the model to refine prompts before generating.
+- If your GPU memory is tight, unload the LM Studio model before heavy ComfyUI generation.
 
-If your GPU memory is tight, unload the LM Studio model before heavy ComfyUI generation.
+**MiniMax (Cloud)**
+
+- Open `Settings > LLM Provider` and select `MiniMax (Cloud)`.
+- Enter your MiniMax API key (get one at [platform.minimaxi.com](https://platform.minimaxi.com)).
+- Choose between MiniMax M2.5 or M2.5 Highspeed models.
+- No local GPU or VRAM needed — prompts are processed in the cloud.
+- Supports 204K token context window for long creative sessions.
 
 ## Workflow Starter Pack
 

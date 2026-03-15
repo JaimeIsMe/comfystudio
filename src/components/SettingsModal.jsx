@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
   X, Server, FolderOpen, Palette, Monitor, Save,
-  HardDrive, Film, ChevronDown, ChevronRight
+  HardDrive, Film, ChevronDown, ChevronRight, Bot
 } from 'lucide-react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../stores/projectStore'
 import { getPexelsApiKey, setPexelsApiKey } from '../services/pexelsSettings'
@@ -13,6 +13,13 @@ import {
   parseLocalComfyPortInput,
   saveLocalComfyConnectionPort,
 } from '../services/localComfyConnection'
+import {
+  PROVIDERS,
+  getProviderTypeSync,
+  saveProviderType,
+  getMiniMaxApiKey,
+  saveMiniMaxApiKey,
+} from '../services/llmProvider'
 const COMFY_ORG_API_KEY_SETTING_KEY = 'comfyApiKeyComfyOrg'
 const COMFY_ORG_API_KEY_LOCAL_KEY = 'comfystudio-comfy-api-key'
 
@@ -28,6 +35,8 @@ function GeneralTab({ initialSection = null }) {
   const [theme, setTheme] = useState('dark')
   const [pexelsApiKey, setPexelsApiKeyLocal] = useState('')
   const [comfyOrgApiKey, setComfyOrgApiKey] = useState('')
+  const [llmProvider, setLlmProvider] = useState(getProviderTypeSync)
+  const [minimaxApiKey, setMinimaxApiKey] = useState('')
   const [settingsSaved, setSettingsSaved] = useState(false)
   const [expandedSections, setExpandedSections] = useState(['connection', 'storage', 'stock'])
 
@@ -64,6 +73,7 @@ function GeneralTab({ initialSection = null }) {
 
   useEffect(() => {
     getPexelsApiKey().then(key => setPexelsApiKeyLocal(key || ''))
+    getMiniMaxApiKey().then(key => setMinimaxApiKey(key || ''))
     ;(async () => {
       try {
         let next = ''
@@ -193,9 +203,20 @@ function GeneralTab({ initialSection = null }) {
     })
   }
 
+  const handleSaveLlmProvider = async (type) => {
+    setLlmProvider(type)
+    await saveProviderType(type)
+    window.dispatchEvent(new CustomEvent('comfystudio-llm-provider-changed', { detail: type }))
+  }
+
+  const handleSaveMinimaxApiKey = async () => {
+    await saveMiniMaxApiKey(minimaxApiKey)
+  }
+
   const handleSaveAllSettings = async () => {
     await setPexelsApiKey(pexelsApiKey.trim())
     await handleSaveComfyOrgApiKey()
+    await handleSaveMinimaxApiKey()
     const connectionSaved = await handleSaveComfyConnection()
     if (connectionSaved) {
       setSettingsSaved(true)
@@ -299,6 +320,48 @@ function GeneralTab({ initialSection = null }) {
               . Used by the Stock tab to search photos and videos.
             </p>
           </div>
+        </div>
+      </Section>
+
+      <Section id="llm" icon={Bot} title="LLM Provider">
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs text-sf-text-muted mb-1">Provider</label>
+            <select
+              value={llmProvider}
+              onChange={(e) => handleSaveLlmProvider(e.target.value)}
+              className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-3 py-2 text-sm text-sf-text-primary focus:outline-none focus:border-sf-accent"
+            >
+              <option value={PROVIDERS.LMSTUDIO}>Local (LM Studio)</option>
+              <option value={PROVIDERS.MINIMAX}>MiniMax (Cloud)</option>
+            </select>
+            <p className="text-[10px] text-sf-text-muted mt-1">
+              {llmProvider === PROVIDERS.MINIMAX
+                ? 'Uses MiniMax cloud API. No local GPU needed.'
+                : 'Connects to a local LM Studio server on localhost:1234.'}
+            </p>
+          </div>
+          {llmProvider === PROVIDERS.MINIMAX && (
+            <div>
+              <label className="block text-xs text-sf-text-muted mb-1">MiniMax API Key</label>
+              <input
+                type="password"
+                autoComplete="off"
+                value={minimaxApiKey}
+                onChange={(e) => setMinimaxApiKey(e.target.value)}
+                onBlur={handleSaveMinimaxApiKey}
+                placeholder="Your MiniMax API key"
+                className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-3 py-2 text-sm text-sf-text-primary placeholder-sf-text-muted focus:outline-none focus:border-sf-accent"
+              />
+              <p className="text-[10px] text-sf-text-muted mt-1">
+                Get a key at{' '}
+                <a href="https://platform.minimaxi.com" target="_blank" rel="noopener noreferrer" className="text-sf-accent hover:underline">
+                  platform.minimaxi.com
+                </a>
+                . Used by the LLM Assistant for cloud-based prompt help.
+              </p>
+            </div>
+          )}
         </div>
       </Section>
 
