@@ -1,0 +1,53 @@
+# Build ComfyStudio Linux artifacts (AppImage + deb) inside a Linux container.
+# Run from project root:
+#   docker build --platform linux/amd64 -f Dockerfile.linux-build -t comfystudio-linux-build .
+#   docker run --rm -v "$(pwd)/release:/out" comfystudio-linux-build sh -lc 'cp -R /app/release/. /out/'
+#
+# Artifacts will appear in ./release/
+
+FROM node:20-bookworm-slim
+
+# Optional base64-encoded custom root CA cert for corporate proxies.
+# Example: CUSTOM_CA_CERT_B64="$(base64 -i /path/to/corp-root-ca.crt)"
+ARG CUSTOM_CA_CERT_B64=""
+
+# System deps for electron-builder Linux targets (AppImage, deb)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    binutils \
+    libc6-i386 \
+    fakeroot \
+    libgtk-3-0 \
+    libnotify4 \
+    libnss3 \
+    libxss1 \
+    libasound2 \
+    libxtst6 \
+    xauth \
+    libsecret-1-0 \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# If provided, trust an additional corporate root CA certificate.
+RUN if [ -n "$CUSTOM_CA_CERT_B64" ]; then \
+      echo "$CUSTOM_CA_CERT_B64" | base64 -d > /usr/local/share/ca-certificates/custom-corp-root.crt && \
+      update-ca-certificates; \
+    fi
+
+WORKDIR /app
+
+# Install dependencies first (better layer caching)
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Rest of app
+COPY . .
+
+# Linux icon set: electron-builder expects build/icons/ with PNGs
+RUN mkdir -p build/icons && cp build/icon.png build/icons/256x256.png && cp build/icon.png build/icons/512x512.png
+
+# Build Vite then electron-builder for Linux only
+RUN npm run build && npm run electron:build:linux
+
+# Default: just build; artifacts are in /app/release (mount as volume to copy out)
+CMD ["ls", "-la", "/app/release"]

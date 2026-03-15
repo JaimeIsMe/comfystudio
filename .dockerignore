@@ -1,0 +1,27 @@
+# Dependencies (reinstalled in container)
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Build output (produced inside container)
+dist
+release
+out
+
+# Git and IDE
+.git
+.gitignore
+.cursor
+.vscode
+*.swp
+*.swo
+.DS_Store
+
+# Docs and misc (not needed for build)
+*.md
+!README.md
+.env
+.env.*
+*.log

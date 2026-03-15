@@ -237,6 +237,32 @@ npm run electron:build:linux
 
 Packaged artifacts are written to `release/`.
 
+### Building the Linux app with Docker
+
+You can build the Linux version (AppImage and .deb) on any host (including macOS or Windows) using Docker, so you get native Linux binaries without cross-compilation:
+
+```bash
+./scripts/docker-build-linux.sh
+```
+
+Or manually:
+
+```bash
+docker build --platform linux/amd64 -f Dockerfile.linux-build -t comfystudio-linux-build .
+docker run --platform linux/amd64 --rm -v "$(pwd)/release:/out" comfystudio-linux-build sh -lc "cp -R /app/release/. /out/"
+```
+
+Artifacts appear in `release/`.
+
+If your network uses TLS interception (common on corporate proxies) and Docker fails with `x509: certificate signed by unknown authority`, pass your root CA into the build:
+
+```bash
+export CUSTOM_CA_CERT_B64="$(base64 -i /path/to/corp-root-ca.crt)"
+./scripts/docker-build-linux.sh
+```
+
+The script forwards `CUSTOM_CA_CERT_B64` to the Docker build and installs it into the container trust store.
+
 ## Known Constraints
 
 - ComfyUI is local-only in this build.

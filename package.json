@@ -138,6 +138,7 @@
       ],
       "icon": "build/icons",
       "category": "Video",
+      "maintainer": "ComfyStudio contributors <opensource@comfystudio.app>",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "nsis": {
