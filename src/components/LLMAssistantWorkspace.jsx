@@ -1,9 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Bot, Loader2, Send, Copy, Check, Power, PowerOff, RefreshCw,
-  AlertCircle, Sparkles, MessageSquare, X
+  AlertCircle, Sparkles, MessageSquare, X, Cloud, Monitor
 } from 'lucide-react'
 import lmstudio from '../services/lmstudio'
+import minimax from '../services/minimax'
+import {
+  PROVIDERS,
+  getProviderTypeSync,
+  getActiveService,
+  supportsModelManagement,
+  getMiniMaxApiKey,
+  getMiniMaxModelSync,
+  saveMiniMaxModel,
+} from '../services/llmProvider'
 
 const SYSTEM_PROMPT = `You are an expert AI assistant specialized in helping users create high-quality prompts for AI video and image generation. 
 
@@ -24,12 +34,16 @@ When helping with prompts:
 Be creative, helpful, and focused on achieving the best possible generation results.`
 
 function LLMAssistantWorkspace() {
+  const [providerType, setProviderType] = useState(getProviderTypeSync)
   const [isConnected, setIsConnected] = useState(false)
   const [isCheckingConnection, setIsCheckingConnection] = useState(false)
   const [models, setModels] = useState([])
   const [selectedModelId, setSelectedModelId] = useState(() => {
     // Load last selected model from localStorage
     try {
+      if (getProviderTypeSync() === PROVIDERS.MINIMAX) {
+        return getMiniMaxModelSync()
+      }
       return localStorage.getItem('llm-assistant-selected-model') || null
     } catch (error) {
       return null
@@ -37,16 +51,38 @@ function LLMAssistantWorkspace() {
   })
   const [loadedModelId, setLoadedModelId] = useState(null)
 
+  // Listen for provider changes from settings
+  useEffect(() => {
+    const handler = (e) => {
+      const newType = e.detail
+      setProviderType(newType)
+      setIsConnected(false)
+      setModels([])
+      setLoadedModelId(null)
+      if (newType === PROVIDERS.MINIMAX) {
+        setSelectedModelId(getMiniMaxModelSync())
+      } else {
+        setSelectedModelId(localStorage.getItem('llm-assistant-selected-model') || null)
+      }
+    }
+    window.addEventListener('comfystudio-llm-provider-changed', handler)
+    return () => window.removeEventListener('comfystudio-llm-provider-changed', handler)
+  }, [])
+
   // Persist selected model to localStorage
   useEffect(() => {
     if (selectedModelId) {
       try {
-        localStorage.setItem('llm-assistant-selected-model', selectedModelId)
+        if (providerType === PROVIDERS.MINIMAX) {
+          saveMiniMaxModel(selectedModelId)
+        } else {
+          localStorage.setItem('llm-assistant-selected-model', selectedModelId)
+        }
       } catch (error) {
         console.error('Failed to save selected model:', error)
       }
     }
-  }, [selectedModelId])
+  }, [selectedModelId, providerType])
   const [isLoadingModel, setIsLoadingModel] = useState(false)
   const [isUnloadingModel, setIsUnloadingModel] = useState(false)
   const [isLoadingModels, setIsLoadingModels] = useState(false)
@@ -96,7 +132,8 @@ function LLMAssistantWorkspace() {
   const checkConnection = async () => {
     setIsCheckingConnection(true)
     try {
-      const connected = await lmstudio.checkConnection()
+      const service = await getActiveService(providerType)
+      const connected = await service.checkConnection()
       setIsConnected(connected)
       if (connected) {
         await loadModels()
@@ -111,27 +148,39 @@ function LLMAssistantWorkspace() {
   const loadModels = async () => {
     setIsLoadingModels(true)
     try {
-      const modelList = await lmstudio.listModels()
+      const service = await getActiveService(providerType)
+      const modelList = await service.listModels()
       setModels(modelList)
-      
-      // Get current selectedModelId from state (may be from localStorage)
-      setSelectedModelId(currentSelected => {
-        // Find currently loaded model
-        const loaded = modelList.find(m => m.state === 'loaded')
-        if (loaded) {
-          setLoadedModelId(loaded.id)
-          // Prefer loaded model if one exists
-          return loaded.id
-        }
-        
-        // If we have a saved selection, verify it still exists
-        if (currentSelected && modelList.find(m => m.id === currentSelected)) {
-          return currentSelected
-        }
-        
-        // Otherwise use first available model
-        return modelList.length > 0 ? modelList[0].id : null
-      })
+
+      if (providerType === PROVIDERS.MINIMAX) {
+        // Cloud models are always "loaded"
+        setSelectedModelId(currentSelected => {
+          if (currentSelected && modelList.find(m => m.id === currentSelected)) {
+            return currentSelected
+          }
+          return modelList.length > 0 ? modelList[0].id : null
+        })
+        setLoadedModelId(modelList.length > 0 ? (getMiniMaxModelSync() || modelList[0].id) : null)
+      } else {
+        // Get current selectedModelId from state (may be from localStorage)
+        setSelectedModelId(currentSelected => {
+          // Find currently loaded model
+          const loaded = modelList.find(m => m.state === 'loaded')
+          if (loaded) {
+            setLoadedModelId(loaded.id)
+            // Prefer loaded model if one exists
+            return loaded.id
+          }
+
+          // If we have a saved selection, verify it still exists
+          if (currentSelected && modelList.find(m => m.id === currentSelected)) {
+            return currentSelected
+          }
+
+          // Otherwise use first available model
+          return modelList.length > 0 ? modelList[0].id : null
+        })
+      }
     } catch (error) {
       console.error('Failed to load models:', error)
     } finally {
@@ -192,9 +241,10 @@ function LLMAssistantWorkspace() {
       ]
 
       let fullResponse = ''
-      
+      const service = await getActiveService(providerType)
+
       // Use streaming for better UX
-      await lmstudio.streamChatCompletion(
+      await service.streamChatCompletion(
         loadedModelId,
         chatMessages,
         (chunk) => {
@@ -203,7 +253,7 @@ function LLMAssistantWorkspace() {
         },
         {
           temperature: 0.7,
-          max_tokens: -1,
+          max_tokens: providerType === PROVIDERS.MINIMAX ? 4096 : -1,
         }
       )
 
@@ -212,9 +262,12 @@ function LLMAssistantWorkspace() {
       setCurrentResponse('')
     } catch (error) {
       console.error('Chat error:', error)
+      const hint = providerType === PROVIDERS.MINIMAX
+        ? 'Check your MiniMax API key in Settings > LLM Provider.'
+        : 'Make sure LM Studio is running and the model is loaded.'
       setMessages([...newMessages, {
         role: 'assistant',
-        content: `Error: ${error.message}. Make sure LM Studio is running and the model is loaded.`,
+        content: `Error: ${error.message}. ${hint}`,
       }])
       setCurrentResponse('')
     } finally {
@@ -262,9 +315,16 @@ function LLMAssistantWorkspace() {
             Refresh
           </button>
           <div className="flex items-center gap-2">
+            {providerType === PROVIDERS.MINIMAX ? (
+              <Cloud className="w-3 h-3 text-sf-text-muted" />
+            ) : (
+              <Monitor className="w-3 h-3 text-sf-text-muted" />
+            )}
             <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
             <span className="text-[10px] text-sf-text-muted">
-              {isConnected ? 'LM Studio Connected' : 'LM Studio Offline'}
+              {providerType === PROVIDERS.MINIMAX
+                ? (isConnected ? 'MiniMax Connected' : 'MiniMax Offline')
+                : (isConnected ? 'LM Studio Connected' : 'LM Studio Offline')}
             </span>
           </div>
         </div>
@@ -282,21 +342,41 @@ function LLMAssistantWorkspace() {
                 <div className="flex items-start gap-2 text-xs text-sf-text-muted">
                   <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
                   <div>
-                    <div className="font-medium text-sf-text-secondary mb-2">LM Studio API not connected</div>
-                    <div className="text-[10px] space-y-1.5">
-                      <div className="font-medium text-sf-text-primary">To enable the API:</div>
-                      <ol className="list-decimal list-inside space-y-1 ml-1">
-                        <li>Open LM Studio</li>
-                        <li>Go to <strong>Settings</strong> → <strong>Developer</strong> tab</li>
-                        <li>Find the <strong>"Local LLM Service (headless)"</strong> section</li>
-                        <li>Check <strong>"Enable Local LLM Service"</strong></li>
-                        <li>Alternatively, look for a <strong>"Start server"</strong> toggle/button</li>
-                        <li>Click <strong>Refresh</strong> above to reconnect</li>
-                      </ol>
-                      <div className="mt-2 pt-2 border-t border-sf-dark-700 text-[9px] opacity-80">
-                        The API server runs on <code className="bg-sf-dark-700 px-1 rounded">localhost:1234</code> by default
-                      </div>
-                    </div>
+                    {providerType === PROVIDERS.MINIMAX ? (
+                      <>
+                        <div className="font-medium text-sf-text-secondary mb-2">MiniMax API not connected</div>
+                        <div className="text-[10px] space-y-1.5">
+                          <div className="font-medium text-sf-text-primary">To connect:</div>
+                          <ol className="list-decimal list-inside space-y-1 ml-1">
+                            <li>Open <strong>Settings</strong> → <strong>LLM Provider</strong></li>
+                            <li>Select <strong>MiniMax (Cloud)</strong></li>
+                            <li>Enter your <strong>MiniMax API key</strong></li>
+                            <li>Click <strong>Refresh</strong> above to reconnect</li>
+                          </ol>
+                          <div className="mt-2 pt-2 border-t border-sf-dark-700 text-[9px] opacity-80">
+                            Get an API key at <a href="https://platform.minimaxi.com" target="_blank" rel="noopener noreferrer" className="text-sf-accent hover:underline">platform.minimaxi.com</a>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="font-medium text-sf-text-secondary mb-2">LM Studio API not connected</div>
+                        <div className="text-[10px] space-y-1.5">
+                          <div className="font-medium text-sf-text-primary">To enable the API:</div>
+                          <ol className="list-decimal list-inside space-y-1 ml-1">
+                            <li>Open LM Studio</li>
+                            <li>Go to <strong>Settings</strong> → <strong>Developer</strong> tab</li>
+                            <li>Find the <strong>"Local LLM Service (headless)"</strong> section</li>
+                            <li>Check <strong>"Enable Local LLM Service"</strong></li>
+                            <li>Alternatively, look for a <strong>"Start server"</strong> toggle/button</li>
+                            <li>Click <strong>Refresh</strong> above to reconnect</li>
+                          </ol>
+                          <div className="mt-2 pt-2 border-t border-sf-dark-700 text-[9px] opacity-80">
+                            The API server runs on <code className="bg-sf-dark-700 px-1 rounded">localhost:1234</code> by default
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -342,48 +422,59 @@ function LLMAssistantWorkspace() {
                   </div>
                 )}
 
-                {/* Load/Unload buttons */}
-                <div className="flex gap-2">
-                  {loadedModelId ? (
-                    <>
-                      <button
-                        onClick={handleUnloadModel}
-                        disabled={isUnloadingModel}
-                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-red-600/20 hover:bg-red-600/30 border border-red-600/50 rounded text-xs text-red-400 transition-colors disabled:opacity-50"
-                      >
-                        {isUnloadingModel ? (
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                        ) : (
-                          <PowerOff className="w-3 h-3" />
-                        )}
-                        Unload Model
-                      </button>
-                      <div className="flex items-center gap-1 px-2 text-[10px] text-green-400">
-                        <div className="w-1.5 h-1.5 rounded-full bg-green-400" />
-                        Loaded
-                      </div>
-                    </>
-                  ) : (
-                    <button
-                      onClick={handleLoadModel}
-                      disabled={!selectedModelId || isLoadingModel}
-                      className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-sf-accent hover:bg-sf-accent-hover rounded text-xs text-white transition-colors disabled:opacity-50"
-                    >
-                      {isLoadingModel ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
+                {/* Load/Unload buttons — only for local providers */}
+                {supportsModelManagement(providerType) ? (
+                  <>
+                    <div className="flex gap-2">
+                      {loadedModelId ? (
+                        <>
+                          <button
+                            onClick={handleUnloadModel}
+                            disabled={isUnloadingModel}
+                            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-red-600/20 hover:bg-red-600/30 border border-red-600/50 rounded text-xs text-red-400 transition-colors disabled:opacity-50"
+                          >
+                            {isUnloadingModel ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <PowerOff className="w-3 h-3" />
+                            )}
+                            Unload Model
+                          </button>
+                          <div className="flex items-center gap-1 px-2 text-[10px] text-green-400">
+                            <div className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                            Loaded
+                          </div>
+                        </>
                       ) : (
-                        <Power className="w-3 h-3" />
+                        <button
+                          onClick={handleLoadModel}
+                          disabled={!selectedModelId || isLoadingModel}
+                          className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-sf-accent hover:bg-sf-accent-hover rounded text-xs text-white transition-colors disabled:opacity-50"
+                        >
+                          {isLoadingModel ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Power className="w-3 h-3" />
+                          )}
+                          Load Model
+                        </button>
                       )}
-                      Load Model
-                    </button>
-                  )}
-                </div>
+                    </div>
 
-                {loadedModel && (
-                  <div className="mt-3 p-2 bg-green-500/10 border border-green-500/30 rounded text-[10px] text-green-400">
-                    <div className="font-medium mb-1">Model Loaded</div>
+                    {loadedModel && (
+                      <div className="mt-3 p-2 bg-green-500/10 border border-green-500/30 rounded text-[10px] text-green-400">
+                        <div className="font-medium mb-1">Model Loaded</div>
+                        <div className="text-[9px] opacity-80">
+                          VRAM is being used. Unload when generating videos/images to free memory.
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="mt-2 p-2 bg-green-500/10 border border-green-500/30 rounded text-[10px] text-green-400">
+                    <div className="font-medium mb-1">Cloud Model Ready</div>
                     <div className="text-[9px] opacity-80">
-                      VRAM is being used. Unload when generating videos/images to free memory.
+                      Using MiniMax cloud API. No local VRAM required.
                     </div>
                   </div>
                 )}
@@ -395,31 +486,62 @@ function LLMAssistantWorkspace() {
           <div className="flex-1 overflow-auto p-4">
             <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">How to Use</div>
             <div className="space-y-2 text-[11px] text-sf-text-secondary">
-              <div>
-                <div className="font-medium text-sf-text-primary mb-1">1. Enable API Server</div>
-                <div className="text-[10px]">
-                  In LM Studio: <strong>Settings</strong> → <strong>Developer</strong> tab → 
-                  Check <strong>"Enable Local LLM Service"</strong> or toggle <strong>"Start server"</strong>
-                </div>
-              </div>
-              <div>
-                <div className="font-medium text-sf-text-primary mb-1">2. Load a Model</div>
-                <div className="text-[10px]">Select and load a model to use for prompt assistance</div>
-              </div>
-              <div>
-                <div className="font-medium text-sf-text-primary mb-1">3. Chat & Refine</div>
-                <div className="text-[10px]">Ask for help creating or improving prompts</div>
-              </div>
-              <div>
-                <div className="font-medium text-sf-text-primary mb-1">4. Copy & Use</div>
-                <div className="text-[10px]">Copy generated prompts to the Generate workspace</div>
-              </div>
-              <div className="pt-2 border-t border-sf-dark-700">
-                <div className="font-medium text-yellow-400 mb-1">💡 Tip</div>
-                <div className="text-[10px]">
-                  Unload the model before generating videos/images to free VRAM for ComfyUI.
-                </div>
-              </div>
+              {providerType === PROVIDERS.MINIMAX ? (
+                <>
+                  <div>
+                    <div className="font-medium text-sf-text-primary mb-1">1. Add API Key</div>
+                    <div className="text-[10px]">
+                      Go to <strong>Settings</strong> → <strong>LLM Provider</strong> → enter your MiniMax API key
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-medium text-sf-text-primary mb-1">2. Select a Model</div>
+                    <div className="text-[10px]">Choose between M2.5 (balanced) or M2.5 Highspeed (faster)</div>
+                  </div>
+                  <div>
+                    <div className="font-medium text-sf-text-primary mb-1">3. Chat & Refine</div>
+                    <div className="text-[10px]">Ask for help creating or improving prompts</div>
+                  </div>
+                  <div>
+                    <div className="font-medium text-sf-text-primary mb-1">4. Copy & Use</div>
+                    <div className="text-[10px]">Copy generated prompts to the Generate workspace</div>
+                  </div>
+                  <div className="pt-2 border-t border-sf-dark-700">
+                    <div className="font-medium text-blue-400 mb-1">Cloud</div>
+                    <div className="text-[10px]">
+                      MiniMax runs in the cloud — no local GPU or VRAM needed.
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <div className="font-medium text-sf-text-primary mb-1">1. Enable API Server</div>
+                    <div className="text-[10px]">
+                      In LM Studio: <strong>Settings</strong> → <strong>Developer</strong> tab →
+                      Check <strong>"Enable Local LLM Service"</strong> or toggle <strong>"Start server"</strong>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-medium text-sf-text-primary mb-1">2. Load a Model</div>
+                    <div className="text-[10px]">Select and load a model to use for prompt assistance</div>
+                  </div>
+                  <div>
+                    <div className="font-medium text-sf-text-primary mb-1">3. Chat & Refine</div>
+                    <div className="text-[10px]">Ask for help creating or improving prompts</div>
+                  </div>
+                  <div>
+                    <div className="font-medium text-sf-text-primary mb-1">4. Copy & Use</div>
+                    <div className="text-[10px]">Copy generated prompts to the Generate workspace</div>
+                  </div>
+                  <div className="pt-2 border-t border-sf-dark-700">
+                    <div className="font-medium text-yellow-400 mb-1">Tip</div>
+                    <div className="text-[10px]">
+                      Unload the model before generating videos/images to free VRAM for ComfyUI.
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -540,7 +662,9 @@ function LLMAssistantWorkspace() {
             {!loadedModelId && (
               <div className="mt-2 text-[10px] text-yellow-500 flex items-center gap-1">
                 <AlertCircle className="w-3 h-3" />
-                Load a model in the left panel to start chatting
+                {providerType === PROVIDERS.MINIMAX
+                  ? 'Connect to MiniMax to start chatting'
+                  : 'Load a model in the left panel to start chatting'}
               </div>
             )}
           </div>
