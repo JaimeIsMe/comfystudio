@@ -3,7 +3,7 @@ import {
   Volume2, VolumeX, Lock, Unlock, Eye, EyeOff, 
   Plus, Video, Type, Image as ImageIcon,
   Sparkles, GripVertical, Magnet, ArrowRightLeft, Square, X, Check, Pencil,
-  Diamond, Zap, AlertTriangle, Loader2, ChevronRight, Maximize2, Flag
+  Diamond, Zap, AlertTriangle, Loader2, ChevronLeft, ChevronRight, Maximize2, Flag
 } from 'lucide-react'
 import useTimelineStore from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
@@ -903,6 +903,24 @@ function Timeline({ onOpenAudioGenerate }) {
     }
   }, [marqueeState, clips, tracks, videoTracks, audioTracks, pixelsPerSecond, selectedClipIds])
 
+  const selectClipsFromPlayheadToEnd = useCallback(() => {
+    const clipsToSelect = clips
+      .filter(c => (c.startTime + c.duration) > playheadPosition)
+      .map(c => c.id)
+
+    useTimelineStore.getState().selectClips(clipsToSelect)
+    selectMarker(null)
+  }, [clips, playheadPosition, selectMarker])
+
+  const selectClipsFromTimelineStartToPlayhead = useCallback(() => {
+    const clipsToSelect = clips
+      .filter(c => c.startTime <= playheadPosition)
+      .map(c => c.id)
+
+    useTimelineStore.getState().selectClips(clipsToSelect)
+    selectMarker(null)
+  }, [clips, playheadPosition, selectMarker])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -967,6 +985,16 @@ function Timeline({ onOpenAudioGenerate }) {
         useTimelineStore.getState().selectClips(allClipIds)
       }
 
+      // E / Shift+E - select clips relative to the playhead
+      if ((e.key === 'e' || e.key === 'E') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault()
+        if (e.shiftKey) {
+          selectClipsFromTimelineStartToPlayhead()
+        } else {
+          selectClipsFromPlayheadToEnd()
+        }
+      }
+
       // Ctrl/Cmd + C - copy selected clips
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
         if (selectedClipIds.length > 0) {
@@ -1029,7 +1057,7 @@ function Timeline({ onOpenAudioGenerate }) {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedTransitionId, selectedMarkerId, removeSelectedClips, removeTransition, removeMarker, clearSelection, selectMarker, clips, undo, redo, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips])
+  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedTransitionId, selectedMarkerId, removeSelectedClips, removeTransition, removeMarker, clearSelection, selectMarker, clips, undo, redo, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips, selectClipsFromPlayheadToEnd, selectClipsFromTimelineStartToPlayhead])
 
   // Spacebar panning key state (dedicated listeners so keyup cannot get "stuck")
   useEffect(() => {
@@ -2645,6 +2673,24 @@ function Timeline({ onOpenAudioGenerate }) {
         {selectedClipIds.length > 1 && (
           <span className="text-[10px] text-sf-accent">{selectedClipIds.length} selected</span>
         )}
+
+        <button
+          onClick={selectClipsFromTimelineStartToPlayhead}
+          className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
+          title="Select clips from the start of the timeline to the playhead (Shift+E)"
+        >
+          <ChevronLeft className="w-3 h-3" />
+          From Start
+        </button>
+
+        <button
+          onClick={selectClipsFromPlayheadToEnd}
+          className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
+          title="Select clips from the playhead to the end of the timeline (E)"
+        >
+          <ChevronRight className="w-3 h-3" />
+          To End
+        </button>
         
         {/* Clip count */}
         <span className="text-[10px] text-sf-text-muted">{clips.length} clips</span>
