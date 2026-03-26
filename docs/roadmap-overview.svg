@@ -1,0 +1,72 @@
+<svg width="1400" height="240" viewBox="0 0 1400 240" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">ComfyStudio roadmap overview</title>
+  <desc id="desc">A five-phase roadmap: Core Editing Polish, Precision Editing and Pro Workflow Features, Workflow Expansion, Music Video Generation, and Creative Automation and Higher-Level Tools.</desc>
+
+  <defs>
+    <filter id="shadow" x="-20%" y="-40%" width="140%" height="200%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#000000" flood-opacity="0.18"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0 0L10 5L0 10V0Z" fill="#7D8CB5"/>
+    </marker>
+    <style>
+      .phase-box { fill: #171B24; stroke: #58637D; stroke-width: 2; rx: 18; }
+      .phase-label { fill: #F5F7FB; font-family: Inter, Segoe UI, Arial, sans-serif; font-size: 18px; font-weight: 600; text-anchor: middle; }
+      .phase-sub { fill: #D4DAE8; font-family: Inter, Segoe UI, Arial, sans-serif; font-size: 18px; font-weight: 600; text-anchor: middle; }
+      .connector { stroke: #7D8CB5; stroke-width: 3; stroke-linecap: round; }
+    </style>
+  </defs>
+
+  <g filter="url(#shadow)">
+    <rect x="40" y="72" width="236" height="86" class="phase-box"/>
+    <rect x="40" y="72" width="236" height="8" rx="18" fill="#6EA7FF"/>
+    <text x="158" y="117" class="phase-label">
+      <tspan x="158" dy="0">Phase 1: Core Editing Polish</tspan>
+    </text>
+  </g>
+
+  <line x1="276" y1="115" x2="321" y2="115" class="connector" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="330" y="72" width="236" height="86" class="phase-box"/>
+    <rect x="330" y="72" width="236" height="8" rx="18" fill="#9F7BFF"/>
+    <text x="448" y="106" class="phase-label">
+      <tspan x="448" dy="0">Phase 2: Precision Editing</tspan>
+      <tspan x="448" dy="24">and Pro Workflow Features</tspan>
+    </text>
+  </g>
+
+  <line x1="566" y1="115" x2="611" y2="115" class="connector" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="620" y="72" width="236" height="86" class="phase-box"/>
+    <rect x="620" y="72" width="236" height="8" rx="18" fill="#59C8A8"/>
+    <text x="738" y="106" class="phase-label">
+      <tspan x="738" dy="0">Phase 3: Workflow</tspan>
+      <tspan x="738" dy="24">Expansion</tspan>
+    </text>
+  </g>
+
+  <line x1="856" y1="115" x2="901" y2="115" class="connector" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="910" y="72" width="236" height="86" class="phase-box"/>
+    <rect x="910" y="72" width="236" height="8" rx="18" fill="#F7AB63"/>
+    <text x="1028" y="106" class="phase-label">
+      <tspan x="1028" dy="0">Phase 4: Music Video</tspan>
+      <tspan x="1028" dy="24">Generation</tspan>
+    </text>
+  </g>
+
+  <line x1="1146" y1="115" x2="1191" y2="115" class="connector" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="1200" y="72" width="160" height="86" class="phase-box"/>
+    <rect x="1200" y="72" width="160" height="8" rx="18" fill="#8B93A6"/>
+    <text x="1280" y="97" class="phase-sub">
+      <tspan x="1280" dy="0">Phase 5: Creative</tspan>
+      <tspan x="1280" dy="22">Automation and</tspan>
+      <tspan x="1280" dy="22">Higher-Level Tools</tspan>
+    </text>
+  </g>
+</svg>

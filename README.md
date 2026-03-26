@@ -10,13 +10,11 @@ It combines a timeline editor, asset browser, Generate workspace, stock search, 
 
 See the full roadmap in [ROADMAP.md](ROADMAP.md).
 
-```mermaid
-flowchart LR
-  phase1["Phase 1: Core Editing Polish"] --> phase2["Phase 2: Precision Editing and Pro Workflow Features"]
-  phase2 --> phase3["Phase 3: Workflow Expansion"]
-  phase3 --> phase4["Phase 4: Music Video Generation"]
-  phase4 --> phase5["Phase 5: Creative Automation and Higher-Level Tools"]
-```
+<p align="center">
+  <a href="ROADMAP.md">
+    <img src="docs/roadmap-overview.svg" alt="ComfyStudio roadmap overview" />
+  </a>
+</p>
 
 ## Download
 
