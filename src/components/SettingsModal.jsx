@@ -1,10 +1,21 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   X, Server, FolderOpen, Palette, Monitor, Save,
-  HardDrive, Film, ChevronDown, ChevronRight
+  HardDrive, Film, ChevronDown, ChevronRight, Keyboard
 } from 'lucide-react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../stores/projectStore'
 import { getPexelsApiKey, setPexelsApiKey } from '../services/pexelsSettings'
+import {
+  DEFAULT_EDITOR_HOTKEYS,
+  EDITOR_HOTKEY_DEFINITIONS,
+  EDITOR_HOTKEY_PRESETS,
+  formatEditorHotkey,
+  getEditorHotkeys,
+  getEditorHotkeyPresetMatch,
+  hotkeyEventToBinding,
+  isReservedEditorHotkeyBinding,
+  setEditorHotkeys,
+} from '../services/editorHotkeys'
 import {
   DEFAULT_COMFY_PORT,
   checkLocalComfyConnection,
@@ -30,6 +41,13 @@ function GeneralTab({ initialSection = null }) {
   const [comfyOrgApiKey, setComfyOrgApiKey] = useState('')
   const [settingsSaved, setSettingsSaved] = useState(false)
   const [expandedSections, setExpandedSections] = useState(['connection', 'storage', 'stock'])
+  const [editorHotkeys, setEditorHotkeysState] = useState(DEFAULT_EDITOR_HOTKEYS)
+  const [recordingHotkeyId, setRecordingHotkeyId] = useState(null)
+  const [hotkeysError, setHotkeysError] = useState('')
+  const currentHotkeyPresetId = useMemo(
+    () => getEditorHotkeyPresetMatch(editorHotkeys),
+    [editorHotkeys]
+  )
 
   const SHOW_COMFYUI_TAB_KEY = 'comfystudio-show-comfyui-tab'
   const [showComfyUiTab, setShowComfyUiTab] = useState(() => {
@@ -66,6 +84,12 @@ function GeneralTab({ initialSection = null }) {
     getPexelsApiKey().then(key => setPexelsApiKeyLocal(key || ''))
     ;(async () => {
       try {
+        setEditorHotkeysState(await getEditorHotkeys())
+      } catch {
+        setEditorHotkeysState(DEFAULT_EDITOR_HOTKEYS)
+      }
+
+      try {
         let next = ''
         if (window?.electronAPI?.getSetting) {
           next = String(await window.electronAPI.getSetting(COMFY_ORG_API_KEY_SETTING_KEY) || '')
@@ -93,6 +117,54 @@ function GeneralTab({ initialSection = null }) {
       }
     })()
   }, [])
+
+  useEffect(() => {
+    if (!recordingHotkeyId) return
+
+    const handleKeyDown = (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+
+      if (e.key === 'Escape') {
+        setRecordingHotkeyId(null)
+        setHotkeysError('')
+        return
+      }
+
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        setEditorHotkeysState((prev) => ({ ...prev, [recordingHotkeyId]: '' }))
+        setRecordingHotkeyId(null)
+        setHotkeysError('')
+        return
+      }
+
+      const binding = hotkeyEventToBinding(e)
+      if (!binding) return
+
+      if (isReservedEditorHotkeyBinding(binding)) {
+        setHotkeysError(`${formatEditorHotkey(binding)} is reserved for fixed shortcuts like play, step, undo, or delete.`)
+        return
+      }
+
+      setEditorHotkeysState((prev) => {
+        const next = { ...prev }
+        for (const definition of EDITOR_HOTKEY_DEFINITIONS) {
+          if (definition.id !== recordingHotkeyId && next[definition.id] === binding) {
+            next[definition.id] = ''
+          }
+        }
+        next[recordingHotkeyId] = binding
+        return next
+      })
+      setRecordingHotkeyId(null)
+      setHotkeysError('')
+    }
+
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true)
+    }
+  }, [recordingHotkeyId])
 
   useEffect(() => {
     if (!initialSection) return
@@ -196,6 +268,7 @@ function GeneralTab({ initialSection = null }) {
   const handleSaveAllSettings = async () => {
     await setPexelsApiKey(pexelsApiKey.trim())
     await handleSaveComfyOrgApiKey()
+    await setEditorHotkeys(editorHotkeys)
     const connectionSaved = await handleSaveComfyConnection()
     if (connectionSaved) {
       setSettingsSaved(true)
@@ -433,6 +506,125 @@ function GeneralTab({ initialSection = null }) {
             <option value="darker">Darker</option>
             <option value="light">Light</option>
           </select>
+        </div>
+      </Section>
+
+      <Section id="hotkeys" icon={Keyboard} title="Hotkeys">
+        <div className="space-y-3">
+          <div className="rounded border border-sf-dark-700 bg-sf-dark-800/60 px-3 py-2">
+            <p className="text-xs text-sf-text-secondary">
+              Only editor-specific shortcuts are customizable in this first pass. Core shortcuts like <code>Space</code>, <code>Arrow Left/Right</code>, <code>Undo/Redo</code>, <code>Delete</code>, and copy/paste stay fixed.
+            </p>
+            <p className="mt-1 text-[10px] text-sf-text-muted">
+              Press a shortcut to record it. Press <code>Delete</code> while recording to clear an assignment.
+            </p>
+          </div>
+
+          <div className="rounded border border-sf-dark-700 bg-sf-dark-800/60 px-3 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm text-sf-text-primary">Keymap presets</p>
+                <p className="text-[10px] text-sf-text-muted">
+                  Apply familiar editor-style bindings to the configurable actions only.
+                </p>
+              </div>
+              <div className="rounded bg-sf-dark-900 px-2 py-1 text-[10px] text-sf-text-secondary">
+                Current preset: {currentHotkeyPresetId === 'custom'
+                  ? 'Custom'
+                  : (EDITOR_HOTKEY_PRESETS.find((preset) => preset.id === currentHotkeyPresetId)?.label || 'Custom')}
+              </div>
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+              {EDITOR_HOTKEY_PRESETS.map((preset) => {
+                const isActive = preset.id === currentHotkeyPresetId
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => {
+                      setEditorHotkeysState(preset.bindings)
+                      setRecordingHotkeyId(null)
+                      setHotkeysError('')
+                    }}
+                    className={`rounded border px-3 py-2 text-left transition-colors ${
+                      isActive
+                        ? 'border-sf-accent bg-sf-accent/10'
+                        : 'border-sf-dark-700 bg-sf-dark-800 hover:bg-sf-dark-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm text-sf-text-primary">{preset.label}</span>
+                      {isActive && (
+                        <span className="text-[10px] text-sf-accent">Active</span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-[10px] text-sf-text-muted">{preset.description}</p>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {EDITOR_HOTKEY_DEFINITIONS.map((definition) => (
+              <div
+                key={definition.id}
+                className="flex items-center justify-between gap-3 rounded border border-sf-dark-700 bg-sf-dark-800 px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm text-sf-text-primary">{definition.label}</div>
+                  <div className="text-[10px] text-sf-text-muted">{definition.description}</div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRecordingHotkeyId(definition.id)
+                      setHotkeysError('')
+                    }}
+                    className={`min-w-[128px] rounded border px-3 py-1.5 text-xs font-mono transition-colors ${
+                      recordingHotkeyId === definition.id
+                        ? 'border-sf-accent bg-sf-accent/15 text-sf-accent'
+                        : 'border-sf-dark-600 bg-sf-dark-700 text-sf-text-secondary hover:bg-sf-dark-600'
+                    }`}
+                  >
+                    {recordingHotkeyId === definition.id ? 'Press shortcut...' : formatEditorHotkey(editorHotkeys[definition.id])}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditorHotkeysState((prev) => ({ ...prev, [definition.id]: definition.defaultBinding || '' }))
+                      setHotkeysError('')
+                    }}
+                    className="rounded bg-sf-dark-700 px-2.5 py-1.5 text-[10px] text-sf-text-muted transition-colors hover:bg-sf-dark-600"
+                    title="Restore default binding for this action"
+                  >
+                    Default
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {hotkeysError && (
+            <p className="text-xs text-sf-error">{hotkeysError}</p>
+          )}
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                setEditorHotkeysState(DEFAULT_EDITOR_HOTKEYS)
+                setRecordingHotkeyId(null)
+                setHotkeysError('')
+              }}
+              className="rounded bg-sf-dark-700 px-3 py-1.5 text-xs text-sf-text-secondary transition-colors hover:bg-sf-dark-600"
+            >
+              Restore All Defaults
+            </button>
+          </div>
         </div>
       </Section>
 

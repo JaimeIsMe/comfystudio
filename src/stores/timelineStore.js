@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import { TRANSITION_DEFAULT_SETTINGS, FRAME_RATE } from '../constants/transitions'
 import { buildTextAnimationPresetKeyframes, TEXT_ANIMATION_KEYFRAME_PROPERTIES } from '../utils/textAnimationPresets'
 import { normalizeAdjustmentSettings } from '../utils/adjustments'
+import { clampAudioFadeDuration } from '../utils/audioClipFades'
 
 // Maximum number of undo states to keep
 const MAX_HISTORY_SIZE = 50
@@ -627,6 +628,8 @@ export const useTimelineStore = create(
       sourceTimeScale: 1,
       speed: 1,
       reverse: false,
+      fadeIn: asset.type === 'audio' ? clampAudioFadeDuration(options?.fadeIn, finalDuration) : undefined,
+      fadeOut: asset.type === 'audio' ? clampAudioFadeDuration(options?.fadeOut, finalDuration) : undefined,
       color: track.type === 'video' ? getVideoColor(safeClipCounter) : getAudioColor(track.id),
       type: asset.type,
       url: asset.url,
@@ -1738,6 +1741,35 @@ export const useTimelineStore = create(
           }),
         }
       })
+    }))
+  },
+
+  /**
+   * Update audio clip properties such as fade-in and fade-out.
+   * @param {string} clipId - The audio clip to update
+   * @param {object} audioUpdates - Partial audio properties object
+   * @param {boolean} saveHistory - Whether to save to history
+   */
+  updateAudioClipProperties: (clipId, audioUpdates, saveHistory = false) => {
+    if (saveHistory) {
+      get().saveToHistory()
+    }
+
+    set((state) => ({
+      clips: state.clips.map((clip) => {
+        if (clip.id !== clipId || clip.type !== 'audio') return clip
+
+        return {
+          ...clip,
+          ...audioUpdates,
+          fadeIn: Object.prototype.hasOwnProperty.call(audioUpdates || {}, 'fadeIn')
+            ? clampAudioFadeDuration(audioUpdates.fadeIn, clip.duration)
+            : (clip.fadeIn ?? 0),
+          fadeOut: Object.prototype.hasOwnProperty.call(audioUpdates || {}, 'fadeOut')
+            ? clampAudioFadeDuration(audioUpdates.fadeOut, clip.duration)
+            : (clip.fadeOut ?? 0),
+        }
+      }),
     }))
   },
 

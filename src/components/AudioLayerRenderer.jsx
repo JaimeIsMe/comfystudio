@@ -1,6 +1,7 @@
 import { useEffect, useRef, useMemo } from 'react'
 import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
+import { getAudioClipFadeGain } from '../utils/audioClipFades'
 
 /**
  * AudioLayerRenderer - Manages audio playback for audio clips on the timeline
@@ -153,6 +154,7 @@ function AudioLayerRenderer() {
         // Track volume is typically 0-100, convert to 0-1 and multiply with master volume
         finalVolume = volume * (track.volume / 100)
       }
+      finalVolume *= getAudioClipFadeGain(clip, clipTime)
       audioEl.volume = Math.max(0, Math.min(1, finalVolume))
     })
   }, [activeAudioClips, playheadPosition, isPlaying, playbackRate, getAssetById, clips, tracks, volume])

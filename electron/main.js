@@ -908,6 +908,31 @@ const buildAtempoFilterChain = (rate) => {
   return filters
 }
 
+const clampAudioFadeSeconds = (value, clipDuration = 0) => {
+  const duration = Math.max(0, Number(clipDuration) || 0)
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0
+  return Math.min(parsed, duration)
+}
+
+const buildAudioFadeVolumeExpression = (clipDuration, fadeIn, fadeOut, clipOffset = 0) => {
+  const duration = Math.max(0, Number(clipDuration) || 0)
+  const normalizedFadeIn = clampAudioFadeSeconds(fadeIn, duration)
+  const normalizedFadeOut = clampAudioFadeSeconds(fadeOut, duration)
+  const offset = Math.max(0, Math.min(Number(clipOffset) || 0, duration))
+
+  const fadeInExpr = normalizedFadeIn > 0
+    ? `if(lt(t+${formatFilterNumber(offset)},${formatFilterNumber(normalizedFadeIn)}),(t+${formatFilterNumber(offset)})/${formatFilterNumber(normalizedFadeIn)},1)`
+    : '1'
+
+  const fadeOutStart = Math.max(0, duration - normalizedFadeOut)
+  const fadeOutExpr = normalizedFadeOut > 0
+    ? `if(gt(t+${formatFilterNumber(offset)},${formatFilterNumber(fadeOutStart)}),(${formatFilterNumber(duration)}-(t+${formatFilterNumber(offset)}))/${formatFilterNumber(normalizedFadeOut)},1)`
+    : '1'
+
+  return `max(0,min(1,min(${fadeInExpr},${fadeOutExpr})))`
+}
+
 ipcMain.handle('export:mixAudio', async (event, options = {}) => {
   if (!ffmpegPath) {
     return { success: false, error: 'FFmpeg binary not available.' }
@@ -990,6 +1015,10 @@ ipcMain.handle('export:mixAudio', async (event, options = {}) => {
       sourceDurationSec,
       delayMs,
       timeScale,
+      clipDuration,
+      clipOffsetOnTimeline,
+      fadeIn: clampAudioFadeSeconds(clip.fadeIn, clipDuration),
+      fadeOut: clampAudioFadeSeconds(clip.fadeOut, clipDuration),
       forceMono: track.channels === 'mono',
     })
   }
@@ -1024,6 +1053,9 @@ ipcMain.handle('export:mixAudio', async (event, options = {}) => {
 
     if (entry.forceMono) {
       filters.push('aformat=channel_layouts=mono')
+    }
+    if (entry.fadeIn > 0 || entry.fadeOut > 0) {
+      filters.push(`volume='${buildAudioFadeVolumeExpression(entry.clipDuration, entry.fadeIn, entry.fadeOut, entry.clipOffsetOnTimeline)}':eval=frame`)
     }
     if (entry.delayMs > 0) {
       filters.push(`adelay=${entry.delayMs}:all=1`)

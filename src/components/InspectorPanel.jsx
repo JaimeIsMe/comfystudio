@@ -266,6 +266,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     resizeClip,
     updateClipSpeed,
     updateClipReverse,
+    updateAudioClipProperties,
     toggleKeyframe,
     setKeyframe,
     saveToHistory,
@@ -529,11 +530,24 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   
   // Legacy audio data state (for audio clips - will be connected to real data later)
   const [audioData, setAudioData] = useState({
+    name: '',
+    type: 'audio',
     volume: 100,
     fadeIn: 0,
     fadeOut: 0,
     pan: 0
   })
+
+  useEffect(() => {
+    if (!selectedClip || !isAudioClip) return
+    setAudioData((prev) => ({
+      ...prev,
+      name: selectedClip.name || '',
+      type: selectedClip.type || 'audio',
+      fadeIn: Number.isFinite(Number(selectedClip.fadeIn)) ? Number(selectedClip.fadeIn) : 0,
+      fadeOut: Number.isFinite(Number(selectedClip.fadeOut)) ? Number(selectedClip.fadeOut) : 0,
+    }))
+  }, [selectedClip?.id, selectedClip?.name, selectedClip?.type, selectedClip?.fadeIn, selectedClip?.fadeOut, isAudioClip])
 
   const toggleSection = (section) => {
     setExpandedSections(prev => 
@@ -3047,7 +3061,13 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 step="0.1"
                 min="0"
                 value={audioData.fadeIn}
-                onChange={(e) => setAudioData({ ...audioData, fadeIn: parseFloat(e.target.value) })}
+                onChange={(e) => {
+                  const value = Math.max(0, parseFloat(e.target.value) || 0)
+                  setAudioData({ ...audioData, fadeIn: value })
+                  if (selectedClip) {
+                    updateAudioClipProperties(selectedClip.id, { fadeIn: value }, true)
+                  }
+                }}
                 className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
               />
               <span className="ml-1 text-[10px] text-sf-text-muted">s</span>
@@ -3061,7 +3081,13 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 step="0.1"
                 min="0"
                 value={audioData.fadeOut}
-                onChange={(e) => setAudioData({ ...audioData, fadeOut: parseFloat(e.target.value) })}
+                onChange={(e) => {
+                  const value = Math.max(0, parseFloat(e.target.value) || 0)
+                  setAudioData({ ...audioData, fadeOut: value })
+                  if (selectedClip) {
+                    updateAudioClipProperties(selectedClip.id, { fadeOut: value }, true)
+                  }
+                }}
                 className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
               />
               <span className="ml-1 text-[10px] text-sf-text-muted">s</span>

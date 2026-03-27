@@ -49,6 +49,7 @@ This phase focuses on features that help experienced editors work faster and wit
 - Move selected clips by exact timecode offset
 - Extend clip duration by a chosen amount
 - Better multi-clip movement across tracks
+- Show timelines and sequences in a dedicated browser section and open them directly from the Assets panel
 - More direct text editing workflows
 - Better editing toolbar coverage
 - Fully customizable keyboard shortcuts and hotkeys in settings

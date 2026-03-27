@@ -3,7 +3,7 @@ import {
   Volume2, VolumeX, Lock, Unlock, Eye, EyeOff, 
   Plus, Video, Type, Image as ImageIcon,
   Sparkles, GripVertical, Magnet, ArrowRightLeft, Square, X, Check, Pencil,
-  Diamond, Zap, AlertTriangle, Loader2, ChevronLeft, ChevronRight, Maximize2, Flag, Scissors
+  Diamond, Zap, AlertTriangle, Loader2, ChevronLeft, ChevronRight, Maximize2, Flag, Scissors, Clock
 } from 'lucide-react'
 import useTimelineStore from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
@@ -14,6 +14,15 @@ import useAssetsStore from '../stores/assetsStore'
 import { useSnapping, SNAP_TYPES } from '../hooks/useSnapping'
 import { getAllKeyframeTimes } from '../utils/keyframes'
 import { TRANSITION_TYPES, TRANSITION_DURATIONS, FRAME_RATE } from '../constants/transitions'
+import { getAudioClipFadeValues } from '../utils/audioClipFades'
+import {
+  DEFAULT_EDITOR_HOTKEYS,
+  EDITOR_HOTKEYS_CHANGED_EVENT,
+  EDITOR_HOTKEY_IDS,
+  formatEditorHotkey,
+  getEditorHotkeys,
+  matchEditorHotkey,
+} from '../services/editorHotkeys'
 import MasterAudioMeter from './AudioMeter'
 
 const TRANSITION_DEFAULT_DURATION_KEY = 'comfystudio-transition-default-duration-frames'
@@ -29,6 +38,126 @@ const ROLL_EDIT_MAX_GAP_SECONDS = 1 / FRAME_RATE
 const AUDIO_WAVEFORM_CACHE = new Map()
 const AUDIO_WAVEFORM_PENDING = new Map()
 let audioWaveformContext = null
+const padTimecode2 = (value) => String(value).padStart(2, '0')
+
+const formatTimecodeWithFps = (seconds, fps) => {
+  const roundedFps = Math.max(1, Math.round(Number(fps) || FRAME_RATE))
+  const totalFrames = Math.max(0, Math.floor((Number(seconds) || 0) * roundedFps))
+  const frames = totalFrames % roundedFps
+  const totalSeconds = Math.floor(totalFrames / roundedFps)
+  const ss = totalSeconds % 60
+  const mm = Math.floor(totalSeconds / 60) % 60
+  const hh = Math.floor(totalSeconds / 3600)
+  return `${padTimecode2(hh)}:${padTimecode2(mm)}:${padTimecode2(ss)}:${padTimecode2(frames)}`
+}
+
+const sanitizeTimelineOffsetInput = (value) => {
+  const raw = String(value || '').replace(/\s+/g, '')
+  if (!raw) return ''
+
+  const sign = raw[0] === '+' || raw[0] === '-' ? raw[0] : ''
+  let body = sign ? raw.slice(1) : raw
+  body = body.replace(/[^\d:.]/g, '')
+
+  if (!body) return sign
+
+  if (body.includes(':')) {
+    body = body.replace(/\./g, '')
+    const parts = body
+      .split(':')
+      .slice(0, 4)
+      .map((part, index) => {
+        const digits = part.replace(/\D/g, '')
+        return index === 0 ? digits : digits.slice(0, 2)
+      })
+    return sign + parts.join(':')
+  }
+
+  const dotIndex = body.indexOf('.')
+  if (dotIndex >= 0) {
+    body = `${body.slice(0, dotIndex + 1)}${body.slice(dotIndex + 1).replace(/\./g, '')}`
+  }
+
+  return sign + body
+}
+
+const sanitizeFrameOffsetInput = (value) => {
+  const raw = String(value || '').replace(/\s+/g, '')
+  if (!raw) return ''
+
+  const sign = raw[0] === '+' || raw[0] === '-' ? raw[0] : ''
+  const digits = (sign ? raw.slice(1) : raw).replace(/\D/g, '')
+  return sign + digits
+}
+
+const parseTimelineOffsetInput = (value, fps) => {
+  const raw = String(value || '').trim()
+  if (!raw) {
+    return { success: false, error: 'Enter a timecode offset like +00:00:02:12.' }
+  }
+
+  const roundedFps = Math.max(1, Math.round(Number(fps) || FRAME_RATE))
+  const match = raw.match(/^([+-])?\s*(.+)$/)
+  const sign = match?.[1] === '-' ? -1 : 1
+  const remainder = (match?.[2] || raw).trim()
+
+  if (/^\d+(?:\.\d+)?$/.test(remainder)) {
+    return { success: true, seconds: sign * Number(remainder) }
+  }
+
+  const parts = remainder.split(':').map(part => part.trim())
+  if (parts.length < 2 || parts.length > 4 || parts.some(part => !/^\d+$/.test(part))) {
+    return { success: false, error: 'Use signed timecode like +00:00:02:12 or seconds like -1.5.' }
+  }
+
+  const normalized = [...parts]
+  while (normalized.length < 4) {
+    normalized.unshift('0')
+  }
+
+  const [hh, mm, ss, ff] = normalized.map(part => Number(part))
+  if (mm >= 60 || ss >= 60) {
+    return { success: false, error: 'Minutes and seconds must be below 60.' }
+  }
+  if (ff >= roundedFps) {
+    return { success: false, error: `Frames must be below ${roundedFps} at the current timeline FPS.` }
+  }
+
+  const seconds = hh * 3600 + mm * 60 + ss + (ff / roundedFps)
+  return { success: true, seconds: sign * seconds }
+}
+
+const parseFrameOffsetInput = (value, fps) => {
+  const raw = String(value || '').trim()
+  if (!raw) {
+    return { success: false, error: 'Enter a frame offset like +12 or -48.' }
+  }
+
+  const roundedFps = Math.max(1, Math.round(Number(fps) || FRAME_RATE))
+  const match = raw.match(/^([+-])?\s*(\d+)$/)
+  if (!match) {
+    return { success: false, error: 'Use signed whole frames like +12 or -48.' }
+  }
+
+  const sign = match[1] === '-' ? -1 : 1
+  const frames = Number(match[2]) || 0
+  return {
+    success: true,
+    frames: sign * frames,
+    seconds: sign * (frames / roundedFps),
+  }
+}
+
+const getClipSourceDurationForExtension = (clip) => {
+  if (!clip) return Infinity
+  if (clip.type === 'image' || clip.type === 'adjustment' || clip.type === 'text') return Infinity
+  const raw = clip.sourceDuration
+  if (raw === Infinity || raw === 'Infinity') return Infinity
+  const parsed = Number(raw)
+  if (Number.isFinite(parsed) && parsed > 0) return parsed
+  const fallbackTrimEnd = Number(clip.trimEnd)
+  return Number.isFinite(fallbackTrimEnd) && fallbackTrimEnd > 0 ? fallbackTrimEnd : null
+}
 
 const getAudioWaveformContext = () => {
   if (typeof window === 'undefined') return null
@@ -356,6 +485,7 @@ function Timeline({ onOpenAudioGenerate }) {
   // Trimming state
   const [trimState, setTrimState] = useState(null) // { clipId, edge: 'left' | 'right', startX, startValue }
   const [slipState, setSlipState] = useState(null) // { clipId, startX, startTrimStart, startTrimEnd, timeScale, minSourceDelta, maxSourceDelta }
+  const [fadeDragState, setFadeDragState] = useState(null) // { clipId, edge: 'in' | 'out', startX, startFade }
 
   const getTimeScale = (clip) => {
     if (!clip) return 1
@@ -425,6 +555,19 @@ function Timeline({ onOpenAudioGenerate }) {
   const [trackDragState, setTrackDragState] = useState(null) // { trackId, trackType, startY, originalIndex }
   const [trackDropTarget, setTrackDropTarget] = useState(null) // index within type group
   const [trackResizeState, setTrackResizeState] = useState(null) // { trackId, startY, startHeight }
+  const [moveOffsetDialogOpen, setMoveOffsetDialogOpen] = useState(false)
+  const [moveOffsetMode, setMoveOffsetMode] = useState('timecode')
+  const [moveOffsetInput, setMoveOffsetInput] = useState('+00:00:00:00')
+  const [moveOffsetFramesInput, setMoveOffsetFramesInput] = useState('+0')
+  const [moveOffsetError, setMoveOffsetError] = useState('')
+  const moveOffsetInputRef = useRef(null)
+  const [durationDeltaDialogOpen, setDurationDeltaDialogOpen] = useState(false)
+  const [durationDeltaMode, setDurationDeltaMode] = useState('timecode')
+  const [durationDeltaInput, setDurationDeltaInput] = useState('+00:00:00:00')
+  const [durationDeltaFramesInput, setDurationDeltaFramesInput] = useState('+0')
+  const [durationDeltaError, setDurationDeltaError] = useState('')
+  const durationDeltaInputRef = useRef(null)
+  const [editorHotkeys, setEditorHotkeys] = useState(DEFAULT_EDITOR_HOTKEYS)
   
   // Timeline store
   const {
@@ -454,6 +597,7 @@ function Timeline({ onOpenAudioGenerate }) {
     setSelectedClipsStartTimes,
     resizeClip,
     updateClipTrim,
+    updateAudioClipProperties,
     selectClip,
     clearSelection,
     setPlayheadPosition,
@@ -493,6 +637,19 @@ function Timeline({ onOpenAudioGenerate }) {
 
   const { currentProjectHandle, getCurrentTimelineSettings } = useProjectStore()
   const timelineFps = getCurrentTimelineSettings()?.fps
+  const timecodeFps = Number.isFinite(Number(timelineFps)) && Number(timelineFps) > 0
+    ? Number(timelineFps)
+    : FRAME_RATE
+  const markerHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.ADD_MARKER])
+  const splitAllHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.SPLIT_ALL])
+  const splitActiveHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.SPLIT_ACTIVE])
+  const selectFromStartHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.SELECT_FROM_START])
+  const selectToEndHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.SELECT_TO_END])
+  const moveByHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.OPEN_MOVE_BY])
+  const durationByHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.OPEN_DURATION_BY])
+  const snappingHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.TOGGLE_SNAPPING])
+  const rippleHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.TOGGLE_RIPPLE])
+  const durationByHotkeyHint = durationByHotkeyLabel === 'Not set' ? '' : durationByHotkeyLabel
   
   const edgeTransitionsByClipId = useMemo(() => {
     const map = new Map()
@@ -921,6 +1078,217 @@ function Timeline({ onOpenAudioGenerate }) {
     selectMarker(null)
   }, [clips, playheadPosition, selectMarker])
 
+  const closeMoveOffsetDialog = useCallback(() => {
+    setMoveOffsetDialogOpen(false)
+    setMoveOffsetError('')
+  }, [])
+
+  const closeDurationDeltaDialog = useCallback(() => {
+    setDurationDeltaDialogOpen(false)
+    setDurationDeltaError('')
+  }, [])
+
+  const openMoveOffsetDialog = useCallback(() => {
+    if (selectedClipIds.length === 0) return
+    setMoveOffsetMode('timecode')
+    setMoveOffsetInput('+00:00:00:00')
+    setMoveOffsetFramesInput('+0')
+    setMoveOffsetError('')
+    setMoveOffsetDialogOpen(true)
+    setClipContextMenu(null)
+    setMaskSubmenuOpen(false)
+  }, [selectedClipIds.length])
+
+  const openDurationDeltaDialog = useCallback(() => {
+    if (selectedClipIds.length === 0) return
+    setDurationDeltaMode('timecode')
+    setDurationDeltaInput('+00:00:00:00')
+    setDurationDeltaFramesInput('+0')
+    setDurationDeltaError('')
+    setDurationDeltaDialogOpen(true)
+    setClipContextMenu(null)
+    setMaskSubmenuOpen(false)
+  }, [selectedClipIds.length])
+
+  const applyMoveOffset = useCallback(() => {
+    if (selectedClipIds.length === 0) {
+      closeMoveOffsetDialog()
+      return
+    }
+
+    const parsed = moveOffsetMode === 'frames'
+      ? parseFrameOffsetInput(moveOffsetFramesInput, timecodeFps)
+      : parseTimelineOffsetInput(moveOffsetInput, timecodeFps)
+    if (!parsed.success) {
+      setMoveOffsetError(parsed.error)
+      return
+    }
+
+    const selectedClips = clips.filter(clip => selectedClipIds.includes(clip.id))
+    if (selectedClips.length === 0) {
+      closeMoveOffsetDialog()
+      return
+    }
+
+    const proposed = selectedClips.map((clip) => ({
+      id: clip.id,
+      startTime: clip.startTime + parsed.seconds,
+    }))
+    const minStart = Math.min(...proposed.map(clip => clip.startTime))
+    const shift = minStart < 0 ? -minStart : 0
+    const updates = proposed.map((clip) => ({
+      id: clip.id,
+      startTime: clip.startTime + shift,
+    }))
+
+    const hasChange = updates.some((update) => {
+      const original = selectedClips.find(clip => clip.id === update.id)
+      return original && Math.abs(original.startTime - update.startTime) > 0.000001
+    })
+
+    if (!hasChange) {
+      closeMoveOffsetDialog()
+      return
+    }
+
+    saveToHistory()
+    setSelectedClipsStartTimes(updates)
+    moveSelectedClips(0, null, true)
+    closeMoveOffsetDialog()
+  }, [clips, closeMoveOffsetDialog, moveOffsetFramesInput, moveOffsetInput, moveOffsetMode, moveSelectedClips, saveToHistory, selectedClipIds, setSelectedClipsStartTimes, timecodeFps])
+
+  const applyDurationDelta = useCallback(() => {
+    if (selectedClipIds.length === 0) {
+      closeDurationDeltaDialog()
+      return
+    }
+
+    const parsed = durationDeltaMode === 'frames'
+      ? parseFrameOffsetInput(durationDeltaFramesInput, timecodeFps)
+      : parseTimelineOffsetInput(durationDeltaInput, timecodeFps)
+    if (!parsed.success) {
+      setDurationDeltaError(parsed.error)
+      return
+    }
+
+    const fps = Math.max(1, Math.round(timecodeFps))
+    const minDurationSec = 1 / fps
+    const selectedClips = clips.filter(clip => selectedClipIds.includes(clip.id))
+    if (selectedClips.length === 0) {
+      closeDurationDeltaDialog()
+      return
+    }
+
+    const updates = selectedClips.map((clip) => {
+      const currentDuration = Math.max(minDurationSec, Number(clip.duration) || minDurationSec)
+      const rightNeighbor = clips
+        .filter(other =>
+          other.id !== clip.id &&
+          other.trackId === clip.trackId &&
+          other.startTime >= clip.startTime + currentDuration - 0.000001
+        )
+        .sort((a, b) => a.startTime - b.startTime)[0]
+
+      const neighborCap = rightNeighbor
+        ? Math.max(minDurationSec, rightNeighbor.startTime - clip.startTime)
+        : Infinity
+
+      const timeScale = Math.max(0.0001, Number(getTimeScale(clip)) || 1)
+      const trimStart = Math.max(0, Number(clip.trimStart) || 0)
+      const sourceDuration = getClipSourceDurationForExtension(clip)
+      const sourceCap = Number.isFinite(sourceDuration)
+        ? Math.max(minDurationSec, (sourceDuration - trimStart) / timeScale)
+        : Infinity
+
+      const requestedDuration = currentDuration + parsed.seconds
+      const nextDuration = Math.max(
+        minDurationSec,
+        Math.min(requestedDuration, neighborCap, sourceCap)
+      )
+
+      return {
+        id: clip.id,
+        duration: nextDuration,
+      }
+    })
+
+    const changedUpdates = updates.filter((update) => {
+      const original = selectedClips.find(clip => clip.id === update.id)
+      return original && Math.abs((original.duration || 0) - update.duration) > 0.000001
+    })
+
+    if (changedUpdates.length === 0) {
+      closeDurationDeltaDialog()
+      return
+    }
+
+    saveToHistory()
+    changedUpdates.forEach((update) => {
+      resizeClip(update.id, update.duration)
+    })
+    closeDurationDeltaDialog()
+  }, [clips, closeDurationDeltaDialog, durationDeltaFramesInput, durationDeltaInput, durationDeltaMode, resizeClip, saveToHistory, selectedClipIds, timecodeFps])
+
+  useEffect(() => {
+    if (!moveOffsetDialogOpen) return
+    const handleEscape = (e) => {
+      if (e.key === 'Escape') {
+        closeMoveOffsetDialog()
+      }
+    }
+
+    window.addEventListener('keydown', handleEscape)
+    setTimeout(() => {
+      moveOffsetInputRef.current?.focus()
+      moveOffsetInputRef.current?.select()
+    }, 0)
+    return () => {
+      window.removeEventListener('keydown', handleEscape)
+    }
+  }, [closeMoveOffsetDialog, moveOffsetDialogOpen, moveOffsetMode])
+
+  useEffect(() => {
+    if (!durationDeltaDialogOpen) return
+    const handleEscape = (e) => {
+      if (e.key === 'Escape') {
+        closeDurationDeltaDialog()
+      }
+    }
+
+    window.addEventListener('keydown', handleEscape)
+    setTimeout(() => {
+      durationDeltaInputRef.current?.focus()
+      durationDeltaInputRef.current?.select()
+    }, 0)
+    return () => {
+      window.removeEventListener('keydown', handleEscape)
+    }
+  }, [closeDurationDeltaDialog, durationDeltaDialogOpen, durationDeltaMode])
+
+  useEffect(() => {
+    let isMounted = true
+
+    getEditorHotkeys().then((next) => {
+      if (isMounted) setEditorHotkeys(next)
+    }).catch(() => {
+      if (isMounted) setEditorHotkeys(DEFAULT_EDITOR_HOTKEYS)
+    })
+
+    const handleHotkeysChanged = (event) => {
+      if (event?.detail) {
+        setEditorHotkeys(event.detail)
+      } else {
+        setEditorHotkeys(DEFAULT_EDITOR_HOTKEYS)
+      }
+    }
+
+    window.addEventListener(EDITOR_HOTKEYS_CHANGED_EVENT, handleHotkeysChanged)
+    return () => {
+      isMounted = false
+      window.removeEventListener(EDITOR_HOTKEYS_CHANGED_EVENT, handleHotkeysChanged)
+    }
+  }, [])
+
   const splitClipAtTime = useCallback((clip, splitPosition, { saveHistory = false } = {}) => {
     if (!clip || splitPosition <= clip.startTime || splitPosition >= clip.startTime + clip.duration) return null
 
@@ -996,38 +1364,62 @@ function Timeline({ onOpenAudioGenerate }) {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
+      const key = String(e.key || '').toLowerCase()
+
+      // Keep timeline undo/redo responsive even if focus was left on a non-dialog control.
+      // If one of the exact-edit dialogs is open, let the input field keep native text undo.
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && key === 'z') {
+        if (moveOffsetDialogOpen || durationDeltaDialogOpen) return
+        e.preventDefault()
+        undo()
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && ((e.shiftKey && key === 'z') || key === 'y')) {
+        if (moveOffsetDialogOpen || durationDeltaDialogOpen) return
+        e.preventDefault()
+        redo()
+        return
+      }
+
       // Don't trigger when typing in inputs (use activeElement so prompt/search fields work)
       const active = document.activeElement
       if (active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable)) return
-      
-      // Ctrl/Cmd + Z - Undo
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
-        e.preventDefault()
-        undo()
-      }
-      
-      // Ctrl/Cmd + Shift + Z or Ctrl/Cmd + Y - Redo
-      if ((e.ctrlKey || e.metaKey) && (e.shiftKey && e.key === 'z' || e.key === 'y')) {
-        e.preventDefault()
-        redo()
-      }
-      
-      // S key - toggle snapping
-      if (e.key === 's' || e.key === 'S') {
-        e.preventDefault()
-        toggleSnapping()
-      }
-      
-      // R key - toggle ripple edit mode
-      if (e.key === 'r' || e.key === 'R') {
-        e.preventDefault()
-        toggleRippleEdit()
+
+      // Configurable editor actions
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.OPEN_MOVE_BY])) {
+        if (selectedClipIds.length > 0) {
+          e.preventDefault()
+          openMoveOffsetDialog()
+        }
+        return
       }
 
-      // M key - add timeline marker at playhead
-      if ((e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.OPEN_DURATION_BY])) {
+        if (selectedClipIds.length > 0) {
+          e.preventDefault()
+          openDurationDeltaDialog()
+        }
+        return
+      }
+      
+      // Configurable editor hotkeys
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.TOGGLE_SNAPPING])) {
+        e.preventDefault()
+        toggleSnapping()
+        return
+      }
+      
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.TOGGLE_RIPPLE])) {
+        e.preventDefault()
+        toggleRippleEdit()
+        return
+      }
+
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.ADD_MARKER])) {
         e.preventDefault()
         addMarker(playheadPosition)
+        return
       }
       
       // Delete/Backspace - delete selected clips, otherwise selected transition/marker
@@ -1051,24 +1443,26 @@ function Timeline({ onOpenAudioGenerate }) {
       }
       
       // Ctrl/Cmd + A - select all clips
-      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+      if ((e.ctrlKey || e.metaKey) && key === 'a') {
         e.preventDefault()
         const allClipIds = clips.map(c => c.id)
         useTimelineStore.getState().selectClips(allClipIds)
       }
 
-      // E / Shift+E - select clips relative to the playhead
-      if ((e.key === 'e' || e.key === 'E') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.SELECT_TO_END])) {
         e.preventDefault()
-        if (e.shiftKey) {
-          selectClipsFromTimelineStartToPlayhead()
-        } else {
-          selectClipsFromPlayheadToEnd()
-        }
+        selectClipsFromPlayheadToEnd()
+        return
+      }
+
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.SELECT_FROM_START])) {
+        e.preventDefault()
+        selectClipsFromTimelineStartToPlayhead()
+        return
       }
 
       // Ctrl/Cmd + C - copy selected clips
-      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+      if ((e.ctrlKey || e.metaKey) && key === 'c') {
         if (selectedClipIds.length > 0) {
           e.preventDefault()
           copySelectedClips()
@@ -1076,28 +1470,28 @@ function Timeline({ onOpenAudioGenerate }) {
       }
 
       // Ctrl/Cmd + V - paste at playhead on active track
-      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+      if ((e.ctrlKey || e.metaKey) && key === 'v') {
         if (activeTrackId && copiedClips.length > 0) {
           e.preventDefault()
           pasteClipsAtPlayhead(activeTrackId, playheadPosition, assets)
         }
       }
       
-      // X / Shift+X - split at playhead
-      if ((e.key === 'x' || e.key === 'X') && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (e.shiftKey) {
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.SPLIT_ALL])) {
+        e.preventDefault()
+        splitAllTracksAtPlayhead()
+        return
+      }
+
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.SPLIT_ACTIVE]) && activeTrackId) {
+        const clip = clips.find(
+          c => c.trackId === activeTrackId &&
+            playheadPosition > c.startTime &&
+            playheadPosition < c.startTime + c.duration
+        )
+        if (clip) {
           e.preventDefault()
-          splitAllTracksAtPlayhead()
-        } else if (activeTrackId) {
-          const clip = clips.find(
-            c => c.trackId === activeTrackId &&
-              playheadPosition > c.startTime &&
-              playheadPosition < c.startTime + c.duration
-          )
-          if (clip) {
-            e.preventDefault()
-            splitClipAtTime(clip, playheadPosition, { saveHistory: true })
-          }
+          splitClipAtTime(clip, playheadPosition, { saveHistory: true })
         }
       }
     }
@@ -1106,7 +1500,7 @@ function Timeline({ onOpenAudioGenerate }) {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedTransitionId, selectedMarkerId, removeSelectedClips, removeTransition, removeMarker, clearSelection, selectMarker, clips, undo, redo, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips, selectClipsFromPlayheadToEnd, selectClipsFromTimelineStartToPlayhead, splitClipAtTime, splitAllTracksAtPlayhead])
+  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedTransitionId, selectedMarkerId, removeSelectedClips, removeTransition, removeMarker, clearSelection, selectMarker, clips, undo, redo, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips, selectClipsFromPlayheadToEnd, selectClipsFromTimelineStartToPlayhead, splitClipAtTime, splitAllTracksAtPlayhead, openMoveOffsetDialog, openDurationDeltaDialog, moveOffsetDialogOpen, durationDeltaDialogOpen, editorHotkeys])
 
   // Spacebar panning key state (dedicated listeners so keyup cannot get "stuck")
   useEffect(() => {
@@ -1722,6 +2116,12 @@ function Timeline({ onOpenAudioGenerate }) {
           }
         }
         break
+      case 'move-by-offset':
+        openMoveOffsetDialog()
+        break
+      case 'duration-by-amount':
+        openDurationDeltaDialog()
+        break
       case 'split':
         splitClipAtTime(clip, playheadPosition, { saveHistory: true })
         break
@@ -1768,6 +2168,7 @@ function Timeline({ onOpenAudioGenerate }) {
     if (transitionDragState) setTransitionDragState(null)
     if (rollEditState) setRollEditState(null)
     if (slipState) setSlipState(null)
+    if (fadeDragState) setFadeDragState(null)
     clearActiveSnap()
     
     // Save to history before trimming starts
@@ -1788,6 +2189,62 @@ function Timeline({ onOpenAudioGenerate }) {
     
     selectClip(clipId)
   }
+
+  const handleFadeDragStart = (e, clip, edge) => {
+    e.stopPropagation()
+    e.preventDefault()
+
+    if (!clip || clip.type !== 'audio') return
+
+    if (clipDragState) setClipDragState(null)
+    if (transitionDragState) setTransitionDragState(null)
+    if (rollEditState) setRollEditState(null)
+    if (slipState) setSlipState(null)
+    if (trimState) setTrimState(null)
+    clearActiveSnap()
+    saveToHistory()
+
+    const { fadeIn, fadeOut } = getAudioClipFadeValues(clip)
+    setFadeDragState({
+      clipId: clip.id,
+      edge,
+      startX: e.clientX,
+      startFade: edge === 'in' ? fadeIn : fadeOut,
+    })
+
+    selectClip(clip.id)
+  }
+
+  useEffect(() => {
+    if (!fadeDragState) return
+
+    const handleMouseMove = (e) => {
+      const deltaX = e.clientX - fadeDragState.startX
+      const deltaTime = deltaX / pixelsPerSecond
+      const clip = clips.find(c => c.id === fadeDragState.clipId)
+      if (!clip || clip.type !== 'audio') return
+
+      const nextFade = fadeDragState.edge === 'in'
+        ? fadeDragState.startFade + deltaTime
+        : fadeDragState.startFade - deltaTime
+
+      updateAudioClipProperties(clip.id, {
+        [fadeDragState.edge === 'in' ? 'fadeIn' : 'fadeOut']: Math.max(0, nextFade),
+      }, false)
+    }
+
+    const handleMouseUp = () => {
+      setFadeDragState(null)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [fadeDragState, clips, pixelsPerSecond, updateAudioClipProperties])
 
   // Handle trim move (mousemove when trimming)
   useEffect(() => {
@@ -1967,7 +2424,7 @@ function Timeline({ onOpenAudioGenerate }) {
   // Handle clip drag start (mousedown on clip body, not trim handles)
   const handleClipDragStart = (e, clip) => {
     // Don't start drag if clicking on trim handles or delete button
-    if (trimState || slipState || e.target.closest('[data-trim-handle]') || e.target.closest('button')) {
+    if (trimState || slipState || fadeDragState || e.target.closest('[data-trim-handle]') || e.target.closest('[data-fade-handle]') || e.target.closest('button')) {
       return
     }
     
@@ -2564,21 +3021,7 @@ function Timeline({ onOpenAudioGenerate }) {
     }
   }, [trackResizeState])
 
-  const timecodeFps = Number.isFinite(Number(timelineFps)) && Number(timelineFps) > 0
-    ? Number(timelineFps)
-    : FRAME_RATE
-
-  const formatTimelineTimecode = (seconds) => {
-    const fps = Math.max(1, Math.round(timecodeFps))
-    const totalFrames = Math.max(0, Math.floor((seconds || 0) * fps))
-    const frames = totalFrames % fps
-    const totalSeconds = Math.floor(totalFrames / fps)
-    const ss = totalSeconds % 60
-    const mm = Math.floor(totalSeconds / 60) % 60
-    const hh = Math.floor(totalSeconds / 3600)
-    const pad2 = (n) => String(n).padStart(2, '0')
-    return `${pad2(hh)}:${pad2(mm)}:${pad2(ss)}:${pad2(frames)}`
-  }
+  const formatTimelineTimecode = (seconds) => formatTimecodeWithFps(seconds, timecodeFps)
 
   const getMajorRulerStep = (pixelsPerSec) => {
     // Keep labels readable while allowing finer granularity at high zoom.
@@ -2637,7 +3080,7 @@ function Timeline({ onOpenAudioGenerate }) {
           <button
             onClick={() => addMarker(playheadPosition)}
             className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
-            title="Add timeline marker at playhead (M)"
+            title={`Add timeline marker at playhead (${markerHotkeyLabel})`}
           >
             <Flag className="w-3 h-3 text-yellow-400" />
             Marker
@@ -2645,7 +3088,7 @@ function Timeline({ onOpenAudioGenerate }) {
           <button
             onClick={splitAllTracksAtPlayhead}
             className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
-            title="Split all clips at the playhead across every track (Shift+X)"
+            title={`Split all clips at the playhead across every track (${splitAllHotkeyLabel})`}
           >
             <Scissors className="w-3 h-3" />
             Cut All
@@ -2677,7 +3120,7 @@ function Timeline({ onOpenAudioGenerate }) {
               ? 'bg-sf-accent/20 text-sf-accent border border-sf-accent/50' 
               : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
           }`}
-          title={`Snapping ${snappingEnabled ? 'ON' : 'OFF'} (S to toggle)`}
+          title={`Snapping ${snappingEnabled ? 'ON' : 'OFF'} (${snappingHotkeyLabel} to toggle)`}
         >
           <Magnet className={`w-3 h-3 ${snappingEnabled ? 'text-sf-accent' : ''}`} />
           Snap
@@ -2691,7 +3134,7 @@ function Timeline({ onOpenAudioGenerate }) {
               ? 'bg-sf-accent/20 text-sf-accent border border-sf-accent/50' 
               : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
           }`}
-          title={`Ripple Edit ${rippleEditMode ? 'ON' : 'OFF'} (R to toggle) - Moving clips shifts subsequent clips`}
+          title={`Ripple Edit ${rippleEditMode ? 'ON' : 'OFF'} (${rippleHotkeyLabel} to toggle) - Moving clips shifts subsequent clips`}
         >
           <ArrowRightLeft className={`w-3 h-3 ${rippleEditMode ? 'text-sf-accent' : ''}`} />
           Ripple
@@ -2705,7 +3148,7 @@ function Timeline({ onOpenAudioGenerate }) {
         <button
           onClick={selectClipsFromTimelineStartToPlayhead}
           className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
-          title="Select clips from the start of the timeline to the playhead (Shift+E)"
+          title={`Select clips from the start of the timeline to the playhead (${selectFromStartHotkeyLabel})`}
         >
           <ChevronLeft className="w-3 h-3" />
           From Start
@@ -2714,11 +3157,33 @@ function Timeline({ onOpenAudioGenerate }) {
         <button
           onClick={selectClipsFromPlayheadToEnd}
           className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
-          title="Select clips from the playhead to the end of the timeline (E)"
+          title={`Select clips from the playhead to the end of the timeline (${selectToEndHotkeyLabel})`}
         >
           <ChevronRight className="w-3 h-3" />
           To End
         </button>
+
+        {selectedClipIds.length > 0 && (
+          <button
+            onClick={openMoveOffsetDialog}
+            className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
+            title={`Move selected clips by an exact signed timecode offset (${moveByHotkeyLabel})`}
+          >
+            <ArrowRightLeft className="w-3 h-3" />
+            Move By
+          </button>
+        )}
+
+        {selectedClipIds.length > 0 && (
+          <button
+            onClick={openDurationDeltaDialog}
+            className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
+            title={`Change selected clip duration by an exact signed amount${durationByHotkeyHint ? ` (${durationByHotkeyHint})` : ''}`}
+          >
+            <Clock className="w-3 h-3" />
+            Duration By
+          </button>
+        )}
         
         {/* Clip count */}
         <span className="text-[10px] text-sf-text-muted">{clips.length} clips</span>
@@ -2806,7 +3271,7 @@ function Timeline({ onOpenAudioGenerate }) {
             <div 
               key={track.id}
               onClick={() => setActiveTrack(track.id)}
-              title={activeTrackId === track.id ? 'Active track — press X to split at playhead, or Shift+X to split all tracks' : 'Click to set as active track (X cuts at playhead on this track; Shift+X splits all tracks)'}
+              title={activeTrackId === track.id ? `Active track — press ${splitActiveHotkeyLabel} to split at playhead, or ${splitAllHotkeyLabel} to split all tracks` : `Click to set as active track (${splitActiveHotkeyLabel} cuts at playhead on this track; ${splitAllHotkeyLabel} splits all tracks)`}
               className={`relative flex items-center px-2 gap-1 border-b border-sf-dark-700 hover:bg-sf-dark-800 transition-colors group/track cursor-pointer ${
                 track.locked ? 'bg-sf-dark-800/50' : ''
               } ${isDragging ? 'opacity-50 bg-sf-dark-700' : ''} ${isDropTarget ? 'border-t-2 border-t-purple-500' : ''}`}
@@ -2952,7 +3417,7 @@ function Timeline({ onOpenAudioGenerate }) {
             <div 
               key={track.id}
               onClick={() => setActiveTrack(track.id)}
-              title={activeTrackId === track.id ? 'Active track — press X to split at playhead, or Shift+X to split all tracks' : 'Click to set as active track (X cuts at playhead on this track; Shift+X splits all tracks)'}
+              title={activeTrackId === track.id ? `Active track — press ${splitActiveHotkeyLabel} to split at playhead, or ${splitAllHotkeyLabel} to split all tracks` : `Click to set as active track (${splitActiveHotkeyLabel} cuts at playhead on this track; ${splitAllHotkeyLabel} splits all tracks)`}
               className={`relative flex flex-col px-2 gap-0 border-b border-sf-dark-700 hover:bg-sf-dark-800 transition-colors group/track cursor-pointer ${
                 track.locked ? 'bg-sf-dark-800/50' : ''
               } ${isDragging ? 'opacity-50 bg-sf-dark-700' : ''} ${isDropTarget ? 'border-t-2 border-t-purple-500' : ''}`}
@@ -3789,7 +4254,14 @@ function Timeline({ onOpenAudioGenerate }) {
                 )}
                 {trackClips.map((clip) => {
                   const clipWidth = clip.duration * pixelsPerSecond
+                  const renderedClipWidth = Math.max(24, clipWidth)
                   const clipUrl = getClipUrl(clip)
+                  const { fadeIn, fadeOut } = getAudioClipFadeValues(clip)
+                  const fadeInWidth = Math.min(renderedClipWidth, fadeIn * pixelsPerSecond)
+                  const fadeOutWidth = Math.min(renderedClipWidth, fadeOut * pixelsPerSecond)
+                  const fadeHandleInset = Math.min(6, Math.max(2, renderedClipWidth / 2))
+                  const fadeInHandleX = Math.max(fadeHandleInset, Math.min(renderedClipWidth - fadeHandleInset, fadeInWidth))
+                  const fadeOutHandleX = Math.max(fadeHandleInset, Math.min(renderedClipWidth - fadeHandleInset, renderedClipWidth - fadeOutWidth))
                   const clipAsset = clip.assetId ? getAssetById(clip.assetId) : null
                   const nativeWaveformInput = (
                     (clipAsset?.absolutePath || null)
@@ -3833,6 +4305,27 @@ function Timeline({ onOpenAudioGenerate }) {
                       clipUrl={clipUrl}
                       waveformInput={waveformInput}
                     />
+
+                    {fadeInWidth > 0 && (
+                      <div
+                        className="absolute left-0 top-[3px] bottom-0 z-10 pointer-events-none"
+                        style={{
+                          width: `${fadeInWidth}px`,
+                          background: 'linear-gradient(to right, rgba(255,255,255,0.22), rgba(255,255,255,0))',
+                          clipPath: 'polygon(0 100%, 0 0, 100% 100%)',
+                        }}
+                      />
+                    )}
+                    {fadeOutWidth > 0 && (
+                      <div
+                        className="absolute right-0 top-[3px] bottom-0 z-10 pointer-events-none"
+                        style={{
+                          width: `${fadeOutWidth}px`,
+                          background: 'linear-gradient(to left, rgba(255,255,255,0.22), rgba(255,255,255,0))',
+                          clipPath: 'polygon(0 100%, 100% 0, 100% 100%)',
+                        }}
+                      />
+                    )}
                     
                     {/* Clip label - top left with background */}
                     <div className="absolute top-[4px] left-1 right-5 z-10">
@@ -3865,6 +4358,33 @@ function Timeline({ onOpenAudioGenerate }) {
                       className="absolute right-0 top-0 bottom-0 w-4 bg-white/0 group-hover:bg-white/20 cursor-ew-resize transition-colors z-20 flex items-center justify-end"
                     >
                       <div className="w-1 h-6 bg-white/0 group-hover:bg-white/90 rounded-l transition-colors" />
+                    </div>
+
+                    <div
+                      data-fade-handle="true"
+                      onMouseDown={(e) => handleFadeDragStart(e, clip, 'in')}
+                      className="absolute top-[3px] bottom-0 z-20 w-4 -translate-x-1/2 cursor-ew-resize flex items-center justify-center"
+                      style={{ left: `${fadeInHandleX}px` }}
+                      title={`Drag fade in (${fadeIn.toFixed(2)}s)`}
+                    >
+                      <div className={`h-full w-1.5 rounded-full shadow-[0_0_8px_rgba(0,0,0,0.35)] transition-colors ${
+                        fadeDragState?.clipId === clip.id && fadeDragState?.edge === 'in'
+                          ? 'bg-sf-accent'
+                          : 'bg-cyan-200/70 group-hover:bg-cyan-100'
+                      }`} />
+                    </div>
+                    <div
+                      data-fade-handle="true"
+                      onMouseDown={(e) => handleFadeDragStart(e, clip, 'out')}
+                      className="absolute top-[3px] bottom-0 z-20 w-4 -translate-x-1/2 cursor-ew-resize flex items-center justify-center"
+                      style={{ left: `${fadeOutHandleX}px` }}
+                      title={`Drag fade out (${fadeOut.toFixed(2)}s)`}
+                    >
+                      <div className={`h-full w-1.5 rounded-full shadow-[0_0_8px_rgba(0,0,0,0.35)] transition-colors ${
+                        fadeDragState?.clipId === clip.id && fadeDragState?.edge === 'out'
+                          ? 'bg-sf-accent'
+                          : 'bg-cyan-200/70 group-hover:bg-cyan-100'
+                      }`} />
                     </div>
                   </div>
                   )
@@ -4237,10 +4757,10 @@ function Timeline({ onOpenAudioGenerate }) {
           <button
             onClick={() => handleContextMenuAction('split')}
             className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
-            title="Split selected clip at playhead (or press X to split on active track)"
+            title={`Split selected clip at playhead (or press ${splitActiveHotkeyLabel} to split on the active track)`}
           >
             <span>Split at Playhead</span>
-            <span className="ml-auto text-sf-text-muted text-[10px]">X</span>
+            <span className="ml-auto text-sf-text-muted text-[10px]">{splitActiveHotkeyLabel}</span>
           </button>
           
           <button
@@ -4249,6 +4769,24 @@ function Timeline({ onOpenAudioGenerate }) {
           >
             <span>Duplicate</span>
             <span className="ml-auto text-sf-text-muted text-[10px]">⌘D</span>
+          </button>
+          <button
+            onClick={() => handleContextMenuAction('move-by-offset')}
+            className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
+            title="Move the current selection by an exact signed timecode offset"
+          >
+            <span>Move by Offset...</span>
+            <span className="ml-auto text-sf-text-muted text-[10px]">{moveByHotkeyLabel}</span>
+          </button>
+          <button
+            onClick={() => handleContextMenuAction('duration-by-amount')}
+            className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
+            title="Change the current selection duration by an exact signed amount"
+          >
+            <span>Change Duration...</span>
+            {durationByHotkeyHint && (
+              <span className="ml-auto text-sf-text-muted text-[10px]">{durationByHotkeyHint}</span>
+            )}
           </button>
           <button
             onClick={() => { copySelectedClips(); setClipContextMenu(null) }}
@@ -4277,6 +4815,254 @@ function Timeline({ onOpenAudioGenerate }) {
             <span>{selectedClipIds.length > 1 ? `Delete ${selectedClipIds.length} clips` : 'Delete'}</span>
             <span className="ml-auto text-sf-text-muted text-[10px]">Del</span>
           </button>
+        </div>
+      )}
+
+      {moveOffsetDialogOpen && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
+              closeMoveOffsetDialog()
+            }
+          }}
+        >
+          <div className="w-full max-w-sm rounded-lg border border-sf-dark-600 bg-sf-dark-800 shadow-2xl">
+            <div className="border-b border-sf-dark-700 px-4 py-3">
+              <h3 className="text-sm font-medium text-sf-text-primary">Move Selected Clips</h3>
+              <p className="mt-1 text-xs text-sf-text-muted">
+                Apply a signed offset to {selectedClipIds.length} selected clip{selectedClipIds.length === 1 ? '' : 's'}.
+              </p>
+            </div>
+
+            <form
+              className="space-y-3 px-4 py-3"
+              onSubmit={(e) => {
+                e.preventDefault()
+                applyMoveOffset()
+              }}
+            >
+              <div className="flex items-center gap-1 rounded bg-sf-dark-900 p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoveOffsetMode('timecode')
+                    setMoveOffsetError('')
+                  }}
+                  className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                    moveOffsetMode === 'timecode'
+                      ? 'bg-sf-accent text-black'
+                      : 'text-sf-text-secondary hover:bg-sf-dark-700'
+                  }`}
+                >
+                  Timecode
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoveOffsetMode('frames')
+                    setMoveOffsetError('')
+                  }}
+                  className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                    moveOffsetMode === 'frames'
+                      ? 'bg-sf-accent text-black'
+                      : 'text-sf-text-secondary hover:bg-sf-dark-700'
+                  }`}
+                >
+                  Frames
+                </button>
+              </div>
+
+              <div>
+                <label htmlFor="move-offset-input" className="mb-1 block text-[11px] uppercase tracking-wider text-sf-text-muted">
+                  {moveOffsetMode === 'frames' ? 'Frames' : 'Offset'}
+                </label>
+                <input
+                  id="move-offset-input"
+                  ref={moveOffsetInputRef}
+                  type="text"
+                  inputMode={moveOffsetMode === 'frames' ? 'numeric' : 'text'}
+                  value={moveOffsetMode === 'frames' ? moveOffsetFramesInput : moveOffsetInput}
+                  onChange={(e) => {
+                    if (moveOffsetMode === 'frames') {
+                      setMoveOffsetFramesInput(sanitizeFrameOffsetInput(e.target.value))
+                    } else {
+                      setMoveOffsetInput(sanitizeTimelineOffsetInput(e.target.value))
+                    }
+                    if (moveOffsetError) setMoveOffsetError('')
+                  }}
+                  placeholder={moveOffsetMode === 'frames' ? '+12' : '+00:00:02:12'}
+                  className="w-full rounded border border-sf-dark-600 bg-sf-dark-700 px-3 py-2 font-mono text-sm text-sf-text-primary focus:border-sf-accent focus:outline-none"
+                />
+                <p className="mt-1 text-[11px] text-sf-text-muted">
+                  {moveOffsetMode === 'frames'
+                    ? <>Use signed whole frames like <span className="font-mono">+12</span> or <span className="font-mono">-48</span>.</>
+                    : <>Use signed timecode like <span className="font-mono">+00:00:02:12</span> or seconds like <span className="font-mono">-1.5</span>.</>}
+                </p>
+              </div>
+
+              {!moveOffsetError && (
+                <p className="text-xs text-sf-text-secondary">
+                  {(() => {
+                    const parsed = moveOffsetMode === 'frames'
+                      ? parseFrameOffsetInput(moveOffsetFramesInput, timecodeFps)
+                      : parseTimelineOffsetInput(moveOffsetInput, timecodeFps)
+                    if (!parsed.success) return `Timeline FPS: ${Math.round(timecodeFps)}`
+                    const sign = parsed.seconds < 0 ? '-' : '+'
+                    const frameCount = Math.round(Math.abs(parsed.seconds) * Math.max(1, Math.round(timecodeFps)))
+                    if (moveOffsetMode === 'frames') {
+                      return `Parsed offset: ${sign}${frameCount} frames (${sign}${formatTimecodeWithFps(Math.abs(parsed.seconds), timecodeFps)})`
+                    }
+                    return `Parsed offset: ${sign}${formatTimecodeWithFps(Math.abs(parsed.seconds), timecodeFps)} (${sign}${frameCount} frames)`
+                  })()}
+                </p>
+              )}
+
+              {moveOffsetError && (
+                <p className="text-xs text-sf-error">{moveOffsetError}</p>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={closeMoveOffsetDialog}
+                  className="rounded bg-sf-dark-700 px-3 py-1.5 text-xs text-sf-text-secondary transition-colors hover:bg-sf-dark-600"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded bg-sf-accent px-3 py-1.5 text-xs font-medium text-black transition-colors hover:bg-sf-accent/90"
+                >
+                  Move Clips
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {durationDeltaDialogOpen && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
+              closeDurationDeltaDialog()
+            }
+          }}
+        >
+          <div className="w-full max-w-sm rounded-lg border border-sf-dark-600 bg-sf-dark-800 shadow-2xl">
+            <div className="border-b border-sf-dark-700 px-4 py-3">
+              <h3 className="text-sm font-medium text-sf-text-primary">Change Clip Duration</h3>
+              <p className="mt-1 text-xs text-sf-text-muted">
+                Adjust the right edge of {selectedClipIds.length} selected clip{selectedClipIds.length === 1 ? '' : 's'} by an exact signed amount.
+              </p>
+            </div>
+
+            <form
+              className="space-y-3 px-4 py-3"
+              onSubmit={(e) => {
+                e.preventDefault()
+                applyDurationDelta()
+              }}
+            >
+              <div className="flex items-center gap-1 rounded bg-sf-dark-900 p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDurationDeltaMode('timecode')
+                    setDurationDeltaError('')
+                  }}
+                  className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                    durationDeltaMode === 'timecode'
+                      ? 'bg-sf-accent text-black'
+                      : 'text-sf-text-secondary hover:bg-sf-dark-700'
+                  }`}
+                >
+                  Timecode
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDurationDeltaMode('frames')
+                    setDurationDeltaError('')
+                  }}
+                  className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                    durationDeltaMode === 'frames'
+                      ? 'bg-sf-accent text-black'
+                      : 'text-sf-text-secondary hover:bg-sf-dark-700'
+                  }`}
+                >
+                  Frames
+                </button>
+              </div>
+
+              <div>
+                <label htmlFor="duration-delta-input" className="mb-1 block text-[11px] uppercase tracking-wider text-sf-text-muted">
+                  {durationDeltaMode === 'frames' ? 'Frames' : 'Amount'}
+                </label>
+                <input
+                  id="duration-delta-input"
+                  ref={durationDeltaInputRef}
+                  type="text"
+                  inputMode={durationDeltaMode === 'frames' ? 'numeric' : 'text'}
+                  value={durationDeltaMode === 'frames' ? durationDeltaFramesInput : durationDeltaInput}
+                  onChange={(e) => {
+                    if (durationDeltaMode === 'frames') {
+                      setDurationDeltaFramesInput(sanitizeFrameOffsetInput(e.target.value))
+                    } else {
+                      setDurationDeltaInput(sanitizeTimelineOffsetInput(e.target.value))
+                    }
+                    if (durationDeltaError) setDurationDeltaError('')
+                  }}
+                  placeholder={durationDeltaMode === 'frames' ? '+12' : '+00:00:00:12'}
+                  className="w-full rounded border border-sf-dark-600 bg-sf-dark-700 px-3 py-2 font-mono text-sm text-sf-text-primary focus:border-sf-accent focus:outline-none"
+                />
+                <p className="mt-1 text-[11px] text-sf-text-muted">
+                  {durationDeltaMode === 'frames'
+                    ? <>Use signed whole frames like <span className="font-mono">+12</span> or <span className="font-mono">-8</span>.</>
+                    : <>Use signed timecode like <span className="font-mono">+00:00:00:12</span> or seconds like <span className="font-mono">-0.5</span>.</>}
+                </p>
+              </div>
+
+              {!durationDeltaError && (
+                <p className="text-xs text-sf-text-secondary">
+                  {(() => {
+                    const parsed = durationDeltaMode === 'frames'
+                      ? parseFrameOffsetInput(durationDeltaFramesInput, timecodeFps)
+                      : parseTimelineOffsetInput(durationDeltaInput, timecodeFps)
+                    if (!parsed.success) return `Timeline FPS: ${Math.round(timecodeFps)}`
+                    const sign = parsed.seconds < 0 ? '-' : '+'
+                    const frameCount = Math.round(Math.abs(parsed.seconds) * Math.max(1, Math.round(timecodeFps)))
+                    if (durationDeltaMode === 'frames') {
+                      return `Parsed change: ${sign}${frameCount} frames (${sign}${formatTimecodeWithFps(Math.abs(parsed.seconds), timecodeFps)})`
+                    }
+                    return `Parsed change: ${sign}${formatTimecodeWithFps(Math.abs(parsed.seconds), timecodeFps)} (${sign}${frameCount} frames)`
+                  })()}
+                </p>
+              )}
+
+              {durationDeltaError && (
+                <p className="text-xs text-sf-error">{durationDeltaError}</p>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={closeDurationDeltaDialog}
+                  className="rounded bg-sf-dark-700 px-3 py-1.5 text-xs text-sf-text-secondary transition-colors hover:bg-sf-dark-600"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded bg-sf-accent px-3 py-1.5 text-xs font-medium text-black transition-colors hover:bg-sf-accent/90"
+                >
+                  Change Duration
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

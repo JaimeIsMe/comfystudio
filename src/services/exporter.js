@@ -3,6 +3,7 @@ import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 import { getAnimatedTransform, getAnimatedAdjustmentSettings } from '../utils/keyframes'
 import { buildCssFilterFromAdjustments, hasAdjustmentEffect, normalizeAdjustmentSettings } from '../utils/adjustments'
+import { getAudioClipFadeGain, getAudioClipFadeValues } from '../utils/audioClipFades'
 
 const DEFAULT_SAMPLE_RATE = 44100
 const AUDIO_FETCH_TIMEOUT_MS = 15000
@@ -1008,6 +1009,8 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
               sourceFps: clip.sourceFps,
               speed: clip.speed,
               reverse: clip.reverse,
+              fadeIn: clip.fadeIn ?? 0,
+              fadeOut: clip.fadeOut ?? 0,
               url: clip.url || null,
             })),
             tracks: timelineState.tracks
@@ -1095,12 +1098,61 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
             
             const source = offlineContext.createBufferSource()
             source.buffer = audioBuffer
-            
-            const startOffset = Math.max(0, clip.startTime - rangeStart)
-            const sourceOffset = clip.trimStart || 0
-            const playDuration = clamp(clip.duration, 0, audioBuffer.duration - sourceOffset)
-            
-            source.connect(offlineContext.destination)
+
+            const clipStart = Number(clip.startTime) || 0
+            const clipDuration = Math.max(0, Number(clip.duration) || 0)
+            const clipEnd = clipStart + clipDuration
+            const visibleStart = Math.max(rangeStart, clipStart)
+            const visibleEnd = Math.min(rangeEnd, clipEnd)
+            if (visibleEnd <= visibleStart) continue
+
+            const clipOffsetOnTimeline = visibleStart - clipStart
+            const baseScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
+              ? clip.timelineFps / clip.sourceFps
+              : 1)
+            const speed = Number(clip.speed)
+            const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
+            const timeScale = baseScale * speedScale
+            const startOffset = Math.max(0, visibleStart - rangeStart)
+            const sourceOffset = Math.max(0, (clip.trimStart || 0) + clipOffsetOnTimeline * timeScale)
+            const visibleDuration = visibleEnd - visibleStart
+            const playDuration = clamp(visibleDuration * timeScale, 0, audioBuffer.duration - sourceOffset)
+            if (playDuration <= 0) continue
+
+            const gainNode = offlineContext.createGain()
+            const { fadeIn, fadeOut } = getAudioClipFadeValues(clip)
+            const endClipTime = Math.min(clipDuration, clipOffsetOnTimeline + visibleDuration)
+            const startClipTime = Math.max(0, clipOffsetOnTimeline)
+            const segmentEndTime = startOffset + visibleDuration
+            const startGain = getAudioClipFadeGain(clip, startClipTime)
+            const endGain = getAudioClipFadeGain(clip, endClipTime)
+
+            gainNode.gain.setValueAtTime(startGain, startOffset)
+
+            if (fadeIn > 0) {
+              const fadeInBoundary = fadeIn - startClipTime
+              if (fadeInBoundary > 0 && fadeInBoundary < visibleDuration) {
+                gainNode.gain.linearRampToValueAtTime(1, startOffset + fadeInBoundary)
+              }
+            }
+
+            if (fadeOut > 0) {
+              const fadeOutStart = Math.max(0, clipDuration - fadeOut)
+              const fadeOutBoundary = fadeOutStart - startClipTime
+              if (fadeOutBoundary > 0 && fadeOutBoundary < visibleDuration) {
+                gainNode.gain.setValueAtTime(1, startOffset + fadeOutBoundary)
+                gainNode.gain.linearRampToValueAtTime(endGain, segmentEndTime)
+              } else if (startClipTime >= fadeOutStart) {
+                gainNode.gain.linearRampToValueAtTime(endGain, segmentEndTime)
+              } else if (fadeIn <= 0) {
+                gainNode.gain.setValueAtTime(1, startOffset)
+              }
+            } else if (fadeIn > 0 && startClipTime >= fadeIn) {
+              gainNode.gain.setValueAtTime(1, startOffset)
+            }
+
+            source.connect(gainNode)
+            gainNode.connect(offlineContext.destination)
             source.start(startOffset, sourceOffset, playDuration)
           } catch (err) {
             console.warn('Failed to decode audio clip for export:', err)
