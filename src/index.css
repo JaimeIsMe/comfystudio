@@ -2,6 +2,152 @@
 @tailwind components;
 @tailwind utilities;
 
+/* =============================================
+   Theme CSS Variables
+   Each theme defines the full sf-* palette as
+   space-separated RGB triplets so Tailwind's
+   alpha modifier (e.g. bg-sf-dark-800/50) works.
+   ============================================= */
+
+:root {
+  /* ---- Midnight (default) ---- */
+  --sf-dark-950: 13 13 13;
+  --sf-dark-900: 26 26 26;
+  --sf-dark-800: 36 36 36;
+  --sf-dark-700: 45 45 45;
+  --sf-dark-600: 56 56 56;
+  --sf-dark-500: 74 74 74;
+  --sf-dark-400: 92 92 92;
+
+  --sf-accent: 86 92 107;
+  --sf-accent-hover: 106 112 128;
+  --sf-accent-muted: 74 80 96;
+
+  --sf-blue: 90 122 158;
+  --sf-blue-hover: 74 106 142;
+  --sf-blue-muted: 58 90 126;
+
+  --sf-clip-video: 61 112 128;
+  --sf-clip-audio: 45 95 74;
+  --sf-clip-text: 86 92 107;
+
+  --sf-success: 34 197 94;
+  --sf-warning: 86 92 107;
+  --sf-error: 239 68 68;
+
+  --sf-text-primary: 229 229 229;
+  --sf-text-secondary: 163 163 163;
+  --sf-text-muted: 115 115 115;
+}
+
+[data-theme="soft-dark"] {
+  --sf-dark-950: 16 16 20;
+  --sf-dark-900: 28 28 34;
+  --sf-dark-800: 38 38 46;
+  --sf-dark-700: 50 50 58;
+  --sf-dark-600: 62 62 72;
+  --sf-dark-500: 80 80 92;
+  --sf-dark-400: 100 100 114;
+
+  --sf-accent: 90 98 130;
+  --sf-accent-hover: 110 118 150;
+  --sf-accent-muted: 74 82 112;
+
+  --sf-blue: 88 115 165;
+  --sf-blue-hover: 72 100 148;
+  --sf-blue-muted: 56 84 130;
+
+  --sf-clip-video: 58 108 130;
+  --sf-clip-audio: 42 92 72;
+  --sf-clip-text: 90 98 130;
+
+  --sf-text-primary: 222 222 230;
+  --sf-text-secondary: 158 158 170;
+  --sf-text-muted: 110 110 124;
+}
+
+[data-theme="high-contrast"] {
+  --sf-dark-950: 0 0 0;
+  --sf-dark-900: 10 10 12;
+  --sf-dark-800: 20 20 24;
+  --sf-dark-700: 34 34 40;
+  --sf-dark-600: 52 52 58;
+  --sf-dark-500: 80 80 88;
+  --sf-dark-400: 110 110 120;
+
+  --sf-accent: 64 144 224;
+  --sf-accent-hover: 80 160 240;
+  --sf-accent-muted: 48 120 200;
+
+  --sf-blue: 64 144 224;
+  --sf-blue-hover: 48 120 200;
+  --sf-blue-muted: 40 100 180;
+
+  --sf-clip-video: 50 140 170;
+  --sf-clip-audio: 34 120 80;
+  --sf-clip-text: 64 144 224;
+
+  --sf-text-primary: 255 255 255;
+  --sf-text-secondary: 200 200 208;
+  --sf-text-muted: 148 148 160;
+}
+
+[data-theme="arctic"] {
+  --sf-dark-950: 12 14 18;
+  --sf-dark-900: 22 26 34;
+  --sf-dark-800: 30 36 46;
+  --sf-dark-700: 40 48 58;
+  --sf-dark-600: 52 62 74;
+  --sf-dark-500: 70 82 96;
+  --sf-dark-400: 90 104 120;
+
+  --sf-accent: 90 144 184;
+  --sf-accent-hover: 106 160 200;
+  --sf-accent-muted: 74 128 168;
+
+  --sf-blue: 80 130 180;
+  --sf-blue-hover: 64 114 164;
+  --sf-blue-muted: 50 98 148;
+
+  --sf-clip-video: 56 120 148;
+  --sf-clip-audio: 40 100 78;
+  --sf-clip-text: 90 144 184;
+
+  --sf-text-primary: 220 228 236;
+  --sf-text-secondary: 153 168 184;
+  --sf-text-muted: 104 120 136;
+}
+
+[data-theme="ember"] {
+  --sf-dark-950: 16 12 10;
+  --sf-dark-900: 30 24 20;
+  --sf-dark-800: 42 34 28;
+  --sf-dark-700: 52 44 36;
+  --sf-dark-600: 64 56 46;
+  --sf-dark-500: 86 76 64;
+  --sf-dark-400: 110 98 84;
+
+  --sf-accent: 160 112 64;
+  --sf-accent-hover: 180 130 80;
+  --sf-accent-muted: 140 96 52;
+
+  --sf-blue: 148 116 78;
+  --sf-blue-hover: 128 98 64;
+  --sf-blue-muted: 108 82 52;
+
+  --sf-clip-video: 80 120 110;
+  --sf-clip-audio: 60 100 70;
+  --sf-clip-text: 160 112 64;
+
+  --sf-text-primary: 232 224 212;
+  --sf-text-secondary: 176 168 152;
+  --sf-text-muted: 128 116 104;
+}
+
+/* =============================================
+   Global Styles
+   ============================================= */
+
 * {
   margin: 0;
   padding: 0;
@@ -15,29 +161,29 @@ html, body, #root {
 
 body {
   font-family: 'Inter', system-ui, sans-serif;
-  background-color: #0d0d0d;
-  color: #e5e5e5;
+  background-color: rgb(var(--sf-dark-950));
+  color: rgb(var(--sf-text-primary));
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Custom scrollbar - Resolve style darker */
+/* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #1a1a1a;
+  background: rgb(var(--sf-dark-900));
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #383838;
+  background: rgb(var(--sf-dark-600));
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #4a4a4a;
+  background: rgb(var(--sf-dark-500));
 }
 
 /* Hide number input spinners - use double-click to type instead */
@@ -70,7 +216,7 @@ input[type="number"] {
 
 /* Panel borders */
 .panel-border {
-  border: 1px solid #2d2d2d;
+  border: 1px solid rgb(var(--sf-dark-700));
 }
 
 /* Drag handle for electron window */

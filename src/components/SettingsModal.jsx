@@ -4,6 +4,7 @@ import {
   HardDrive, Film, ChevronDown, ChevronRight, Keyboard
 } from 'lucide-react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../stores/projectStore'
+import { THEMES, getStoredThemeId, applyTheme } from '../config/themes'
 import { getPexelsApiKey, setPexelsApiKey } from '../services/pexelsSettings'
 import {
   DEFAULT_EDITOR_HOTKEYS,
@@ -36,7 +37,7 @@ function GeneralTab({ initialSection = null }) {
   })
   const [outputPath, setOutputPath] = useState('C:\\Users\\...\\ComfyStudio\\outputs')
   const [workflowPath, setWorkflowPath] = useState('C:\\Users\\...\\ComfyUI\\workflow_API')
-  const [theme, setTheme] = useState('dark')
+  const [activeThemeId, setActiveThemeId] = useState(() => getStoredThemeId())
   const [pexelsApiKey, setPexelsApiKeyLocal] = useState('')
   const [comfyOrgApiKey, setComfyOrgApiKey] = useState('')
   const [settingsSaved, setSettingsSaved] = useState(false)
@@ -495,17 +496,47 @@ function GeneralTab({ initialSection = null }) {
       </Section>
 
       <Section id="appearance" icon={Palette} title="Appearance">
-        <div>
+        <div className="space-y-2">
           <label className="block text-xs text-sf-text-muted mb-1">Theme</label>
-          <select
-            value={theme}
-            onChange={(e) => setTheme(e.target.value)}
-            className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-3 py-2 text-sm text-sf-text-primary focus:outline-none focus:border-sf-accent"
-          >
-            <option value="dark">Dark (Default)</option>
-            <option value="darker">Darker</option>
-            <option value="light">Light</option>
-          </select>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {THEMES.map((theme) => {
+              const isActive = theme.id === activeThemeId
+              return (
+                <button
+                  key={theme.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveThemeId(theme.id)
+                    applyTheme(theme.id)
+                  }}
+                  className={`rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                    isActive
+                      ? 'border-sf-accent bg-sf-accent/10'
+                      : 'border-sf-dark-700 bg-sf-dark-800 hover:bg-sf-dark-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    {/* Color swatch row */}
+                    <div className="flex gap-0.5 flex-shrink-0">
+                      <div className="w-4 h-4 rounded-sm" style={{ backgroundColor: theme.preview.bg }} />
+                      <div className="w-4 h-4 rounded-sm" style={{ backgroundColor: theme.preview.surface }} />
+                      <div className="w-4 h-4 rounded-sm" style={{ backgroundColor: theme.preview.accent }} />
+                      <div className="w-4 h-4 rounded-sm border border-white/10" style={{ backgroundColor: theme.preview.text }} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm text-sf-text-primary font-medium">{theme.label}</span>
+                        {isActive && (
+                          <span className="text-[10px] text-sf-accent font-medium">Active</span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-sf-text-muted truncate">{theme.description}</p>
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
         </div>
       </Section>
 
