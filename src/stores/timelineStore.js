@@ -402,6 +402,7 @@ export const useTimelineStore = create(
 
   // UI request: open Inspector (optionally mask picker) for a clip
   maskPickerRequest: null, // { clipId, openPicker }
+  textEditRequest: null, // { clipId, selectAll, requestedAt }
   
   // Clip counter for unique IDs
   clipCounter: 1,
@@ -516,6 +517,7 @@ export const useTimelineStore = create(
         selectedTransitionId: null,
         selectedMarkerId: null,
         selectedGap: null,
+        textEditRequest: null,
       })
       return true
     }
@@ -537,6 +539,7 @@ export const useTimelineStore = create(
         selectedTransitionId: null,
         selectedMarkerId: null,
         selectedGap: null,
+        textEditRequest: null,
       })
       return true
     }
@@ -566,6 +569,7 @@ export const useTimelineStore = create(
         selectedTransitionId: null,
         selectedMarkerId: null,
         selectedGap: null,
+        textEditRequest: null,
       })
       return true
     }
@@ -3758,7 +3762,13 @@ export const useTimelineStore = create(
    * Clear all selections
    */
   clearSelection: () => {
-    set({ selectedClipIds: [], selectedTransitionId: null, selectedMarkerId: null, selectedGap: null })
+    set({
+      selectedClipIds: [],
+      selectedTransitionId: null,
+      selectedMarkerId: null,
+      selectedGap: null,
+      textEditRequest: null,
+    })
   },
 
   /**
@@ -3774,6 +3784,28 @@ export const useTimelineStore = create(
    */
   clearMaskPickerRequest: () => {
     set({ maskPickerRequest: null })
+  },
+
+  /**
+   * Request focusing the selected text clip content field in the Inspector.
+   */
+  requestTextEdit: (clipId, options = {}) => {
+    const { selectAll = true } = options
+    if (!clipId) return
+    set({
+      textEditRequest: {
+        clipId,
+        selectAll,
+        requestedAt: Date.now(),
+      },
+    })
+  },
+
+  /**
+   * Clear pending text edit focus request.
+   */
+  clearTextEditRequest: () => {
+    set({ textEditRequest: null })
   },
 
   /**

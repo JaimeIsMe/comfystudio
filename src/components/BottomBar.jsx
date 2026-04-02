@@ -24,7 +24,7 @@ function BottomBar({ onOpenSettings, onOpenGettingStarted, projectName }) {
   const combinedCanRedo = projectCanRedo || canRedo()
 
   const handleUndo = () => {
-    if (projectCanUndo && (!canUndo() || projectHistoryLastChangedAt >= timelineHistoryLastChangedAt)) {
+    if (projectCanUndo && (!canUndo() || projectHistoryLastChangedAt > timelineHistoryLastChangedAt)) {
       undoTimelineStructureChange()
       return
     }
@@ -32,7 +32,7 @@ function BottomBar({ onOpenSettings, onOpenGettingStarted, projectName }) {
   }
 
   const handleRedo = () => {
-    if (projectCanRedo && (!canRedo() || projectHistoryLastChangedAt >= timelineHistoryLastChangedAt)) {
+    if (projectCanRedo && (!canRedo() || projectHistoryLastChangedAt > timelineHistoryLastChangedAt)) {
       redoTimelineStructureChange()
       return
     }

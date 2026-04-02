@@ -1,5 +1,5 @@
 import { Type, AlignLeft, AlignCenter, AlignRight } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTimelineStore } from '../../stores/timelineStore'
 import { TEXT_ANIMATION_PRESETS, TEXT_ANIMATION_MODE_OPTIONS } from '../../utils/textAnimationPresets'
 
@@ -11,7 +11,14 @@ const FONT_OPTIONS = [
 
 function TextPanel() {
   // Timeline store for adding text clips
-  const { addTextClip, applyTextAnimationPreset, tracks, playheadPosition } = useTimelineStore()
+  const {
+    addTextClip,
+    applyTextAnimationPreset,
+    tracks,
+    playheadPosition,
+    activeTrackId,
+    requestTextEdit,
+  } = useTimelineStore()
   
   // Text generation state
   const [textContent, setTextContent] = useState('Sample Text')
@@ -29,13 +36,17 @@ function TextPanel() {
   const [animationPreset, setAnimationPreset] = useState('none')
   const [animationMode, setAnimationMode] = useState('inOut')
 
+  const preferredVideoTrack = useMemo(() => {
+    const activeVideoTrack = tracks.find((track) => track.id === activeTrackId && track.type === 'video')
+    if (activeVideoTrack) return activeVideoTrack
+    return tracks.find((track) => track.type === 'video') || null
+  }, [tracks, activeTrackId])
+
   // Handle adding text to timeline
   const handleAddText = () => {
-    // Find the first video track
-    const videoTrack = tracks.find(t => t.type === 'video')
-    if (!videoTrack) return
+    if (!preferredVideoTrack) return
     
-    const newClip = addTextClip(videoTrack.id, {
+    const newClip = addTextClip(preferredVideoTrack.id, {
       text: textContent,
       fontFamily: textFontFamily,
       fontSize: textFontSize,
@@ -52,6 +63,10 @@ function TextPanel() {
 
     if (newClip && animationPreset !== 'none') {
       applyTextAnimationPreset(newClip.id, animationPreset, animationMode, { saveHistory: false })
+    }
+
+    if (newClip) {
+      requestTextEdit(newClip.id, { selectAll: true })
     }
   }
 
@@ -363,14 +378,21 @@ function TextPanel() {
         <div className="space-y-2">
           <button
             onClick={handleAddText}
-            className="w-full py-2.5 bg-sf-accent hover:bg-sf-accent-hover rounded-lg font-medium text-white flex items-center justify-center gap-2 transition-colors text-sm"
+            disabled={!preferredVideoTrack}
+            className={`w-full py-2.5 rounded-lg font-medium text-white flex items-center justify-center gap-2 transition-colors text-sm ${
+              preferredVideoTrack
+                ? 'bg-sf-accent hover:bg-sf-accent-hover'
+                : 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
+            }`}
           >
             <Type className="w-4 h-4" />
             Add Text to Timeline
           </button>
           
           <p className="text-[10px] text-sf-text-muted text-center">
-            Text will be added at playhead position on Video 1
+            {preferredVideoTrack
+              ? `Text will be added at playhead position on ${preferredVideoTrack.name}`
+              : 'Add a video track to place text on the timeline'}
           </p>
         </div>
 

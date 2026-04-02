@@ -1151,6 +1151,7 @@ const TextLayer = memo(function TextLayer({
   buildVideoTransform,
   getClipTransform,
   onClipPointerDown,
+  onClipDoubleClick,
   previewScale = 1,
 }) {
   if (!clip || clip.type !== 'text') return null
@@ -1221,6 +1222,11 @@ const TextLayer = memo(function TextLayer({
       onPointerDown={(e) => {
         if (typeof onClipPointerDown === 'function') {
           onClipPointerDown(clip, e)
+        }
+      }}
+      onDoubleClick={(e) => {
+        if (typeof onClipDoubleClick === 'function') {
+          onClipDoubleClick(clip, e)
         }
       }}
       style={{
@@ -1335,6 +1341,7 @@ function VideoLayerRenderer({
   getTransitionStyles,
   getTransitionOverlay,
   onClipPointerDown,
+  onClipDoubleClick,
   previewScale = 1,
 }) {
   const containerRef = useRef(null)
@@ -1708,6 +1715,7 @@ function VideoLayerRenderer({
             buildVideoTransform={buildVideoTransform}
             getClipTransform={getClipTransform}
             onClipPointerDown={onClipPointerDown}
+            onClipDoubleClick={onClipDoubleClick}
             previewScale={previewScale}
           />
         )
@@ -1772,7 +1780,7 @@ function VideoLayerRenderer({
     })
 
     return accumulated
-  }, [compositedVisualClips, playheadPosition, isPlaying, buildVideoTransform, getClipTransform, onClipPointerDown, previewScale, transitionStyleByClipId])
+  }, [compositedVisualClips, playheadPosition, isPlaying, buildVideoTransform, getClipTransform, onClipPointerDown, onClipDoubleClick, previewScale, transitionStyleByClipId])
 
   // Render multi-layer composition (including transitions)
   return (

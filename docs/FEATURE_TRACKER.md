@@ -40,6 +40,9 @@ We should keep updating this file as new features land.
 - Preview viewer now lets you hide transform controls while keeping the selected clip active for looping and playback checks
 - Audio clips now have per-clip Inspector gain with boosted preview, meters, and export mix support for quiet recordings
 - Timeline audio meters now stop cleanly with playback and use clearer `5 dB` ruler ticks and labels
+- Text clips can now be added to the active video track and jump straight into editing from the text panel, a hotkey, timeline double-click, or preview double-click
+- Timeline header now surfaces a compact `Edit` group for split, copy, paste, enable or disable, delete, and text clip creation without leaving the main timeline UI
+- Dragging a video clip above the top of the visible video stack can now create a new video track automatically on drop
 - Inspector clip headers now surface richer media info like resolution, FPS, codec, format, size, and timecode summaries
 - Inspector section collapse state now persists across app restarts
 - Timeline marquee selection now works by dragging on empty track space, supports additive modifiers, and auto-scrolls while sweeping large areas
@@ -80,6 +83,7 @@ These are the most important shortcut-related additions or surfaced editing shor
 - `R`: Toggle ripple edit
 - `M`: Add marker at playhead
 - `D`: Enable or disable selected clips
+- `T`: Add a text clip at the playhead and start typing
 - `+` / `-`: Zoom timeline in and out
 - `Esc`: Clear selected clips, markers, transitions, or gap targets
 - `Delete` / `Backspace`: Ripple delete selected clips while ripple mode is on, or close a selected gap
@@ -106,6 +110,9 @@ Good visuals to capture for posts, release notes, or short clips:
 - Audio fade drag with the new `seconds:frames` badge over the waveform
 - Audio Inspector gain boosting a quiet clip above `0 dB` while the meter reacts live
 - Timeline audio meters dropping cleanly to silence on stop with the denser `5 dB` scale visible beside them
+- Add text on the active track and immediately type into the Inspector after creating or double-clicking a text clip
+- Timeline header showing the new compact `Edit` group while split, copy, paste, delete, and text buttons enable and disable with selection state
+- Drag a clip above the top video lane and release to show automatic top-track creation
 - Preview transform gizmo showing out-of-frame bounds and corner rotation handles
 - Preview toolbar toggling transform controls on and off while the same clip stays selected
 - Inspector header showing clip start / duration / source timing in `hours:minutes:seconds:frames`
@@ -126,6 +133,8 @@ Good visuals to capture for posts, release notes, or short clips:
 - Fade handles feel more like an NLE with clearer ramp direction and drag timing feedback
 - Inspector audio gain now boosts quiet clips directly in preview and export without leaving the editor
 - Timeline audio meters now feel more trustworthy with cleaner stop behavior and a clearer ruler
+- Text editing is becoming faster by letting you create or re-enter text clips without hunting through side panels
+- The timeline is becoming more mouse-friendly by surfacing core split, copy, paste, delete, enable or disable, and text actions directly in the header
 - Preview transforms feel closer to Photoshop / After Effects with more legible bounds and rotation handles
 - Inspector headers now show clip metadata and timecode more like a real editing app
 - Large timeline selections are faster now that marquee drag works directly from empty track space

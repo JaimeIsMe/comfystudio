@@ -257,6 +257,7 @@ function PreviewPanel() {
     transitions,
     selectedClipIds,
     selectClip,
+    requestTextEdit,
     saveToHistory,
     updateClipTransform,
     hasKeyframes,
@@ -1175,6 +1176,17 @@ function PreviewPanel() {
       toggleSelection: isCtrlHeld,
     })
   }, [previewMode, isSpaceHeld, isPanning, isZooming, selectClip])
+
+  const handlePreviewTextDoubleClick = useCallback((clip, e) => {
+    if (!clip || clip.type !== 'text' || previewMode !== 'timeline') return
+    if (isSpaceHeld || isPanning || isZooming) return
+    if (e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+
+    selectClip(clip.id)
+    requestTextEdit(clip.id, { selectAll: true })
+  }, [previewMode, isSpaceHeld, isPanning, isZooming, requestTextEdit, selectClip])
   
   // Handle mouse wheel for zooming
   const handleWheel = useCallback((e) => {
@@ -1871,6 +1883,7 @@ function PreviewPanel() {
                       getTransitionStyles={getTransitionStyles}
                       getTransitionOverlay={getTransitionOverlay}
                       onClipPointerDown={handlePreviewClipPointerDown}
+                      onClipDoubleClick={handlePreviewTextDoubleClick}
                       previewScale={previewScale.uniform}
                     />
                   </>

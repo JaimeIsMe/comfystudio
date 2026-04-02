@@ -337,6 +337,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   const [letterboxBarColor, setLetterboxBarColor] = useState('#000000')
   const [isUpdatingLetterbox, setIsUpdatingLetterbox] = useState(false)
   const [letterboxUpdateError, setLetterboxUpdateError] = useState(null)
+  const textContentInputRef = useRef(null)
   
   // Get selected clip from timeline store
   const { 
@@ -378,6 +379,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     clearClipCache,
     maskPickerRequest,
     clearMaskPickerRequest,
+    textEditRequest,
+    clearTextEditRequest,
   } = useTimelineStore()
   
   // Get assets store functions (needed for render cache)
@@ -465,6 +468,69 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     }
     clearMaskPickerRequest()
   }, [maskPickerRequest, selectedClip?.id, isExpanded, onToggleExpanded, clearMaskPickerRequest])
+
+  useEffect(() => {
+    if (!textEditRequest) return
+
+    if (!selectedClipIds.includes(textEditRequest.clipId)) {
+      clearTextEditRequest()
+      return
+    }
+
+    if (!selectedClip || selectedClip.id !== textEditRequest.clipId || selectedClip.type !== 'text') {
+      return
+    }
+
+    if (!isExpanded) {
+      onToggleExpanded()
+    }
+    setExpandedSections((prev) => (
+      prev.includes('text') ? prev : [...prev, 'text']
+    ))
+
+    let frameId = 0
+    let attempts = 0
+    let isCancelled = false
+
+    const focusTextContent = () => {
+      if (isCancelled) return
+
+      const textarea = textContentInputRef.current
+      if (textarea) {
+        textarea.focus()
+        if (textEditRequest.selectAll !== false) {
+          textarea.select()
+        } else {
+          const length = textarea.value.length
+          textarea.setSelectionRange(length, length)
+        }
+        clearTextEditRequest()
+        return
+      }
+
+      attempts += 1
+      if (attempts < 8) {
+        frameId = window.requestAnimationFrame(focusTextContent)
+      } else {
+        clearTextEditRequest()
+      }
+    }
+
+    frameId = window.requestAnimationFrame(focusTextContent)
+    return () => {
+      isCancelled = true
+      if (frameId) {
+        window.cancelAnimationFrame(frameId)
+      }
+    }
+  }, [
+    textEditRequest,
+    selectedClipIds,
+    selectedClip,
+    isExpanded,
+    onToggleExpanded,
+    clearTextEditRequest,
+  ])
   
   // Get track info for the selected clip
   const selectedTrack = selectedClip 
@@ -2781,6 +2847,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
             <div>
               <label className="text-[10px] text-sf-text-muted block mb-1">Content</label>
               <textarea
+                ref={textContentInputRef}
                 value={textProps.text}
                 onChange={(e) => handleTextPropertyChange('text', e.target.value)}
                 onBlur={(e) => handleTextPropertyCommit('text', e.target.value)}

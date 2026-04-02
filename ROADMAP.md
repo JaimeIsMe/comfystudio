@@ -58,12 +58,16 @@ The next roadmap work now rolls into the Phase 2 precision editing items below.
 
 This phase focuses on features that help experienced editors work faster and with more control.
 
+Recent Phase 2 progress that is now shipped:
+
+- Better editing toolbar coverage for split, copy, paste, enable or disable, delete, and text clip creation directly in the timeline header
+
+Remaining Phase 2 priorities:
+
 - Move selected clips by exact timecode offset
 - Extend clip duration by a chosen amount
 - Better multi-clip movement across tracks
 - Show timelines and sequences in a dedicated browser section and open them directly from the Assets panel
-- More direct text editing workflows
-- Better editing toolbar coverage
 - Fully customizable keyboard shortcuts and hotkeys in settings
 - Editor keymap profiles with familiar presets such as Premiere Pro, Resolve, and Final Cut Pro
 

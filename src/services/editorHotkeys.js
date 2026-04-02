@@ -12,6 +12,7 @@ export const EDITOR_HOTKEY_IDS = {
   SPLIT_ALL: 'timeline.splitAll',
   OPEN_MOVE_BY: 'timeline.openMoveBy',
   OPEN_DURATION_BY: 'timeline.openDurationBy',
+  ADD_TEXT_CLIP: 'timeline.addTextClip',
   LINK_SELECTION: 'timeline.linkSelection',
   UNLINK_SELECTION: 'timeline.unlinkSelection',
 }
@@ -76,6 +77,12 @@ export const EDITOR_HOTKEY_DEFINITIONS = [
     label: 'Open Duration By dialog',
     description: 'Precision editing',
     defaultBinding: '',
+  },
+  {
+    id: EDITOR_HOTKEY_IDS.ADD_TEXT_CLIP,
+    label: 'Add text clip at playhead',
+    description: 'Timeline text',
+    defaultBinding: 'T',
   },
   {
     id: EDITOR_HOTKEY_IDS.LINK_SELECTION,

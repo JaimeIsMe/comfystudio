@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react'
-import { 
-  Volume2, VolumeX, Lock, Unlock, Link, Unlink, Eye, EyeOff, 
+import {
+  Volume2, VolumeX, Lock, Unlock, Link, Unlink, Eye, EyeOff,
   Plus, Video, Type, Image as ImageIcon,
   Sparkles, GripVertical, Magnet, ArrowRightLeft, Square, X, Check, Pencil,
-  Diamond, Zap, AlertTriangle, Loader2, ChevronLeft, ChevronRight, Maximize2, Flag, Scissors, Clock
+  Diamond, Zap, AlertTriangle, Loader2, ChevronLeft, ChevronRight, Maximize2, Flag, Scissors, Clock,
+  Copy, ClipboardPaste, Trash2,
 } from 'lucide-react'
 import useTimelineStore from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
@@ -30,6 +31,8 @@ const DEFAULT_WAVEFORM_SAMPLES = 4096
 const MARQUEE_DRAG_THRESHOLD_PX = 6
 const MARQUEE_AUTO_SCROLL_EDGE_PX = 32
 const MARQUEE_AUTO_SCROLL_STEP_PX = 24
+const PLAYHEAD_SCRUB_AUTO_SCROLL_EDGE_PX = 40
+const PLAYHEAD_SCRUB_AUTO_SCROLL_MAX_STEP_PX = 28
 
 // Resolve-style audio track/waveform colors
 const AUDIO_TRACK_BG = '#2d4038'
@@ -645,6 +648,7 @@ function Timeline({ onOpenAudioGenerate }) {
     saveToHistory,
     clearClipCache,
     requestMaskPicker,
+    requestTextEdit,
     copySelectedClips,
     pasteClipsAtPlayhead,
     copiedClips,
@@ -675,6 +679,21 @@ function Timeline({ onOpenAudioGenerate }) {
   const projectCanRedo = canRedoTimelineStructureChange()
   const timelineHistoryLastChangedAt = useTimelineStore((state) => state.historyLastChangedAt)
   const timelineIsPlaying = useTimelineStore((state) => state.isPlaying)
+  const preferredVideoTrack = useMemo(() => {
+    const activeVideoTrack = tracks.find((track) => track.id === activeTrackId && track.type === 'video')
+    if (activeVideoTrack) return activeVideoTrack
+    return tracks.find((track) => track.type === 'video') || null
+  }, [tracks, activeTrackId])
+  const addTextClipAtPlayhead = useCallback((options = {}) => {
+    const targetTrack = preferredVideoTrack
+    if (!targetTrack) return null
+
+    const newClip = addTextClip(targetTrack.id, options, playheadPosition)
+    if (newClip) {
+      requestTextEdit(newClip.id, { selectAll: true })
+    }
+    return newClip
+  }, [preferredVideoTrack, addTextClip, playheadPosition, requestTextEdit])
   const handleUndoAction = useCallback(() => {
     if (projectCanUndo && (!canUndo() || projectHistoryLastChangedAt > timelineHistoryLastChangedAt)) {
       return undoTimelineStructureChange()
@@ -699,6 +718,10 @@ function Timeline({ onOpenAudioGenerate }) {
   const snappingHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.TOGGLE_SNAPPING])
   const rippleHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.TOGGLE_RIPPLE])
   const toggleClipEnabledHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.TOGGLE_CLIP_ENABLED])
+  const addTextClipHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.ADD_TEXT_CLIP])
+  const isMacPlatform = typeof navigator !== 'undefined' && /mac|iphone|ipad/i.test(navigator.platform || '')
+  const copyHotkeyLabel = `${isMacPlatform ? 'Cmd' : 'Ctrl'}+C`
+  const pasteHotkeyLabel = `${isMacPlatform ? 'Cmd' : 'Ctrl'}+V`
   const durationByHotkeyHint = durationByHotkeyLabel === 'Not set' ? '' : durationByHotkeyLabel
   const isClipEnabled = useCallback((clip) => clip?.enabled !== false, [])
   const getContextSelectionClipIds = useCallback((clipId) => {
@@ -838,6 +861,72 @@ function Timeline({ onOpenAudioGenerate }) {
     const shouldEnable = targetClips.every((clip) => !isClipEnabled(clip))
     setClipSelectionEnabled(targetClips.map((clip) => clip.id), shouldEnable)
   }, [clips, isClipEnabled, selectedClipIds, setClipSelectionEnabled])
+  const selectedClips = useMemo(
+    () => selectedClipIds
+      .map((clipId) => clips.find((clip) => clip.id === clipId))
+      .filter(Boolean),
+    [clips, selectedClipIds]
+  )
+  const selectedClipsShouldEnable = useMemo(
+    () => selectedClips.length > 0 && selectedClips.every((clip) => !isClipEnabled(clip)),
+    [selectedClips, isClipEnabled]
+  )
+  const activeTrackClipAtPlayhead = useMemo(() => {
+    if (!activeTrackId) return null
+    return clips.find(
+      (clip) => clip.trackId === activeTrackId
+        && playheadPosition > clip.startTime
+        && playheadPosition < clip.startTime + clip.duration
+    ) || null
+  }, [activeTrackId, clips, playheadPosition])
+  const canDeleteCurrentSelection = selectedClipIds.length > 0
+    || Boolean(selectedGap)
+    || Boolean(selectedTransitionId)
+    || Boolean(selectedMarkerId)
+
+  const handleDeleteCurrentSelection = useCallback(() => {
+    if (selectedClipIds.length > 0) {
+      if (rippleEditMode) {
+        rippleDeleteSelectedClips()
+      } else {
+        removeSelectedClips()
+      }
+      return true
+    }
+    if (selectedGap) {
+      rippleDeleteSelectedGap()
+      return true
+    }
+    if (selectedTransitionId) {
+      removeTransition(selectedTransitionId)
+      return true
+    }
+    if (selectedMarkerId) {
+      removeMarker(selectedMarkerId)
+      return true
+    }
+    return false
+  }, [
+    removeMarker,
+    removeSelectedClips,
+    removeTransition,
+    rippleDeleteSelectedClips,
+    rippleDeleteSelectedGap,
+    rippleEditMode,
+    selectedClipIds,
+    selectedGap,
+    selectedMarkerId,
+    selectedTransitionId,
+  ])
+
+  const handleCopySelection = useCallback(() => {
+    if (selectedClipIds.length === 0) return false
+    copySelectedClips()
+    return true
+  }, [copySelectedClips, selectedClipIds])
+
+  const toolbarButtonClass = 'flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-sf-dark-700'
+  const toolbarDangerButtonClass = 'flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-error/20 rounded text-[10px] text-sf-error transition-colors disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-sf-dark-700'
   
   const edgeTransitionsByClipId = useMemo(() => {
     const map = new Map()
@@ -857,6 +946,11 @@ function Timeline({ onOpenAudioGenerate }) {
 
   // Assets store for drag & drop and preview mode
   const { assets, currentPreview, setPreviewMode, getAssetUrl, getAssetById, updateAsset, isPlaying: assetIsPlaying, setIsPlaying: setAssetIsPlaying } = useAssetsStore()
+  const handlePasteAtPlayhead = useCallback(() => {
+    if (!activeTrackId || copiedClips.length === 0) return false
+    pasteClipsAtPlayhead(activeTrackId, playheadPosition, assets)
+    return true
+  }, [activeTrackId, assets, copiedClips, pasteClipsAtPlayhead, playheadPosition])
   const assetsById = useMemo(() => {
     const map = new Map()
     assets.forEach((asset) => {
@@ -1033,6 +1127,10 @@ function Timeline({ onOpenAudioGenerate }) {
   // Filtered tracks by type (moved up for use in effects)
   const videoTracks = tracks.filter(t => t.type === 'video')
   const audioTracks = tracks.filter(t => t.type === 'audio')
+  const autoCreateVideoTrackIndicatorVisible = Boolean(clipDragState?.pendingAutoCreateVideoTrack)
+  const autoCreateVideoTrackIndicatorHeight = videoTracks[0]
+    ? getTrackHeight(videoTracks[0])
+    : getDefaultTrackHeight({ type: 'video' })
 
   const getClipTrackFamily = useCallback((clip) => {
     if (clip?.type === 'audio') return 'audio'
@@ -1086,13 +1184,36 @@ function Timeline({ onOpenAudioGenerate }) {
     return 0
   }, [getTracksForFamily])
 
-  // Calculate time from mouse position
-  function getTimeFromMouseEvent(e) {
+  function getTimeFromClientX(clientX) {
     if (!timelineRef.current) return 0
     const rect = timelineRef.current.getBoundingClientRect()
-    const x = e.clientX - rect.left + timelineRef.current.scrollLeft
+    const x = clientX - rect.left + timelineRef.current.scrollLeft
     const time = x / pixelsPerSecond
     return Math.max(0, Math.min(duration, time))
+  }
+
+  // Calculate time from mouse position
+  function getTimeFromMouseEvent(e) {
+    return getTimeFromClientX(e.clientX)
+  }
+
+  function getPlayheadScrubAutoScrollDelta(clientX) {
+    if (!timelineRef.current) return 0
+    const rect = timelineRef.current.getBoundingClientRect()
+    const rightThreshold = rect.right - PLAYHEAD_SCRUB_AUTO_SCROLL_EDGE_PX
+    const leftThreshold = rect.left + PLAYHEAD_SCRUB_AUTO_SCROLL_EDGE_PX
+
+    if (clientX >= rightThreshold) {
+      const intensity = Math.min(1.5, Math.max(0.2, (clientX - rightThreshold) / PLAYHEAD_SCRUB_AUTO_SCROLL_EDGE_PX))
+      return Math.round(PLAYHEAD_SCRUB_AUTO_SCROLL_MAX_STEP_PX * intensity)
+    }
+
+    if (clientX <= leftThreshold) {
+      const intensity = Math.min(1.5, Math.max(0.2, (leftThreshold - clientX) / PLAYHEAD_SCRUB_AUTO_SCROLL_EDGE_PX))
+      return -Math.round(PLAYHEAD_SCRUB_AUTO_SCROLL_MAX_STEP_PX * intensity)
+    }
+
+    return 0
   }
 
   function getTimelinePointerPosition(clientX, clientY) {
@@ -1171,21 +1292,67 @@ function Timeline({ onOpenAudioGenerate }) {
   // Handle scrubbing mouse move and mouse up
   useEffect(() => {
     if (!isScrubbing) return
-    
-    const handleMouseMove = (e) => {
-      const time = getTimeFromMouseEvent(e)
-      setPlayheadPosition(time)
+
+    let latestClientX = null
+    let scrubAutoScrollRaf = null
+
+    const stopAutoScroll = () => {
+      if (scrubAutoScrollRaf !== null) {
+        cancelAnimationFrame(scrubAutoScrollRaf)
+        scrubAutoScrollRaf = null
+      }
     }
-    
+
+    const syncScrubPosition = (clientX) => {
+      if (!timelineRef.current) return false
+      const scrollEl = timelineRef.current
+      const previousScrollLeft = scrollEl.scrollLeft
+      const maxScrollLeft = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth)
+      const scrollDelta = getPlayheadScrubAutoScrollDelta(clientX)
+      if (scrollDelta !== 0) {
+        scrollEl.scrollLeft = Math.max(0, Math.min(maxScrollLeft, previousScrollLeft + scrollDelta))
+      }
+      setPlayheadPosition(getTimeFromClientX(clientX))
+      return scrollEl.scrollLeft !== previousScrollLeft
+    }
+
+    const tickAutoScroll = () => {
+      if (latestClientX == null) {
+        scrubAutoScrollRaf = null
+        return
+      }
+      const didScroll = syncScrubPosition(latestClientX)
+      if (didScroll && getPlayheadScrubAutoScrollDelta(latestClientX) !== 0) {
+        scrubAutoScrollRaf = requestAnimationFrame(tickAutoScroll)
+      } else {
+        scrubAutoScrollRaf = null
+      }
+    }
+
+    const ensureAutoScroll = () => {
+      if (scrubAutoScrollRaf !== null) return
+      if (latestClientX == null) return
+      if (getPlayheadScrubAutoScrollDelta(latestClientX) === 0) return
+      scrubAutoScrollRaf = requestAnimationFrame(tickAutoScroll)
+    }
+
+    const handleMouseMove = (e) => {
+      latestClientX = e.clientX
+      syncScrubPosition(e.clientX)
+      ensureAutoScroll()
+    }
+
     const handleMouseUp = () => {
+      stopAutoScroll()
       setIsScrubbing(false)
     }
-    
+
     // Add listeners to window so dragging works even outside the timeline
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
-    
+
     return () => {
+      stopAutoScroll()
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
@@ -1683,6 +1850,16 @@ function Timeline({ onOpenAudioGenerate }) {
     }
   }, [clips, playheadPosition, saveToHistory, splitClipAtTime, selectMarker])
 
+  const handleSplitClipAtPlayhead = useCallback((clip) => {
+    if (!clip) return false
+    splitClipAtTime(clip, playheadPosition, { saveHistory: true })
+    return true
+  }, [playheadPosition, splitClipAtTime])
+
+  const handleSplitActiveTrackAtPlayhead = useCallback(() => (
+    handleSplitClipAtPlayhead(activeTrackClipAtPlayhead)
+  ), [activeTrackClipAtPlayhead, handleSplitClipAtPlayhead])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -1742,6 +1919,14 @@ function Timeline({ onOpenAudioGenerate }) {
         return
       }
 
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.ADD_TEXT_CLIP])) {
+        const newClip = addTextClipAtPlayhead()
+        if (newClip) {
+          e.preventDefault()
+        }
+        return
+      }
+
       if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.LINK_SELECTION])) {
         if (selectedClipIds.length > 1) {
           e.preventDefault()
@@ -1791,22 +1976,9 @@ function Timeline({ onOpenAudioGenerate }) {
       
       // Delete/Backspace - delete selected clips or gaps, otherwise selected transition/marker
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedClipIds.length > 0) {
+        if (canDeleteCurrentSelection) {
           e.preventDefault()
-          if (rippleEditMode) {
-            rippleDeleteSelectedClips()
-          } else {
-            removeSelectedClips()
-          }
-        } else if (selectedGap) {
-          e.preventDefault()
-          rippleDeleteSelectedGap()
-        } else if (selectedTransitionId) {
-          e.preventDefault()
-          removeTransition(selectedTransitionId)
-        } else if (selectedMarkerId) {
-          e.preventDefault()
-          removeMarker(selectedMarkerId)
+          handleDeleteCurrentSelection()
         }
       }
       
@@ -1839,7 +2011,7 @@ function Timeline({ onOpenAudioGenerate }) {
       if ((e.ctrlKey || e.metaKey) && key === 'c') {
         if (selectedClipIds.length > 0) {
           e.preventDefault()
-          copySelectedClips()
+          handleCopySelection()
         }
       }
 
@@ -1847,7 +2019,7 @@ function Timeline({ onOpenAudioGenerate }) {
       if ((e.ctrlKey || e.metaKey) && key === 'v') {
         if (activeTrackId && copiedClips.length > 0) {
           e.preventDefault()
-          pasteClipsAtPlayhead(activeTrackId, playheadPosition, assets)
+          handlePasteAtPlayhead()
         }
       }
       
@@ -1858,14 +2030,9 @@ function Timeline({ onOpenAudioGenerate }) {
       }
 
       if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.SPLIT_ACTIVE]) && activeTrackId) {
-        const clip = clips.find(
-          c => c.trackId === activeTrackId &&
-            playheadPosition > c.startTime &&
-            playheadPosition < c.startTime + c.duration
-        )
-        if (clip) {
+        if (activeTrackClipAtPlayhead) {
           e.preventDefault()
-          splitClipAtTime(clip, playheadPosition, { saveHistory: true })
+          handleSplitActiveTrackAtPlayhead()
         }
       }
     }
@@ -1874,7 +2041,7 @@ function Timeline({ onOpenAudioGenerate }) {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedGap, selectedTransitionId, selectedMarkerId, removeSelectedClips, rippleDeleteSelectedClips, rippleDeleteSelectedGap, removeTransition, removeMarker, clearSelection, selectMarker, clips, handleUndoAction, handleRedoAction, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips, selectClipsFromPlayheadToEnd, selectClipsFromTimelineStartToPlayhead, splitClipAtTime, splitAllTracksAtPlayhead, openMoveOffsetDialog, openDurationDeltaDialog, moveOffsetDialogOpen, durationDeltaDialogOpen, editorHotkeys, linkSelectedClips, unlinkSelectedClips, toggleClipSelectionEnabled, applyZoomWithPlayheadPivot, zoom, rippleEditMode])
+  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedGap, selectedTransitionId, selectedMarkerId, removeSelectedClips, rippleDeleteSelectedClips, rippleDeleteSelectedGap, removeTransition, removeMarker, clearSelection, selectMarker, clips, handleUndoAction, handleRedoAction, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, addTextClipAtPlayhead, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips, selectClipsFromPlayheadToEnd, selectClipsFromTimelineStartToPlayhead, splitClipAtTime, splitAllTracksAtPlayhead, openMoveOffsetDialog, openDurationDeltaDialog, moveOffsetDialogOpen, durationDeltaDialogOpen, editorHotkeys, linkSelectedClips, unlinkSelectedClips, toggleClipSelectionEnabled, applyZoomWithPlayheadPivot, zoom, rippleEditMode, activeTrackClipAtPlayhead, canDeleteCurrentSelection, handleCopySelection, handleDeleteCurrentSelection, handlePasteAtPlayhead, handleSplitActiveTrackAtPlayhead])
 
   // Spacebar panning key state (dedicated listeners so keyup cannot get "stuck")
   useEffect(() => {
@@ -2428,6 +2595,20 @@ function Timeline({ onOpenAudioGenerate }) {
     // the playhead stays where it is and the user can scrub independently.
   }
 
+  const handleTextClipDoubleClick = useCallback((e, clip) => {
+    if (!clip || clip.type !== 'text') return
+    e.preventDefault()
+    e.stopPropagation()
+
+    setPreviewMode('timeline')
+    if (assetIsPlaying) {
+      setAssetIsPlaying(false)
+    }
+
+    selectClip(clip.id)
+    requestTextEdit(clip.id, { selectAll: true })
+  }, [assetIsPlaying, requestTextEdit, selectClip, setAssetIsPlaying, setPreviewMode])
+
   // Handle clip right-click context menu
   const handleClipContextMenu = (e, clip) => {
     e.preventDefault()
@@ -2559,7 +2740,7 @@ function Timeline({ onOpenAudioGenerate }) {
         unlinkSelectedClips()
         break
       case 'split':
-        splitClipAtTime(clip, playheadPosition, { saveHistory: true })
+        handleSplitClipAtPlayhead(clip)
         break
     }
     
@@ -2927,6 +3108,7 @@ function Timeline({ onOpenAudioGenerate }) {
       originalStartTime: clip.startTime,
       originalTrackId: clip.trackId,
       hasMoved: false,
+      pendingAutoCreateVideoTrack: false,
       lastDeltaTime: 0,
       originalPositions: clipsToMove.map((c) => ({
         id: c.id,
@@ -3026,11 +3208,18 @@ function Timeline({ onOpenAudioGenerate }) {
       let newTrackId = clipDragState.originalTrackId
       const isDraggingMultiple = selectedClipIds.includes(clipDragState.clipId) && selectedClipIds.length > 1
       let groupTrackDelta = 0
+      let pendingAutoCreateVideoTrack = false
       
       // Use track content ref for Y (scrollable area where tracks live)
       if (trackContentRef.current) {
         const contentRect = trackContentRef.current.getBoundingClientRect()
         const relativeY = e.clientY - contentRect.top + trackContentRef.current.scrollTop
+        const isPrimaryVideoFamily = getClipTrackFamily(clip) === 'video'
+        const canAutoCreateAboveTopVideoTrack = isPrimaryVideoFamily
+          && trackContentRef.current.scrollTop <= 4
+          && e.clientY < contentRect.top
+
+        pendingAutoCreateVideoTrack = canAutoCreateAboveTopVideoTrack
 
         if (isDraggingMultiple) {
           const primaryOriginal = clipDragState.originalPositions.find((entry) => entry.id === clipDragState.clipId)
@@ -3079,11 +3268,20 @@ function Timeline({ onOpenAudioGenerate }) {
           trackId,
         }))
         setSelectedClipPositions(updates)
-        setClipDragState(prev => ({ ...prev, currentTrackId: newTrackId }))
+        setClipDragState(prev => ({
+          ...prev,
+          currentTrackId: newTrackId,
+          pendingAutoCreateVideoTrack,
+        }))
       } else {
         // Move single clip (no overlap resolution yet)
         moveClip(clipDragState.clipId, newTrackId, proposedStartTime, false)
-        setClipDragState(prev => ({ ...prev, currentTrackId: newTrackId, currentStartTime: proposedStartTime }))
+        setClipDragState(prev => ({
+          ...prev,
+          currentTrackId: newTrackId,
+          currentStartTime: proposedStartTime,
+          pendingAutoCreateVideoTrack,
+        }))
       }
     }
     
@@ -3091,8 +3289,57 @@ function Timeline({ onOpenAudioGenerate }) {
       // On mouse up, resolve overlaps for the final position (NLE overwrite behavior)
       if (clipDragState && clipDragState.hasMoved) {
         const isDraggingMultiple = selectedClipIds.includes(clipDragState.clipId) && selectedClipIds.length > 1
-        
-        if (isDraggingMultiple) {
+        if (clipDragState.pendingAutoCreateVideoTrack) {
+          const newTrack = addTrack('video')
+          if (newTrack) {
+            if (isDraggingMultiple) {
+              const latestState = useTimelineStore.getState()
+              const latestClipsById = new Map(latestState.clips.map((entry) => [entry.id, entry]))
+              const selectedVideoTrackIndices = clipDragState.originalPositions
+                .filter((entry) => entry.family === 'video')
+                .map((entry) => {
+                  const latestClip = latestClipsById.get(entry.id)
+                  const currentTrackId = latestClip?.trackId || entry.trackId
+                  return videoTracks.findIndex((track) => track.id === currentTrackId)
+                })
+                .filter((index) => index >= 0)
+              const topSelectedVideoTrackIndex = selectedVideoTrackIndices.length > 0
+                ? Math.min(...selectedVideoTrackIndices)
+                : -1
+              const updates = clipDragState.originalPositions.map(({ id, startTime, trackId, family }) => {
+                const latestClip = latestClipsById.get(id)
+                let nextTrackId = latestClip?.trackId || trackId
+
+                if (family === 'video') {
+                  const currentTrackId = latestClip?.trackId || trackId
+                  const currentIndex = videoTracks.findIndex((track) => track.id === currentTrackId)
+                  nextTrackId = currentIndex <= topSelectedVideoTrackIndex
+                    ? newTrack.id
+                    : (videoTracks[currentIndex - 1]?.id || newTrack.id)
+                }
+
+                return {
+                  id,
+                  startTime: latestClip?.startTime ?? startTime,
+                  trackId: nextTrackId,
+                }
+              })
+              setSelectedClipPositions(updates)
+              moveSelectedClips(0, null, true)
+            } else {
+              const latestClip = useTimelineStore.getState().clips.find((entry) => entry.id === clipDragState.clipId)
+              const finalStartTime = latestClip?.startTime ?? clipDragState.currentStartTime ?? clipDragState.originalStartTime
+              moveClip(clipDragState.clipId, newTrack.id, finalStartTime, true)
+            }
+          } else if (isDraggingMultiple) {
+            moveSelectedClips(0, null, true)
+          } else {
+            const clip = clips.find(c => c.id === clipDragState.clipId)
+            if (clip) {
+              moveClip(clipDragState.clipId, clip.trackId, clip.startTime, true)
+            }
+          }
+        } else if (isDraggingMultiple) {
           // For multi-clip drag, resolve overlaps with delta of 0 (clips already in position)
           moveSelectedClips(0, null, true)
         } else {
@@ -3116,7 +3363,7 @@ function Timeline({ onOpenAudioGenerate }) {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [clipDragState, trimState, slipState, clips, pixelsPerSecond, moveClip, moveSelectedClips, setSelectedClipPositions, selectedClipIds, snapClipPosition, setActiveSnapTime, clearActiveSnap, saveToHistory, getClipTrackFamily, getHoveredTrackIdForFamily, getResolvedGroupTrackDelta, getTracksForFamily])
+  }, [clipDragState, trimState, slipState, clips, pixelsPerSecond, moveClip, moveSelectedClips, setSelectedClipPositions, selectedClipIds, snapClipPosition, setActiveSnapTime, clearActiveSnap, saveToHistory, addTrack, getClipTrackFamily, getHoveredTrackIdForFamily, getResolvedGroupTrackDelta, getTracksForFamily, videoTracks])
 
   // Handle adding transition between adjacent clips - show type menu
   const handleAddTransition = (e, clipA, clipB) => {
@@ -3546,7 +3793,7 @@ function Timeline({ onOpenAudioGenerate }) {
           </button>
           <button
             onClick={splitAllTracksAtPlayhead}
-            className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
+            className={toolbarButtonClass}
             title={`Split all clips at the playhead across every track (${splitAllHotkeyLabel})`}
           >
             <Scissors className="w-3 h-3" />
@@ -3554,7 +3801,7 @@ function Timeline({ onOpenAudioGenerate }) {
           </button>
           <button
             onClick={handleAddAdjustmentLayer}
-            className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
+            className={toolbarButtonClass}
             title="Add adjustment layer on active video track"
           >
             <Square className="w-3 h-3 text-purple-400" />
@@ -3569,6 +3816,83 @@ function Timeline({ onOpenAudioGenerate }) {
               <X className="w-3 h-3 text-sf-error" />
             </button>
           )}
+        </div>
+
+        <div className="h-4 w-px bg-sf-dark-600" aria-hidden="true" />
+
+        <div className="flex items-center gap-1">
+          <button
+            onClick={handleSplitActiveTrackAtPlayhead}
+            disabled={!activeTrackClipAtPlayhead}
+            className={toolbarButtonClass}
+            title={activeTrackClipAtPlayhead
+              ? `Split the clip under the playhead on the active track (${splitActiveHotkeyLabel})`
+              : `Set an active track and park the playhead over a clip to split it (${splitActiveHotkeyLabel})`}
+          >
+            <Scissors className="w-3 h-3" />
+            Split
+          </button>
+          <button
+            onClick={handleCopySelection}
+            disabled={selectedClipIds.length === 0}
+            className={toolbarButtonClass}
+            title={`Copy the selected clips (${copyHotkeyLabel})`}
+          >
+            <Copy className="w-3 h-3" />
+            Copy
+          </button>
+          <button
+            onClick={handlePasteAtPlayhead}
+            disabled={!activeTrackId || copiedClips.length === 0}
+            className={toolbarButtonClass}
+            title={activeTrackId && copiedClips.length > 0
+              ? `Paste copied clips at the playhead on the active track (${pasteHotkeyLabel})`
+              : `Copy clips first, then choose an active track to paste at the playhead (${pasteHotkeyLabel})`}
+          >
+            <ClipboardPaste className="w-3 h-3" />
+            Paste
+          </button>
+          <button
+            onClick={() => toggleClipSelectionEnabled()}
+            disabled={selectedClipIds.length === 0}
+            className={toolbarButtonClass}
+            title={selectedClipIds.length > 0
+              ? `${selectedClipsShouldEnable ? 'Enable' : 'Disable'} the selected clips (${toggleClipEnabledHotkeyLabel})`
+              : `Select clips to enable or disable them (${toggleClipEnabledHotkeyLabel})`}
+          >
+            {selectedClipsShouldEnable ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+            {selectedClipsShouldEnable ? 'Enable' : 'Disable'}
+          </button>
+          <button
+            onClick={handleDeleteCurrentSelection}
+            disabled={!canDeleteCurrentSelection}
+            className={toolbarDangerButtonClass}
+            title={
+              selectedClipIds.length > 0
+                ? `${rippleEditMode ? 'Ripple delete' : 'Delete'} the selected clips (Delete or Backspace)`
+                : selectedGap
+                  ? 'Delete the selected gap and close it (Delete or Backspace)'
+                  : selectedTransitionId
+                    ? 'Delete the selected transition (Delete or Backspace)'
+                    : selectedMarkerId
+                      ? 'Delete the selected marker (Delete or Backspace)'
+                      : 'Select clips, a gap, a transition, or a marker to delete'
+            }
+          >
+            <Trash2 className="w-3 h-3" />
+            Delete
+          </button>
+          <button
+            onClick={() => addTextClipAtPlayhead()}
+            disabled={!preferredVideoTrack}
+            className={toolbarButtonClass}
+            title={preferredVideoTrack
+              ? `Add a text clip on ${preferredVideoTrack.name} at the playhead (${addTextClipHotkeyLabel})`
+              : `Add a video track to create text at the playhead (${addTextClipHotkeyLabel})`}
+          >
+            <Type className="w-3 h-3" />
+            Text
+          </button>
         </div>
         
         {/* Snapping Toggle */}
@@ -3728,6 +4052,25 @@ function Timeline({ onOpenAudioGenerate }) {
             }}
           >
           
+          {autoCreateVideoTrackIndicatorVisible && (
+            <div
+              className="relative flex items-center px-2 gap-1.5 border-b border-dashed border-sf-accent/70 bg-sf-accent/8"
+              style={{ minHeight: autoCreateVideoTrackIndicatorHeight, height: autoCreateVideoTrackIndicatorHeight }}
+            >
+              <div className="w-5 h-5 rounded flex items-center justify-center flex-shrink-0 bg-sf-accent/20 text-sf-accent border border-sf-accent/40">
+                <Video className="w-3 h-3" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-[11px] text-sf-text-primary font-medium">Release to add video track</div>
+                <div className="text-[9px] text-sf-text-muted uppercase tracking-[0.16em]">New top track</div>
+              </div>
+              <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-sf-accent/15 text-sf-accent text-[10px] font-medium">
+                <Plus className="w-3 h-3" />
+                <span>Add</span>
+              </div>
+            </div>
+          )}
+
           {/* Video Tracks */}
           {videoTracks.map((track, index) => {
             const isDragging = trackDragState?.trackId === track.id
@@ -4081,6 +4424,20 @@ function Timeline({ onOpenAudioGenerate }) {
               }
             }}
           >
+          {autoCreateVideoTrackIndicatorVisible && (
+            <div
+              className="border-b border-dashed border-sf-accent/70 bg-gradient-to-b from-sf-accent/10 to-sf-accent/5 relative pointer-events-none"
+              style={{ minHeight: autoCreateVideoTrackIndicatorHeight, height: autoCreateVideoTrackIndicatorHeight }}
+            >
+              <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 px-3">
+                <div className="h-0 border-t border-dashed border-sf-accent/60 relative">
+                  <div className="absolute left-3 -top-4 px-2 py-1 rounded-md bg-sf-dark-900/95 border border-sf-accent/40 text-[10px] text-sf-accent font-medium shadow-lg">
+                    Release to add new video track
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           {/* Video Tracks Content */}
           {videoTracks.map((track) => {
             const trackClips = clips.filter(c => c.trackId === track.id)
@@ -4132,6 +4489,7 @@ function Timeline({ onOpenAudioGenerate }) {
                     data-clip="true"
                     onMouseDown={(e) => handleClipDragStart(e, clip)}
                     onClick={(e) => handleClipClick(e, clip)}
+                    onDoubleClick={isTextClip ? (e) => handleTextClipDoubleClick(e, clip) : undefined}
                     onContextMenu={(e) => handleClipContextMenu(e, clip)}
                     className={`absolute top-0.5 bottom-0.5 rounded-sm cursor-grab group overflow-hidden ${
                       selectedClipIds.includes(clip.id) ? 'ring-2 ring-white ring-offset-1 ring-offset-sf-dark-900' : ''
