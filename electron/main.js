@@ -77,6 +77,82 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function captureCommandOutput(command, args = [], timeoutMs = 2500) {
+  return new Promise((resolve) => {
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+
+    let child = null
+    try {
+      child = spawn(command, args, { windowsHide: true })
+    } catch (error) {
+      resolve({ success: false, output: '', error: error.message })
+      return
+    }
+
+    const finish = (result) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      resolve(result)
+    }
+
+    const timeout = setTimeout(() => {
+      try {
+        child.kill()
+      } catch (_) {
+        // Ignore failures when terminating helper processes.
+      }
+      finish({ success: false, output: stdout || stderr, error: 'Timed out while gathering system info.' })
+    }, timeoutMs)
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString()
+    })
+    child.stderr.on('data', (data) => {
+      stderr += data.toString()
+    })
+    child.on('error', (error) => {
+      finish({ success: false, output: stdout || stderr, error: error.message })
+    })
+    child.on('close', (code) => {
+      finish({
+        success: code === 0,
+        output: (stdout || stderr).trim(),
+        error: code === 0 ? null : (stderr.trim() || `Command exited with code ${code}`),
+      })
+    })
+  })
+}
+
+async function detectNvidiaGpuName() {
+  const commands = process.platform === 'win32'
+    ? [{
+        command: 'powershell.exe',
+        args: ['-NoProfile', '-Command', 'Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name'],
+      }]
+    : [{
+        command: 'nvidia-smi',
+        args: ['--query-gpu=name', '--format=csv,noheader'],
+      }]
+
+  for (const candidate of commands) {
+    const result = await captureCommandOutput(candidate.command, candidate.args)
+    if (!result.success || !result.output) continue
+
+    const names = result.output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+
+    const nvidiaName = names.find((name) => /nvidia|geforce|rtx|gtx|quadro|tesla/i.test(name))
+    if (nvidiaName) return nvidiaName
+  }
+
+  return null
+}
+
 function sanitizeLocalComfyPort(value) {
   const parsed = Number(value)
   if (!Number.isInteger(parsed)) return null
@@ -1409,8 +1485,10 @@ ipcMain.handle('playback:transcode', async (event, { inputPath, outputPath }) =>
 })
 
 ipcMain.handle('export:checkNvenc', async () => {
+  const gpuName = await detectNvidiaGpuName()
+
   if (!ffmpegPath) {
-    return { available: false, h264: false, h265: false, error: 'FFmpeg binary not available.' }
+    return { available: false, h264: false, h265: false, gpuName, error: 'FFmpeg binary not available.' }
   }
   
   return await new Promise((resolve) => {
@@ -1425,7 +1503,7 @@ ipcMain.handle('export:checkNvenc', async () => {
     })
     
     ffmpeg.on('error', (err) => {
-      resolve({ available: false, h264: false, h265: false, error: err.message })
+      resolve({ available: false, h264: false, h265: false, gpuName, error: err.message })
     })
     
     ffmpeg.on('close', () => {
@@ -1435,6 +1513,7 @@ ipcMain.handle('export:checkNvenc', async () => {
         available: hasH264 || hasH265,
         h264: hasH264,
         h265: hasH265,
+        gpuName,
       })
     })
   })

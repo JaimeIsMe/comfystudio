@@ -128,7 +128,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /**
    * Check if FFmpeg supports NVIDIA NVENC encoders
-   * @returns {Promise<{available: boolean, h264: boolean, h265: boolean, error?: string}>}
+   * @returns {Promise<{available: boolean, h264: boolean, h265: boolean, gpuName?: string | null, error?: string}>}
    */
   checkNvenc: () => ipcRenderer.invoke('export:checkNvenc'),
 

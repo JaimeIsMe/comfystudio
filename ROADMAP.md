@@ -62,14 +62,19 @@ Recent Phase 2 progress that is now shipped:
 
 - Better editing toolbar coverage for split, copy, paste, enable or disable, delete, and text clip creation directly in the timeline header
 - Better multi-clip movement across tracks so linked or selected groups keep their layout and drop more predictably
+- Move selected clips by exact timecode offset
+- Extend clip duration by a chosen amount
+- Show timelines and sequences directly from the Assets panel with open and management workflows
+- Fully customizable keyboard shortcuts and hotkeys in settings
+- Editor keymap profiles with familiar presets such as Premiere Pro, Resolve, and Final Cut Pro
+- Keep mouse-wheel behavior inside the timeline focused on horizontal travel only, without unintended vertical track scrolling when many tracks are off-screen
+- Add keyboard navigation for jumping between clip boundaries and markers, including assignable bindings for next or previous clip edges and marker jumps
+- Make NVENC export support easier to discover and understand in the packaged app so GPU encoding feels more obvious for users with supported NVIDIA hardware
 
 Remaining Phase 2 priorities:
 
-- Move selected clips by exact timecode offset
-- Extend clip duration by a chosen amount
-- Show timelines and sequences in a dedicated browser section and open them directly from the Assets panel
-- Fully customizable keyboard shortcuts and hotkeys in settings
-- Editor keymap profiles with familiar presets such as Premiere Pro, Resolve, and Final Cut Pro
+- The current editing-focused Phase 2 checklist is complete.
+- The next editing priorities can now be driven by new workflow feedback and higher-level product goals.
 
 ## Phase 3: Workflow Expansion
 

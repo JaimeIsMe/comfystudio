@@ -1127,6 +1127,32 @@ function Timeline({ onOpenAudioGenerate }) {
   // Filtered tracks by type (moved up for use in effects)
   const videoTracks = tracks.filter(t => t.type === 'video')
   const audioTracks = tracks.filter(t => t.type === 'audio')
+  const visibleTrackIds = useMemo(() => (
+    new Set(
+      tracks
+        .filter((track) => track?.visible !== false)
+        .map((track) => track.id)
+    )
+  ), [tracks])
+  const visibleClipBoundaryTimes = useMemo(() => {
+    const boundaries = clips
+      .filter((clip) => visibleTrackIds.has(clip.trackId))
+      .flatMap((clip) => {
+        const clipStart = Math.max(0, Number(clip.startTime) || 0)
+        const clipEnd = Math.max(clipStart, clipStart + (Number(clip.duration) || 0))
+        return [clipStart, clipEnd]
+      })
+      .sort((a, b) => a - b)
+
+    return boundaries.filter((time, index) => (
+      index === 0 || Math.abs(time - boundaries[index - 1]) > 0.0001
+    ))
+  }, [clips, visibleTrackIds])
+  const markerNavigationTargets = useMemo(() => (
+    [...markers]
+      .filter((marker) => Number.isFinite(Number(marker?.time)))
+      .sort((a, b) => a.time - b.time)
+  ), [markers])
   const autoCreateVideoTrackIndicatorVisible = Boolean(clipDragState?.pendingAutoCreateVideoTrack)
   const autoCreateVideoTrackIndicatorHeight = videoTracks[0]
     ? getTrackHeight(videoTracks[0])
@@ -1860,6 +1886,74 @@ function Timeline({ onOpenAudioGenerate }) {
     handleSplitClipAtPlayhead(activeTrackClipAtPlayhead)
   ), [activeTrackClipAtPlayhead, handleSplitClipAtPlayhead])
 
+  const ensureTimelineTimeVisible = useCallback((time) => {
+    if (!timelineRef.current || !Number.isFinite(Number(time))) return
+
+    const el = timelineRef.current
+    const targetX = Number(time) * pixelsPerSecond
+    const visibleLeft = el.scrollLeft
+    const visibleRight = visibleLeft + el.clientWidth
+    const padding = Math.max(80, el.clientWidth * 0.18)
+    const maxScrollLeft = Math.max(0, el.scrollWidth - el.clientWidth)
+
+    if (targetX > visibleRight - padding) {
+      const nextScrollLeft = Math.max(0, targetX - (el.clientWidth * 0.35))
+      el.scrollLeft = Math.min(nextScrollLeft, maxScrollLeft)
+      return
+    }
+
+    if (targetX < visibleLeft + padding) {
+      el.scrollLeft = Math.max(0, Math.min(targetX - padding, maxScrollLeft))
+    }
+  }, [pixelsPerSecond])
+
+  const jumpPlayheadToClipBoundary = useCallback((direction) => {
+    if (!Number.isFinite(direction) || direction === 0 || visibleClipBoundaryTimes.length === 0) return false
+
+    const epsilon = 0.0001
+    let targetTime = null
+
+    if (direction > 0) {
+      targetTime = visibleClipBoundaryTimes.find((time) => time > playheadPosition + epsilon) ?? null
+    } else {
+      for (let i = visibleClipBoundaryTimes.length - 1; i >= 0; i -= 1) {
+        if (visibleClipBoundaryTimes[i] < playheadPosition - epsilon) {
+          targetTime = visibleClipBoundaryTimes[i]
+          break
+        }
+      }
+    }
+
+    if (targetTime === null) return false
+    setPlayheadPosition(targetTime)
+    ensureTimelineTimeVisible(targetTime)
+    return true
+  }, [ensureTimelineTimeVisible, playheadPosition, setPlayheadPosition, visibleClipBoundaryTimes])
+
+  const jumpPlayheadToMarker = useCallback((direction) => {
+    if (!Number.isFinite(direction) || direction === 0 || markerNavigationTargets.length === 0) return false
+
+    const epsilon = 0.0001
+    let targetMarker = null
+
+    if (direction > 0) {
+      targetMarker = markerNavigationTargets.find((marker) => marker.time > playheadPosition + epsilon) ?? null
+    } else {
+      for (let i = markerNavigationTargets.length - 1; i >= 0; i -= 1) {
+        if (markerNavigationTargets[i].time < playheadPosition - epsilon) {
+          targetMarker = markerNavigationTargets[i]
+          break
+        }
+      }
+    }
+
+    if (!targetMarker) return false
+    setPlayheadPosition(targetMarker.time)
+    ensureTimelineTimeVisible(targetMarker.time)
+    selectMarker(targetMarker.id)
+    return true
+  }, [ensureTimelineTimeVisible, markerNavigationTargets, playheadPosition, selectMarker, setPlayheadPosition])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -1973,6 +2067,30 @@ function Timeline({ onOpenAudioGenerate }) {
         addMarker(playheadPosition)
         return
       }
+
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.PREVIOUS_CLIP_BOUNDARY])) {
+        e.preventDefault()
+        jumpPlayheadToClipBoundary(-1)
+        return
+      }
+
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.NEXT_CLIP_BOUNDARY])) {
+        e.preventDefault()
+        jumpPlayheadToClipBoundary(1)
+        return
+      }
+
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.PREVIOUS_MARKER])) {
+        e.preventDefault()
+        jumpPlayheadToMarker(-1)
+        return
+      }
+
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.NEXT_MARKER])) {
+        e.preventDefault()
+        jumpPlayheadToMarker(1)
+        return
+      }
       
       // Delete/Backspace - delete selected clips or gaps, otherwise selected transition/marker
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -2041,7 +2159,7 @@ function Timeline({ onOpenAudioGenerate }) {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedGap, selectedTransitionId, selectedMarkerId, removeSelectedClips, rippleDeleteSelectedClips, rippleDeleteSelectedGap, removeTransition, removeMarker, clearSelection, selectMarker, clips, handleUndoAction, handleRedoAction, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, addTextClipAtPlayhead, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips, selectClipsFromPlayheadToEnd, selectClipsFromTimelineStartToPlayhead, splitClipAtTime, splitAllTracksAtPlayhead, openMoveOffsetDialog, openDurationDeltaDialog, moveOffsetDialogOpen, durationDeltaDialogOpen, editorHotkeys, linkSelectedClips, unlinkSelectedClips, toggleClipSelectionEnabled, applyZoomWithPlayheadPivot, zoom, rippleEditMode, activeTrackClipAtPlayhead, canDeleteCurrentSelection, handleCopySelection, handleDeleteCurrentSelection, handlePasteAtPlayhead, handleSplitActiveTrackAtPlayhead])
+  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedGap, selectedTransitionId, selectedMarkerId, removeSelectedClips, rippleDeleteSelectedClips, rippleDeleteSelectedGap, removeTransition, removeMarker, clearSelection, selectMarker, clips, handleUndoAction, handleRedoAction, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, addTextClipAtPlayhead, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips, selectClipsFromPlayheadToEnd, selectClipsFromTimelineStartToPlayhead, splitClipAtTime, splitAllTracksAtPlayhead, openMoveOffsetDialog, openDurationDeltaDialog, moveOffsetDialogOpen, durationDeltaDialogOpen, editorHotkeys, linkSelectedClips, unlinkSelectedClips, toggleClipSelectionEnabled, applyZoomWithPlayheadPivot, zoom, rippleEditMode, activeTrackClipAtPlayhead, canDeleteCurrentSelection, handleCopySelection, handleDeleteCurrentSelection, handlePasteAtPlayhead, handleSplitActiveTrackAtPlayhead, jumpPlayheadToClipBoundary, jumpPlayheadToMarker])
 
   // Spacebar panning key state (dedicated listeners so keyup cannot get "stuck")
   useEffect(() => {
@@ -2167,8 +2285,9 @@ function Timeline({ onOpenAudioGenerate }) {
     }
   }, [cancelPendingAssetDragOver])
 
-  // Handle scroll wheel - Ctrl+Scroll to zoom, regular scroll to pan horizontally
-  const handleWheel = (e) => {
+  // Handle wheel input directly on the DOM node so nested scrollable children
+  // cannot perform their own vertical wheel scroll before we remap it.
+  const handleWheel = useCallback((e) => {
     if (!timelineRef.current) return
     
     // Ctrl/Cmd + Scroll = Zoom (centered on mouse position)
@@ -2212,27 +2331,28 @@ function Timeline({ onOpenAudioGenerate }) {
         : e.deltaY
       timelineRef.current.scrollLeft += horizontalDelta
     }
-  }
+  }, [pixelsPerSecond, zoom, setZoom])
+
+  useEffect(() => {
+    const timelineEl = timelineRef.current
+    if (!timelineEl) return undefined
+
+    const handleNativeWheel = (event) => {
+      handleWheel(event)
+    }
+
+    timelineEl.addEventListener('wheel', handleNativeWheel, { passive: false, capture: true })
+
+    return () => {
+      timelineEl.removeEventListener('wheel', handleNativeWheel, true)
+    }
+  }, [handleWheel])
 
   useEffect(() => {
     if (!timelineRef.current || !timelineIsPlaying) return
 
-    const el = timelineRef.current
-    const playheadX = playheadPosition * pixelsPerSecond
-    const visibleLeft = el.scrollLeft
-    const visibleRight = visibleLeft + el.clientWidth
-    const padding = Math.max(80, el.clientWidth * 0.18)
-
-    if (playheadX > visibleRight - padding) {
-      const targetScrollLeft = Math.max(0, playheadX - (el.clientWidth * 0.35))
-      el.scrollLeft = Math.min(targetScrollLeft, Math.max(0, el.scrollWidth - el.clientWidth))
-      return
-    }
-
-    if (playheadX < visibleLeft + padding) {
-      el.scrollLeft = Math.max(0, playheadX - padding)
-    }
-  }, [playheadPosition, pixelsPerSecond, timelineIsPlaying])
+    ensureTimelineTimeVisible(playheadPosition)
+  }, [ensureTimelineTimeVisible, playheadPosition, timelineIsPlaying])
 
   const getDraggedAssetIds = (dataTransfer) => {
     if (Array.isArray(draggedAssetIds) && draggedAssetIds.length > 0) return draggedAssetIds
@@ -4372,7 +4492,6 @@ function Timeline({ onOpenAudioGenerate }) {
             isScrubbing ? 'cursor-ew-resize select-none' : ''
           }`}
           onMouseDown={handleTimelineMouseDown}
-          onWheel={handleWheel}
         >
           {/* Inner container that stretches to fill available space */}
           <div className="min-w-full flex flex-col flex-1 min-h-0" style={{ width: `max(100%, ${duration * pixelsPerSecond}px)` }}>

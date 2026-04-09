@@ -28,7 +28,12 @@ We should keep updating this file as new features land.
 - Manual `Link Selected` and `Unlink Selected` actions in the timeline
 - Linked audio/video pair selections can now stay multi-selected while the Inspector switches between focused `Video` and `Audio` controls
 - Horizontal timeline wheel navigation
+- Timeline wheel input now stays focused on horizontal timeline travel without accidental vertical track scrolling
 - Playback follow so the playhead stays visible while the timeline is running
+- `Arrow Up` and `Arrow Down` can jump the playhead across visible clip boundaries
+- `Shift+Arrow Up` and `Shift+Arrow Down` can jump between timeline markers
+- Keyboard clip-boundary and marker jumps now keep the playhead visible by following the timeline viewport
+- Clip-boundary and marker navigation is now exposed through the hotkey system for reassignment
 - Click empty space on a track to select a timeline gap as its own target
 - Selected gaps get a visible highlight and can be cleared with `Esc`
 - Ripple delete for selected clips when ripple mode is enabled
@@ -67,6 +72,7 @@ We should keep updating this file as new features land.
 - Five dark themes with live switching:
   `Midnight`, `Soft Dark`, `High Contrast`, `Arctic`, `Ember`
 - Fixed the custom restore-down / maximize behavior when the app starts fullscreen
+- Export now makes NVIDIA NVENC easier to understand by surfacing supported codecs, the detected GPU, and the expected encoder path
 
 ## Shortcut Notes
 
@@ -82,6 +88,8 @@ These are the most important shortcut-related additions or surfaced editing shor
 - `S`: Toggle snapping
 - `R`: Toggle ripple edit
 - `M`: Add marker at playhead
+- `Arrow Up` / `Arrow Down`: Jump to previous or next visible clip boundary
+- `Shift+Arrow Up` / `Shift+Arrow Down`: Jump to previous or next marker
 - `D`: Enable or disable selected clips
 - `T`: Add a text clip at the playhead and start typing
 - `+` / `-`: Zoom timeline in and out
@@ -148,4 +156,6 @@ Good visuals to capture for posts, release notes, or short clips:
 
 Current Phase 1 roadmap queue is complete.
 
-The next major work now moves into the Phase 2 precision editing items in `ROADMAP.md`.
+The recent editing-focused Phase 2 roadmap items around exact edits, sequence access, navigation, hotkeys, and NVENC discoverability are now shipped.
+
+The next major work can move to newly prioritized editing ideas or the broader workflow-expansion items in `ROADMAP.md`.

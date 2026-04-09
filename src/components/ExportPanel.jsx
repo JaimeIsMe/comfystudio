@@ -149,6 +149,7 @@ function ExportPanel() {
     available: false,
     h264: false,
     h265: false,
+    gpuName: null,
     error: null,
   })
   const [queueRunning, setQueueRunning] = useState(false)
@@ -166,7 +167,7 @@ function ExportPanel() {
     
     const checkNvenc = async () => {
       if (!window.electronAPI?.checkNvenc) {
-        setNvencStatus({ checked: true, available: false, h264: false, h265: false, error: 'NVENC check unavailable' })
+        setNvencStatus({ checked: true, available: false, h264: false, h265: false, gpuName: null, error: 'NVENC check unavailable' })
         return
       }
       try {
@@ -177,6 +178,7 @@ function ExportPanel() {
           available: !!result.available,
           h264: !!result.h264,
           h265: !!result.h265,
+          gpuName: result.gpuName || null,
           error: result.error || null,
         })
       } catch (err) {
@@ -186,6 +188,7 @@ function ExportPanel() {
           available: false,
           h264: false,
           h265: false,
+          gpuName: null,
           error: err.message,
         })
       }
@@ -277,6 +280,60 @@ function ExportPanel() {
       return next
     })
   }
+
+  const selectedNvencCodecSupported = settings.videoCodec === 'h265'
+    ? nvencStatus.h265
+    : settings.videoCodec === 'h264'
+      ? nvencStatus.h264
+      : false
+  const nvencToggleDisabledReason = useMemo(() => {
+    if (settings.format === 'webm' || settings.videoCodec === 'vp9') {
+      return 'NVENC is only used for MP4 H.264/H.265 exports.'
+    }
+    if (settings.format === 'prores') {
+      return 'NVENC is not used for ProRes exports.'
+    }
+    if (nvencStatus.checked && !nvencStatus.available) {
+      return 'NVENC not available in your FFmpeg build.'
+    }
+    if (settings.videoCodec === 'h265' && nvencStatus.checked && !nvencStatus.h265) {
+      return 'HEVC NVENC is not available in your FFmpeg build.'
+    }
+    if (settings.videoCodec === 'h264' && nvencStatus.checked && !nvencStatus.h264) {
+      return 'H.264 NVENC is not available in your FFmpeg build.'
+    }
+    return null
+  }, [settings.format, settings.videoCodec, nvencStatus])
+  const nvencSummaryText = useMemo(() => {
+    if (!nvencStatus.checked) {
+      return 'Checking FFmpeg for NVIDIA NVENC support...'
+    }
+
+    const gpuPrefix = nvencStatus.gpuName
+      ? `Detected GPU: ${nvencStatus.gpuName}. `
+      : ''
+
+    if (!nvencStatus.available) {
+      return gpuPrefix + (nvencStatus.error || 'NVENC not detected in FFmpeg. GPU encoding will be unavailable.')
+    }
+
+    if (settings.format === 'webm' || settings.videoCodec === 'vp9') {
+      return `${gpuPrefix}NVENC is ready for MP4 H.264/H.265 exports. Switch from WebM/VP9 to use it.`
+    }
+
+    if (settings.format === 'prores') {
+      return `${gpuPrefix}NVENC is ready for MP4 H.264/H.265 exports. ProRes always uses software encoding.`
+    }
+
+    if (selectedNvencCodecSupported) {
+      return `${gpuPrefix}NVENC is ready for faster ${settings.videoCodec === 'h265' ? 'H.265' : 'H.264'} exports.`
+    }
+
+    return `${gpuPrefix}NVENC is detected, but the current codec is not available in this FFmpeg build.`
+  }, [nvencStatus, selectedNvencCodecSupported, settings.format, settings.videoCodec])
+  const nvencExpectedEncoder = settings.useHardwareEncoder && selectedNvencCodecSupported
+    ? (settings.videoCodec === 'h265' ? 'hevc_nvenc' : 'h264_nvenc')
+    : null
   
   const handleAddToQueue = () => {
     const queuedItem = {
@@ -406,7 +463,7 @@ function ExportPanel() {
       hints.push('60fps export doubles frame workload. Lower FPS for faster renders.')
     }
     if (!settings.useHardwareEncoder && settings.format === 'mp4' && settings.videoCodec !== 'vp9') {
-      hints.push('Enable NVIDIA NVENC to speed up encoding on RTX GPUs.')
+      hints.push('Enable NVIDIA NVENC to speed up H.264/H.265 exports on supported NVIDIA GPUs.')
     }
     if (nvencStatus.checked && !nvencStatus.available) {
       hints.push('NVENC not detected in your FFmpeg build. GPU encoding will be unavailable.')
@@ -678,32 +735,49 @@ function ExportPanel() {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handleSettingChange('useHardwareEncoder', !settings.useHardwareEncoder)}
-                      disabled={
-                        settings.videoCodec === 'vp9' ||
-                        settings.format === 'webm' ||
-                        settings.format === 'prores' ||
-                        (nvencStatus.checked && !nvencStatus.available) ||
-                        (settings.videoCodec === 'h265' && nvencStatus.checked && !nvencStatus.h265) ||
-                        (settings.videoCodec === 'h264' && nvencStatus.checked && !nvencStatus.h264)
-                      }
+                      disabled={Boolean(nvencToggleDisabledReason)}
                       className={`px-2 py-1 text-xs rounded border transition-colors ${
                         settings.useHardwareEncoder
                           ? 'bg-sf-accent text-white border-sf-accent'
                           : 'bg-sf-dark-800 text-sf-text-muted border-sf-dark-600'
-                      } ${(settings.videoCodec === 'vp9' || settings.format === 'webm') ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      title={nvencStatus.checked && !nvencStatus.available
-                        ? 'NVENC not available in your FFmpeg build'
-                        : 'Requires FFmpeg with NVIDIA NVENC support'}
+                      } ${nvencToggleDisabledReason ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      title={nvencToggleDisabledReason || 'Use NVIDIA NVENC for faster MP4 exports'}
                     >
                       Use NVIDIA NVENC
                     </button>
                     <span className="text-[10px] text-sf-text-muted">
-                      Hardware encoding (RTX 5090 friendly)
+                      Hardware encoding
                     </span>
                   </div>
-                  {nvencStatus.checked && !nvencStatus.available && (
-                    <div className="mt-1 text-[10px] text-sf-warning">
-                      NVENC not detected in FFmpeg. Install an NVENC-enabled build to use GPU encoding.
+                  <div className={`mt-1 text-[10px] ${
+                    nvencStatus.checked && nvencStatus.available ? 'text-sf-text-secondary' : 'text-sf-warning'
+                  }`}>
+                    {nvencSummaryText}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span className={`px-1.5 py-0.5 rounded border text-[10px] ${
+                      nvencStatus.h264
+                        ? 'border-sf-accent/40 bg-sf-accent/10 text-sf-accent'
+                        : 'border-sf-dark-600 bg-sf-dark-800 text-sf-text-muted'
+                    }`}>
+                      H.264 NVENC
+                    </span>
+                    <span className={`px-1.5 py-0.5 rounded border text-[10px] ${
+                      nvencStatus.h265
+                        ? 'border-sf-accent/40 bg-sf-accent/10 text-sf-accent'
+                        : 'border-sf-dark-600 bg-sf-dark-800 text-sf-text-muted'
+                    }`}>
+                      H.265 NVENC
+                    </span>
+                    {nvencStatus.gpuName && (
+                      <span className="px-1.5 py-0.5 rounded border border-sf-dark-600 bg-sf-dark-800 text-[10px] text-sf-text-secondary">
+                        {nvencStatus.gpuName}
+                      </span>
+                    )}
+                  </div>
+                  {nvencExpectedEncoder && (
+                    <div className="mt-1 text-[10px] text-sf-accent font-mono">
+                      Expected encoder: {nvencExpectedEncoder}
                     </div>
                   )}
                 </div>
