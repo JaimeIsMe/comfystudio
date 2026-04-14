@@ -259,6 +259,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAudioWaveform: (mediaInput, options = {}) => ipcRenderer.invoke('media:getAudioWaveform', mediaInput, options),
 
   /**
+   * Extract a temporary mono WAV file for local caption transcription.
+   * @param {{ mediaInput: string, sampleRate?: number }} options
+   * @returns {Promise<{success: boolean, outputPath?: string, duration?: number, error?: string}>}
+   */
+  extractCaptionAudio: (options = {}) => ipcRenderer.invoke('captions:extractAudio', options),
+
+  /**
+   * Run Whisper transcription in the main process (avoids renderer OOM).
+   * @param {{ wavPath: string }} options
+   * @returns {Promise<{success: boolean, text?: string, chunks?: Array, error?: string}>}
+   */
+  transcribeCaptionAudio: (options = {}) => ipcRenderer.invoke('captions:transcribe', options),
+
+  /**
+   * Listen for caption transcription progress events from the main process.
+   * @param {Function} cb - callback receiving { stage, message, ... }
+   * @returns {Function} unsubscribe function
+   */
+  onCaptionProgress: (cb) => {
+    const handler = (_, data) => cb(data)
+    ipcRenderer.on('captions:progress', handler)
+    return () => ipcRenderer.removeListener('captions:progress', handler)
+  },
+
+  /**
    * Get a direct file:// URL for a local file
    * @param {string} filePath 
    * @returns {Promise<string>}

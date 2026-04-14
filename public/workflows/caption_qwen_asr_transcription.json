@@ -1,0 +1,160 @@
+{
+  "18": {
+    "inputs": {
+      "video": "INPUT_VIDEO_FILENAME",
+      "force_rate": 0,
+      "custom_width": 0,
+      "custom_height": 0,
+      "frame_load_cap": 0,
+      "skip_first_frames": 0,
+      "select_every_nth": 1,
+      "format": "AnimateDiff"
+    },
+    "class_type": "VHS_LoadVideo",
+    "_meta": {
+      "title": "Load Video (Upload)"
+    }
+  },
+  "28": {
+    "inputs": {
+      "text": [
+        "36",
+        0
+      ]
+    },
+    "class_type": "ShowText|pysssss",
+    "_meta": {
+      "title": "Show Text"
+    }
+  },
+  "35": {
+    "inputs": {
+      "text": [
+        "44",
+        0
+      ],
+      "model": "English Fullstop + Truecase (EN, ~210MB)",
+      "processing_scope": "Whole Text",
+      "output_mode": "Restored Paragraphs",
+      "lowercase_input_first": true
+    },
+    "class_type": "ASRPunctuationTruecaseNode",
+    "_meta": {
+      "title": "ASR Punctuation / Truecase"
+    }
+  },
+  "36": {
+    "inputs": {
+      "text": [
+        "35",
+        0
+      ],
+      "asr_timing_data": [
+        "44",
+        1
+      ],
+      "srt_options": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "TextToSRTBuilderNode",
+    "_meta": {
+      "title": "Text to SRT Builder"
+    }
+  },
+  "39": {
+    "inputs": {
+      "srt_preset": "Netflix-Standard",
+      "srt_mode": "smart",
+      "tts_ready_mode": false,
+      "tts_ready_paragraph_mode": false,
+      "heuristic_language_profile": "Auto",
+      "srt_max_chars_per_line": 42,
+      "srt_max_lines": 2,
+      "srt_max_duration": 7,
+      "srt_min_duration": 0.9,
+      "srt_min_gap": 0.2,
+      "srt_max_cps": 17,
+      "dedupe_overlaps": true,
+      "dedupe_window_ms": 1500,
+      "dedupe_min_words": 2,
+      "dedupe_overlap_ratio": 0.6,
+      "punctuation_grace_chars": 12,
+      "min_words_per_segment": 2,
+      "min_segment_seconds": 0.4,
+      "merge_trailing_punct_word": true,
+      "merge_trailing_punct_max_gap": 1,
+      "merge_leading_short_phrase": true,
+      "merge_leading_short_max_words": 2,
+      "merge_leading_short_max_gap": 2,
+      "merge_dangling_tail": true,
+      "merge_dangling_tail_max_words": 3,
+      "merge_dangling_tail_max_gap": 3,
+      "merge_dangling_tail_allowlist": "a,an,the,to,of,and,or,im,i'm,you,you're,we,they,he,she,it",
+      "merge_leading_short_no_punct": true,
+      "merge_leading_short_no_punct_max_words": 2,
+      "merge_leading_short_no_punct_max_gap": 1.5,
+      "merge_incomplete_sentence": true,
+      "merge_incomplete_max_gap": 1.2,
+      "merge_incomplete_keywords": "what,why,how,where,who,which,when",
+      "merge_incomplete_split_next": true,
+      "merge_allow_overlong": true,
+      "normalize_cue_end_punctuation": false,
+      "srt_panel_spacer": ""
+    },
+    "class_type": "SRTAdvancedOptionsNode",
+    "_meta": {
+      "title": "SRT Advanced Options"
+    }
+  },
+  "44": {
+    "inputs": {
+      "language": "Auto",
+      "task": "transcribe",
+      "timestamps": "none",
+      "chunk_size": 30,
+      "overlap": 2,
+      "enable_asr_cache": true,
+      "engine": [
+        "45",
+        0
+      ],
+      "audio": [
+        "18",
+        2
+      ]
+    },
+    "class_type": "UnifiedASRTranscribeNode",
+    "_meta": {
+      "title": "ASR Transcribe"
+    }
+  },
+  "45": {
+    "inputs": {
+      "model_size": "0.6B",
+      "device": "auto",
+      "voice_preset": "None (Zero-shot / Custom)",
+      "language": "Auto",
+      "instruct": "",
+      "top_k": 50,
+      "top_p": 1,
+      "temperature": 0.9,
+      "repetition_penalty": 1.05,
+      "max_new_tokens": 2048,
+      "dtype": "auto",
+      "attn_implementation": "auto",
+      "x_vector_only_mode": false,
+      "use_torch_compile": false,
+      "use_cuda_graphs": false,
+      "compile_mode": "default",
+      "asr_use_forced_aligner": true,
+      "asr_translate_target_language": "English",
+      "asr_translate_instruction_override": "Translate the speech from {source_language} into {target_language} text. Return only the translated text."
+    },
+    "class_type": "Qwen3TTSEngineNode",
+    "_meta": {
+      "title": "Qwen3-TTS Engine"
+    }
+  }
+}

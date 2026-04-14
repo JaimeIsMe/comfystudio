@@ -907,6 +907,253 @@ ipcMain.handle('media:getAudioWaveform', async (event, mediaInput, options = {})
   })
 })
 
+ipcMain.handle('captions:extractAudio', async (event, options = {}) => {
+  if (!ffmpegPath) {
+    return { success: false, error: 'FFmpeg binary not available.' }
+  }
+
+  const filePath = resolveMediaInputPath(options?.mediaInput)
+  if (!filePath) {
+    return { success: false, error: 'Invalid caption media input path.' }
+  }
+
+  const sampleRate = Math.max(8000, Math.min(48000, Math.round(Number(options?.sampleRate) || 16000)))
+  const safeBaseName = path.basename(filePath, path.extname(filePath))
+    .replace(/[^a-zA-Z0-9_\-\s]/g, ' ')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40) || 'caption_audio'
+
+  const tempDir = path.join(app.getPath('temp'), 'comfystudio-caption-audio')
+  const outputPath = path.join(tempDir, `${safeBaseName}_${Date.now()}.wav`)
+
+  try {
+    await fs.mkdir(tempDir, { recursive: true })
+  } catch (error) {
+    return { success: false, error: error.message }
+  }
+
+  return await new Promise((resolve) => {
+    const args = [
+      '-y',
+      '-v', 'error',
+      '-i', filePath,
+      '-vn',
+      '-ac', '1',
+      '-ar', String(sampleRate),
+      '-c:a', 'pcm_s16le',
+      outputPath,
+    ]
+
+    const proc = spawn(ffmpegPath, args, { windowsHide: true })
+    let stderr = ''
+
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString()
+    })
+
+    proc.on('error', (error) => {
+      resolve({ success: false, error: error.message })
+    })
+
+    proc.on('close', async (code) => {
+      if (code !== 0) {
+        try {
+          await fs.unlink(outputPath)
+        } catch (_) {
+          // Ignore cleanup failures for temp caption audio.
+        }
+        resolve({ success: false, error: stderr || `FFmpeg exited with code ${code}` })
+        return
+      }
+
+      try {
+        const stat = await fs.stat(outputPath)
+        resolve({
+          success: true,
+          outputPath,
+          size: stat.size,
+        })
+      } catch (error) {
+        resolve({ success: false, error: error.message })
+      }
+    })
+  })
+})
+
+// ============================================
+// IPC Handlers - Caption Transcription (runs in main process to avoid renderer OOM)
+// ============================================
+
+let captionTranscriberPromise = null
+
+async function ensureCaptionTranscriber(event) {
+  if (captionTranscriberPromise) return await captionTranscriberPromise
+
+  captionTranscriberPromise = (async () => {
+    const sendProgress = (data) => {
+      try {
+        if (event?.sender && !event.sender.isDestroyed()) {
+          event.sender.send('captions:progress', data)
+        }
+      } catch (_) {}
+    }
+
+    sendProgress({ stage: 'model', message: 'Loading local caption model...' })
+
+    const { pipeline } = await import('@huggingface/transformers')
+    const transcriber = await pipeline(
+      'automatic-speech-recognition',
+      'Xenova/whisper-tiny.en',
+      {
+        device: 'cpu',
+        dtype: {
+          encoder_model: 'fp32',
+          decoder_model_merged: 'fp32',
+        },
+        progress_callback: (progress) => {
+          let message = 'Loading local caption model...'
+          if (progress?.status === 'ready') message = 'Caption model ready.'
+          else if (progress?.status === 'download') message = `Downloading caption model: ${progress.file || 'weights'}`
+          else if (progress?.status === 'progress') message = `Loading caption model: ${progress.file || 'weights'}`
+          else if (progress?.status === 'initiate') message = `Preparing caption model: ${progress.file || 'weights'}`
+          sendProgress({ stage: 'model', ...progress, message })
+        },
+      }
+    )
+
+    sendProgress({ stage: 'model', status: 'ready', message: 'Caption model ready.' })
+    return transcriber
+  })().catch((error) => {
+    captionTranscriberPromise = null
+    throw error
+  })
+
+  return await captionTranscriberPromise
+}
+
+function readWavAsFloat32(buffer) {
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+
+  let offset = 12
+  let dataOffset = -1
+  let dataSize = 0
+  let sampleRate = 16000
+  let bitsPerSample = 16
+  let numChannels = 1
+
+  while (offset + 8 <= buffer.length) {
+    const chunkId = String.fromCharCode(
+      buffer[offset], buffer[offset + 1], buffer[offset + 2], buffer[offset + 3]
+    )
+    const chunkSize = view.getUint32(offset + 4, true)
+
+    if (chunkId === 'fmt ') {
+      numChannels = view.getUint16(offset + 10, true)
+      sampleRate = view.getUint32(offset + 12, true)
+      bitsPerSample = view.getUint16(offset + 22, true)
+    } else if (chunkId === 'data') {
+      dataOffset = offset + 8
+      dataSize = chunkSize
+      break
+    }
+
+    offset += 8 + chunkSize
+    if (chunkSize % 2 !== 0) offset += 1
+  }
+
+  if (dataOffset < 0 || dataSize === 0) {
+    throw new Error('Could not find PCM data in WAV file.')
+  }
+
+  const bytesPerSample = bitsPerSample / 8
+  const totalSamples = Math.floor(dataSize / (bytesPerSample * numChannels))
+  const float32 = new Float32Array(totalSamples)
+
+  for (let i = 0; i < totalSamples; i++) {
+    const bytePos = dataOffset + i * bytesPerSample * numChannels
+    if (bitsPerSample === 16) {
+      float32[i] = view.getInt16(bytePos, true) / 32768
+    } else if (bitsPerSample === 32) {
+      float32[i] = view.getFloat32(bytePos, true)
+    } else {
+      float32[i] = (buffer[bytePos] - 128) / 128
+    }
+  }
+
+  return {
+    audio: float32,
+    sampleRate,
+    duration: sampleRate > 0 ? float32.length / sampleRate : 0,
+  }
+}
+
+ipcMain.handle('captions:transcribe', async (event, options = {}) => {
+  const wavPath = options?.wavPath
+  if (!wavPath || typeof wavPath !== 'string') {
+    return { success: false, error: 'Missing WAV file path for caption transcription.' }
+  }
+
+  try {
+    await fs.access(wavPath)
+  } catch (_) {
+    return { success: false, error: `Caption audio file not found: ${wavPath}` }
+  }
+
+  try {
+    const transcriber = await ensureCaptionTranscriber(event)
+
+    try {
+      if (event?.sender && !event.sender.isDestroyed()) {
+        event.sender.send('captions:progress', { stage: 'transcribe', message: 'Reading audio file...' })
+      }
+    } catch (_) {}
+
+    const wavBuffer = await fs.readFile(wavPath)
+    const { audio, duration } = readWavAsFloat32(wavBuffer)
+
+    try {
+      if (event?.sender && !event.sender.isDestroyed()) {
+        event.sender.send('captions:progress', { stage: 'transcribe', message: 'Transcribing audio locally...' })
+      }
+    } catch (_) {}
+
+    let output = await transcriber(audio, {
+      return_timestamps: 'word',
+      chunk_length_s: 29,
+      stride_length_s: 5,
+    })
+
+    let chunks = Array.isArray(output?.chunks) ? output.chunks : []
+
+    const hasValidWordTimestamps = chunks.length > 1 && chunks.some((chunk) => {
+      const ts = Array.isArray(chunk?.timestamp) ? chunk.timestamp : []
+      return Number(ts[0]) > 0.01 || Number(ts[1]) > 0.5
+    })
+
+    if (!hasValidWordTimestamps) {
+      output = await transcriber(audio, {
+        return_timestamps: true,
+        chunk_length_s: 29,
+        stride_length_s: 5,
+      })
+      chunks = Array.isArray(output?.chunks) ? output.chunks : []
+    }
+
+    return {
+      success: true,
+      text: output?.text || '',
+      chunks,
+      timestampMode: hasValidWordTimestamps ? 'word' : 'segment',
+      audioDuration: duration,
+    }
+  } catch (error) {
+    captionTranscriberPromise = null
+    return { success: false, error: error?.message || 'Caption transcription failed.' }
+  }
+})
+
 // ============================================
 // IPC Handlers - App Settings Storage
 // ============================================

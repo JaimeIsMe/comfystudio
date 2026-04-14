@@ -1,4 +1,4 @@
-import { Upload, FolderOpen, Image, Video, Music, Search, Grid, List, Trash2, Edit3, Play, FileVideo, FileAudio, FileImage, Loader2, FolderPlus, ChevronRight, ChevronDown, ChevronLeft, Home, Minus, Plus, MoreVertical, FolderInput, Wand2, Layers, Film, VolumeX, Volume2, ArrowUpDown, ArrowUp, ArrowDown, Copy } from 'lucide-react'
+import { Upload, FolderOpen, Image, Video, Music, Search, Grid, List, Trash2, Edit3, Play, FileVideo, FileAudio, FileImage, Loader2, FolderPlus, ChevronRight, ChevronDown, ChevronLeft, Home, Minus, Plus, MoreVertical, FolderInput, Wand2, Layers, Film, VolumeX, Volume2, ArrowUpDown, ArrowUp, ArrowDown, Copy, Type } from 'lucide-react'
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import useAssetsStore from '../../stores/assetsStore'
 import useProjectStore from '../../stores/projectStore'
@@ -9,6 +9,7 @@ import MaskGenerationDialog from '../MaskGenerationDialog'
 import OverlayGeneratorModal from '../OverlayGeneratorModal'
 import ConfirmDialog from '../ConfirmDialog'
 import NewTimelineDialog from '../NewTimelineDialog'
+import CaptionWorkspace from '../CaptionWorkspace'
 
 // Thumbnail size presets (xs = extra small for denser grid)
 const THUMBNAIL_SIZES = {
@@ -64,6 +65,7 @@ function AssetsPanel() {
   const [overlayModalOpen, setOverlayModalOpen] = useState(false)
   const [overlayModalInitialType, setOverlayModalInitialType] = useState('letterbox')
   const [overlayModalFolderId, setOverlayModalFolderId] = useState(null) // when opened from folder context menu
+  const [captionWorkspaceAsset, setCaptionWorkspaceAsset] = useState(null)
   const [confirmDialog, setConfirmDialog] = useState(null) // { title, message, confirmLabel, cancelLabel, tone }
   const [showNewTimelineDialog, setShowNewTimelineDialog] = useState(false)
   const confirmResolverRef = useRef(null)
@@ -207,6 +209,7 @@ function AssetsPanel() {
     removeAsset, 
     renameAsset, 
     addAsset,
+    updateAsset,
     folders,
     addFolder,
     removeFolder,
@@ -483,6 +486,57 @@ function AssetsPanel() {
   const canGenerateThumbnails = (asset) => {
     return asset.type === 'video' && asset.duration > 0.5
   }
+
+  const canGenerateCaptions = useCallback((asset) => {
+    return asset?.type === 'video' && asset?.hasAudio !== false
+  }, [])
+
+  const handleOpenCaptionWorkspace = useCallback((assetId) => {
+    const asset = assets.find((entry) => entry.id === assetId)
+    if (!asset || !canGenerateCaptions(asset)) return
+    setCaptionWorkspaceAsset(asset)
+    setContextMenu(null)
+  }, [assets, canGenerateCaptions])
+
+  const handlePlaceCaptionAssetOnTimeline = useCallback(async (captionAsset, sourceAsset) => {
+    if (!captionAsset) return
+
+    const timelineState = useTimelineStore.getState()
+    const {
+      tracks,
+      clips,
+      timelineFps,
+      playheadPosition,
+      addClip,
+      addTrack,
+    } = timelineState
+
+    const videoTracks = tracks.filter((track) => track.type === 'video')
+    const sourceClip = clips
+      .filter((clip) => clip.assetId === sourceAsset?.id && videoTracks.some((track) => track.id === clip.trackId))
+      .sort((a, b) => a.startTime - b.startTime)[0] || null
+
+    let targetTrack = null
+    if (sourceClip) {
+      const sourceTrackIndex = tracks.findIndex((track) => track.id === sourceClip.trackId)
+      targetTrack = tracks
+        .slice(0, sourceTrackIndex)
+        .find((track) => track.type === 'video') || addTrack('video')
+    } else {
+      targetTrack = videoTracks[0] || addTrack('video')
+    }
+
+    const startTime = sourceClip ? sourceClip.startTime : playheadPosition
+    const duration = sourceClip
+      ? sourceClip.duration
+      : (captionAsset.duration || captionAsset.settings?.duration || sourceAsset?.duration || sourceAsset?.settings?.duration || 3)
+
+    addClip(targetTrack.id, captionAsset, startTime, timelineFps, {
+      duration,
+      trimStart: 0,
+      trimEnd: duration,
+    })
+  }, [])
   
   // Handle generating thumbnail sprite
   const handleGenerateThumbnails = async (assetId) => {
@@ -1984,12 +2038,13 @@ function AssetsPanel() {
             const asset = assets.find(a => a.id === contextMenu.assetId)
             const showMask = asset && canGenerateMask(asset)
             const showThumbnails = asset && canGenerateThumbnails(asset)
+            const showCaptions = asset && canGenerateCaptions(asset)
             const hasSprite = asset?.sprite?.url
             const isGenerating = asset?.spriteGenerating
             const showAudioToggle = asset?.type === 'video' && asset?.hasAudio !== false
             const isAudioDisabled = asset?.audioEnabled === false
             
-            if (!showMask && !showThumbnails && !showAudioToggle) return null
+            if (!showMask && !showThumbnails && !showAudioToggle && !showCaptions) return null
             
             return (
               <>
@@ -2021,6 +2076,16 @@ function AssetsPanel() {
                       <Film className="w-3 h-3 text-sf-blue" />
                     )}
                     {isGenerating ? 'Generating...' : hasSprite ? 'Regenerate Thumbnails' : 'Generate Thumbnails'}
+                  </button>
+                )}
+
+                {showCaptions && (
+                  <button
+                    onClick={() => handleOpenCaptionWorkspace(contextMenu.assetId)}
+                    className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+                  >
+                    <Type className="w-3 h-3 text-sf-accent" />
+                    Add Captions...
                   </button>
                 )}
                 
@@ -2152,6 +2217,23 @@ function AssetsPanel() {
         defaultFolderId={overlayModalFolderId ?? currentFolderId}
         initialType={overlayModalInitialType}
         availableTypes={['letterbox', 'color']}
+      />
+
+      <CaptionWorkspace
+        isOpen={Boolean(captionWorkspaceAsset)}
+        asset={captionWorkspaceAsset}
+        currentProjectHandle={currentProjectHandle}
+        timelineSize={getCurrentTimelineSettings() ? {
+          width: getCurrentTimelineSettings().width,
+          height: getCurrentTimelineSettings().height,
+          fps: getCurrentTimelineSettings().fps,
+        } : { width: 1920, height: 1080, fps: 24 }}
+        folders={folders}
+        addFolder={addFolder}
+        addAsset={addAsset}
+        updateAsset={updateAsset}
+        onPlaceOnTimeline={handlePlaceCaptionAssetOnTimeline}
+        onClose={() => setCaptionWorkspaceAsset(null)}
       />
       
       {/* Footer with asset count */}

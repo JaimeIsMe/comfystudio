@@ -24,6 +24,7 @@ export function getBundledWorkflowPath(filename) {
 // Built-in workflows shipped with ComfyStudio - always installed, cannot be deleted
 export const BUILTIN_WORKFLOWS = [
   { id: 'wan22-i2v', label: 'Image to Video (WAN 2.2)', category: 'video', needsImage: true, description: 'Animate an image into video', file: 'video_wan2_2_14B_i2v.json' },
+  { id: 'ltx23-i2v', label: 'Image to Video (LTX 2.3)', category: 'video', needsImage: true, description: 'Animate an image with local LTX 2.3', file: 'video_ltx2_3_i2v.json' },
   { id: 'kling-o3-i2v', label: 'Image to Video (Kling O3 Omni)', category: 'video', needsImage: true, description: 'Premium image-to-video with Kling 3.0 Omni', file: 'api_kling_o3_i2v.json' },
   { id: 'grok-video-i2v', label: 'Image to Video (Grok Imagine Video)', category: 'video', needsImage: true, description: 'Cloud image-to-video with Grok Imagine Video Beta', file: 'api_grok_video.json' },
   { id: 'vidu-q2-i2v', label: 'Image to Video (Vidu Q2)', category: 'video', needsImage: true, description: 'Cloud image-to-video with Vidu Q2 Pro Fast', file: 'api_vidu_q2_i2v.json' },
@@ -40,6 +41,7 @@ export const BUILTIN_WORKFLOWS = [
 // Map workflow id -> public path (for loading JSON)
 export const BUILTIN_WORKFLOW_PATHS = {
   'wan22-i2v': getBundledWorkflowPath('video_wan2_2_14B_i2v.json'),
+  'ltx23-i2v': getBundledWorkflowPath('video_ltx2_3_i2v.json'),
   'kling-o3-i2v': getBundledWorkflowPath('api_kling_o3_i2v.json'),
   'grok-video-i2v': getBundledWorkflowPath('api_grok_video.json'),
   'vidu-q2-i2v': getBundledWorkflowPath('api_vidu_q2_i2v.json'),
@@ -53,6 +55,7 @@ export const BUILTIN_WORKFLOW_PATHS = {
   'seedream-5-lite-image-edit': getBundledWorkflowPath('api_bytedance_seedream_5_0_lite_image_edit.json'),
   'nano-banana-pro': getBundledWorkflowPath('api_google_nano_banana2_image_edit.json'), // legacy id alias
   'music-gen': getBundledWorkflowPath('music_generation.json'),
+  'caption-qwen-asr': getBundledWorkflowPath('caption_qwen_asr_transcription.json'),
 }
 
 // Optional workflows - user can download to enable (not in Generate until installed)
