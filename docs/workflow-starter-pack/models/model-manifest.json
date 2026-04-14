@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-04-14T05:13:19.383Z",
-  "totalModels": 16,
+  "generatedAt": "2026-04-14T05:25:14.047Z",
+  "totalModels": 20,
   "models": [
     {
       "filename": "ace_1.5_vae.safetensors",
@@ -44,6 +44,68 @@
       ],
       "workflows": [
         "z-image-turbo"
+      ],
+      "downloadUrl": null
+    },
+    {
+      "filename": "gemma_3_12B_it_fp4_mixed.safetensors",
+      "targetSubdir": "text_encoders",
+      "folder": "models/text_encoders",
+      "loaders": [
+        "LTXAVTextEncoderLoader"
+      ],
+      "inputKeys": [
+        "text_encoder"
+      ],
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "downloadUrl": null
+    },
+    {
+      "filename": "ltx-2.3-22b-dev-fp8.safetensors",
+      "targetSubdir": "checkpoints",
+      "folder": "models/checkpoints",
+      "loaders": [
+        "CheckpointLoaderSimple",
+        "LTXAVTextEncoderLoader",
+        "LTXVAudioVAELoader"
+      ],
+      "inputKeys": [
+        "ckpt_name"
+      ],
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "downloadUrl": null
+    },
+    {
+      "filename": "ltx-2.3-22b-distilled-lora-384.safetensors",
+      "targetSubdir": "loras",
+      "folder": "models/loras",
+      "loaders": [
+        "LoraLoaderModelOnly"
+      ],
+      "inputKeys": [
+        "lora_name"
+      ],
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "downloadUrl": null
+    },
+    {
+      "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+      "targetSubdir": "upscale_models",
+      "folder": "models/upscale_models",
+      "loaders": [
+        "LatentUpscaleModelLoader"
+      ],
+      "inputKeys": [
+        "model_name"
+      ],
+      "workflows": [
+        "ltx23-i2v"
       ],
       "downloadUrl": null
     },

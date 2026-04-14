@@ -8,7 +8,7 @@ This pack is for advanced ComfyUI users who want to inspect workflows directly i
 |---|---|---|---|---|---|---|
 | Image to Video (Grok Imagine Video) | `grok-video-i2v` | `cloud` | `cloud` | [`grok-video-i2v.comfyui.json`](workflows/cloud/grok-video-i2v.comfyui.json) | [Guide](docs/workflows/grok-video-i2v.md) | Required |
 | Image to Video (Kling O3 Omni) | `kling-o3-i2v` | `cloud` | `cloud` | [`kling-o3-i2v.comfyui.json`](workflows/cloud/kling-o3-i2v.comfyui.json) | [Guide](docs/workflows/kling-o3-i2v.md) | Required |
-| Image to Video (LTX 2.3) | `ltx23-i2v` | `unknown` | `local` | [`ltx23-i2v.comfyui.json`](workflows/local/ltx23-i2v.comfyui.json) | [Guide](docs/workflows/ltx23-i2v.md) | Not required |
+| Image to Video (LTX 2.3) | `ltx23-i2v` | `pro` | `local` | [`ltx23-i2v.comfyui.json`](workflows/local/ltx23-i2v.comfyui.json) | [Guide](docs/workflows/ltx23-i2v.md) | Not required |
 | Image to Video (Vidu Q2) | `vidu-q2-i2v` | `cloud` | `cloud` | [`vidu-q2-i2v.comfyui.json`](workflows/cloud/vidu-q2-i2v.comfyui.json) | [Guide](docs/workflows/vidu-q2-i2v.md) | Required |
 | Image to Video (WAN 2.2) | `wan22-i2v` | `pro` | `local` | [`wan22-i2v.comfyui.json`](workflows/local/wan22-i2v.comfyui.json) | [Guide](docs/workflows/wan22-i2v.md) | Not required |
 | Image Edit | `image-edit` | `standard` | `local` | [`image-edit.comfyui.json`](workflows/local/image-edit.comfyui.json) | [Guide](docs/workflows/image-edit.md) | Not required |

@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-04-14T05:13:19.382Z",
-  "totalNodes": 22,
+  "generatedAt": "2026-04-14T05:25:14.046Z",
+  "totalNodes": 40,
   "nodes": [
     {
       "classType": "BatchImagesNode",
@@ -23,10 +23,40 @@
       "installDocs": "https://registry.comfy.org"
     },
     {
+      "classType": "CheckpointLoaderSimple",
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
       "classType": "CLIPLoader",
       "workflows": [
         "wan22-i2v",
         "z-image-turbo"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "CreateVideo",
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "EmptyLTXVLatentVideo",
+      "workflows": [
+        "ltx23-i2v"
       ],
       "runtimes": [
         "local"
@@ -107,9 +137,130 @@
       "installDocs": "https://registry.comfy.org"
     },
     {
+      "classType": "LatentUpscaleModelLoader",
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
       "classType": "LoraLoaderModelOnly",
       "workflows": [
+        "ltx23-i2v",
         "wan22-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "LTXAVTextEncoderLoader",
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "LTXVAudioVAEDecode",
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "LTXVAudioVAELoader",
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "LTXVConcatAVLatent",
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "LTXVConditioning",
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "LTXVCropGuides",
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "LTXVEmptyLatentAudio",
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "LTXVImgToVideoInplace",
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "LTXVLatentUpsampler",
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "LTXVPreprocess",
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "LTXVSeparateAVLatent",
+      "workflows": [
+        "ltx23-i2v"
       ],
       "runtimes": [
         "local"
@@ -120,6 +271,26 @@
       "classType": "ModelSamplingAuraFlow",
       "workflows": [
         "z-image-turbo"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "ResizeImageMaskNode",
+      "workflows": [
+        "ltx23-i2v"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "ResizeImagesByLongerEdge",
+      "workflows": [
+        "ltx23-i2v"
       ],
       "runtimes": [
         "local"
@@ -159,6 +330,7 @@
       "workflows": [
         "grok-video-i2v",
         "kling-o3-i2v",
+        "ltx23-i2v",
         "vidu-q2-i2v",
         "wan22-i2v"
       ],
@@ -206,6 +378,16 @@
       "classType": "VAEDecodeAudio",
       "workflows": [
         "music-gen"
+      ],
+      "runtimes": [
+        "local"
+      ],
+      "installDocs": "https://registry.comfy.org"
+    },
+    {
+      "classType": "VAEDecodeTiled",
+      "workflows": [
+        "ltx23-i2v"
       ],
       "runtimes": [
         "local"

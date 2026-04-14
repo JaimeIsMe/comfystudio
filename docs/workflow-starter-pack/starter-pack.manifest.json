@@ -1,8 +1,8 @@
 {
   "starterPackVersion": "0.1.6",
   "compatibleAppVersion": "0.1.6",
-  "generatedAt": "2026-04-14T05:13:19.336Z",
-  "sourceCommit": "37771c8119deb4d9a355bd2e2ba45b12539523a6",
+  "generatedAt": "2026-04-14T05:25:13.995Z",
+  "sourceCommit": "3bcd7a369fd4d78ab5158545ea5bfab235d7cc43",
   "totalWorkflows": 14,
   "localWorkflowCount": 8,
   "cloudWorkflowCount": 6,
@@ -54,18 +54,76 @@
       "label": "Image to Video (LTX 2.3)",
       "category": "video",
       "description": "Animate an image with local LTX 2.3",
-      "tier": "unknown",
+      "tier": "pro",
       "runtime": "local",
       "appWorkflowPath": "/workflows/video_ltx2_3_i2v.json",
       "appWorkflowFile": "public/workflows/video_ltx2_3_i2v.json",
       "sourceWorkflowFilename": "video_ltx2_3_i2v.json",
       "setupWorkflowFile": "workflows/local/ltx23-i2v.comfyui.json",
-      "setupWorkflowStatus": "missing",
+      "setupWorkflowStatus": "available",
       "workflowGuideFile": "docs/workflows/ltx23-i2v.md",
       "requiresComfyOrgApiKey": false,
-      "docsUrl": null,
-      "requiredNodes": [],
-      "requiredModels": []
+      "docsUrl": "https://registry.comfy.org",
+      "requiredNodes": [
+        "CheckpointLoaderSimple",
+        "CreateVideo",
+        "EmptyLTXVLatentVideo",
+        "LatentUpscaleModelLoader",
+        "LoraLoaderModelOnly",
+        "LTXAVTextEncoderLoader",
+        "LTXVAudioVAEDecode",
+        "LTXVAudioVAELoader",
+        "LTXVConcatAVLatent",
+        "LTXVConditioning",
+        "LTXVCropGuides",
+        "LTXVEmptyLatentAudio",
+        "LTXVImgToVideoInplace",
+        "LTXVLatentUpsampler",
+        "LTXVPreprocess",
+        "LTXVSeparateAVLatent",
+        "ResizeImageMaskNode",
+        "ResizeImagesByLongerEdge",
+        "SaveVideo",
+        "VAEDecodeTiled"
+      ],
+      "requiredModels": [
+        {
+          "filename": "gemma_3_12B_it_fp4_mixed.safetensors",
+          "targetSubdir": "text_encoders",
+          "classType": "LTXAVTextEncoderLoader",
+          "inputKey": "text_encoder"
+        },
+        {
+          "filename": "ltx-2.3-22b-dev-fp8.safetensors",
+          "targetSubdir": "checkpoints",
+          "classType": "CheckpointLoaderSimple",
+          "inputKey": "ckpt_name"
+        },
+        {
+          "filename": "ltx-2.3-22b-dev-fp8.safetensors",
+          "targetSubdir": "checkpoints",
+          "classType": "LTXVAudioVAELoader",
+          "inputKey": "ckpt_name"
+        },
+        {
+          "filename": "ltx-2.3-22b-dev-fp8.safetensors",
+          "targetSubdir": "checkpoints",
+          "classType": "LTXAVTextEncoderLoader",
+          "inputKey": "ckpt_name"
+        },
+        {
+          "filename": "ltx-2.3-22b-distilled-lora-384.safetensors",
+          "targetSubdir": "loras",
+          "classType": "LoraLoaderModelOnly",
+          "inputKey": "lora_name"
+        },
+        {
+          "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+          "targetSubdir": "upscale_models",
+          "classType": "LatentUpscaleModelLoader",
+          "inputKey": "model_name"
+        }
+      ]
     },
     {
       "id": "vidu-q2-i2v",

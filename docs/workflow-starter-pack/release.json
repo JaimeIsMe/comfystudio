@@ -1,8 +1,8 @@
 {
   "starterPackVersion": "0.1.6",
   "compatibleAppVersion": "0.1.6",
-  "generatedAt": "2026-04-14T05:13:19.336Z",
-  "sourceCommit": "37771c8119deb4d9a355bd2e2ba45b12539523a6",
+  "generatedAt": "2026-04-14T05:25:13.995Z",
+  "sourceCommit": "3bcd7a369fd4d78ab5158545ea5bfab235d7cc43",
   "totalWorkflows": 14,
   "localWorkflowCount": 8,
   "cloudWorkflowCount": 6

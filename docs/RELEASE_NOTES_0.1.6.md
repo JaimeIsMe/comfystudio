@@ -10,6 +10,7 @@
 - New animated caption overlay workflow with ComfyUI-based ASR, cue editing, and transparent overlay export
 - New kinetic typography caption renderer with per-word motion, palettes, global controls, and per-cue direction overrides
 - New traditional subtitle mode with configurable position, text style, color, and size
+- New local `LTX 2.3` image-to-video workflow option in Generate
 - Better tonal color controls and clearer packaged NVIDIA NVENC export support
 
 ## Captions And Typography
@@ -35,6 +36,12 @@
 - Tonal color controls are more flexible and packaged NVENC detection is more reliable
 - Export messaging is clearer when H.264/H.265 NVENC is or is not available
 - The app surfaces the detected NVIDIA GPU and expected encoder path when possible
+
+## Local Video Workflow Expansion
+
+- Added a local `LTX 2.3` image-to-video workflow option alongside the existing WAN 2.2 and cloud video workflows
+- Generate now groups video workflows by runtime (`Local` vs `Cloud`) to make it clearer what runs on your GPU
+- Timeline-frame-driven generation now supports `LTX 2.3` in the same flow as the other single-video workflows
 
 ## Workflow Starter Pack
 
