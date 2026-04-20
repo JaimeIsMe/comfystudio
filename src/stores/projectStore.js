@@ -244,8 +244,9 @@ export const useProjectStore = create(
 
       // Recent projects view mode on the welcome screen: 'grid' (thumbnail
       // cards) or 'list' (compact rows). Persisted so users stay in their
-      // preferred view across launches.
-      projectListViewMode: 'grid',
+      // preferred view across launches. Default to list for a denser,
+      // less intimidating first-run project picker.
+      projectListViewMode: 'list',
       
       /**
        * Check if File System API is supported
