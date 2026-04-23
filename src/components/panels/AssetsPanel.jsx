@@ -5,9 +5,11 @@ import useProjectStore from '../../stores/projectStore'
 import useTimelineStore from '../../stores/timelineStore'
 import { importAsset, isElectron, writeGeneratedOverlayToProject } from '../../services/fileSystem'
 import { enqueuePlaybackTranscode } from '../../services/playbackCache'
+import { enqueueProxyTranscode, isProxyPlaybackEnabled } from '../../services/proxyCache'
 import { unstitchSequenceAsset } from '../../services/comfyAutoImport'
 import MaskGenerationDialog from '../MaskGenerationDialog'
 import OverlayGeneratorModal from '../OverlayGeneratorModal'
+import TopazVideoUpscaleDialog from '../TopazVideoUpscaleDialog'
 import ConfirmDialog from '../ConfirmDialog'
 import NewTimelineDialog from '../NewTimelineDialog'
 // Thumbnail size presets (xs = extra small for denser grid)
@@ -60,6 +62,7 @@ function AssetsPanel() {
   
   // Mask generation state
   const [maskDialogAsset, setMaskDialogAsset] = useState(null) // Asset to generate mask for
+  const [topazUpscaleAsset, setTopazUpscaleAsset] = useState(null)
   // Overlay generator modal (matte/letterbox/vignette/grain)
   const [overlayModalOpen, setOverlayModalOpen] = useState(false)
   const [overlayModalInitialType, setOverlayModalInitialType] = useState('letterbox')
@@ -282,6 +285,13 @@ function AssetsPanel() {
         // Flame-style: transcode video for smooth playback (Electron only)
         if (category === 'video' && isElectron() && currentProjectHandle && newAsset?.absolutePath) {
           enqueuePlaybackTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
+          // Low-res preview proxy (NLE-style). Only spawned when the user
+          // has proxies enabled — otherwise we'd waste disk/cpu on every
+          // import. If they turn proxies on later, the "Generate missing
+          // proxies" button in the preview panel backfills existing videos.
+          if (isProxyPlaybackEnabled()) {
+            enqueueProxyTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
+          }
         }
         
         // Auto-generate thumbnail sprites for videos in background
@@ -483,6 +493,17 @@ function AssetsPanel() {
   // Check if asset can have thumbnails generated (videos only)
   const canGenerateThumbnails = (asset) => {
     return asset.type === 'video' && asset.duration > 0.5
+  }
+
+  const canUpscaleVideo = (asset) => {
+    return asset?.type === 'video'
+  }
+
+  const handleOpenTopazUpscaleDialog = (assetId) => {
+    const asset = assets.find(a => a.id === assetId)
+    if (!asset || !canUpscaleVideo(asset)) return
+    setTopazUpscaleAsset(asset)
+    setContextMenu(null)
   }
 
   
@@ -2010,13 +2031,14 @@ function AssetsPanel() {
             const asset = assets.find(a => a.id === contextMenu.assetId)
             const showMask = asset && canGenerateMask(asset)
             const showThumbnails = asset && canGenerateThumbnails(asset)
+            const showUpscale = asset && canUpscaleVideo(asset)
             const hasSprite = asset?.sprite?.url
             const isGenerating = asset?.spriteGenerating
             const showAudioToggle = asset?.type === 'video' && asset?.hasAudio !== false
             const isAudioDisabled = asset?.audioEnabled === false
             const isStitchedSequence = asset?.sequenceSource?.kind === 'comfy-stitched'
 
-            if (!showMask && !showThumbnails && !showAudioToggle && !isStitchedSequence) return null
+            if (!showMask && !showThumbnails && !showUpscale && !showAudioToggle && !isStitchedSequence) return null
             
             return (
               <>
@@ -2032,6 +2054,16 @@ function AssetsPanel() {
                       <VolumeX className="w-3 h-3 text-sf-error" />
                     )}
                     {isAudioDisabled ? 'Restore audio on video' : 'Remove audio from video'}
+                  </button>
+                )}
+
+                {showUpscale && (
+                  <button
+                    onClick={() => handleOpenTopazUpscaleDialog(contextMenu.assetId)}
+                    className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+                  >
+                    <ArrowUpDown className="w-3 h-3 text-amber-300" />
+                    Upscale Video...
                   </button>
                 )}
 
@@ -2153,6 +2185,13 @@ function AssetsPanel() {
           asset={maskDialogAsset}
           onClose={() => setMaskDialogAsset(null)}
           currentFolderId={currentFolderId}
+        />
+      )}
+
+      {topazUpscaleAsset && (
+        <TopazVideoUpscaleDialog
+          asset={topazUpscaleAsset}
+          onClose={() => setTopazUpscaleAsset(null)}
         />
       )}
 

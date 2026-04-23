@@ -1,7 +1,17 @@
 import { useMemo, useState, useEffect } from 'react'
-import { Search, Info, ChevronDown, ChevronRight } from 'lucide-react'
+import { Search, Info, ChevronDown, ChevronRight, Waves, Radio, Sparkles, CircleDot, Sun, RectangleHorizontal, Plus } from 'lucide-react'
 import { useTimelineStore } from '../../stores/timelineStore'
 import { TRANSITION_TYPES, TRANSITION_DURATIONS, FRAME_RATE, TRANSITION_DEFAULT_SETTINGS, TRANSITION_CATEGORIES } from '../../constants/transitions'
+import { EFFECT_TYPES, getEffectTypeDefinition } from '../../utils/effects'
+
+const EFFECT_PANEL_ICONS = {
+  cameraShake: Waves,
+  chromaticAberration: Radio,
+  filmGrain: Sparkles,
+  glow: Sun,
+  vignette: CircleDot,
+  letterbox: RectangleHorizontal,
+}
 
 const TRANSITION_DEFAULT_DURATION_KEY = 'comfystudio-transition-default-duration-frames'
 
@@ -15,8 +25,10 @@ function EffectsPanel() {
     updateTransition,
     getMaxTransitionDuration,
     getMaxEdgeTransitionDuration,
+    addEffect,
   } = useTimelineStore()
   
+  const [tab, setTab] = useState('transitions') // 'transitions' | 'effects'
   const [search, setSearch] = useState('')
   const [message, setMessage] = useState('')
   const [durationFrames, setDurationFrames] = useState(() => {
@@ -192,6 +204,33 @@ function EffectsPanel() {
     e.dataTransfer.setData('application/x-comfystudio-transition', JSON.stringify(payload))
     e.dataTransfer.effectAllowed = 'copy'
   }
+
+  const handleEffectDragStart = (e, effectTypeId, presetId = null) => {
+    const payload = { effectType: effectTypeId, presetId }
+    e.dataTransfer.setData('application/x-comfystudio-effect', JSON.stringify(payload))
+    e.dataTransfer.effectAllowed = 'copy'
+  }
+
+  const applyEffect = (effectTypeId, presetId = null) => {
+    const def = getEffectTypeDefinition(effectTypeId)
+    if (!def) return
+    if (selectedClips.length === 0) {
+      setMessage('Select one or more clips, then click an effect to apply.')
+      return
+    }
+    const preset = presetId ? def.presets?.find((p) => p.id === presetId) : null
+    const settings = preset
+      ? { ...def.defaults, ...preset.settings }
+      : { ...def.defaults }
+    selectedClips.forEach((clip) => {
+      addEffect(clip.id, { type: effectTypeId, settings })
+    })
+    setMessage(
+      `Added ${def.label}${preset ? ` (${preset.label})` : ''} to ${selectedClips.length} clip${
+        selectedClips.length === 1 ? '' : 's'
+      }.`
+    )
+  }
   
   const TransitionThumbnail = ({ type, icon }) => {
     const overlayStyle = (() => {
@@ -307,6 +346,97 @@ function EffectsPanel() {
   
   return (
     <div className="h-full flex flex-col overflow-y-auto">
+      <div className="flex items-center gap-1 px-3 pt-3">
+        <button
+          type="button"
+          onClick={() => setTab('transitions')}
+          className={`px-3 py-1.5 text-[11px] rounded-t transition-colors ${
+            tab === 'transitions'
+              ? 'bg-sf-dark-800 text-sf-text-primary border-b-2 border-sf-accent'
+              : 'text-sf-text-muted hover:text-sf-text-primary'
+          }`}
+        >
+          Transitions
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('effects')}
+          className={`px-3 py-1.5 text-[11px] rounded-t transition-colors ${
+            tab === 'effects'
+              ? 'bg-sf-dark-800 text-sf-text-primary border-b-2 border-sf-accent'
+              : 'text-sf-text-muted hover:text-sf-text-primary'
+          }`}
+        >
+          Effects
+        </button>
+      </div>
+
+      {tab === 'effects' && (
+        <div className="p-3 space-y-3">
+          <div className="text-[11px] text-sf-text-muted flex items-start gap-2 bg-sf-dark-800/60 border border-sf-dark-700 rounded-lg p-2">
+            <Info className="w-4 h-4 text-sf-text-muted mt-0.5" />
+            <div>
+              Select one or more clips on the timeline, then click an effect or preset
+              to apply. Configure parameters in the Inspector.
+            </div>
+          </div>
+
+          {message && (
+            <div className="text-[11px] text-sf-accent bg-sf-accent/10 border border-sf-accent/20 rounded-lg p-2">
+              {message}
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {EFFECT_TYPES.map((def) => {
+              const Icon = EFFECT_PANEL_ICONS[def.id] || Sparkles
+              return (
+                <div
+                  key={def.id}
+                  className="border border-sf-dark-700 rounded-lg overflow-hidden bg-sf-dark-900"
+                >
+                  <div
+                    draggable
+                    onDragStart={(e) => handleEffectDragStart(e, def.id)}
+                    onClick={() => applyEffect(def.id)}
+                    className="flex items-center gap-2 px-3 py-2 bg-sf-dark-800 hover:bg-sf-dark-700 transition-colors cursor-pointer"
+                    title="Click to apply to selected clips"
+                  >
+                    <Icon className="w-4 h-4 text-sf-accent" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[12px] text-sf-text-primary">{def.label}</div>
+                      {def.description && (
+                        <div className="text-[10px] text-sf-text-muted truncate">{def.description}</div>
+                      )}
+                    </div>
+                    <Plus className="w-3.5 h-3.5 text-sf-text-muted" />
+                  </div>
+
+                  {def.presets && def.presets.length > 0 && (
+                    <div className="p-2 flex flex-wrap gap-1">
+                      {def.presets.map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          draggable
+                          onDragStart={(e) => handleEffectDragStart(e, def.id, preset.id)}
+                          onClick={() => applyEffect(def.id, preset.id)}
+                          className="px-2 py-0.5 rounded text-[10px] border border-sf-dark-600 bg-sf-dark-900 text-sf-text-secondary hover:border-sf-accent hover:text-sf-text-primary transition-colors"
+                          title={`Apply ${def.label} preset "${preset.label}"`}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {tab === 'transitions' && (
       <div className="p-3 space-y-4">
         <div className="flex items-center gap-2">
           <Search className="w-4 h-4 text-sf-text-muted" />
@@ -485,6 +615,7 @@ function EffectsPanel() {
           )}
         </div>
       </div>
+      )}
     </div>
   )
 }

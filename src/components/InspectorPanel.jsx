@@ -15,6 +15,7 @@ import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 import renderCacheService from '../services/renderCache'
+import { commitAdjustmentRender } from '../services/commitRender'
 import { saveRenderCache, deleteRenderCache, writeGeneratedOverlayToProject, isElectron } from '../services/fileSystem'
 import { getKeyframeAtTime, getAnimatedTransform, getAnimatedAdjustmentSettings, EASING_OPTIONS } from '../utils/keyframes'
 import { TEXT_ANIMATION_PRESETS, TEXT_ANIMATION_MODE_OPTIONS } from '../utils/textAnimationPresets'
@@ -28,6 +29,8 @@ import {
   TONAL_ADJUSTMENT_GROUP_KEYS,
 } from '../utils/adjustments'
 import { clearDiskCacheUrl } from './VideoLayerRenderer'
+import EffectsStack from './effects/EffectsStack'
+import { isManagedEffectType } from '../utils/effects'
 import { FRAME_RATE, TRANSITION_TYPES, TRANSITION_DEFAULT_SETTINGS } from '../constants/transitions'
 import {
   DEFAULT_LETTERBOX_ASPECT,
@@ -46,7 +49,7 @@ import {
 const TRANSITION_DEFAULT_DURATION_KEY = 'comfystudio-transition-default-duration-frames'
 const INSPECTOR_EXPANDED_SECTIONS_KEY = 'comfystudio-inspector-expanded-sections-v1'
 const INSPECTOR_EXPANDED_ADJUSTMENT_GROUPS_KEY = 'comfystudio-inspector-expanded-adjustment-groups-v1'
-const DEFAULT_INSPECTOR_EXPANDED_SECTIONS = ['clipInfo', 'transform', 'crop', 'timing', 'effects', 'text', 'style', 'animation', 'adjustments']
+const DEFAULT_INSPECTOR_EXPANDED_SECTIONS = ['clipInfo', 'transform', 'crop', 'timing', 'effects', 'text', 'style', 'animation', 'adjustments', 'commit']
 const DEFAULT_EXPANDED_ADJUSTMENT_GROUPS = ['global']
 const INSPECTOR_SETTINGS_SCOPE = {
   ALL: 'all',
@@ -446,6 +449,15 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   const [isUpdatingLetterbox, setIsUpdatingLetterbox] = useState(false)
   const [letterboxUpdateError, setLetterboxUpdateError] = useState(null)
   const [inspectorSettingsClipboard, setInspectorSettingsClipboard] = useState(null)
+  // Flame-style "commit render" (flatten adjustment clip onto the stack).
+  // Progress shape matches the exporter's onProgress payload.
+  const [commitRenderState, setCommitRenderState] = useState({
+    busy: false,
+    progress: 0,
+    status: '',
+    error: null,
+    lastSuccessAt: 0,
+  })
   const textContentInputRef = useRef(null)
   
   // Get selected clip from timeline store
@@ -469,12 +481,16 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     updateAudioClipProperties,
     toggleKeyframe,
     setKeyframe,
+    removeKeyframe,
+    goToNextKeyframe,
+    goToPrevKeyframe,
     saveToHistory,
     // Effects
     addEffect,
     removeEffect,
     updateEffect,
     toggleEffect,
+    reorderEffect,
     addMaskEffect,
     getClipEffects,
     updateTransition,
@@ -1521,7 +1537,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   const handleRenderCache = useCallback(async () => {
     if (!selectedClip || isRendering) return
     
-    const enabledEffects = (selectedClip.effects || []).filter(e => e.enabled)
+    const enabledEffects = (selectedClip.effects || []).filter(
+      (e) => e.enabled && !isManagedEffectType(e?.type)
+    )
     if (enabledEffects.length === 0) return
 
     // Get the video URL
@@ -2334,8 +2352,24 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
         {expandedSections.includes('effects') && (
           <div className="p-3 space-y-2 border-b border-sf-dark-700">
             {renderAdjustmentBlurControl('Applies blur as an effect on this clip.')}
-            {/* Render existing effects */}
-            {(selectedClip.effects || []).map((effect, index) => (
+
+            {/* Stylistic effects (camera shake, chromatic aberration, film grain, vignette) */}
+            <EffectsStack
+              clip={selectedClip}
+              playheadPosition={playheadPosition}
+              addEffect={addEffect}
+              removeEffect={removeEffect}
+              updateEffect={updateEffect}
+              toggleEffect={toggleEffect}
+              reorderEffect={reorderEffect}
+              setKeyframe={setKeyframe}
+              removeKeyframe={removeKeyframe}
+              goToNextKeyframe={goToNextKeyframe}
+              goToPrevKeyframe={goToPrevKeyframe}
+            />
+
+            {/* Render mask effects inline (managed effects handled by EffectsStack above) */}
+            {(selectedClip.effects || []).filter((e) => !isManagedEffectType(e?.type)).map((effect, index) => (
               <div key={effect.id} className="bg-sf-dark-800 rounded overflow-hidden">
                 {/* Effect Header */}
                 <div className="flex items-center gap-2 px-2 py-1.5 bg-sf-dark-700">
@@ -2415,8 +2449,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
               </div>
             ))}
             
-            {/* Render Cache Section - Only show if clip has effects */}
-            {(selectedClip.effects || []).some(e => e.enabled) && (
+            {/* Render Cache Section - Only show if clip has non-managed (mask) effects enabled */}
+            {(selectedClip.effects || []).some(e => e.enabled && !isManagedEffectType(e?.type)) && (
               <div className="bg-sf-dark-800 rounded p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] text-sf-text-secondary uppercase tracking-wider">Render Cache</span>
@@ -2548,31 +2582,72 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
             )}
             
             {/* No masks available message */}
-            {availableMasks.length === 0 && (selectedClip.effects || []).length === 0 && (
+            {availableMasks.length === 0 && (selectedClip.effects || []).filter((e) => !isManagedEffectType(e?.type)).length === 0 && (
               <div className="text-center py-3">
                 <Wand2 className="w-6 h-6 text-sf-text-muted mx-auto mb-2 opacity-50" />
-                <p className="text-[10px] text-sf-text-muted">No effects applied</p>
+                <p className="text-[10px] text-sf-text-muted">No mask effects applied</p>
                 <p className="text-[9px] text-sf-text-muted mt-1">
                   Generate masks from the Assets panel
                 </p>
               </div>
             )}
             
-            {/* Placeholder for future effects */}
-            <div className="pt-2 border-t border-sf-dark-600">
-              <p className="text-[9px] text-sf-text-muted text-center">
-                More effects coming soon
-              </p>
-            </div>
           </div>
         )}
       </>
     )
   }
 
+  const handleCommitRender = async () => {
+    if (!selectedClip || selectedClip.type !== 'adjustment') return
+    if (commitRenderState.busy) return
+    setCommitRenderState({
+      busy: true,
+      progress: 0,
+      status: 'Preparing commit render…',
+      error: null,
+      lastSuccessAt: 0,
+    })
+    const result = await commitAdjustmentRender(selectedClip.id, {
+      onProgress: ({ status, progress }) => {
+        setCommitRenderState((prev) => ({
+          ...prev,
+          busy: true,
+          status: typeof status === 'string' ? status : prev.status,
+          progress: Number.isFinite(progress) ? Math.max(0, Math.min(100, progress)) : prev.progress,
+        }))
+      },
+    })
+    if (result?.success) {
+      setCommitRenderState({
+        busy: false,
+        progress: 100,
+        status: 'Commit layer added on top.',
+        error: null,
+        lastSuccessAt: Date.now(),
+      })
+    } else {
+      setCommitRenderState({
+        busy: false,
+        progress: 0,
+        status: '',
+        error: result?.error || 'Commit render failed.',
+        lastSuccessAt: 0,
+      })
+    }
+  }
+
   const renderAdjustmentClipInspector = () => {
     if (!selectedClip || !transform) return null
     const adjustments = animatedAdjustments
+    const commitDisabledReason = !isElectron()
+      ? 'Available in the desktop app only.'
+      : !currentProjectHandle
+        ? 'Open a project folder first.'
+        : !(Number(selectedClip?.duration) > 0)
+          ? 'Adjustment clip has zero duration.'
+          : null
+    const commitDisabled = commitRenderState.busy || !!commitDisabledReason
 
     return (
       <>
@@ -3007,6 +3082,21 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
         {expandedSections.includes('effects') && (
           <div className="p-3 space-y-2 border-b border-sf-dark-700">
             {renderAdjustmentBlurControl('Applies blur as an effect on the clips below this layer.')}
+
+            {/* Stylistic effects applied to all layers beneath this adjustment */}
+            <EffectsStack
+              clip={selectedClip}
+              playheadPosition={playheadPosition}
+              addEffect={addEffect}
+              removeEffect={removeEffect}
+              updateEffect={updateEffect}
+              toggleEffect={toggleEffect}
+              reorderEffect={reorderEffect}
+              setKeyframe={setKeyframe}
+              removeKeyframe={removeKeyframe}
+              goToNextKeyframe={goToNextKeyframe}
+              goToPrevKeyframe={goToPrevKeyframe}
+            />
           </div>
         )}
 
@@ -3072,6 +3162,61 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {renderSectionHeader('commit', 'Commit Render', HardDrive)}
+        {expandedSections.includes('commit') && (
+          <div className="p-3 space-y-2 border-b border-sf-dark-700">
+            <p className="text-[10px] text-sf-text-muted leading-relaxed">
+              Flatten this adjustment and everything beneath it into a single video
+              clip on a new &quot;Commits&quot; track. Playback becomes smooth because the
+              compositor plays one layer instead of running live effects. Delete the
+              commit clip to re-expose the live composite for editing.
+            </p>
+            <button
+              type="button"
+              onClick={() => { void handleCommitRender() }}
+              disabled={commitDisabled}
+              title={commitDisabledReason || 'Render this adjustment and its underlying layers to a single clip'}
+              className={`w-full flex items-center justify-center gap-2 py-2 rounded text-xs font-medium transition-colors ${
+                commitDisabled
+                  ? 'bg-sf-dark-800 text-sf-text-muted cursor-not-allowed'
+                  : 'bg-violet-600 hover:bg-violet-500 text-white'
+              }`}
+            >
+              {commitRenderState.busy ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Committing… {Math.round(commitRenderState.progress)}%</span>
+                </>
+              ) : (
+                <>
+                  <HardDrive className="w-3.5 h-3.5" />
+                  <span>Commit render</span>
+                </>
+              )}
+            </button>
+            {commitRenderState.busy && commitRenderState.status && (
+              <p className="text-[10px] text-sf-text-muted truncate" title={commitRenderState.status}>
+                {commitRenderState.status}
+              </p>
+            )}
+            {!commitRenderState.busy && commitRenderState.error && (
+              <div className="flex items-start gap-1.5 text-[10px] text-red-300 bg-red-900/20 border border-red-800/40 rounded px-2 py-1.5">
+                <AlertTriangle className="w-3 h-3 flex-shrink-0 mt-[1px]" />
+                <span className="break-words">{commitRenderState.error}</span>
+              </div>
+            )}
+            {!commitRenderState.busy && !commitRenderState.error && commitRenderState.lastSuccessAt > 0 && (
+              <div className="flex items-start gap-1.5 text-[10px] text-emerald-300 bg-emerald-900/20 border border-emerald-800/40 rounded px-2 py-1.5">
+                <Check className="w-3 h-3 flex-shrink-0 mt-[1px]" />
+                <span>Commit layer added on top. Delete it to edit again.</span>
+              </div>
+            )}
+            {!commitRenderState.busy && commitDisabledReason && (
+              <p className="text-[10px] text-sf-text-muted">{commitDisabledReason}</p>
+            )}
           </div>
         )}
       </>

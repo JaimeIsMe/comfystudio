@@ -17,6 +17,10 @@ import {
 import { useTimelineStore } from './timelineStore'
 import { useAssetsStore } from './assetsStore'
 import { captureAndSaveProjectThumbnail } from '../utils/projectThumbnail'
+import {
+  createDefaultFlowAiProjectData,
+  normalizeFlowAiProjectData,
+} from '../services/flowAiSchema'
 
 /**
  * Resolution presets for new projects
@@ -136,6 +140,8 @@ const normalizeOpenedProjectData = (projectData) => {
 
   const currentTimelineId = normalizedProject.currentTimelineId || normalizedProject.timelines[0].id
   const currentTimeline = normalizedProject.timelines.find((timeline) => timeline.id === currentTimelineId) || normalizedProject.timelines[0]
+
+  normalizedProject.flowAi = normalizeFlowAiProjectData(normalizedProject.flowAi)
 
   return {
     projectData: normalizedProject,
@@ -417,6 +423,7 @@ export const useProjectStore = create(
             timelines: [defaultTimeline], // Array of timelines
             currentTimelineId: defaultTimeline.id,
             assets: [],
+            flowAi: createDefaultFlowAiProjectData(),
           }
           
           // Save project file
@@ -1116,6 +1123,24 @@ export const useProjectStore = create(
             settings: { ...state.currentProject.settings, ...settings },
           } : null,
         }))
+      },
+
+      getFlowAiData: () => {
+        const state = get()
+        return normalizeFlowAiProjectData(state.currentProject?.flowAi)
+      },
+
+      setFlowAiData: (flowAi) => {
+        if (!get().currentProject) return null
+        const normalized = normalizeFlowAiProjectData(flowAi)
+        set((state) => ({
+          currentProject: state.currentProject ? {
+            ...state.currentProject,
+            flowAi: normalized,
+            modified: new Date().toISOString(),
+          } : null,
+        }))
+        return normalized
       },
       
       /**

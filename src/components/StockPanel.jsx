@@ -4,6 +4,7 @@ import useProjectStore from '../stores/projectStore'
 import useAssetsStore from '../stores/assetsStore'
 import { importAsset, isElectron } from '../services/fileSystem'
 import { enqueuePlaybackTranscode } from '../services/playbackCache'
+import { enqueueProxyTranscode, isProxyPlaybackEnabled } from '../services/proxyCache'
 import { getPexelsApiKey } from '../services/pexelsSettings'
 
 const PEXELS_PHOTOS_URL = 'https://api.pexels.com/v1/search'
@@ -205,6 +206,9 @@ function StockPanel() {
         })
         if (isElectron() && currentProjectHandle && newAsset?.absolutePath) {
           enqueuePlaybackTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
+          if (isProxyPlaybackEnabled()) {
+            enqueueProxyTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
+          }
         }
       }
     } catch (err) {

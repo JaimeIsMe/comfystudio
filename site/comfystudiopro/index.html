@@ -6,7 +6,7 @@
     <title>ComfyStudio Pro</title>
     <meta
       name="description"
-      content="AI-powered editing for ComfyUI creators. Open source now, with a dedicated home for releases, demos, and updates."
+      content="AI-powered editing for ComfyUI creators. Download the Windows app directly, then explore releases, demos, and updates."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -120,6 +120,12 @@
         margin: 32px 0 0;
       }
 
+      .cta-stack {
+        display: grid;
+        justify-items: center;
+        gap: 14px;
+      }
+
       .button {
         display: inline-flex;
         align-items: center;
@@ -147,6 +153,19 @@
           linear-gradient(135deg, rgba(110, 167, 255, 0.28), rgba(159, 123, 255, 0.22)),
           rgba(255, 255, 255, 0.06);
         box-shadow: 0 18px 40px rgba(76, 110, 221, 0.22);
+      }
+
+      .cta-note {
+        max-width: 560px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .cta-note a {
+        color: #dbe6ff;
+        text-decoration: underline;
+        text-underline-offset: 3px;
       }
 
       /* ---- SCREENSHOT ---- */
@@ -313,10 +332,27 @@
             <span class="eyebrow-dot" aria-hidden="true"></span>
             Open source &mdash; available now
           </div>
-          <div class="cta-row">
-            <a class="button primary" href="https://github.com/JaimeIsMe/comfystudio/releases" target="_blank" rel="noreferrer">Download latest release</a>
-            <a class="button" href="https://github.com/JaimeIsMe/comfystudio" target="_blank" rel="noreferrer">View on GitHub</a>
-            <a class="button" href="https://x.com/comfystudiopro" target="_blank" rel="noreferrer">Follow on X</a>
+          <div class="cta-stack">
+            <div class="cta-row">
+              <a
+                id="download-button"
+                class="button primary"
+                href="https://github.com/JaimeIsMe/comfystudio/releases"
+              >Download for Windows</a>
+              <a
+                id="releases-button"
+                class="button"
+                href="https://github.com/JaimeIsMe/comfystudio/releases"
+                target="_blank"
+                rel="noreferrer"
+              >All releases</a>
+              <a class="button" href="https://github.com/JaimeIsMe/comfystudio" target="_blank" rel="noreferrer">View on GitHub</a>
+              <a class="button" href="https://x.com/comfystudiopro" target="_blank" rel="noreferrer">Follow on X</a>
+            </div>
+            <p id="download-note" class="cta-note">
+              Windows x64 installer. Need the portable build instead?
+              Grab it from <a href="https://github.com/JaimeIsMe/comfystudio/releases" target="_blank" rel="noreferrer">All releases</a>.
+            </p>
           </div>
 
           <div class="hero-visual">
@@ -400,11 +436,112 @@
       <footer class="footer">
         <div>ComfyStudio Pro</div>
         <div class="footer-links">
-          <a href="https://github.com/JaimeIsMe/comfystudio/releases" target="_blank" rel="noreferrer">Releases</a>
+          <a href="https://github.com/JaimeIsMe/comfystudio/releases" target="_blank" rel="noreferrer">All releases</a>
           <a href="https://github.com/JaimeIsMe/comfystudio" target="_blank" rel="noreferrer">GitHub</a>
           <a href="https://x.com/comfystudiopro" target="_blank" rel="noreferrer">X</a>
         </div>
       </footer>
     </div>
+    <script>
+      (() => {
+        const latestReleaseApiUrl = 'https://api.github.com/repos/JaimeIsMe/comfystudio/releases/latest'
+        const releasesUrl = 'https://github.com/JaimeIsMe/comfystudio/releases'
+
+        const downloadButton = document.getElementById('download-button')
+        const downloadNote = document.getElementById('download-note')
+
+        if (!downloadButton || !downloadNote) return
+
+        const platformSource = [
+          navigator.userAgentData?.platform,
+          navigator.platform,
+          navigator.userAgent,
+        ].filter(Boolean).join(' ')
+
+        const isWindows = /win/i.test(platformSource)
+        const isMac = /mac|darwin/i.test(platformSource)
+        const isLinux = /linux|x11/i.test(platformSource)
+
+        function setDownloadCopy({ version = '', installerUrl = releasesUrl, portableUrl = releasesUrl, directAvailable = false }) {
+          const versionHtml = version ? ` <strong>v${version}</strong>` : ''
+          downloadButton.href = installerUrl
+
+          if (isWindows) {
+            downloadButton.textContent = 'Download for Windows'
+            downloadButton.setAttribute(
+              'aria-label',
+              version ? `Download ComfyStudio ${version} for Windows` : 'Download ComfyStudio for Windows'
+            )
+            if (directAvailable) {
+              downloadNote.innerHTML = `Windows x64 installer for${versionHtml}. Need the portable build instead? Grab it from <a href="${portableUrl}" target="_blank" rel="noreferrer">All releases</a>.`
+            } else {
+              downloadNote.innerHTML = `Windows x64 installer available now. If direct download lookup fails, browse <a href="${releasesUrl}" target="_blank" rel="noreferrer">All releases</a>.`
+            }
+            return
+          }
+
+          downloadButton.textContent = 'Download Windows app'
+          downloadButton.setAttribute(
+            'aria-label',
+            version ? `Download ComfyStudio ${version} for Windows` : 'Download ComfyStudio for Windows'
+          )
+
+          if (isMac) {
+            downloadNote.innerHTML = `Windows x64 is available now${version ? ` as <strong>v${version}</strong>` : ''}. macOS builds are not published yet, but you can still download the current Windows installer or browse <a href="${releasesUrl}" target="_blank" rel="noreferrer">All releases</a>.`
+            return
+          }
+
+          if (isLinux) {
+            downloadNote.innerHTML = `Windows x64 is available now${version ? ` as <strong>v${version}</strong>` : ''}. Linux builds are not published yet, but you can still download the current Windows installer or browse <a href="${releasesUrl}" target="_blank" rel="noreferrer">All releases</a>.`
+            return
+          }
+
+          downloadNote.innerHTML = `Windows x64 is available now${version ? ` as <strong>v${version}</strong>` : ''}. Need another platform later? Keep an eye on <a href="${releasesUrl}" target="_blank" rel="noreferrer">All releases</a>.`
+        }
+
+        function deriveVersion(tagName = '', assetName = '') {
+          const normalizedTag = String(tagName || '').trim().replace(/^v/i, '')
+          if (normalizedTag) return normalizedTag
+          const match = String(assetName || '').match(/ComfyStudio-(\d+\.\d+\.\d+)-/i)
+          return match ? match[1] : ''
+        }
+
+        function applyReleaseMetadata(release) {
+          const assets = Array.isArray(release?.assets) ? release.assets : []
+          const installerAsset = assets.find((asset) => (
+            /setup-x64\.exe$/i.test(asset?.name || '') && !/blockmap$/i.test(asset?.name || '')
+          ))
+          const portableAsset = assets.find((asset) => /portable-x64\.exe$/i.test(asset?.name || ''))
+          const version = deriveVersion(release?.tag_name, installerAsset?.name || portableAsset?.name)
+
+          setDownloadCopy({
+            version,
+            installerUrl: installerAsset?.browser_download_url || releasesUrl,
+            portableUrl: portableAsset?.browser_download_url || releasesUrl,
+            directAvailable: Boolean(installerAsset?.browser_download_url),
+          })
+        }
+
+        setDownloadCopy({})
+
+        fetch(latestReleaseApiUrl, {
+          headers: {
+            Accept: 'application/vnd.github+json',
+          },
+        })
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error(`GitHub API responded with ${response.status}`)
+            }
+            return response.json()
+          })
+          .then((release) => {
+            applyReleaseMetadata(release)
+          })
+          .catch(() => {
+            setDownloadCopy({})
+          })
+      })()
+    </script>
   </body>
 </html>

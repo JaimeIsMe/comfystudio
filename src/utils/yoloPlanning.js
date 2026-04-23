@@ -17,8 +17,25 @@ const STRUCTURED_FIELD_PATTERNS = Object.freeze([
   { key: 'keyframePrompt', pattern: /^(?:keyframe\s*prompt|image\s*action|opening\s*frame|keyframe)\s*:\s*(.*)$/i },
   { key: 'motionPrompt', pattern: /^(?:motion\s*prompt|video\s*action|video\s*prompt|motion)\s*:\s*(.*)$/i },
   { key: 'camera', pattern: /^(?:camera|camera\s*direction|camera\s*setup)\s*:\s*(.*)$/i },
-  { key: 'duration', pattern: /^duration(?:\s*\(s\))?\s*:\s*(.*)$/i },
+  // `length` is a music-video-friendly alias for duration. Ad scripts still
+  // write `Duration:` and both route to the same shot field, so the downstream
+  // parser/normalizer doesn't need to care which was used.
+  { key: 'duration', pattern: /^(?:duration|length)(?:\s*\(s\))?\s*:\s*(.*)$/i },
   { key: 'takes', pattern: /^takes?\s*:\s*(.*)$/i },
+  // Music-video-only: the specific lyric line this shot should sit on. The
+  // ad path never sets this; the music planner reads it out when present to
+  // pin audioStart to the right moment in the song.
+  { key: 'lyricMoment', pattern: /^(?:lyric\s*(?:moment|cue|line)?|lyrics?)\s*:\s*(.*)$/i },
+  // Music-video-only: per-shot artist override that picks a cast member by
+  // slug/label (e.g. "rose", "jake", "both", "all"). Ignored when the cast
+  // roster is empty or when no match is found — the planner then falls back
+  // to the lyric-tag resolver and finally to the default (first cast entry).
+  { key: 'artist', pattern: /^(?:artist|singer|performer|cast|vocalist)\s*:\s*(.*)$/i },
+  // Music-video-only: explicit audio offset (Phase 8). Accepted forms include
+  // "0:15", "15s", "00:00:15,500" — see parseTimeSpecToSeconds in
+  // musicVideoShotConfig.js. When present, the music planner pins audioStart
+  // to this value verbatim, skipping the Lyric moment / SRT-fuzzy fallback.
+  { key: 'startAt', pattern: /^(?:start\s*at|audio\s*start|start)\s*:\s*(.*)$/i },
 ])
 
 function parseSceneHeadingLine(line = '') {
@@ -175,7 +192,7 @@ function buildStructuredSceneSummary(sceneLabel, sceneContext, fallbackText = ''
   )
 }
 
-function parseStructuredDirectorScript(script = '', options = {}) {
+export function parseStructuredDirectorScript(script = '', options = {}) {
   const normalized = String(script || '').replace(/\r\n/g, '\n').trim()
   if (!normalized) return null
 
@@ -249,6 +266,20 @@ function parseStructuredDirectorScript(script = '', options = {}) {
       cameraPresetId: 'auto',
       shotType,
       cameraDirection,
+      // Music-video-only pass-through. The ad flow never sets lyricMoment; the
+      // music planner reads it downstream to align audioStart to a lyric.
+      lyricMoment: sanitizeSnippet(currentShot.lyricMoment || '', 220),
+      // Music-video-only pass-through. Resolved to actual cast asset ids in
+      // the music planner (src/components/GenerateWorkspace.jsx).
+      artistRaw: sanitizeSnippet(currentShot.artist || '', 120),
+      // Music-video-only pass-through (Phase 8). The music planner calls
+      // parseTimeSpecToSeconds on this to pin audioStart, bypassing the
+      // Lyric-moment fuzzy lookup when it's present and parseable.
+      startAtRaw: sanitizeSnippet(currentShot.startAt || '', 32),
+      // Keyframe + motion prompts kept raw so the music planner can compose
+      // separate shotPrompt (motion) and referenceImagePrompt (keyframe) from them.
+      keyframePromptRaw: sanitizeSnippet(currentShot.keyframePrompt || '', 320),
+      motionPromptRaw: sanitizeSnippet(currentShot.motionPrompt || '', 320),
       locked: false,
     })
 
@@ -321,6 +352,11 @@ function parseStructuredDirectorScript(script = '', options = {}) {
         camera: '',
         duration: '',
         takes: '',
+        // Music-video-only (null-op for ads). Collected by the shared
+        // structured-field matcher — see STRUCTURED_FIELD_PATTERNS above.
+        lyricMoment: '',
+        artist: '',
+        startAt: '',
         notes: '',
       }
       continue
@@ -434,6 +470,10 @@ export function flattenYoloPlanVariants(plan = []) {
   for (const scene of plan || []) {
     const sceneBody = String(scene?.contextText || getSceneBodyText(scene?.rawText || scene?.summary || '')).trim()
     const strictConsistency = String(scene?.styleNotes || '').toLowerCase().includes('consistency mode: strict')
+    // Pass identity (master / alt_performance / environmental_broll / detail_broll)
+    // is stamped onto the scene by buildYoloMusicPlan. Pass it through so the
+    // queue layer can tag generated assets with their origin pass.
+    const scenePass = scene?.pass && typeof scene.pass === 'object' ? scene.pass : null
 
     for (const shot of scene?.shots || []) {
       const takes = Math.max(1, Number(shot?.takesPerAngle) || 1)
@@ -497,6 +537,16 @@ export function flattenYoloPlanVariants(plan = []) {
             prompt: sanitizeSnippet(videoPrompt, 1100),
             videoPrompt: sanitizeSnippet(videoPrompt, 1100),
             storyboardPrompt: sanitizeSnippet(storyboardPrompt, 1100),
+            // Music-video-only pass-throughs. Unset for ads. The queue code
+            // reads resolvedArtistAssetIds (ordered list of up to 2 cast asset
+            // ids) in music mode to override the default-artist reference.
+            resolvedArtistAssetIds: Array.isArray(shot?.resolvedArtistAssetIds)
+              ? shot.resolvedArtistAssetIds.filter(Boolean).slice(0, 2)
+              : [],
+            // Origin pass: { type, altSlotId, altLabel }. Null for ad mode and
+            // legacy plans that pre-date pass tagging. Consumers of this field
+            // must tolerate null and fall back to the pre-pass behavior.
+            pass: scenePass,
           })
         }
       }

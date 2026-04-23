@@ -1,0 +1,49 @@
+{
+  "3": {
+    "inputs": {
+      "file": "running_horse.mp4"
+    },
+    "class_type": "LoadVideo",
+    "_meta": {
+      "title": "Load Video"
+    }
+  },
+  "4": {
+    "inputs": {
+      "filename_prefix": "video/Topaz",
+      "format": "auto",
+      "codec": "auto",
+      "video": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  },
+  "5": {
+    "inputs": {
+      "upscaler_enabled": true,
+      "upscaler_model": "Starlight Precise 2.5",
+      "upscaler_resolution": "4K (2160p)",
+      "upscaler_creativity": "low",
+      "interpolation_enabled": false,
+      "interpolation_model": "apo-8",
+      "interpolation_slowmo": 1,
+      "interpolation_frame_rate": 60,
+      "interpolation_duplicate": false,
+      "interpolation_duplicate_threshold": 0.01,
+      "dynamic_compression_level": "Low",
+      "video": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "TopazVideoEnhance",
+    "_meta": {
+      "title": "Topaz Video Enhance"
+    }
+  }
+}

@@ -3,6 +3,9 @@
  * Phase 1 intentionally focuses on required dependencies only.
  */
 
+import { TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID } from './topazVideoUpscaleConfig'
+import { MUSIC_VIDEO_SHOT_WORKFLOW_ID, VOCAL_EXTRACT_WORKFLOW_ID } from './musicVideoShotConfig'
+
 const COMFY_REGISTRY_URL = 'https://registry.comfy.org'
 const NANO_BANANA_2_FALLBACK_ESTIMATED_CREDITS = Object.freeze({
   // Resolution-dependent partner-node pricing currently spans roughly $0.0696-$0.123 per image.
@@ -197,6 +200,162 @@ export const WORKFLOW_DEPENDENCY_PACKS = Object.freeze({
     ]),
     requiredModels: Object.freeze([]),
     requiresComfyOrgApiKey: true,
+    docsUrl: COMFY_REGISTRY_URL,
+  }),
+
+  [TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID]: Object.freeze({
+    id: TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID,
+    displayName: 'Topaz Video Upscale',
+    requiredNodes: Object.freeze([
+      { classType: 'LoadVideo' },
+      { classType: 'TopazVideoEnhance' },
+      { classType: 'SaveVideo' },
+    ]),
+    requiredModels: Object.freeze([]),
+    requiresComfyOrgApiKey: true,
+    docsUrl: COMFY_REGISTRY_URL,
+  }),
+
+  [MUSIC_VIDEO_SHOT_WORKFLOW_ID]: Object.freeze({
+    id: MUSIC_VIDEO_SHOT_WORKFLOW_ID,
+    displayName: 'Music Video Shot (LTX 2.3 + Audio)',
+    requiredNodes: Object.freeze([
+      // LTX 2.3 audio-conditioned graph
+      { classType: 'UNETLoader' },
+      { classType: 'DualCLIPLoader' },
+      { classType: 'VAELoader' },
+      { classType: 'VAELoaderKJ' },
+      { classType: 'LTX2AttentionTunerPatch' },
+      { classType: 'LTX2SamplingPreviewOverride' },
+      { classType: 'LTX2_NAG' },
+      { classType: 'LTXVAudioVAEEncode' },
+      { classType: 'LTXVChunkFeedForward' },
+      { classType: 'LTXVConcatAVLatent' },
+      { classType: 'LTXVConditioning' },
+      { classType: 'LTXVImgToVideoInplace' },
+      { classType: 'LTXVLatentUpsampler' },
+      { classType: 'LTXVPreprocess' },
+      { classType: 'LTXVSeparateAVLatent' },
+      { classType: 'LatentUpscaleModelLoader' },
+      { classType: 'TextGenerateLTX2Prompt' },
+      // Audio handling + vocal stem fallback
+      { classType: 'LoadAudio' },
+      { classType: 'TrimAudioDuration' },
+      { classType: 'MelBandRoFormerModelLoader' },
+      { classType: 'MelBandRoFormerSampler' },
+      // KJ Nodes helpers
+      { classType: 'ImageResizeKJv2' },
+      { classType: 'ResizeImageMaskNode' },
+      { classType: 'ResizeImagesByLongerEdge' },
+      { classType: 'GetImageSizeAndCount' },
+      { classType: 'SimpleCalculatorKJ' },
+      { classType: 'LazySwitchKJ' },
+      { classType: 'PathchSageAttentionKJ' },
+      // rgthree
+      { classType: 'Power Lora Loader (rgthree)' },
+      // easy-use / comfy switch
+      { classType: 'ComfySwitchNode' },
+      // Output
+      { classType: 'CreateVideo' },
+      { classType: 'SaveVideo' },
+    ]),
+    requiredModels: Object.freeze([
+      {
+        classType: 'UNETLoader',
+        inputKey: 'unet_name',
+        filename: 'ltx-2.3-22b-distilled_transformer_only_fp8_scaled.safetensors',
+        targetSubdir: 'diffusion_models',
+      },
+      {
+        classType: 'VAELoader',
+        inputKey: 'vae_name',
+        filename: 'LTX23_video_vae_bf16.safetensors',
+        targetSubdir: 'vae',
+      },
+      {
+        classType: 'VAELoader',
+        inputKey: 'vae_name',
+        filename: 'taeltx2_3.safetensors',
+        targetSubdir: 'vae',
+      },
+      {
+        classType: 'VAELoaderKJ',
+        inputKey: 'vae_name',
+        filename: 'LTX23_audio_vae_bf16.safetensors',
+        targetSubdir: 'vae',
+      },
+      {
+        classType: 'DualCLIPLoader',
+        inputKey: 'clip_name1',
+        filename: 'gemma_3_12B_it_fp8_scaled.safetensors',
+        targetSubdir: 'text_encoders',
+      },
+      {
+        classType: 'DualCLIPLoader',
+        inputKey: 'clip_name2',
+        filename: 'ltx-2.3_text_projection_bf16.safetensors',
+        targetSubdir: 'text_encoders',
+      },
+      {
+        classType: 'LatentUpscaleModelLoader',
+        inputKey: 'model_name',
+        filename: 'ltx-2.3-spatial-upscaler-x2-1.1.safetensors',
+        targetSubdir: 'upscale_models',
+      },
+      {
+        classType: 'MelBandRoFormerModelLoader',
+        inputKey: 'model_name',
+        filename: 'MelBandRoformer_fp16.safetensors',
+        targetSubdir: 'audio_checkpoints',
+      },
+      // LoRAs — Power Lora Loader holds them in its lora_1..lora_4 slots.
+      // The dep checker scans by basename, so sub-folder prefixes in the
+      // workflow (e.g. "LTX\\LTX-2\\ID-Lora\\...") don't affect matching.
+      {
+        classType: 'Power Lora Loader (rgthree)',
+        inputKey: 'lora',
+        filename: 'LTX-2.3-22b-AV-LoRA-talking-head-v1.safetensors',
+        targetSubdir: 'loras',
+      },
+      {
+        classType: 'Power Lora Loader (rgthree)',
+        inputKey: 'lora',
+        filename: 'Ltx2.3-Licon-VBVR-I2V-96000-R32.safetensors',
+        targetSubdir: 'loras',
+      },
+      {
+        classType: 'Power Lora Loader (rgthree)',
+        inputKey: 'lora',
+        filename: 'LTX-2-Image2Vid-Adapter.safetensors',
+        targetSubdir: 'loras',
+      },
+      {
+        classType: 'Power Lora Loader (rgthree)',
+        inputKey: 'lora',
+        filename: 'ltx-2-19b-lora-camera-control-dolly-out.safetensors',
+        targetSubdir: 'loras',
+      },
+    ]),
+    docsUrl: COMFY_REGISTRY_URL,
+  }),
+
+  [VOCAL_EXTRACT_WORKFLOW_ID]: Object.freeze({
+    id: VOCAL_EXTRACT_WORKFLOW_ID,
+    displayName: 'Vocal Extract (Mel-Band RoFormer)',
+    requiredNodes: Object.freeze([
+      { classType: 'LoadAudio' },
+      { classType: 'MelBandRoFormerModelLoader' },
+      { classType: 'MelBandRoFormerSampler' },
+      { classType: 'SaveAudioMP3' },
+    ]),
+    requiredModels: Object.freeze([
+      {
+        classType: 'MelBandRoFormerModelLoader',
+        inputKey: 'model_name',
+        filename: 'MelBandRoformer_fp16.safetensors',
+        targetSubdir: 'audio_checkpoints',
+      },
+    ]),
     docsUrl: COMFY_REGISTRY_URL,
   }),
 

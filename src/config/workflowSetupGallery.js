@@ -3,6 +3,8 @@
  * Thumbnails are optional; gradients + icons provide a Comfy-like card feel without assets.
  */
 import { ALL_WORKFLOWS, getBundledWorkflowPath } from './workflowRegistry'
+import { TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID } from './topazVideoUpscaleConfig'
+import { MUSIC_VIDEO_SHOT_WORKFLOW_ID, VOCAL_EXTRACT_WORKFLOW_ID } from './musicVideoShotConfig'
 
 function coverPath(filename) {
   return getBundledWorkflowPath(`setup-covers/${filename}`)
@@ -12,9 +14,11 @@ const CLOUD_WORKFLOW_IDS = new Set([
   'kling-o3-i2v',
   'grok-video-i2v',
   'vidu-q2-i2v',
+  TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID,
   'nano-banana-2',
   'grok-text-to-image',
   'seedream-5-lite-image-edit',
+  'google-gemini-flash-lite',
 ])
 
 /** @type {Record<string, { gradient: string, icon: string, thumbnailSrc?: string, extraBadges?: string[] }>} */
@@ -48,6 +52,21 @@ const VISUAL_BY_WORKFLOW_ID = {
     icon: 'cloud',
     extraBadges: ['I2V'],
     thumbnailSrc: coverPath('vidu-q2-i2v.webp'),
+  },
+  [TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID]: {
+    gradient: 'from-amber-500/25 via-yellow-900/20 to-sf-dark-950',
+    icon: 'cloud',
+    extraBadges: ['Upscale'],
+  },
+  [MUSIC_VIDEO_SHOT_WORKFLOW_ID]: {
+    gradient: 'from-pink-500/25 via-purple-900/25 to-sf-dark-950',
+    icon: 'music',
+    extraBadges: ['I2V', 'Lip-sync', 'Director Mode'],
+  },
+  [VOCAL_EXTRACT_WORKFLOW_ID]: {
+    gradient: 'from-teal-500/25 via-cyan-900/25 to-sf-dark-950',
+    icon: 'music',
+    extraBadges: ['Preprocess', 'Vocal stem'],
   },
   'multi-angles': {
     gradient: 'from-fuchsia-500/25 via-purple-900/25 to-sf-dark-950',
@@ -103,6 +122,11 @@ const VISUAL_BY_WORKFLOW_ID = {
     extraBadges: ['Audio'],
     thumbnailSrc: coverPath('music-gen.webp'),
   },
+  'google-gemini-flash-lite': {
+    gradient: 'from-sky-500/20 via-cyan-900/20 to-sf-dark-950',
+    icon: 'cloud',
+    extraBadges: ['Prompt'],
+  },
   'mask-gen': {
     gradient: 'from-purple-500/30 via-violet-900/25 to-sf-dark-950',
     icon: 'scanline',
@@ -122,6 +146,9 @@ const LONG_DESCRIPTIONS = {
   'kling-o3-i2v': 'Cloud image-to-video using the Kling 3.0 Omni model via the Comfy Partner API. Premium quality motion and coherence, especially for people and characters. Requires a Comfy Partner API key and credits.',
   'grok-video-i2v': 'Cloud image-to-video powered by xAI Grok Imagine Video (Beta). Strong at stylised and cinematic shots. Requires a Grok / Comfy Partner API key.',
   'vidu-q2-i2v': 'Cloud image-to-video with Vidu Q2 Pro Fast. Tuned for quick turnaround and consistent character motion. Requires a Comfy Partner API key.',
+  [TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID]: 'Cloud video upscaling with Topaz Video Enhance. Feed it an existing video clip and upscale it with Starlight Precise 2.5 or the Astra variants. Requires a Comfy Partner API key.',
+  [MUSIC_VIDEO_SHOT_WORKFLOW_ID]: 'Per-shot music video generator built on LTX 2.3 22B. Takes a reference still and an audio segment and produces a lip-synced shot. Used by Director Mode to render an entire music video one shot at a time. Heavy local workflow — needs a 24GB+ GPU and the LTX 2.3 model stack.',
+  [VOCAL_EXTRACT_WORKFLOW_ID]: 'One-time preprocessing workflow that isolates vocals from a mixed song using Mel-Band RoFormer. Runs once when you import a song into a music-video project, so every shot afterward can be conditioned on clean vocals without re-running separation each time.',
   'multi-angles': 'One-click character turnaround. Give it one character image and it generates 8 matching camera angles so you can build consistent shot sheets or look-dev reference sets.',
   'multi-angles-scene': 'Same idea as the character turnaround, but for environments and scenes. Produces 8 camera angles of a single scene image for coverage, storyboards, or establishing shots.',
   'image-edit': 'Local image editing with Qwen Image Edit 2509. Paint a mask (or describe the change) and apply targeted text-prompted edits to a still image while keeping the rest intact.',
@@ -131,6 +158,7 @@ const LONG_DESCRIPTIONS = {
   'grok-text-to-image': 'Cloud text-to-image using xAI Grok Imagine (Beta). Strong stylistic range and text rendering. Requires a Grok / Comfy Partner API key.',
   'seedream-5-lite-image-edit': 'Cloud image edit using ByteDance Seedream 5.0 Lite. Lower cost per generation and a good fit for batch edits. Requires a Comfy Partner API key.',
   'music-gen': 'Local music generation with ACE-Step. Feed it a short tag list and optional lyrics and it produces a short musical clip you can drop straight into a timeline.',
+  'google-gemini-flash-lite': 'Cloud prompt helper using Gemini 3.1 Flash Lite. Feed it a rough brief and optional image reference and it returns a cleaner, more descriptive prompt you can pass downstream into image or video generation. Requires a Comfy Partner API key.',
   'mask-gen': 'Text-prompted video/image masking using SAM 3 plus MatAnyone. Describe the subject you want isolated and it produces an alpha mask you can use for rotoscoping, replacement, or compositing.',
 }
 
@@ -142,6 +170,8 @@ function categoryBaseBadge(category) {
       return 'Image'
     case 'audio':
       return 'Audio'
+    case 'text':
+      return 'Text'
     default:
       return 'Workflow'
   }

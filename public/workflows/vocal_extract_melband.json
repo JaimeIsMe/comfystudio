@@ -1,0 +1,34 @@
+{
+  "10": {
+    "inputs": {
+      "audio": "input_track.mp3"
+    },
+    "class_type": "LoadAudio",
+    "_meta": { "title": "Load Input Track (mixed song)" }
+  },
+  "20": {
+    "inputs": {
+      "model_name": "MelBandRoformer_fp16.safetensors"
+    },
+    "class_type": "MelBandRoFormerModelLoader",
+    "_meta": { "title": "Mel-Band RoFormer Model Loader" }
+  },
+  "30": {
+    "inputs": {
+      "model": ["20", 0],
+      "audio": ["10", 0]
+    },
+    "class_type": "MelBandRoFormerSampler",
+    "_meta": { "title": "Mel-Band RoFormer (Vocal Isolation)" }
+  },
+  "40": {
+    "inputs": {
+      "filename_prefix": "audio/vocal_stem",
+      "quality": "V0",
+      "audioUI": "",
+      "audio": ["30", 0]
+    },
+    "class_type": "SaveAudioMP3",
+    "_meta": { "title": "Save Vocal Stem (MP3)" }
+  }
+}

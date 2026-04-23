@@ -1,3 +1,6 @@
+import { TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID } from './topazVideoUpscaleConfig'
+import { MUSIC_VIDEO_SHOT_WORKFLOW_ID, VOCAL_EXTRACT_WORKFLOW_ID } from './musicVideoShotConfig'
+
 export const SHOT_CATEGORIES = {
   Shot: ['Extreme close-up', 'Close-up', 'Medium close-up', 'Medium shot', 'Medium wide', 'Wide shot', 'Extreme wide', 'Over-the-shoulder', 'POV', 'Two-shot', 'Insert shot'],
   Movement: ['Static', 'Pan', 'Tilt', 'Dolly in', 'Dolly out', 'Push in', 'Pull out', 'Tracking shot', 'Crane shot', 'Steadicam', 'Handheld', 'Drone', 'Aerial', 'Orbit', 'Whip pan'],
@@ -73,18 +76,21 @@ export const YOLO_AD_PROFILES = Object.freeze({
   }),
 })
 
+// Music Video uses an audio-conditioned per-shot LTX 2.3 workflow that can't be
+// swapped for cloud i2v — lip-sync grounding only exists on the local model.
+// The only knob is storyboard quality; the video pass workflow is fixed.
 export const YOLO_MUSIC_PROFILES = Object.freeze({
   draft: Object.freeze({
     storyboardWorkflowId: 'z-image-turbo',
-    videoWorkflowId: 'ltx23-i2v',
+    videoWorkflowId: MUSIC_VIDEO_SHOT_WORKFLOW_ID,
   }),
   balanced: Object.freeze({
     storyboardWorkflowId: 'nano-banana-2',
-    videoWorkflowId: 'ltx23-i2v',
+    videoWorkflowId: MUSIC_VIDEO_SHOT_WORKFLOW_ID,
   }),
   premium: Object.freeze({
     storyboardWorkflowId: 'nano-banana-2',
-    videoWorkflowId: 'kling-o3-i2v',
+    videoWorkflowId: MUSIC_VIDEO_SHOT_WORKFLOW_ID,
   }),
 })
 
@@ -139,7 +145,11 @@ const WORKFLOW_DISPLAY_LABELS = Object.freeze({
   'kling-o3-i2v': 'Kling O3 Omni',
   'grok-video-i2v': 'Grok Imagine Video',
   'vidu-q2-i2v': 'Vidu Q2',
+  [TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID]: 'Topaz Video Upscale',
+  [MUSIC_VIDEO_SHOT_WORKFLOW_ID]: 'Music Video Shot (LTX 2.3 + Audio)',
+  [VOCAL_EXTRACT_WORKFLOW_ID]: 'Vocal Extract (Mel-Band)',
   'grok-text-to-image': 'Grok Imagine',
+  'google-gemini-flash-lite': 'Prompt Helper (Gemini 3.1 Flash Lite)',
   'seedream-5-lite-image-edit': 'Seedream 5.0 Lite',
   'image-edit-model-product': 'Qwen Image Edit 2509 (Model + Product)',
   'mask-gen': 'Mask Generation',
@@ -243,7 +253,27 @@ const WORKFLOW_HARDWARE = Object.freeze({
     tierId: 'cloud',
     runtime: 'cloud',
   },
+  [TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID]: {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
+  [MUSIC_VIDEO_SHOT_WORKFLOW_ID]: {
+    tierId: 'pro',
+    runtime: 'local',
+    minimumVramGb: 24,
+    recommendedVramGb: 32,
+  },
+  [VOCAL_EXTRACT_WORKFLOW_ID]: {
+    tierId: 'standard',
+    runtime: 'local',
+    minimumVramGb: 6,
+    recommendedVramGb: 8,
+  },
   'seedream-5-lite-image-edit': {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
+  'google-gemini-flash-lite': {
     tierId: 'cloud',
     runtime: 'cloud',
   },

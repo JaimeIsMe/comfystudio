@@ -10,7 +10,37 @@
    ============================================= */
 
 :root {
-  /* ---- Midnight (default) ---- */
+  /* ---- High Contrast (default) ---- */
+  --sf-dark-950: 0 0 0;
+  --sf-dark-900: 10 10 12;
+  --sf-dark-800: 20 20 24;
+  --sf-dark-700: 34 34 40;
+  --sf-dark-600: 52 52 58;
+  --sf-dark-500: 80 80 88;
+  --sf-dark-400: 110 110 120;
+
+  --sf-accent: 64 144 224;
+  --sf-accent-hover: 80 160 240;
+  --sf-accent-muted: 48 120 200;
+
+  --sf-blue: 64 144 224;
+  --sf-blue-hover: 48 120 200;
+  --sf-blue-muted: 40 100 180;
+
+  --sf-clip-video: 50 140 170;
+  --sf-clip-audio: 34 120 80;
+  --sf-clip-text: 64 144 224;
+
+  --sf-success: 34 197 94;
+  --sf-warning: 64 144 224;
+  --sf-error: 239 68 68;
+
+  --sf-text-primary: 255 255 255;
+  --sf-text-secondary: 200 200 208;
+  --sf-text-muted: 148 148 160;
+}
+
+[data-theme="midnight"] {
   --sf-dark-950: 13 13 13;
   --sf-dark-900: 26 26 26;
   --sf-dark-800: 36 36 36;
@@ -30,10 +60,6 @@
   --sf-clip-video: 61 112 128;
   --sf-clip-audio: 45 95 74;
   --sf-clip-text: 86 92 107;
-
-  --sf-success: 34 197 94;
-  --sf-warning: 86 92 107;
-  --sf-error: 239 68 68;
 
   --sf-text-primary: 229 229 229;
   --sf-text-secondary: 163 163 163;
@@ -64,32 +90,6 @@
   --sf-text-primary: 222 222 230;
   --sf-text-secondary: 158 158 170;
   --sf-text-muted: 110 110 124;
-}
-
-[data-theme="high-contrast"] {
-  --sf-dark-950: 0 0 0;
-  --sf-dark-900: 10 10 12;
-  --sf-dark-800: 20 20 24;
-  --sf-dark-700: 34 34 40;
-  --sf-dark-600: 52 52 58;
-  --sf-dark-500: 80 80 88;
-  --sf-dark-400: 110 110 120;
-
-  --sf-accent: 64 144 224;
-  --sf-accent-hover: 80 160 240;
-  --sf-accent-muted: 48 120 200;
-
-  --sf-blue: 64 144 224;
-  --sf-blue-hover: 48 120 200;
-  --sf-blue-muted: 40 100 180;
-
-  --sf-clip-video: 50 140 170;
-  --sf-clip-audio: 34 120 80;
-  --sf-clip-text: 64 144 224;
-
-  --sf-text-primary: 255 255 255;
-  --sf-text-secondary: 200 200 208;
-  --sf-text-muted: 148 148 160;
 }
 
 [data-theme="arctic"] {

@@ -19,7 +19,12 @@ import { comfyui } from '../services/comfyui'
 import { markPromptHandledByApp } from '../services/comfyPromptGuard'
 import { getProjectFileUrl, importAsset, isElectron } from '../services/fileSystem'
 import { enqueuePlaybackTranscode } from '../services/playbackCache'
-import { buildYoloPlanFromScript, flattenYoloPlanVariants } from '../utils/yoloPlanning'
+import { enqueueProxyTranscode, isProxyPlaybackEnabled } from '../services/proxyCache'
+import {
+  buildYoloPlanFromScript,
+  flattenYoloPlanVariants,
+  parseStructuredDirectorScript,
+} from '../utils/yoloPlanning'
 import { checkWorkflowDependencies, buildMissingDependencyClipboardText } from '../services/workflowDependencies'
 import { openBundledWorkflowInComfyUi } from '../services/workflowSetupManager'
 import {
@@ -50,6 +55,31 @@ import {
   getWorkflowHardwareInfo,
   getWorkflowTierMeta,
 } from '../config/generateWorkspaceConfig'
+import {
+  MUSIC_VIDEO_AUDIO_KIND_OPTIONS,
+  MUSIC_VIDEO_CAST_ROLE_OPTIONS,
+  MUSIC_VIDEO_SCRIPT_TEMPLATE,
+  MUSIC_VIDEO_SHOT_WORKFLOW_ID,
+  VOCAL_EXTRACT_WORKFLOW_ID,
+  clampMusicVideoShotLength,
+  computeCoverageGaps,
+  detectTimedLyricsFormat,
+  estimateLyricLineStartSeconds,
+  findLyricLineIndex,
+  findTimedLyricLineByText,
+  formatSecondsAsMMSS,
+  getMusicVideoAudioKindOption,
+  getMusicVideoShotTypeOption,
+  normalizeCastSlug,
+  normalizeMusicVideoShot,
+  parseLyricLines,
+  parseLyricsWithTags,
+  parseTimedLyrics,
+  parseTimeSpecToSeconds,
+  resolveCastMembersFromNameList,
+  resolveMusicVideoShotTypeFromText,
+  splitCastNameList,
+} from '../config/musicVideoShotConfig'
 
 const CATEGORY_ICONS = { video: Video, image: ImageIcon, audio: Music }
 const DIRECTOR_SUBTABS = [
@@ -81,6 +111,7 @@ const SINGLE_VIDEO_WORKFLOW_IDS = new Set([
   'kling-o3-i2v',
   'grok-video-i2v',
   'vidu-q2-i2v',
+  MUSIC_VIDEO_SHOT_WORKFLOW_ID,
 ])
 
 const WORKFLOW_RUNTIME_GROUPS = Object.freeze({
@@ -427,6 +458,11 @@ function normalizeShotForScene(sceneId, shot, shotIndex, fallback = {}) {
   )
 
   return {
+    // Preserve unknown keys first (music-video payload like musicShotType,
+    // audioStart, length, shotPrompt, referenceImagePrompt lives here).
+    // Known keys below override so the normalizer stays authoritative for
+    // pipeline-critical fields.
+    ...(shot && typeof shot === 'object' ? shot : {}),
     id: `${sceneId}_SH${shotIndex + 1}`,
     index: shotIndex + 1,
     beat: videoBeat, // Legacy alias retained for old persisted plans.
@@ -463,65 +499,811 @@ function normalizePersistedYoloPlan(rawPlan = []) {
   })
 }
 
-function splitLyricsIntoBlocks(lyricsText = '', targetBlockCount = 8) {
-  const lines = String(lyricsText || '')
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !(line.startsWith('[') && line.endsWith(']')))
+/**
+ * Compose the motion/video prompt that gets written into the LTX 2.3
+ * audio-conditioned workflow (node 1624). Built from the script's Motion
+ * prompt + shot-type suffix + concept/style continuity lines + an optional
+ * lyric cue (so the encoder has the line the singer is mouthing).
+ */
+function composeMusicShotVideoPrompt({
+  motionPromptRaw = '',
+  shotTypeOption = null,
+  lyricMoment = '',
+  concept = '',
+  styleNotes = '',
+}) {
+  const lyricCue = String(lyricMoment || '')
+    .replace(/["'\u2018\u2019\u201C\u201D]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240)
+  const motion = String(motionPromptRaw || '').trim()
+  const conceptLine = String(concept || '').trim()
+  const styleLine = String(styleNotes || '').trim()
+  const shotSuffix = String(shotTypeOption?.promptSuffix || '').trim()
 
-  if (lines.length === 0) return []
-
-  const blockCount = Math.max(1, Math.min(24, Number(targetBlockCount) || 8))
-  const chunkSize = Math.max(1, Math.ceil(lines.length / blockCount))
-  const blocks = []
-
-  for (let index = 0; index < lines.length; index += chunkSize) {
-    const chunk = lines.slice(index, index + chunkSize)
-    if (chunk.length === 0) continue
-    blocks.push(chunk.join(' '))
-  }
-
-  return blocks
+  const parts = [
+    motion,
+    shotSuffix,
+    lyricCue ? `Lyric moment: "${lyricCue}".` : '',
+    conceptLine ? `Concept: ${conceptLine}.` : '',
+    styleLine ? `Style: ${styleLine}.` : '',
+    'Maintain consistent subject identity, wardrobe, and lighting across adjacent shots unless the script calls for a cut.',
+  ].filter(Boolean)
+  return parts.join(' ')
 }
 
-function buildMusicVideoScriptFromLyrics(lyricsText = '', options = {}) {
+/**
+ * Compose the reference-image prompt used by the storyboard pass to generate
+ * the per-shot keyframe still. Built from the script's Keyframe prompt plus
+ * shot-type-specific framing cues (close / wide / b-roll).
+ *
+ * This is the prompt the stills workflow (nano-banana-2 / z-image-turbo)
+ * renders against; the artist reference image (if set) anchors identity.
+ */
+function composeMusicShotReferencePrompt({
+  keyframePromptRaw = '',
+  shotTypeOption = null,
+  concept = '',
+  styleNotes = '',
+}) {
+  const keyframe = String(keyframePromptRaw || '').trim()
+  const conceptLine = String(concept || '').trim()
+  const styleLine = String(styleNotes || '').trim()
+  const shotFocus = shotTypeOption?.id === 'b_roll'
+    ? 'Environment / cutaway composition, no performer singing on camera.'
+    : shotTypeOption?.id === 'performance_wide'
+      ? 'Artist visible in a wider framing, natural body posture, readable expression.'
+      : 'Artist visible with a readable face, natural performance posture.'
+
+  const parts = [
+    keyframe,
+    shotFocus,
+    conceptLine ? `Concept: ${conceptLine}.` : '',
+    styleLine ? `Style: ${styleLine}.` : '',
+    'Render one cinematic keyframe still, no collage, no split screen, no multiple panels.',
+    'Maintain consistent subject identity and wardrobe across the video.',
+  ].filter(Boolean)
+  return parts.join(' ')
+}
+
+/**
+ * Build a music-video plan from a director-format script (ad-style grammar
+ * extended with `Lyric moment:`, `Length:`, `Artist:`, and `Start at:`).
+ *
+ * audioStart resolution (Phase 8 — SRT-first):
+ *   1. `Start at:` on the shot — parsed via parseTimeSpecToSeconds.
+ *   2. `Lyric moment:` fuzzy-matched against the parsed SRT/LRC (if the
+ *      single `lyrics` field happens to be in a timed format).
+ *   3. `Lyric moment:` fuzzy-matched against plain lyrics + linear estimate
+ *      (path when the `lyrics` field is plain text).
+ *   4. Cumulative sum of prior shot lengths (the old behavior).
+ *
+ * The chosen path is recorded on the shot as `audioStartSource` so the
+ * inspector / validation layer can surface it and coverage checks can tell
+ * pinned vs. inferred placements apart.
+ *
+ * Input shape:
+ *   { script, lyrics, concept, styleNotes, targetDuration,
+ *     songDurationSeconds, cast }
+ *
+ * The `lyrics` field is a single blob that the planner auto-detects as
+ * plain text, SRT, or LRC via detectTimedLyricsFormat. When timed, tiers 2
+ * (SRT fuzzy) + validation cross-check run; when plain, tier 3 (legacy
+ * linear estimate) + [Name] tag resolution run. There is no separate SRT
+ * input — the Option A merge in Phase 8 collapsed the two.
+ *
+ * Output:
+ *   { scenes, warnings } — scenes matches flattenYoloPlanVariants' expected
+ *   shape; warnings is a flat list of { kind, message, ... } entries.
+ */
+function buildMusicVideoPlanFromScript(options = {}) {
   const {
-    songTitle = '',
-    storyIdea = '',
-    subjectDescription = '',
-    scenePalette = '',
-    targetDuration = 15,
-    estimatedSceneCount = 8,
+    script = '',
+    lyrics = '',
+    concept = '',
+    styleNotes = '',
+    targetDuration = 30,
+    songDurationSeconds = 0,
+    cast = [],
   } = options
 
-  const lyricBlocks = splitLyricsIntoBlocks(lyricsText, estimatedSceneCount)
-  if (lyricBlocks.length === 0) return ''
+  // Warnings accumulator lives at the top of the function so every tier —
+  // lyric parsing, artist resolution, and the tail-end coverage/overlap/
+  // drift checks — can push into it without order dependency.
+  const warnings = []
 
-  const intro = [
-    songTitle ? `Song: ${songTitle}.` : '',
-    storyIdea ? `Story arc: ${storyIdea}.` : '',
-    subjectDescription ? `Main subject: ${subjectDescription}.` : '',
-    scenePalette ? `Scene palette: ${scenePalette}.` : '',
-    `Total duration target: ${Math.max(5, Number(targetDuration) || 15)} seconds.`,
-  ].filter(Boolean).join(' ')
-
-  const scenes = lyricBlocks.map((block, index) => {
-    const cue = block.replace(/\s+/g, ' ').trim().slice(0, 300)
-    return `Scene ${index + 1}: ${intro} Lyric cue: "${cue}". Keep this moment visually connected to neighboring scenes with consistent subject identity, wardrobe, and lighting style.`
+  const parsed = parseStructuredDirectorScript(script, {
+    // Music plan flattens each parsed shot to 1 angle × 1 take. The shared
+    // pipeline requires takesPerAngle, so we hardcode 1 here to match the
+    // yoloActive*PerScene overrides in music mode.
+    takesPerAngle: 1,
+    targetDurationSeconds: targetDuration,
+    variationSeed: 0,
+    styleNotes: '',
   })
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    return { scenes: [], warnings }
+  }
 
-  return scenes.join('\n\n')
+  // Detect format on the single lyrics blob. 'srt' / 'lrc' route into the
+  // timed path; 'unknown' / 'empty' route into the plain-lyrics path.
+  const lyricsFormat = detectTimedLyricsFormat(lyrics)
+  const lyricsIsTimed = lyricsFormat === 'srt' || lyricsFormat === 'lrc'
+
+  // Timed-lyric parse (only when the format actually looks timed — otherwise
+  // parseTimedLyrics returns no lines and we skip the tier-2 fuzzy path).
+  const parsedTimed = lyricsIsTimed ? parseTimedLyrics(lyrics) : { lines: [], error: null }
+  const timedLyricLines = Array.isArray(parsedTimed.lines) ? parsedTimed.lines : []
+  const hasTimedLyrics = timedLyricLines.length > 0
+  if (parsedTimed.error) {
+    warnings.push({
+      shotIndex: 0,
+      shotLabel: '',
+      kind: 'srt-parse-error',
+      raw: lyricsFormat,
+      message: `Lyrics Timing: ${parsedTimed.error}`,
+    })
+  }
+
+  // Plain-lyrics parse: only meaningful when the paste isn't a timed file.
+  // When the blob is SRT/LRC, skipping this saves us a weird secondary tag
+  // parse against something shaped wrong.
+  const taggedLyricLines = lyricsIsTimed ? [] : parseLyricsWithTags(lyrics)
+  const lyricLineTexts = taggedLyricLines.map((entry) => entry.text)
+  const lyricLinesLegacy = lyricsIsTimed ? [] : parseLyricLines(lyrics)
+  // Prefer the tagged parse's line list when we got a tag structure out, but
+  // fall back to the legacy cleaner if the user wrote plain lyrics with no
+  // brackets at all (behaves identically in that case).
+  const effectiveLyricLines = lyricLineTexts.length > 0 ? lyricLineTexts : lyricLinesLegacy
+
+  const safeCast = Array.isArray(cast) ? cast.filter((c) => c?.assetId) : []
+  const defaultCastMember = safeCast[0] || null
+  const safeTargetDuration = Math.max(10, Number(targetDuration) || 30)
+  const safeSongDuration = Math.max(0, Number(songDurationSeconds) || 0)
+  const result = []
+  const coverageRanges = [] // [{ start, end, shotIndex, label, source }]
+  let runningAudioStart = 0
+  let flatShotIndex = 0
+
+  for (const scene of parsed) {
+    for (const scriptShot of scene?.shots || []) {
+      flatShotIndex += 1
+
+      const shotTypeId = resolveMusicVideoShotTypeFromText(scriptShot.shotType) || 'performance'
+      const shotTypeOption = getMusicVideoShotTypeOption(shotTypeId)
+      const { length: clampedLength } = clampMusicVideoShotLength(scriptShot.durationSeconds)
+
+      const lyricMomentHint = String(scriptShot.lyricMoment || '').trim()
+      const startAtRaw = String(scriptShot.startAtRaw || '').trim()
+
+      // Tier 1 — explicit `Start at:` from the script (Phase 8).
+      const explicitStart = startAtRaw ? parseTimeSpecToSeconds(startAtRaw) : null
+      if (startAtRaw && explicitStart === null) {
+        warnings.push({
+          shotIndex: flatShotIndex,
+          shotLabel: scriptShot.label || `Shot ${flatShotIndex}`,
+          kind: 'unparseable-start-at',
+          raw: startAtRaw,
+          message: `Shot ${flatShotIndex}${scriptShot.label ? ` (${scriptShot.label})` : ''}: "Start at: ${startAtRaw}" is not a recognizable time (expected e.g. 0:15, 15s, or 00:00:15,500).`,
+        })
+      }
+
+      // Tier 2 — fuzzy-match the Lyric moment against parsed SRT/LRC.
+      const timedMatch = lyricMomentHint && hasTimedLyrics
+        ? findTimedLyricLineByText(lyricMomentHint, timedLyricLines)
+        : null
+
+      // Tier 3 — legacy linear estimate based on plain lyric line index.
+      const lineIdx = lyricMomentHint && effectiveLyricLines.length > 0
+        ? findLyricLineIndex(lyricMomentHint, effectiveLyricLines)
+        : -1
+
+      let audioStart
+      let audioStartSource
+      if (explicitStart !== null) {
+        audioStart = explicitStart
+        audioStartSource = 'start-at'
+      } else if (timedMatch && typeof timedMatch.startSec === 'number') {
+        audioStart = timedMatch.startSec
+        audioStartSource = 'srt-fuzzy'
+      } else if (lineIdx >= 0) {
+        audioStart = estimateLyricLineStartSeconds(lineIdx, effectiveLyricLines.length, safeTargetDuration)
+        audioStartSource = 'lyric-linear'
+      } else {
+        audioStart = runningAudioStart
+        audioStartSource = 'continue'
+      }
+
+      // Artist resolution priority:
+      //   1. Per-shot `Artist:` override from the script
+      //   2. The `[Name]` tag on the matched lyric line (if any)
+      //   3. The first cast member ("default lead"), if a cast exists
+      //   4. No reference (model improvises)
+      //
+      // We short-circuit as soon as a non-empty resolution is produced, so
+      // an explicit `Artist: jane` wins even if the lyric tag says [Rose].
+      let resolvedMembers = []
+      let resolvedSource = ''
+      const artistOverrideRaw = String(scriptShot.artistRaw || '').trim()
+      if (artistOverrideRaw) {
+        const names = splitCastNameList(artistOverrideRaw)
+        const { members, unresolved } = resolveCastMembersFromNameList(names, safeCast)
+        if (members.length > 0) {
+          resolvedMembers = members
+          resolvedSource = 'script-override'
+        }
+        for (const name of unresolved) {
+          warnings.push({
+            shotIndex: flatShotIndex,
+            shotLabel: scriptShot.label || `Shot ${flatShotIndex}`,
+            kind: 'unresolved-artist-override',
+            raw: name,
+            message: `Shot ${flatShotIndex}${scriptShot.label ? ` (${scriptShot.label})` : ''}: "Artist: ${name}" did not match any cast member.`,
+          })
+        }
+      }
+      if (resolvedMembers.length === 0 && lineIdx >= 0) {
+        const tags = taggedLyricLines[lineIdx]?.tags || []
+        if (tags.length > 0) {
+          const { members, unresolved } = resolveCastMembersFromNameList(tags, safeCast)
+          if (members.length > 0) {
+            resolvedMembers = members
+            resolvedSource = 'lyric-tag'
+          }
+          for (const name of unresolved) {
+            warnings.push({
+              shotIndex: flatShotIndex,
+              shotLabel: scriptShot.label || `Shot ${flatShotIndex}`,
+              kind: 'unresolved-lyric-tag',
+              raw: name,
+              message: `Shot ${flatShotIndex}: lyric tag "[${name}]" did not match any cast member.`,
+            })
+          }
+        }
+      }
+      if (resolvedMembers.length === 0 && defaultCastMember) {
+        resolvedMembers = [defaultCastMember]
+        resolvedSource = 'default-cast'
+      }
+      // The queue code currently supports up to two reference-image slots
+      // (referenceAssetId1 / referenceAssetId2). If the user specified three+
+      // (e.g. Artist: all with a 4-piece band), we keep slots 1–2 and warn.
+      if (resolvedMembers.length > 2) {
+        const dropped = resolvedMembers.slice(2).map((m) => m?.label || m?.slug).filter(Boolean)
+        warnings.push({
+          shotIndex: flatShotIndex,
+          shotLabel: scriptShot.label || `Shot ${flatShotIndex}`,
+          kind: 'too-many-artists',
+          raw: dropped.join(', '),
+          message: `Shot ${flatShotIndex}: ${resolvedMembers.length} cast members resolved, but only two reference slots are available (${dropped.join(', ')} were dropped).`,
+        })
+      }
+      const slot1 = resolvedMembers[0]?.assetId || null
+      const slot2 = resolvedMembers[1]?.assetId || null
+
+      const videoPrompt = composeMusicShotVideoPrompt({
+        motionPromptRaw: scriptShot.motionPromptRaw || scriptShot.videoBeat,
+        shotTypeOption,
+        lyricMoment: lyricMomentHint,
+        concept,
+        styleNotes,
+      })
+      const referencePrompt = composeMusicShotReferencePrompt({
+        keyframePromptRaw: scriptShot.keyframePromptRaw || scriptShot.imageBeat,
+        shotTypeOption,
+        concept,
+        styleNotes,
+      })
+
+      // Each script shot becomes its own scene with exactly one shot, because
+      // the shared storyboard/video pipeline flattens scene → shot → angle
+      // and music videos don't use the scene grouping beyond display labels.
+      const sceneIdStr = `M${flatShotIndex}`
+      const shotIdStr = `${sceneIdStr}_SH1`
+
+      result.push({
+        id: sceneIdStr,
+        index: flatShotIndex,
+        label: scriptShot.label || scene?.label || '',
+        shots: [{
+          id: shotIdStr,
+          index: 1,
+          // Legacy pipeline fields so flattenYoloPlanVariants + the shared
+          // queue code consume this without branching on music vs ad.
+          beat: videoPrompt,
+          imageBeat: referencePrompt,
+          videoBeat: videoPrompt,
+          shotType: '',
+          cameraDirection: String(scriptShot.cameraDirection || ''),
+          durationSeconds: Number(clampedLength.toFixed(2)),
+          takesPerAngle: 1,
+          angles: ['Medium shot'],
+          cameraPresetId: 'auto',
+          // Music-video-specific payload consumed by modifyMusicVideoShotWorkflow.
+          musicShotType: shotTypeId,
+          audioStart: Number(Number(audioStart).toFixed(2)),
+          length: Number(clampedLength.toFixed(2)),
+          shotPrompt: videoPrompt,
+          referenceImagePrompt: referencePrompt,
+          // Resolved per-shot artist references. queueYoloStoryboardVariants
+          // reads these (in music mode) to fill referenceAssetId1/2 before
+          // falling back to the default single-artist field.
+          resolvedArtistAssetIds: [slot1, slot2].filter(Boolean),
+          resolvedArtistSource: resolvedSource,
+          resolvedArtistLabels: resolvedMembers.slice(0, 2).map((m) => m?.label || m?.slug || ''),
+          // Phase 8 timing diagnostics — surfaced in the shot inspector and
+          // consumed by the validation/coverage passes below.
+          audioStartSource,
+          scriptStartAtRaw: startAtRaw,
+          srtMatchedLineIndex: timedMatch ? timedMatch.index : -1,
+          // Diagnostic / editable metadata so future UI can show the raw
+          // script fields back to the user without reparsing.
+          scriptShotLabel: scriptShot.label || '',
+          scriptLyricMoment: lyricMomentHint,
+          scriptLyricLineIndex: lineIdx,
+          scriptArtistRaw: artistOverrideRaw,
+        }],
+      })
+
+      coverageRanges.push({
+        shotIndex: flatShotIndex,
+        label: scriptShot.label || `Shot ${flatShotIndex}`,
+        start: Number(audioStart),
+        end: Number(audioStart) + clampedLength,
+        source: audioStartSource,
+        lyricMoment: lyricMomentHint,
+        srtMatch: timedMatch || null,
+      })
+
+      // Advance the cumulative cursor from wherever this shot actually lands
+      // so unhinted shots that follow will continue from here (not from some
+      // stale previous value). This matters most for mixed scripts that
+      // interleave pinned and continue-from-previous shots.
+      runningAudioStart = Number(audioStart) + clampedLength
+    }
+  }
+
+  // ============ Phase 8c — validation pass =============================
+  //
+  // All three checks push into the same `warnings` array with distinct
+  // `kind` values so the UI can group or filter later. They're intentionally
+  // non-fatal: a bad coverage ratio still lets the user click Build / Run,
+  // because sometimes "leave gaps on purpose" (e.g. instrumental breaks) is
+  // what the user wants.
+
+  // 1) Coverage / gap summary — only meaningful once we know the song length.
+  if (safeSongDuration > 0 && coverageRanges.length > 0) {
+    const gaps = computeCoverageGaps(
+      coverageRanges.map((r) => ({ start: r.start, end: r.end })),
+      safeSongDuration,
+      0.75 // ignore gaps shorter than 0.75s — noise
+    )
+    const coveredSeconds = coverageRanges.reduce(
+      (acc, r) => acc + Math.max(0, Math.min(r.end, safeSongDuration) - Math.max(0, r.start)),
+      0
+    )
+    const coveragePct = Math.round((coveredSeconds / safeSongDuration) * 100)
+    warnings.push({
+      shotIndex: 0,
+      shotLabel: '',
+      kind: 'coverage-summary',
+      raw: '',
+      message: `Plan covers ${formatSecondsAsMMSS(coveredSeconds)} of your ${formatSecondsAsMMSS(safeSongDuration)} song (${coveragePct}%).${
+        gaps.length > 0
+          ? ` Gaps: ${gaps.map((g) => `${formatSecondsAsMMSS(g.start)}–${formatSecondsAsMMSS(g.end)}`).join(', ')}.`
+          : ' No gaps.'
+      }`,
+      severity: gaps.length === 0 ? 'info' : coveragePct >= 90 ? 'info' : 'warning',
+      gaps,
+      coveredSeconds,
+      songDuration: safeSongDuration,
+      coveragePct,
+    })
+  }
+
+  // 2) Lyric-moment cross-check — for each shot that has BOTH a Start at:
+  //    and a Lyric moment that matched a timed line, we can compare them.
+  //    Drift above 1s is suspicious; drift above 2.5s almost always means
+  //    the LLM got the timing wrong.
+  for (const range of coverageRanges) {
+    if (range.source !== 'start-at') continue
+    if (!range.lyricMoment || !range.srtMatch) continue
+    const drift = Math.abs(range.start - range.srtMatch.startSec)
+    if (drift >= 1.0) {
+      warnings.push({
+        shotIndex: range.shotIndex,
+        shotLabel: range.label,
+        kind: 'lyric-timing-drift',
+        raw: '',
+        message: `Shot ${range.shotIndex}: Start at (${formatSecondsAsMMSS(range.start)}) disagrees with SRT timing for "${range.lyricMoment}" (${formatSecondsAsMMSS(range.srtMatch.startSec)}) by ${drift.toFixed(1)}s.`,
+        severity: drift >= 2.5 ? 'warning' : 'info',
+      })
+    }
+  }
+
+  // 3) Overlap detector — any two shots whose [start, end] intervals
+  //    intersect. Adjacent ranges that only touch (a.end === b.start) are
+  //    fine. We compare every pair so the warning list stays informative
+  //    even when three+ shots stack up.
+  const sortedRanges = [...coverageRanges].sort((a, b) => a.start - b.start)
+  for (let i = 0; i < sortedRanges.length - 1; i += 1) {
+    const a = sortedRanges[i]
+    const b = sortedRanges[i + 1]
+    if (b.start < a.end - 0.01) {
+      const overlap = Math.min(a.end, b.end) - b.start
+      warnings.push({
+        shotIndex: b.shotIndex,
+        shotLabel: b.label,
+        kind: 'shot-overlap',
+        raw: '',
+        message: `Shot ${b.shotIndex} (${formatSecondsAsMMSS(b.start)}) overlaps Shot ${a.shotIndex} (ends ${formatSecondsAsMMSS(a.end)}) by ${overlap.toFixed(1)}s.`,
+        severity: 'warning',
+      })
+    }
+  }
+
+  return { scenes: result, warnings }
 }
 
-function buildMusicVideoStyleNotes(options = {}) {
-  const { styleNotes = '', subjectDescription = '', scenePalette = '' } = options
+/**
+ * Short display badge for a pass type. Used on alt-script tabs so the user
+ * can tell "alt performance" from "environmental b-roll" at a glance.
+ */
+function getMusicVideoPassBadge(passType) {
+  switch (passType) {
+    case 'alt_performance':     return 'ALT'
+    case 'environmental_broll': return 'ENV'
+    case 'detail_broll':        return 'DET'
+    default:                    return '??'
+  }
+}
+
+/**
+ * Human-readable name for a pass type, used in tooltips and header labels.
+ */
+function getMusicVideoPassDisplayName(passType) {
+  switch (passType) {
+    case 'alt_performance':     return 'Alt Performance'
+    case 'environmental_broll': return 'Environmental B-roll'
+    case 'detail_broll':        return 'Detail B-roll'
+    default:                    return 'Alt Pass'
+  }
+}
+
+/**
+ * Derive a sensible default label for a newly-created alt script slot.
+ *
+ * For alt_performance we fold in the user's variant descriptor so the tab
+ * reads as "Alt: Volvo night" instead of generic "Alt Performance". For the
+ * b-roll passes we number duplicates so "Env", "Env #2", "Env #3" can coexist
+ * — useful when you want to experiment with different environmental angles.
+ */
+function deriveAltScriptLabel(passType, variantDescriptor, existingScripts) {
+  const trimmedVariant = String(variantDescriptor || '').trim()
+
+  if (passType === 'alt_performance') {
+    if (trimmedVariant) {
+      // Clip to a tab-friendly length, trimming on a word boundary when we can.
+      const maxLen = 32
+      let clipped = trimmedVariant.slice(0, maxLen)
+      if (trimmedVariant.length > maxLen) {
+        const lastSpace = clipped.lastIndexOf(' ')
+        if (lastSpace > 12) clipped = clipped.slice(0, lastSpace)
+        clipped = `${clipped.trim()}…`
+      }
+      return `Alt: ${clipped}`
+    }
+    return dedupeLabel('Alt Performance', existingScripts)
+  }
+
+  const base = passType === 'environmental_broll' ? 'Environmental' : 'Detail'
+  return dedupeLabel(base, existingScripts)
+}
+
+function dedupeLabel(base, existingScripts) {
+  const existing = Array.isArray(existingScripts) ? existingScripts : []
+  const taken = new Set(existing.map((s) => String(s?.label || '').toLowerCase()))
+  if (!taken.has(base.toLowerCase())) return base
+  for (let n = 2; n < 500; n += 1) {
+    const candidate = `${base} #${n}`
+    if (!taken.has(candidate.toLowerCase())) return candidate
+  }
+  return `${base} #${Date.now()}`
+}
+
+function makeAltScriptId() {
+  return `alt-script-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+/**
+ * Supported music-video prompt "passes". A pass is a full script pointed at
+ * the same song timeline but serving a different editorial purpose — think
+ * of it like a second unit shoot. The master pass is the backbone; the alt
+ * passes give you cutaway coverage that layers on top in the NLE.
+ *
+ *   - master:              performance-driven backbone script (the default)
+ *   - alt_performance:     second performance of the song in a different
+ *                          setting (car, rooftop, etc.) to intercut with
+ *                          the master. Requires a variantDescriptor.
+ *   - environmental_broll: no-performer b-roll of world/atmosphere, tiles
+ *                          the master's timings for frame-accurate layering.
+ *   - detail_broll:        macro/insert b-roll, subdivides longer master
+ *                          beats into shorter textural shots.
+ */
+const MUSIC_VIDEO_PROMPT_PASSES = Object.freeze([
+  'master',
+  'alt_performance',
+  'environmental_broll',
+  'detail_broll',
+])
+
+/**
+ * Build a single clipboard-ready prompt the user can paste into an LLM
+ * (Claude, GPT, Gemini, etc.) to produce a timing-correct director script
+ * for the music-video mode.
+ *
+ * The prompt bundles together:
+ *   - Role + goal statement (pass-specific)
+ *   - Song + target duration context
+ *   - Cast roster (with slugs the LLM should use in Artist: fields)
+ *   - Concept / style notes
+ *   - Full lyrics and, if available, an SRT/LRC with real timings
+ *   - Pass-specific rules (on top of the universal format rules)
+ *   - (Alt passes only) the current master script as a timing/lyric anchor
+ *   - A strict format spec the LLM must return verbatim
+ *
+ * We keep every section labeled so the LLM can see which parts of its
+ * output need to quote verbatim (the SRT, the master timings) versus
+ * synthesize fresh (the shots).
+ */
+function buildMusicVideoLLMPrompt(options = {}) {
+  const {
+    songName = '',
+    songDurationSeconds = 0,
+    targetDuration = 30,
+    concept = '',
+    styleNotes = '',
+    lyrics = '',
+    cast = [],
+    pass = 'master',
+    variantDescriptor = '',
+    masterScript = '',
+  } = options
+
+  const effectivePass = MUSIC_VIDEO_PROMPT_PASSES.includes(pass) ? pass : 'master'
+
+  // Detect whether the single lyrics blob is plain text or timed (SRT/LRC).
+  // This flips the section label so the LLM knows whether the timings are
+  // authoritative (quote verbatim into `Start at:`) or need to be estimated
+  // evenly across the song.
+  const lyricsFormat = detectTimedLyricsFormat(lyrics)
+  const lyricsIsTimed = lyricsFormat === 'srt' || lyricsFormat === 'lrc'
+
+  const sections = []
+
+  // Pass-specific intro — tells the LLM which editorial job this script is
+  // serving so it doesn't just rehash the master performance.
+  const roleIntro = buildMusicVideoPassIntro(effectivePass, variantDescriptor)
+  sections.push(roleIntro)
+  sections.push('Return ONLY the script in the exact format shown at the bottom. Do not include commentary, headers, or explanations outside the script.')
+
+  const songMeta = []
+  if (songName) songMeta.push(`Song: ${songName}`)
+  if (songDurationSeconds > 0) songMeta.push(`Song length: ${formatSecondsAsMMSS(songDurationSeconds)} (${songDurationSeconds.toFixed(1)}s)`)
+  songMeta.push(`Target music-video length: ~${targetDuration}s`)
+  sections.push(songMeta.join('\n'))
+
+  // B-roll-only passes don't need the cast roster — there are no performers
+  // to reference. Keeping it out of the prompt avoids tempting the LLM to
+  // slip in an Artist: line on a b_roll shot.
+  const isBrollOnlyPass = effectivePass === 'environmental_broll' || effectivePass === 'detail_broll'
+  if (!isBrollOnlyPass) {
+    if (Array.isArray(cast) && cast.length > 0) {
+      const castBlock = ['Cast — use these exact slugs in the Artist: field:']
+      for (const c of cast) {
+        const slug = c?.slug || ''
+        const label = c?.label || slug || 'Artist'
+        const role = c?.role ? ` (${c.role})` : ''
+        castBlock.push(`  - ${slug}: ${label}${role}`)
+      }
+      castBlock.push('For duets, use "Artist: slug1, slug2". For the full cast, use "Artist: all".')
+      sections.push(castBlock.join('\n'))
+    } else {
+      sections.push('Cast: (no cast defined — you may omit the Artist: field entirely, or use "Artist: artist" as a generic slot).')
+    }
+  }
+
+  if (concept.trim()) {
+    sections.push(`Concept / story:\n${concept.trim()}`)
+  }
+  if (styleNotes.trim()) {
+    sections.push(`Style / look notes:\n${styleNotes.trim()}`)
+  }
+
+  if (lyricsIsTimed) {
+    const formatLabel = lyricsFormat.toUpperCase()
+    sections.push(`Lyrics (${formatLabel} — authoritative timings, quote these exact times for "Start at:"):\n${lyrics.trim()}`)
+  } else if (lyrics.trim()) {
+    sections.push(`Lyrics (plain text — no timings provided, estimate evenly across the song):\n${lyrics.trim()}`)
+  } else {
+    sections.push('Lyrics: (none provided — feel free to write an instrumental-style script; use "Shot type: b_roll" for every shot).')
+  }
+
+  // Universal format rules — these apply regardless of pass.
+  const rules = [
+    'Rules:',
+    '  1. Every shot MUST include a "Start at:" field with a time like "0:15" or "15.5s". If you pasted SRT/LRC, use the exact start of the matching line.',
+    '  2. Every shot MUST include "Length:" in seconds (between 2 and 8 — LTX 2.3 works best here).',
+    '  3. Shots should tile the song with no big gaps. A few ≤1s gaps between shots are fine; gaps over 3s should be filled with a b_roll shot.',
+    '  4. "Shot type:" must be one of: performance, performance_wide, b_roll. Use performance/performance_wide when the singer\'s face is visible and lip-syncing; use b_roll for everything else.',
+    '  5. For vocal lines, add "Lyric moment:" quoting the specific lyric line. For instrumentals or b_roll, omit Lyric moment.',
+    '  6. Use "Artist:" to pick which cast member appears. Omit when the shot is b_roll with no performer visible.',
+    '  7. "Keyframe prompt:" describes the opening still (lighting, wardrobe, location, composition). "Motion prompt:" describes what moves in the clip (head turn, camera push-in, lip-sync, etc.).',
+    '  8. Keep wardrobe, location, and lighting consistent across adjacent shots unless the Concept calls for a hard cut.',
+    '  9. Do NOT invent lyrics. If the song is instrumental at a given moment, omit Lyric moment for that shot.',
+  ]
+  sections.push(rules.join('\n'))
+
+  // Pass-specific rules layer on top of the universal ones. For the master
+  // pass this is a no-op; for alt passes it's where we constrain shot types,
+  // inherit timings, and forbid copying the master's imagery.
+  const passRules = buildMusicVideoPassRules(effectivePass, variantDescriptor)
+  if (passRules) sections.push(passRules)
+
+  // For alt passes, feed the current master script in so the LLM can anchor
+  // timings + lyric moments without us having to re-emit the SRT separately.
+  if (effectivePass !== 'master' && masterScript.trim()) {
+    sections.push(`Master performance script (for timing and lyric reference ONLY — do NOT copy shots or imagery):\n${masterScript.trim()}`)
+  }
+
+  sections.push(buildMusicVideoPassFormatSpec(effectivePass))
+
+  return sections.join('\n\n')
+}
+
+function buildMusicVideoPassIntro(pass, variantDescriptor) {
+  switch (pass) {
+    case 'alt_performance': {
+      const variant = String(variantDescriptor || '').trim()
+      const variantLine = variant
+        ? `Alt performance variant: ${variant}`
+        : 'Alt performance variant: (unspecified — pick a distinct setting/wardrobe/lighting from the master that will cut against it cleanly)'
+      return [
+        'You are a music video director. I need you to write an ALT PERFORMANCE PASS for the song below.',
+        'This is a SECOND full performance of the same song, designed to intercut with the master performance pass (included at the bottom). Think of it as a separate second-unit shoot — different setting, different camera grammar — but same cast lip-syncing the same lyrics.',
+        variantLine,
+      ].join('\n')
+    }
+    case 'environmental_broll':
+      return [
+        'You are a music video director. I need you to write an ENVIRONMENTAL B-ROLL PASS for the song below.',
+        'This pass is coverage of PLACES and ATMOSPHERE with NO performers in frame. It will layer alongside the master performance pass (included at the bottom) so the editor can cut to the world whenever the song needs breathing room.',
+      ].join('\n')
+    case 'detail_broll':
+      return [
+        'You are a music video director. I need you to write a DETAIL / INSERT B-ROLL PASS for the song below.',
+        'This pass is TIGHT, MACRO, TEXTURAL inserts — gear, objects, hands, small story details. It will layer alongside the master performance pass (included at the bottom) so the editor can punch in rhythm and hide cuts.',
+      ].join('\n')
+    case 'master':
+    default:
+      return 'You are a music video director. I need you to write a shot-by-shot director script for the song below.'
+  }
+}
+
+function buildMusicVideoPassRules(pass, variantDescriptor) {
+  switch (pass) {
+    case 'alt_performance': {
+      const variant = String(variantDescriptor || '').trim()
+      const variantLine = variant
+        ? `  - Every shot MUST be filmed in this variant setting: "${variant}". Do NOT reuse the master script's location, wardrobe, or lighting.`
+        : '  - Pick ONE distinct setting/wardrobe/lighting different from the master and use it for every shot in this pass.'
+      return [
+        'Alt Performance Pass rules (on top of the universal rules above):',
+        variantLine,
+        '  - Shot type MUST be performance or performance_wide. Do NOT generate any b_roll shots in this pass.',
+        '  - Keep Artist: and Lyric moment: fields on every shot — this is still a lip-sync pass.',
+        '  - Start at: and Length: do NOT need to match the master script. Generate your own shot rhythm appropriate to the variant setting, but still cover the full song with no gaps >3s.',
+        '  - Do NOT repeat the master script\'s Keyframe prompt or Motion prompt text. Invent fresh imagery that belongs to the variant setting.',
+      ].join('\n')
+    }
+    case 'environmental_broll':
+      return [
+        'Environmental B-roll Pass rules (on top of the universal rules above):',
+        '  - Every shot MUST use Shot type: b_roll.',
+        '  - Do NOT include Artist: or Lyric moment: fields on any shot — omit them entirely.',
+        '  - Do NOT show any performer\'s face or body in frame. The cast is absent from this pass.',
+        '  - Imagery should establish PLACES and ATMOSPHERE: empty rooms, exterior locations, weather, landscapes, signage, vehicles without occupants, environmental textures.',
+        '  - REUSE the Start at: and Length: values from the master script below so this pass lines up frame-accurately in an NLE. If the master has no shot at a given moment, invent one that fills the gap.',
+        '  - Favor medium-to-wide framings. Shot lengths should skew 4–7s. Let shots breathe.',
+        '  - INVENT NEW IMAGERY. Do NOT copy the master script\'s Keyframe prompt or Motion prompt text.',
+      ].join('\n')
+    case 'detail_broll':
+      return [
+        'Detail B-roll Pass rules (on top of the universal rules above):',
+        '  - Every shot MUST use Shot type: b_roll.',
+        '  - Do NOT include Artist: or Lyric moment: fields on any shot — omit them entirely.',
+        '  - You MAY show hands, fingers, feet, backs of heads, silhouettes, or isolated body parts — but NEVER a recognizable face and NEVER a visible lip-sync.',
+        '  - Imagery should be TIGHT and TEXTURAL: macro shots of gear (frets, strings, picks, pedals, drums, amp grilles, cables, VU meters), small story objects, close-ups of textures, materials, and details.',
+        '  - You do NOT need to match the master script\'s shot boundaries. It is ENCOURAGED to subdivide longer master shots into multiple shorter detail shots.',
+        '  - Shot lengths should skew SHORTER: 2–4s is ideal, occasionally up to 5s.',
+        '  - Still cover the full song with no gaps >3s.',
+        '  - INVENT NEW IMAGERY. Do NOT copy the master script\'s Keyframe prompt or Motion prompt text.',
+      ].join('\n')
+    case 'master':
+    default:
+      return ''
+  }
+}
+
+function buildMusicVideoPassFormatSpec(pass) {
+  const isBrollOnly = pass === 'environmental_broll' || pass === 'detail_broll'
+  if (isBrollOnly) {
+    const label = pass === 'environmental_broll' ? 'Environmental establishing' : 'Detail insert'
+    const keyframeA = pass === 'environmental_broll'
+      ? 'Rain-slick alley at night, sodium streetlamp haloing the wet pavement, no people in frame, deep atmospheric haze.'
+      : 'Macro insert on fingers pressing a fret, amber stage glow catching the string, shallow depth, heavy grain.'
+    const motionA = pass === 'environmental_broll'
+      ? 'Slow drift along the alley, puddles rippling, neon reflection shimmering on the ground.'
+      : 'Fingers shift to the next fret, string vibrates, micro camera drift.'
+    const keyframeB = pass === 'environmental_broll'
+      ? 'Empty highway under overcast sky, pine forest on both shoulders, a single reflector post catching the light.'
+      : 'Macro on a cassette tape spinning inside a car deck, dash backlight glowing green across the label.'
+    const motionB = pass === 'environmental_broll'
+      ? 'Locked-off static, wind pushes a ripple through a puddle in the foreground.'
+      : 'Reels turn, dust drifts through the backlight, tape tension flickers.'
+    return [
+      'Required output format (verbatim — one block per shot):',
+      '',
+      'Scene 1: Opening',
+      '',
+      `Shot 1: ${label}`,
+      'Start at: 0:00',
+      'Shot type: b_roll',
+      `Keyframe prompt: ${keyframeA}`,
+      `Motion prompt: ${motionA}`,
+      'Camera: Slow drift, 35mm lens.',
+      'Length: 4.5',
+      '',
+      'Shot 2: Cutaway',
+      'Start at: 0:04.5',
+      'Shot type: b_roll',
+      `Keyframe prompt: ${keyframeB}`,
+      `Motion prompt: ${motionB}`,
+      'Camera: Locked-off, 85mm macro.',
+      'Length: 3.2',
+      '',
+      '(...continue until the song is covered.)',
+    ].join('\n')
+  }
+
   return [
-    'Music video flow: cinematic continuity across all shots.',
-    styleNotes || '',
-    subjectDescription ? `Subject consistency: ${subjectDescription}.` : '',
-    scenePalette ? `Location continuity: ${scenePalette}.` : '',
-  ].filter(Boolean).join(' ')
+    'Required output format (verbatim — one block per shot):',
+    '',
+    'Scene 1: Opening',
+    '',
+    'Shot 1: Wide establishing',
+    'Start at: 0:00',
+    'Lyric moment: "You paint your eyelids with correction fluid moons"',
+    'Shot type: performance_wide',
+    'Artist: rose',
+    'Keyframe prompt: Singer leans against a neon-lit phone booth, rain-slick street behind her, warm sodium-lamp glow.',
+    'Motion prompt: Slow push-in on the singer as she mouths the opening line, rain falling around her, headlights flaring in the distance.',
+    'Camera: Slow dolly forward, eye level, 35mm lens.',
+    'Length: 4.5',
+    '',
+    'Shot 2: Close-up',
+    'Start at: 0:04.5',
+    'Lyric moment: "Chewed up saints on the floor"',
+    'Shot type: performance',
+    'Artist: rose',
+    'Keyframe prompt: Tight close-up on the singer\'s eyes, mascara starting to run.',
+    'Motion prompt: Hold on her face as she sings, slight tilt down to catch a tear.',
+    'Camera: Handheld, 85mm, shallow depth of field.',
+    'Length: 3.2',
+    '',
+    '(...continue until the song is covered.)',
+  ].join('\n')
 }
 
 // ============================================
@@ -832,6 +1614,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   const [directorSubTab, setDirectorSubTab] = useState('setup')
   const [yoloScript, setYoloScript] = useState(persistedState?.yoloScript || '')
   const [directorFormatExpanded, setDirectorFormatExpanded] = useState(false)
+  // Expanded state for the alt-pass shot breakdown list. Toggled per-user;
+  // not persisted (these panels should collapse between sessions to keep the
+  // textarea as the primary focus).
+  const [altPassBreakdownExpanded, setAltPassBreakdownExpanded] = useState(false)
   const [yoloStyleNotes, setYoloStyleNotes] = useState('')
   const [yoloAdProductAssetId, setYoloAdProductAssetId] = useState(persistedState?.yoloAdProductAssetId ?? null)
   const [yoloAdModelAssetId, setYoloAdModelAssetId] = useState(persistedState?.yoloAdModelAssetId ?? null)
@@ -881,20 +1667,114 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   })
   const [yoloPlan, setYoloPlan] = useState(() => normalizePersistedYoloPlan(persistedState?.yoloPlan || []))
 
-  // Director mode music video state
-  const [yoloMusicTitle, setYoloMusicTitle] = useState(persistedState?.yoloMusicTitle || '')
-  const [yoloMusicLyrics, setYoloMusicLyrics] = useState(persistedState?.yoloMusicLyrics || '')
-  const [yoloMusicStoryIdea, setYoloMusicStoryIdea] = useState(persistedState?.yoloMusicStoryIdea || '')
-  const [yoloMusicSubject, setYoloMusicSubject] = useState(persistedState?.yoloMusicSubject || '')
-  const [yoloMusicScenePalette, setYoloMusicScenePalette] = useState(persistedState?.yoloMusicScenePalette || '')
-  const [yoloMusicStyleNotes, setYoloMusicStyleNotes] = useState('')
+  // Director Mode Music Video state.
+  // Schema mirrors the Ad script-first pattern: one big director script is the
+  // source of truth for shot breakdown + per-shot prompts, with side inputs
+  // for audio, lyrics, artist reference, and top-level style continuity notes.
+  // Ad Creation state is completely independent (yoloAd*) — do not cross
+  // the streams when editing either side.
+  const [yoloMusicAudioAssetId, setYoloMusicAudioAssetId] = useState(persistedState?.yoloMusicAudioAssetId || null)
+  const [yoloMusicAudioKind, setYoloMusicAudioKind] = useState(persistedState?.yoloMusicAudioKind || MUSIC_VIDEO_AUDIO_KIND_OPTIONS[0].id)
+  // Lyrics field accepts plain text, SRT, or LRC — auto-detected by
+  // detectTimedLyricsFormat. When the paste is SRT/LRC the planner uses real
+  // per-line timings (tier 2 of audioStart resolution); when it's plain
+  // text we fall back to the legacy tagged/linear-estimate path.
+  //
+  // One-time migration: a Phase 8a intermediate state used a separate
+  // `yoloMusicLyricsSrt` textarea. If an old persisted blob has that field
+  // populated while the plain `yoloMusicLyrics` is empty, we promote the
+  // SRT into the main lyrics slot so the format auto-detect picks it up.
+  // If both were populated we keep the plain lyrics (rare but possible —
+  // the SRT one is considered the newer data only when lyrics is empty).
+  const [yoloMusicLyrics, setYoloMusicLyrics] = useState(() => {
+    const plain = String(persistedState?.yoloMusicLyrics || '')
+    const legacySrt = String(persistedState?.yoloMusicLyricsSrt || '')
+    if (plain.trim()) return plain
+    if (legacySrt.trim()) return legacySrt
+    return ''
+  })
+  const [yoloMusicConcept, setYoloMusicConcept] = useState(persistedState?.yoloMusicConcept || '')
+  const [yoloMusicStyleNotes, setYoloMusicStyleNotes] = useState(persistedState?.yoloMusicStyleNotes || '')
+  // Director script in the ad format (Scene/Shot/Shot type/Keyframe prompt/
+  // Motion prompt/Camera/Length + optional Lyric moment). Parsed by
+  // buildMusicVideoPlanFromScript. Empty by default — users click "Start from
+  // template" or paste their own.
+  const [yoloMusicScript, setYoloMusicScript] = useState(persistedState?.yoloMusicScript || '')
+  // Alt-pass script library. Each alt script is a second-unit coverage pass
+  // of the same song — alt performance (different setting), environmental
+  // b-roll (no performers), or detail b-roll (macro inserts). They all share
+  // the master's song/cast/concept context but get their own script blob.
+  //
+  // Shape: [{ id, passType, label, variantDescriptor, script, createdAt,
+  //          plan, planSignature, planWarnings }]
+  //   - passType: 'alt_performance' | 'environmental_broll' | 'detail_broll'
+  //   - variantDescriptor: only meaningful for 'alt_performance' (e.g. "Jake in the car at night")
+  //   - label: user-visible tab name; auto-derived on create, editable later
+  //   - script: the pasted-back LLM output for this pass (empty until pasted)
+  //   - plan: normalized scenes[] produced by "Build Plan" on the alt tab;
+  //           empty until the user explicitly builds. Persisted.
+  //   - planSignature: signature at the time of last build; compared against
+  //                    makeMusicPlanSignature({ script: alt.script }) to detect
+  //                    "script edited since build" → stale-plan banner. Persisted.
+  //   - planWarnings: transient warnings surfaced by the last build. NOT
+  //                    persisted (matches master behavior); regenerated on
+  //                    rebuild. Always hydrated as [] on load.
+  //
+  // Each alt slot now owns its own plan state. The active-target dispatcher
+  // (yoloMusicActiveTargetId = null means master, else alt.id) routes plan
+  // reads/writes to the right place, so the existing storyboard + shot editor
+  // + generation flow can operate on an alt pass without any code that knows
+  // "oh we're on an alt" — it just reads yoloActivePlan.
+  const [yoloMusicAltScripts, setYoloMusicAltScripts] = useState(() => {
+    const saved = Array.isArray(persistedState?.yoloMusicAltScripts) ? persistedState.yoloMusicAltScripts : []
+    return saved
+      .map((entry, idx) => ({
+        id: String(entry?.id || `alt-script-${Date.now()}-${idx}`),
+        passType: String(entry?.passType || 'alt_performance'),
+        label: String(entry?.label || '').slice(0, 80),
+        variantDescriptor: String(entry?.variantDescriptor || ''),
+        script: String(entry?.script || ''),
+        createdAt: Number(entry?.createdAt) || Date.now(),
+        plan: normalizePersistedYoloPlan(Array.isArray(entry?.plan) ? entry.plan : []),
+        planSignature: String(entry?.planSignature || ''),
+        planWarnings: [],
+      }))
+      .filter((entry) => entry.passType && entry.label)
+  })
+  // Null → viewing/editing the master script. Otherwise the id of an alt
+  // script. Kept out of persistence so the tab selection resets to Master
+  // on a fresh page load; alt scripts themselves survive.
+  const [yoloMusicActiveScriptId, setYoloMusicActiveScriptId] = useState(null)
+  // Legacy single-artist reference — still honored as a fallback when the
+  // cast roster (below) is empty. Phase 6 surfaced it as "Artist Reference";
+  // phase 7 treats it as an auto-seeded cast[0] so multi-singer scripts can
+  // extend past a single performer.
+  const [yoloMusicArtistAssetId, setYoloMusicArtistAssetId] = useState(persistedState?.yoloMusicArtistAssetId ?? null)
+  // Cast roster — an ordered list of named performers (singer, duet partner,
+  // backing vocalist, band member...). Each entry is:
+  //   { id, slug, label, assetId, role }
+  // Scripts reference cast members via `Artist: rose`, `Artist: both`, or
+  // lyric `[Rose]` / `[Rose, Jake]` tag lines. When a shot can't resolve an
+  // explicit name, it falls back to cast[0] (the "default lead").
+  const [yoloMusicCast, setYoloMusicCast] = useState(() => {
+    const saved = Array.isArray(persistedState?.yoloMusicCast) ? persistedState.yoloMusicCast : []
+    return saved
+      .map((entry, idx) => ({
+        id: String(entry?.id || `cast-${Date.now()}-${idx}`),
+        slug: String(entry?.slug || '').trim(),
+        label: String(entry?.label || '').trim(),
+        assetId: entry?.assetId ?? null,
+        role: String(entry?.role || 'lead'),
+      }))
+      .filter((entry) => entry.assetId || entry.label || entry.slug)
+  })
   const [yoloMusicTargetDuration, setYoloMusicTargetDuration] = useState(persistedState?.yoloMusicTargetDuration || 30)
-  const [yoloMusicShotsPerScene, setYoloMusicShotsPerScene] = useState(persistedState?.yoloMusicShotsPerScene || 1)
-  const [yoloMusicAnglesPerShot, setYoloMusicAnglesPerShot] = useState(persistedState?.yoloMusicAnglesPerShot || 1)
-  const [yoloMusicTakesPerAngle, setYoloMusicTakesPerAngle] = useState(persistedState?.yoloMusicTakesPerAngle || 1)
   const [yoloMusicQualityProfile, setYoloMusicQualityProfile] = useState(persistedState?.yoloMusicQualityProfile || 'balanced')
   const [yoloMusicPlan, setYoloMusicPlan] = useState(() => normalizePersistedYoloPlan(persistedState?.yoloMusicPlan || []))
   const [yoloMusicPlanSignature, setYoloMusicPlanSignature] = useState(persistedState?.yoloMusicPlanSignature || '')
+  // Planner warnings surfaced next to the build button: unresolved Artist: /
+  // [Name] tags, too-many-artists overflow, etc. Advisory — does not block.
+  const [yoloMusicPlanWarnings, setYoloMusicPlanWarnings] = useState([])
 
   // Generation queue state
   const [generationQueue, setGenerationQueue] = useState([])
@@ -1051,15 +1931,16 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         yoloAdStoryboardTier,
         yoloAdVideoTier,
         yoloPlan,
-        yoloMusicTitle,
+        yoloMusicAudioAssetId,
+        yoloMusicAudioKind,
         yoloMusicLyrics,
-        yoloMusicStoryIdea,
-        yoloMusicSubject,
-        yoloMusicScenePalette,
+        yoloMusicConcept,
+        yoloMusicStyleNotes,
+        yoloMusicScript,
+        yoloMusicAltScripts,
+        yoloMusicArtistAssetId,
+        yoloMusicCast,
         yoloMusicTargetDuration,
-        yoloMusicShotsPerScene,
-        yoloMusicAnglesPerShot,
-        yoloMusicTakesPerAngle,
         yoloMusicQualityProfile,
         yoloMusicPlan,
         yoloMusicPlanSignature,
@@ -1108,15 +1989,16 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloAdStoryboardTier,
     yoloAdVideoTier,
     yoloPlan,
-    yoloMusicTitle,
+    yoloMusicAudioAssetId,
+    yoloMusicAudioKind,
     yoloMusicLyrics,
-    yoloMusicStoryIdea,
-    yoloMusicSubject,
-    yoloMusicScenePalette,
+    yoloMusicConcept,
+    yoloMusicStyleNotes,
+    yoloMusicScript,
+    yoloMusicAltScripts,
+    yoloMusicArtistAssetId,
+    yoloMusicCast,
     yoloMusicTargetDuration,
-    yoloMusicShotsPerScene,
-    yoloMusicAnglesPerShot,
-    yoloMusicTakesPerAngle,
     yoloMusicQualityProfile,
     yoloMusicPlan,
     yoloMusicPlanSignature,
@@ -1380,13 +2262,45 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   const isYoloMusicMode = generationMode === 'yolo' && yoloCreationType === 'music'
   const yoloModeKey = isYoloMusicMode ? 'music' : 'ad'
   const yoloModeLabel = isYoloMusicMode ? 'Music Video' : 'Ad'
-  const yoloActivePlan = isYoloMusicMode ? yoloMusicPlan : yoloPlan
+  // Active-target plan for music mode: null id → master, otherwise the alt
+  // slot's own plan[]. Defined inline here (instead of reusing the richer
+  // yoloMusicActiveAltScript memo below) to avoid a declaration-order
+  // dependency — this block runs before that memo is defined.
+  const yoloMusicActiveTargetPlan = useMemo(() => {
+    if (!yoloMusicActiveScriptId) return yoloMusicPlan
+    const slot = yoloMusicAltScripts.find((entry) => entry.id === yoloMusicActiveScriptId)
+    return Array.isArray(slot?.plan) ? slot.plan : []
+  }, [yoloMusicActiveScriptId, yoloMusicAltScripts, yoloMusicPlan])
+  const yoloActivePlan = isYoloMusicMode ? yoloMusicActiveTargetPlan : yoloPlan
   const yoloCanEditScenes = yoloActivePlan.length > 0
-  const setYoloActivePlan = isYoloMusicMode ? setYoloMusicPlan : setYoloPlan
+  // Music-mode plan setter: dispatches writes to master state or the active
+  // alt slot's plan[]. Supports both "new value" and "(prev) => next" forms so
+  // it's a drop-in replacement for the raw React setter used by updateYoloShot.
+  const setYoloActiveMusicPlan = useCallback((planOrUpdater) => {
+    if (!yoloMusicActiveScriptId) {
+      setYoloMusicPlan(planOrUpdater)
+      return
+    }
+    const targetId = yoloMusicActiveScriptId
+    setYoloMusicAltScripts((prev) => prev.map((entry) => {
+      if (entry.id !== targetId) return entry
+      const nextPlan = typeof planOrUpdater === 'function'
+        ? planOrUpdater(Array.isArray(entry.plan) ? entry.plan : [])
+        : planOrUpdater
+      return { ...entry, plan: Array.isArray(nextPlan) ? nextPlan : [] }
+    }))
+  }, [yoloMusicActiveScriptId])
+  const setYoloActivePlan = isYoloMusicMode ? setYoloActiveMusicPlan : setYoloPlan
   const yoloActiveTargetDuration = isYoloMusicMode ? yoloMusicTargetDuration : yoloTargetDuration
-  const yoloActiveShotsPerScene = isYoloMusicMode ? yoloMusicShotsPerScene : yoloShotsPerScene
-  const yoloActiveAnglesPerShot = isYoloMusicMode ? yoloMusicAnglesPerShot : yoloAnglesPerShot
-  const yoloActiveTakesPerAngle = isYoloMusicMode ? yoloMusicTakesPerAngle : yoloTakesPerAngle
+  // Music-video mode flattens to exactly one shot per scene, one angle, one take.
+  // Per-shot length is driven by the `Length:` field inside the director script
+  // (parsed per-shot) instead of multiplication across angle/take dimensions.
+  // These `yoloActive*` forks are only read by the Ad-style UI which is hidden
+  // in music mode, but we still surface sane values so any shared progress/
+  // summary code that reads them does not explode on nulls.
+  const yoloActiveShotsPerScene = isYoloMusicMode ? 1 : yoloShotsPerScene
+  const yoloActiveAnglesPerShot = isYoloMusicMode ? 1 : yoloAnglesPerShot
+  const yoloActiveTakesPerAngle = isYoloMusicMode ? 1 : yoloTakesPerAngle
   const yoloActiveStyleNotes = isYoloMusicMode ? yoloMusicStyleNotes : yoloStyleNotes
   const yoloAdProductAsset = useMemo(
     () => assets.find((asset) => asset?.id === yoloAdProductAssetId && asset?.type === 'image') || null,
@@ -1397,6 +2311,199 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     [assets, yoloAdModelAssetId]
   )
   const yoloAdHasReferenceAnchors = Boolean(yoloAdProductAsset || yoloAdModelAsset)
+  // Music-video artist reference (legacy single-artist field). Auto-migrated
+  // into the cast on first render — see the effect just below.
+  const yoloMusicArtistAsset = useMemo(
+    () => assets.find((asset) => asset?.id === yoloMusicArtistAssetId && asset?.type === 'image') || null,
+    [assets, yoloMusicArtistAssetId]
+  )
+  // Audio asset for the currently-selected song. Used by the planner to
+  // bound the coverage report against the real song length (Phase 8) and
+  // by the LLM-prompt builder to mention duration in the brief.
+  const yoloMusicAudioAsset = useMemo(
+    () => assets.find((asset) => asset?.id === yoloMusicAudioAssetId) || null,
+    [assets, yoloMusicAudioAssetId]
+  )
+  const yoloMusicSongDurationSeconds = useMemo(() => {
+    const d = Number(yoloMusicAudioAsset?.duration)
+    if (Number.isFinite(d) && d > 0) return d
+    const settingsD = Number(yoloMusicAudioAsset?.settings?.duration)
+    return Number.isFinite(settingsD) && settingsD > 0 ? settingsD : 0
+  }, [yoloMusicAudioAsset])
+  // Single-source-of-truth parse of the user-pasted Lyrics field. The field
+  // auto-detects whether the paste is plain text, SRT, or LRC. When the
+  // format is 'srt' or 'lrc', we consider the lyrics "timed" and the
+  // planner uses the per-line timings; when the format is 'unknown' or
+  // 'empty' we treat the paste as plain lyrics and fall through to the
+  // legacy tagged/linear-estimate resolver.
+  const yoloMusicParsedLyrics = useMemo(() => {
+    const format = detectTimedLyricsFormat(yoloMusicLyrics)
+    if (format === 'srt' || format === 'lrc') {
+      return { ...parseTimedLyrics(yoloMusicLyrics), isTimed: true }
+    }
+    return { format, lines: [], error: null, isTimed: false }
+  }, [yoloMusicLyrics])
+  // Resolved cast: hydrate each entry's assetId to a real image asset so the
+  // planner can read label/slug/assetId uniformly. Entries with missing
+  // assets are dropped (they show up as "unset" rows in the UI).
+  const yoloMusicResolvedCast = useMemo(() => {
+    if (!Array.isArray(yoloMusicCast)) return []
+    return yoloMusicCast
+      .map((entry) => {
+        const asset = assets.find((a) => a?.id === entry?.assetId && a?.type === 'image') || null
+        if (!asset) return null
+        const slug = (entry?.slug && entry.slug.trim()) || normalizeCastSlug(entry?.label || '')
+        const label = (entry?.label && entry.label.trim()) || slug || 'Artist'
+        return {
+          id: String(entry.id || asset.id),
+          slug: slug || normalizeCastSlug(label),
+          label,
+          assetId: asset.id,
+          role: entry?.role || 'lead',
+        }
+      })
+      .filter(Boolean)
+  }, [yoloMusicCast, assets])
+  // Active alt-script derivation.
+  //
+  // `yoloMusicActiveScriptId === null` means the user is editing the master
+  // script (yoloMusicScript). Any other id selects the matching alt script
+  // from yoloMusicAltScripts. If the id references a slot that was deleted
+  // out from under us (shouldn't normally happen, but persisted state +
+  // code edits could race), we fall back to master silently rather than
+  // error out.
+  const yoloMusicActiveAltScript = useMemo(() => {
+    if (!yoloMusicActiveScriptId) return null
+    return yoloMusicAltScripts.find((entry) => entry.id === yoloMusicActiveScriptId) || null
+  }, [yoloMusicActiveScriptId, yoloMusicAltScripts])
+  const yoloMusicIsMasterActive = !yoloMusicActiveAltScript
+  // Self-heal: if the selected id doesn't match any slot, snap back to
+  // master so the textarea doesn't silently bind to a phantom entry.
+  useEffect(() => {
+    if (yoloMusicActiveScriptId && !yoloMusicActiveAltScript) {
+      setYoloMusicActiveScriptId(null)
+    }
+  }, [yoloMusicActiveScriptId, yoloMusicActiveAltScript])
+  /**
+   * Live parse preview for every alt script, keyed by slot id.
+   *
+   * Each entry is one of:
+   *   { state: 'empty' }
+   *     — slot has no script text yet (user just created the tab and hasn't
+   *       pasted the LLM output in).
+   *   { state: 'unparsed', warnings }
+   *     — script text exists but the parser could not produce a single shot.
+   *       The user pasted something, but it doesn't conform to the shot
+   *       grammar (probably an LLM that ignored the format spec).
+   *   { state: 'ok' | 'warning', shotCount, totalLengthSec, coverageGaps, warnings, scenes }
+   *     — parsed cleanly. 'warning' whenever the planner flagged issues
+   *       (unresolved artist, SRT drift, overlap, etc.).
+   *
+   * Cast is intentionally set to [] for alt scripts because b-roll passes
+   * omit Artist fields entirely and alt performance passes use the same
+   * cast as the master (warnings about unresolved names would be noise
+   * on a b-roll pass). This means alt plans won't carry identity refs —
+   * that's the right default until we wire alt passes into generation.
+   *
+   * Pure-derived state — no mutation. Recomputing on every script edit is
+   * fine because the parser is synchronous and the alt script count stays
+   * small in practice.
+   */
+  const yoloMusicAltParseResults = useMemo(() => {
+    const out = {}
+    for (const alt of yoloMusicAltScripts) {
+      const script = String(alt?.script || '').trim()
+      if (!script) {
+        out[alt.id] = { state: 'empty' }
+        continue
+      }
+      const { scenes, warnings } = buildMusicVideoPlanFromScript({
+        script,
+        lyrics: yoloMusicLyrics,
+        concept: yoloMusicConcept,
+        styleNotes: yoloMusicStyleNotes,
+        targetDuration: yoloMusicTargetDuration,
+        songDurationSeconds: yoloMusicSongDurationSeconds,
+        cast: [],
+      })
+      // Cast-resolution warnings are noise on alts (cast is empty by design).
+      // Filter them here so the tab status dot + parse preview match what the
+      // eventual Build Plan writes.
+      const IRRELEVANT_KINDS_FOR_ALT = new Set(['unresolved-artist-override', 'too-many-artists'])
+      const filteredWarnings = Array.isArray(warnings)
+        ? warnings.filter((w) => !IRRELEVANT_KINDS_FOR_ALT.has(w?.kind))
+        : []
+      if (!Array.isArray(scenes) || scenes.length === 0) {
+        out[alt.id] = { state: 'unparsed', warnings: filteredWarnings }
+        continue
+      }
+      let shotCount = 0
+      let totalLengthSec = 0
+      const ranges = []
+      for (const scene of scenes) {
+        for (const shot of scene?.shots || []) {
+          shotCount += 1
+          const len = Number(shot?.durationSeconds ?? shot?.length ?? 0) || 0
+          const start = Number(shot?.audioStart ?? 0) || 0
+          totalLengthSec += len
+          if (len > 0) ranges.push({ start, end: start + len })
+        }
+      }
+      const coverageGaps = yoloMusicSongDurationSeconds > 0
+        ? computeCoverageGaps(ranges, yoloMusicSongDurationSeconds, 0.5)
+        : []
+      const safeWarnings = filteredWarnings
+      out[alt.id] = {
+        state: safeWarnings.length > 0 ? 'warning' : 'ok',
+        shotCount,
+        totalLengthSec,
+        coverageGaps,
+        warnings: safeWarnings,
+        scenes,
+      }
+    }
+    return out
+  }, [
+    yoloMusicAltScripts,
+    yoloMusicLyrics,
+    yoloMusicConcept,
+    yoloMusicStyleNotes,
+    yoloMusicTargetDuration,
+    yoloMusicSongDurationSeconds,
+  ])
+  const yoloMusicActiveAltParse = yoloMusicActiveAltScript
+    ? yoloMusicAltParseResults[yoloMusicActiveAltScript.id] || { state: 'empty' }
+    : null
+  // One-time migration: if the user has a legacy single-artist selection but
+  // no cast entries yet, seed the cast with that artist as a "lead" member
+  // named "Artist". After that, the legacy field goes dormant and the cast
+  // roster is the source of truth.
+  const musicCastMigrationRanRef = useRef(false)
+  useEffect(() => {
+    if (musicCastMigrationRanRef.current) return
+    if (assets.length === 0) return
+    if (yoloMusicCast.length > 0) {
+      musicCastMigrationRanRef.current = true
+      return
+    }
+    if (!yoloMusicArtistAssetId) {
+      musicCastMigrationRanRef.current = true
+      return
+    }
+    const legacyAsset = assets.find((a) => a?.id === yoloMusicArtistAssetId && a?.type === 'image')
+    if (!legacyAsset) {
+      musicCastMigrationRanRef.current = true
+      return
+    }
+    musicCastMigrationRanRef.current = true
+    setYoloMusicCast([{
+      id: `cast-${Date.now()}-seed`,
+      slug: 'artist',
+      label: 'Artist',
+      assetId: yoloMusicArtistAssetId,
+      role: 'lead',
+    }])
+  }, [assets, yoloMusicArtistAssetId, yoloMusicCast])
   const yoloAdReferenceStyleNotes = useMemo(() => buildAdReferenceStyleNotes({
     hasProduct: Boolean(yoloAdProductAsset),
     hasModel: Boolean(yoloAdModelAsset),
@@ -1440,41 +2547,180 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloTakesPerAngle,
     yoloTargetDuration,
   ])
-  const currentYoloMusicPlanSignature = useMemo(() => createYoloPlanSignature({
+  /**
+   * Build a music-mode plan signature for an arbitrary script/style-notes
+   * pair. Used by:
+   *   - `currentYoloMusicPlanSignature` (master)
+   *   - Per-alt-slot signature comparisons (stale-plan detection)
+   *   - `buildYoloMusicPlan` writing a fresh signature after build
+   *
+   * Both arguments fall back to current state, so callers that don't care
+   * about overrides (e.g. master) can call `makeMusicPlanSignature()`.
+   *
+   * The signature includes castSignature and artistAssetId even though
+   * alt passes intentionally omit cast from the planner — the inputs still
+   * affect the generated plan-shape downstream (keyframe refs, variant
+   * fan-out), so we want a rebuild prompt when those change.
+   */
+  const makeMusicPlanSignature = useCallback(({ script, styleNotes } = {}) => createYoloPlanSignature({
     mode: 'music',
-    title: yoloMusicTitle,
+    audioAssetId: yoloMusicAudioAssetId || '',
+    audioKind: yoloMusicAudioKind,
+    // Legacy field kept in the signature only for migration continuity. Once
+    // the cast is populated the planner ignores it, but including it here
+    // ensures "I just converted my legacy artist to cast[0]" still invalidates
+    // the cached plan and prompts a rebuild.
+    artistAssetId: yoloMusicArtistAssetId || '',
+    castSignature: yoloMusicResolvedCast
+      .map((c) => `${c.slug}:${c.assetId}:${c.role || ''}`)
+      .join('|'),
     lyrics: yoloMusicLyrics,
-    storyIdea: yoloMusicStoryIdea,
-    subject: yoloMusicSubject,
-    palette: yoloMusicScenePalette,
-    styleNotes: yoloMusicStyleNotes,
+    script: String(script ?? yoloMusicScript),
+    concept: yoloMusicConcept,
+    styleNotes: String(styleNotes ?? yoloMusicStyleNotes),
     targetDuration: yoloMusicTargetDuration,
-    shotsPerScene: yoloMusicShotsPerScene,
-    anglesPerShot: yoloMusicAnglesPerShot,
-    takesPerAngle: yoloMusicTakesPerAngle,
     qualityProfile: yoloMusicQualityProfile,
   }), [
-    yoloMusicAnglesPerShot,
+    yoloMusicAudioAssetId,
+    yoloMusicAudioKind,
+    yoloMusicArtistAssetId,
+    yoloMusicConcept,
     yoloMusicLyrics,
     yoloMusicQualityProfile,
-    yoloMusicScenePalette,
-    yoloMusicShotsPerScene,
-    yoloMusicStoryIdea,
+    yoloMusicResolvedCast,
+    yoloMusicScript,
     yoloMusicStyleNotes,
-    yoloMusicSubject,
-    yoloMusicTakesPerAngle,
     yoloMusicTargetDuration,
-    yoloMusicTitle,
   ])
+  const currentYoloMusicPlanSignature = useMemo(
+    () => makeMusicPlanSignature({ script: yoloMusicScript }),
+    [makeMusicPlanSignature, yoloMusicScript]
+  )
   const yoloAdPlanIsStale = yoloPlan.length > 0 && yoloPlanSignature !== currentYoloAdPlanSignature
   const yoloMusicPlanIsStale = yoloMusicPlan.length > 0 && yoloMusicPlanSignature !== currentYoloMusicPlanSignature
-  const yoloActivePlanIsStale = isYoloMusicMode ? yoloMusicPlanIsStale : yoloAdPlanIsStale
+  // Per-alt-slot staleness: a slot's plan is stale if it was built (plan.length > 0)
+  // AND its persisted signature disagrees with a freshly-computed signature of its
+  // current script. Keyed by slot id so the tab strip + stale-plan banner can read it.
+  const yoloMusicAltPlanStaleness = useMemo(() => {
+    const out = {}
+    for (const alt of yoloMusicAltScripts) {
+      const plan = Array.isArray(alt.plan) ? alt.plan : []
+      if (plan.length === 0) {
+        out[alt.id] = false
+        continue
+      }
+      const currentSig = makeMusicPlanSignature({ script: alt.script })
+      out[alt.id] = (alt.planSignature || '') !== currentSig
+    }
+    return out
+  }, [yoloMusicAltScripts, makeMusicPlanSignature])
+  const yoloMusicActiveTargetPlanIsStale = yoloMusicActiveScriptId
+    ? Boolean(yoloMusicAltPlanStaleness[yoloMusicActiveScriptId])
+    : yoloMusicPlanIsStale
+  const yoloActivePlanIsStale = isYoloMusicMode ? yoloMusicActiveTargetPlanIsStale : yoloAdPlanIsStale
+  // Active-target planner warnings: master warnings live in yoloMusicPlanWarnings,
+  // alt-target warnings live on the slot itself. The UI consumer reads this
+  // derived value so a single panel works for both.
+  const yoloMusicActiveTargetPlanWarnings = useMemo(() => {
+    if (!yoloMusicActiveScriptId) return yoloMusicPlanWarnings
+    const slot = yoloMusicAltScripts.find((entry) => entry.id === yoloMusicActiveScriptId)
+    return Array.isArray(slot?.planWarnings) ? slot.planWarnings : []
+  }, [yoloMusicActiveScriptId, yoloMusicAltScripts, yoloMusicPlanWarnings])
+  /**
+   * Render the pass-switcher tab strip — Master + one chip per alt script,
+   * each with badge, label, and a parse-status dot.
+   *
+   * Used in two places:
+   *   - Script step (above the textarea) — always visible in the full form
+   *   - Keyframes/Videos step banner — compact form so users can pivot
+   *     between passes without bouncing back to the Script step
+   *
+   * `variant: 'full'` = Script-step chrome (larger click targets).
+   * `variant: 'compact'` = banner chrome (smaller, fits on the banner row).
+   *
+   * Exposed as a plain function instead of a component so both render sites
+   * can inline it cleanly without prop/children plumbing; closures over
+   * state keep this cheap.
+   */
+  const renderPassTabStrip = (variant = 'full') => {
+    const isCompact = variant === 'compact'
+    const basePad = isCompact ? 'px-1.5 py-0.5' : 'px-2 py-1'
+    const baseText = 'text-[10px]'
+    const badgeSize = isCompact ? 'px-[5px] text-[8px]' : 'px-1 text-[8px]'
+    const labelMax = isCompact ? 'max-w-[8rem]' : 'max-w-[12rem]'
+    return (
+      <div className="flex flex-wrap items-center gap-1">
+        <button
+          type="button"
+          onClick={() => setYoloMusicActiveScriptId(null)}
+          className={`${basePad} ${baseText} rounded transition-colors ${
+            yoloMusicIsMasterActive
+              ? 'bg-sf-accent text-white'
+              : 'bg-sf-dark-700 text-sf-text-secondary hover:text-sf-text-primary hover:bg-sf-dark-600'
+          }`}
+          title="The backbone performance script. Alt passes inherit its timings."
+        >
+          Master
+        </button>
+        {yoloMusicAltScripts.map((alt) => {
+          const isActive = yoloMusicActiveScriptId === alt.id
+          const badge = getMusicVideoPassBadge(alt.passType)
+          const parse = yoloMusicAltParseResults[alt.id] || { state: 'empty' }
+          const dotClass = (() => {
+            switch (parse.state) {
+              case 'ok':       return 'bg-emerald-400'
+              case 'warning':  return 'bg-yellow-400'
+              case 'unparsed': return 'bg-red-400'
+              case 'empty':    return 'bg-sf-dark-500'
+              default:         return 'bg-sf-dark-500'
+            }
+          })()
+          const dotTitle = (() => {
+            switch (parse.state) {
+              case 'ok':       return `Parses cleanly · ${parse.shotCount} shots`
+              case 'warning':  return `Parses with ${parse.warnings.length} warning${parse.warnings.length === 1 ? '' : 's'}`
+              case 'unparsed': return 'Script pasted but could not be parsed — check the shot grammar.'
+              case 'empty':    return 'Empty — paste the LLM output into the textarea to parse.'
+              default:         return ''
+            }
+          })()
+          return (
+            <button
+              key={alt.id}
+              type="button"
+              onClick={() => setYoloMusicActiveScriptId(alt.id)}
+              className={`${basePad} ${baseText} rounded transition-colors flex items-center gap-1.5 ${
+                isActive
+                  ? 'bg-sf-accent text-white'
+                  : 'bg-sf-dark-700 text-sf-text-secondary hover:text-sf-text-primary hover:bg-sf-dark-600'
+              }`}
+              title={`${getMusicVideoPassDisplayName(alt.passType)}${alt.variantDescriptor ? `: ${alt.variantDescriptor}` : ''}`}
+            >
+              <span className={`${badgeSize} py-0 rounded font-bold tracking-wider ${isActive ? 'bg-white/20' : 'bg-sf-dark-900/60'}`}>
+                {badge}
+              </span>
+              <span className={`truncate ${labelMax}`}>{alt.label}</span>
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${dotClass}`}
+                title={dotTitle}
+                aria-label={dotTitle}
+              />
+            </button>
+          )
+        })}
+      </div>
+    )
+  }
   const yoloQueueNameLabel = useMemo(() => {
     if (isYoloMusicMode) {
+      // Pull a human-friendly label from the selected audio asset name first,
+      // then the concept/style-notes as fallbacks. Avoids blanks in the job
+      // list when the user hasn't named anything.
+      const audioAsset = assets.find((asset) => asset?.id === yoloMusicAudioAssetId) || null
       return (
-        String(yoloMusicTitle || '').trim()
-        || String(yoloMusicSubject || '').trim()
-        || summarizeSceneText(yoloMusicStoryIdea, 'music video')
+        stripFileExtension(audioAsset?.name || '').trim()
+        || String(yoloMusicConcept || '').trim()
+        || summarizeSceneText(yoloMusicStyleNotes, 'music video')
       )
     }
 
@@ -1486,12 +2732,13 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
     return anchorLabel || summarizeSceneText(yoloScript, 'director ad')
   }, [
+    assets,
     isYoloMusicMode,
     yoloAdModelAsset?.name,
     yoloAdProductAsset?.name,
-    yoloMusicStoryIdea,
-    yoloMusicSubject,
-    yoloMusicTitle,
+    yoloMusicAudioAssetId,
+    yoloMusicConcept,
+    yoloMusicStyleNotes,
     yoloScript,
   ])
 
@@ -2505,71 +3752,128 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloTargetDuration,
   ])
 
+  /**
+   * Build a music-mode plan for a specific target.
+   *
+   * `options.target` selects where the plan gets written:
+   *   - undefined / null / 'active'  → active target (yoloMusicActiveScriptId)
+   *   - 'master'                      → master regardless of active tab
+   *   - <altSlotId>                   → a specific alt slot by id
+   *
+   * Alt-slot builds intentionally pass cast: [] to the planner because
+   * b-roll passes have no performers and alt_performance passes inherit
+   * the master's cast via the LLM prompt (the planner itself doesn't need
+   * to resolve Artist: fields for alts — the LLM already baked them into
+   * the Keyframe/Motion prompts). Keeping cast empty here avoids spurious
+   * "unresolved artist" warnings on every b-roll pass.
+   */
   const buildYoloMusicPlan = useCallback((options = {}) => {
-    if (!yoloMusicLyrics.trim()) {
-      setFormError('Paste song lyrics first, then click Build Plan')
+    const rawTarget = Object.prototype.hasOwnProperty.call(options, 'target') ? options.target : 'active'
+    let resolvedTargetId = null // null = master
+    if (rawTarget === 'master') {
+      resolvedTargetId = null
+    } else if (rawTarget === 'active' || rawTarget == null) {
+      resolvedTargetId = yoloMusicActiveScriptId || null
+    } else {
+      resolvedTargetId = String(rawTarget)
+    }
+    const targetSlot = resolvedTargetId
+      ? yoloMusicAltScripts.find((entry) => entry.id === resolvedTargetId) || null
+      : null
+    if (resolvedTargetId && !targetSlot) {
+      setFormError('Alt pass not found. Switch to it again and retry.')
+      return null
+    }
+    const scriptContent = targetSlot ? targetSlot.script : yoloMusicScript
+    const isAltTarget = Boolean(targetSlot)
+
+    if (!yoloMusicAudioAssetId) {
+      setFormError('Select the song audio asset first')
+      return null
+    }
+    if (!String(scriptContent || '').trim()) {
+      setFormError(isAltTarget
+        ? 'This alt pass has no script yet — paste the LLM output into it first.'
+        : 'Write a director script first (tip: click "Start from template")')
       return null
     }
 
-    const estimatedSceneCount = Math.max(
-      4,
-      Math.min(24, Math.round((Number(yoloMusicTargetDuration) || 30) / Math.max(1, Number(yoloMusicShotsPerScene) || 1)))
-    )
-    const generatedScript = buildMusicVideoScriptFromLyrics(yoloMusicLyrics, {
-      songTitle: yoloMusicTitle,
-      storyIdea: yoloMusicStoryIdea,
-      subjectDescription: yoloMusicSubject,
-      scenePalette: yoloMusicScenePalette,
-      targetDuration: yoloMusicTargetDuration,
-      estimatedSceneCount,
-    })
-
-    if (!generatedScript.trim()) {
-      setFormError('Could not build a music video scene script from the lyrics')
-      return null
-    }
-
-    const effectiveMusicStyleNotes = Object.prototype.hasOwnProperty.call(options, 'styleNotesOverride')
+    const effectiveStyleNotes = Object.prototype.hasOwnProperty.call(options, 'styleNotesOverride')
       ? String(options.styleNotesOverride || '').trim()
       : String(yoloMusicStyleNotes || '').trim()
-    if (effectiveMusicStyleNotes !== yoloMusicStyleNotes) {
-      setYoloMusicStyleNotes(effectiveMusicStyleNotes)
+    if (effectiveStyleNotes !== yoloMusicStyleNotes) {
+      setYoloMusicStyleNotes(effectiveStyleNotes)
     }
-    const combinedStyleNotes = buildMusicVideoStyleNotes({
-      styleNotes: effectiveMusicStyleNotes,
-      subjectDescription: yoloMusicSubject,
-      scenePalette: yoloMusicScenePalette,
-    })
 
-    const nextPlan = buildYoloPlanFromScript(generatedScript, {
-      targetDurationSeconds: yoloMusicTargetDuration,
-      shotsPerScene: yoloMusicShotsPerScene,
-      anglesPerShot: yoloMusicAnglesPerShot,
-      takesPerAngle: yoloMusicTakesPerAngle,
-      styleNotes: combinedStyleNotes,
+    const { scenes: nextPlan, warnings: planWarnings } = buildMusicVideoPlanFromScript({
+      script: scriptContent,
+      lyrics: yoloMusicLyrics,
+      concept: yoloMusicConcept,
+      styleNotes: effectiveStyleNotes,
+      targetDuration: yoloMusicTargetDuration,
+      songDurationSeconds: yoloMusicSongDurationSeconds,
+      cast: isAltTarget ? [] : yoloMusicResolvedCast,
     })
-    if (nextPlan.length === 0) {
-      setFormError('Could not extract scenes from lyrics')
+    if (!Array.isArray(nextPlan) || nextPlan.length === 0) {
+      setFormError('Could not parse the director script. Make sure each shot starts with "Shot N:" and includes at least a Keyframe prompt and a Motion prompt.')
       return null
     }
-    const normalizedPlan = normalizeGeneratedYoloPlan(nextPlan)
-    setYoloMusicPlan(normalizedPlan)
-    setYoloMusicPlanSignature(currentYoloMusicPlanSignature)
+
+    // Stamp pass identity onto every scene so it survives into
+    // flattenYoloPlanVariants → queue jobs → generated assets. Master gets a
+    // synthetic `master` type so downstream code can treat every asset
+    // uniformly; alt slots contribute their real passType + label so we can
+    // distinguish Alt Performance vs Environmental vs Detail B-roll assets.
+    const passMeta = isAltTarget
+      ? {
+        type: String(targetSlot.passType || 'alt_performance'),
+        altSlotId: String(targetSlot.id || ''),
+        altLabel: String(targetSlot.label || ''),
+      }
+      : { type: 'master', altSlotId: null, altLabel: 'Master Performance' }
+    const normalizedPlan = normalizeGeneratedYoloPlan(nextPlan).map((scene) => ({
+      ...scene,
+      pass: passMeta,
+    }))
+    const signature = makeMusicPlanSignature({ script: scriptContent, styleNotes: effectiveStyleNotes })
+    const rawWarnings = Array.isArray(planWarnings) ? planWarnings : []
+    // Alt builds pass cast:[] to the planner on purpose (alt passes either
+    // have no performers, as for b-roll, or inherit cast via the LLM prompt
+    // for alt_performance). Cast-resolution warnings are therefore expected
+    // on every Artist-bearing shot and would flood the warnings panel with
+    // noise. Strip those kinds for alt targets only.
+    const IRRELEVANT_KINDS_FOR_ALT = new Set(['unresolved-artist-override', 'too-many-artists'])
+    const safeWarnings = isAltTarget
+      ? rawWarnings.filter((w) => !IRRELEVANT_KINDS_FOR_ALT.has(w?.kind))
+      : rawWarnings
+    if (isAltTarget) {
+      setYoloMusicAltScripts((prev) => prev.map((entry) => entry.id === resolvedTargetId
+        ? { ...entry, plan: normalizedPlan, planSignature: signature, planWarnings: safeWarnings }
+        : entry))
+    } else {
+      setYoloMusicPlan(normalizedPlan)
+      setYoloMusicPlanSignature(signature)
+      // Surface planner warnings (unresolved Artist: names, unknown lyric tags,
+      // too-many-artists overflow) in the music-mode warning state. These are
+      // advisory and do NOT block the build — the plan already fell back to a
+      // sensible default.
+      setYoloMusicPlanWarnings(safeWarnings)
+    }
     setFormError(null)
     return normalizedPlan
   }, [
-    currentYoloMusicPlanSignature,
+    makeMusicPlanSignature,
     normalizeGeneratedYoloPlan,
-    yoloMusicAnglesPerShot,
+    yoloMusicActiveScriptId,
+    yoloMusicAltScripts,
+    yoloMusicAudioAssetId,
+    yoloMusicResolvedCast,
+    yoloMusicConcept,
     yoloMusicLyrics,
-    yoloMusicScenePalette,
-    yoloMusicShotsPerScene,
-    yoloMusicStoryIdea,
+    yoloMusicScript,
+    yoloMusicSongDurationSeconds,
     yoloMusicStyleNotes,
-    yoloMusicSubject,
-    yoloMusicTakesPerAngle,
     yoloMusicTargetDuration,
-    yoloMusicTitle,
   ])
 
   const buildActiveYoloPlan = useCallback((options = {}) => (
@@ -2577,8 +3881,19 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   ), [buildYoloAdPlan, buildYoloMusicPlan, isYoloMusicMode])
   const handleBuildActiveYoloPlan = useCallback(() => {
     if (isYoloMusicMode) {
-      setYoloMusicPlan([])
-      setYoloMusicPlanSignature('')
+      // Reset the active target's plan first so the Build → reflow
+      // produces clean state. Master uses the dedicated yoloMusicPlan
+      // setters; alt targets write into the alt slot.
+      if (yoloMusicActiveScriptId) {
+        const targetId = yoloMusicActiveScriptId
+        setYoloMusicAltScripts((prev) => prev.map((entry) => entry.id === targetId
+          ? { ...entry, plan: [], planSignature: '', planWarnings: [] }
+          : entry))
+      } else {
+        setYoloMusicPlan([])
+        setYoloMusicPlanSignature('')
+        setYoloMusicPlanWarnings([])
+      }
     } else {
       setYoloPlan([])
       setYoloPlanSignature('')
@@ -2588,7 +3903,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       setDirectorSubTab('scene-shot')
     }
     return nextPlan
-  }, [buildActiveYoloPlan, isYoloMusicMode])
+  }, [buildActiveYoloPlan, isYoloMusicMode, yoloMusicActiveScriptId])
 
   const updateYoloShot = useCallback((sceneId, shotId, updater) => {
     setYoloActivePlan((prevPlan) => prevPlan.map((scene) => {
@@ -2649,6 +3964,150 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       takesPerAngle: Math.round(clampNumberValue(value, 1, 4, shot.takesPerAngle)),
     }))
   }, [updateYoloShot])
+
+  // --- Music-video cast roster handlers -----------------------------------
+  // The roster is a flat array; each row is edited by id. When the user picks
+  // an image asset we also auto-derive a slug from its name (but leave the
+  // slug editable — users sometimes want "rose" even when the asset is named
+  // "rose_portrait_v2.png").
+  const handleYoloMusicCastAdd = useCallback(() => {
+    setYoloMusicCast((prev) => {
+      const next = [...(prev || [])]
+      next.push({
+        id: `cast-${Date.now()}-${next.length}`,
+        slug: '',
+        label: '',
+        assetId: null,
+        role: next.length === 0 ? 'lead' : 'co_lead',
+      })
+      return next
+    })
+  }, [])
+  const handleYoloMusicCastRemove = useCallback((castId) => {
+    setYoloMusicCast((prev) => (prev || []).filter((entry) => entry?.id !== castId))
+  }, [])
+  const handleYoloMusicCastAssetChange = useCallback((castId, nextAssetId) => {
+    setYoloMusicCast((prev) => (prev || []).map((entry) => {
+      if (entry?.id !== castId) return entry
+      const assetId = nextAssetId || null
+      // If the row has no slug/label yet, seed them from the picked asset's
+      // name so the user immediately sees a usable "rose" / "jake" handle.
+      let { slug, label } = entry
+      if (assetId && (!slug || !label)) {
+        const asset = assets.find((a) => a?.id === assetId)
+        const rawName = asset?.name || ''
+        const stripped = rawName.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').trim()
+        if (!slug) slug = normalizeCastSlug(stripped) || normalizeCastSlug(rawName)
+        if (!label) label = stripped || rawName
+      }
+      return { ...entry, assetId, slug, label }
+    }))
+  }, [assets])
+  const handleYoloMusicCastSlugChange = useCallback((castId, rawValue) => {
+    const slug = normalizeCastSlug(rawValue)
+    setYoloMusicCast((prev) => (prev || []).map((entry) => (
+      entry?.id === castId ? { ...entry, slug } : entry
+    )))
+  }, [])
+  const handleYoloMusicCastLabelChange = useCallback((castId, label) => {
+    setYoloMusicCast((prev) => (prev || []).map((entry) => (
+      entry?.id === castId ? { ...entry, label: String(label || '').slice(0, 60) } : entry
+    )))
+  }, [])
+  const handleYoloMusicCastRoleChange = useCallback((castId, role) => {
+    setYoloMusicCast((prev) => (prev || []).map((entry) => (
+      entry?.id === castId ? { ...entry, role } : entry
+    )))
+  }, [])
+
+  /**
+   * Build the LLM prompt for a given pass configuration using the current
+   * song/cast/concept context plus the current master script. Shared by
+   * "create a new alt slot" and "re-copy this existing alt slot's prompt".
+   */
+  const buildMusicVideoAltPrompt = useCallback(({ passType, variantDescriptor }) => (
+    buildMusicVideoLLMPrompt({
+      songName: yoloMusicAudioAsset?.name || '',
+      songDurationSeconds: yoloMusicSongDurationSeconds,
+      targetDuration: yoloMusicTargetDuration,
+      concept: yoloMusicConcept,
+      styleNotes: yoloMusicStyleNotes,
+      lyrics: yoloMusicLyrics,
+      cast: yoloMusicResolvedCast,
+      pass: passType,
+      variantDescriptor,
+      masterScript: yoloMusicScript,
+    })
+  ), [
+    yoloMusicAudioAsset?.name,
+    yoloMusicSongDurationSeconds,
+    yoloMusicTargetDuration,
+    yoloMusicConcept,
+    yoloMusicStyleNotes,
+    yoloMusicLyrics,
+    yoloMusicResolvedCast,
+    yoloMusicScript,
+  ])
+
+  /**
+   * Create a new alt-script slot for the given pass type, set it active,
+   * and copy the corresponding LLM prompt to the clipboard so the user
+   * can immediately paste it into their model of choice.
+   *
+   * Gated on the master script existing — alt passes inherit the master's
+   * timings/lyrics, so without a master there's nothing to anchor to.
+   */
+  const handleCreateMusicAltScript = useCallback(({ passType, variantDescriptor = '' }) => {
+    if (!yoloMusicScript.trim()) {
+      setFormError('Write or paste your master Director Script first — alt passes inherit its timings.')
+      return null
+    }
+    const variant = String(variantDescriptor || '').trim()
+    const newSlot = {
+      id: makeAltScriptId(),
+      passType,
+      label: deriveAltScriptLabel(passType, variant, yoloMusicAltScripts),
+      variantDescriptor: variant,
+      script: '',
+      createdAt: Date.now(),
+    }
+    setYoloMusicAltScripts((prev) => [...prev, newSlot])
+    setYoloMusicActiveScriptId(newSlot.id)
+    setFormError(null)
+    const prompt = buildMusicVideoAltPrompt({ passType, variantDescriptor: variant })
+    void copyTextToClipboard(prompt)
+    return newSlot
+  }, [
+    yoloMusicScript,
+    yoloMusicAltScripts,
+    buildMusicVideoAltPrompt,
+  ])
+
+  const handleMusicAltScriptRename = useCallback((slotId, label) => {
+    setYoloMusicAltScripts((prev) => prev.map((entry) => (
+      entry.id === slotId ? { ...entry, label: String(label || '').slice(0, 80) } : entry
+    )))
+  }, [])
+
+  const handleMusicAltScriptChangeContent = useCallback((slotId, script) => {
+    setYoloMusicAltScripts((prev) => prev.map((entry) => (
+      entry.id === slotId ? { ...entry, script: String(script || '') } : entry
+    )))
+  }, [])
+
+  const handleMusicAltScriptDelete = useCallback((slotId) => {
+    const target = yoloMusicAltScripts.find((entry) => entry.id === slotId)
+    if (!target) return
+    const hasContent = Boolean(String(target.script || '').trim())
+    // Only prompt for confirmation when the user would lose pasted work.
+    // Empty slots delete silently since they were likely created by an
+    // accidental click and are costless to recreate.
+    if (hasContent && !window.confirm(`Delete "${target.label}"? This cannot be undone.`)) {
+      return
+    }
+    setYoloMusicAltScripts((prev) => prev.filter((entry) => entry.id !== slotId))
+    setYoloMusicActiveScriptId((currentId) => (currentId === slotId ? null : currentId))
+  }, [yoloMusicAltScripts])
 
   const queueYoloStoryboardVariants = useCallback(async (variants, options = {}) => {
     const {
@@ -2731,8 +4190,21 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         inputAssetId: storyboardInputAsset?.id || null,
         inputAssetName: storyboardInputAsset?.name || '',
         inputFromTimelineFrame: false,
-        referenceAssetId1: !isYoloMusicMode ? (yoloAdProductAsset?.id || null) : null,
-        referenceAssetId2: !isYoloMusicMode ? (yoloAdModelAsset?.id || null) : null,
+        // Music mode routes the resolved per-shot artist reference(s) into
+        // slots 1/2 (the same slots ads use for product/model). The planner
+        // resolved these from cast + script Artist: override + lyric [Name]
+        // tags. If a shot has no resolved cast member (empty roster or fully
+        // unresolved), we fall back to the legacy single-artist asset. If
+        // that's unset too, the storyboard runs reference-free.
+        //
+        // z-image-turbo ignores references silently — a warning is surfaced
+        // in the Script tab when an artist is picked with that workflow.
+        referenceAssetId1: isYoloMusicMode
+          ? (variant.resolvedArtistAssetIds?.[0] || yoloMusicArtistAsset?.id || null)
+          : (yoloAdProductAsset?.id || null),
+        referenceAssetId2: isYoloMusicMode
+          ? (variant.resolvedArtistAssetIds?.[1] || null)
+          : (yoloAdModelAsset?.id || null),
         directorLabel: yoloQueueNameLabel,
         yolo: {
           mode: yoloModeKey,
@@ -2746,6 +4218,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           profile: isYoloMusicMode ? yoloMusicQualityProfile : yoloNormalizedAdStoryboardTier,
           profileRuntime: !isYoloMusicMode ? yoloStoryboardProfileRuntime : null,
           referenceConsistency: !isYoloMusicMode ? yoloAdConsistency : null,
+          // Origin pass (music mode only). flattenYoloPlanVariants threads this
+          // through from the scene; the importer writes it onto the asset so
+          // the UI can show a pass badge and future filters can group by pass.
+          pass: (isYoloMusicMode && variant?.pass && typeof variant.pass === 'object') ? variant.pass : null,
         },
       })
     })
@@ -2765,6 +4241,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloAdConsistency,
     yoloAdModelAsset,
     yoloAdModelAsset?.id,
+    yoloMusicArtistAsset,
+    yoloMusicArtistAsset?.id,
     yoloMusicQualityProfile,
     yoloNormalizedAdStoryboardTier,
     yoloAdProductAsset,
@@ -2924,6 +4402,22 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       return true
     })
 
+    // Build a lookup from variant.key back to the source shot so we can pull
+    // music-video-specific fields (musicShotType, audioStart, shotPrompt, etc.)
+    // without coupling flattenYoloPlanVariants to music-video concepts.
+    const musicShotByKey = new Map()
+    if (isYoloMusicMode) {
+      for (const scene of yoloActivePlan || []) {
+        for (const shot of scene?.shots || []) {
+          // variant keys have the form `${sceneId}|${shotId}|${angle}|T${take}`.
+          // Music-video shots always flatten to one variant: angle='Medium shot', take=1.
+          const angle = Array.isArray(shot?.angles) && shot.angles.length > 0 ? shot.angles[0] : 'Medium shot'
+          const key = `${scene.id}|${shot.id}|${angle}|T1`
+          musicShotByKey.set(key, shot)
+        }
+      }
+    }
+
     const jobs = []
     let missing = 0
     let seedOffset = 0
@@ -2945,6 +4439,18 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       const requestedFps = customFpsWorkflowIds.has(String(workflowId || '').trim())
         ? (Number(yoloVideoFps) || 24)
         : null
+
+      // Music-video-specific payload threaded into the job, consumed by the
+      // music-video case in runJob's switch.
+      const musicShot = isYoloMusicMode ? musicShotByKey.get(variant.key) : null
+      const musicShotPayload = musicShot ? normalizeMusicVideoShot({
+        shotType: musicShot.musicShotType,
+        audioStart: musicShot.audioStart,
+        length: musicShot.length || musicShot.durationSeconds,
+        shotPrompt: musicShot.shotPrompt || musicShot.videoBeat || musicShot.beat,
+        referenceImagePrompt: musicShot.referenceImagePrompt,
+      }) : null
+
       jobs.push(createQueuedJob({
         category: 'video',
         workflowId,
@@ -2953,13 +4459,19 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         inputAssetId: storyboardAsset.id,
         inputAssetName: storyboardAsset.name || variant.key,
         inputFromTimelineFrame: false,
-        prompt: variant.videoPrompt || variant.prompt,
-        duration: videoDuration,
+        prompt: musicShotPayload?.shotPrompt || variant.videoPrompt || variant.prompt,
+        duration: musicShotPayload?.length || videoDuration,
         fps: requestedFps,
         seed: Number(seed) + seedOffset,
         referenceAssetId1: null,
         referenceAssetId2: null,
         directorLabel: yoloQueueNameLabel,
+        // Carry the song audio asset id + mode-specific audio metadata so runJob
+        // can upload it once per job and pass the uploaded filename into the
+        // music-video workflow modifier.
+        musicAudioAssetId: isYoloMusicMode ? yoloMusicAudioAssetId : null,
+        musicAudioKind: isYoloMusicMode ? yoloMusicAudioKind : null,
+        musicShot: musicShotPayload,
         yolo: {
           mode: yoloModeKey,
           stage: 'video',
@@ -2973,6 +4485,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           durationSeconds: variant.durationSeconds,
           profile: isYoloMusicMode ? yoloMusicQualityProfile : yoloNormalizedAdVideoTier,
           profileRuntime: !isYoloMusicMode ? yoloVideoProfileRuntime : null,
+          // Origin pass, mirrored from the keyframe stage so videos
+          // inherit the same badge/filename token as their keyframe.
+          pass: (isYoloMusicMode && variant?.pass && typeof variant.pass === 'object') ? variant.pass : null,
         },
       }))
     }
@@ -3012,7 +4527,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     getExistingYoloStageKeys,
     isYoloMusicMode,
     seed,
+    yoloActivePlan,
     yoloDefaultVideoWorkflowId,
+    yoloMusicAudioAssetId,
+    yoloMusicAudioKind,
     yoloMusicQualityProfile,
     yoloNormalizedAdVideoTier,
     yoloVideoProfileRuntime,
@@ -3769,7 +5287,23 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       stripFileExtension(job?.directorLabel || ''),
       { fallback: '', maxLength: 28 }
     )
-    const directorNameToken = [labelToken, stageToken, sceneToken, shotToken, angleToken, takeToken]
+    // Pass token so b-roll/alt assets are identifiable by filename alone.
+    // master → omitted (keeps existing filenames for the primary pass stable);
+    // alt_performance → alt-<label-slug>; environmental_broll → env;
+    // detail_broll → det. The slug for alt_performance folds in the variant
+    // label so different alt passes keep distinct filenames.
+    const passType = String(directorMeta?.pass?.type || '')
+    const passToken = (() => {
+      if (!passType || passType === 'master') return ''
+      if (passType === 'environmental_broll') return 'env'
+      if (passType === 'detail_broll') return 'det'
+      if (passType === 'alt_performance') {
+        const altLabelSlug = slugifyNameToken(directorMeta?.pass?.altLabel, { fallback: 'alt', maxLength: 18 })
+        return `alt-${altLabelSlug}`
+      }
+      return slugifyNameToken(passType, { fallback: '', maxLength: 18 })
+    })()
+    const directorNameToken = [labelToken, passToken, stageToken, sceneToken, shotToken, angleToken, takeToken]
       .filter(Boolean)
       .join('_')
     const resolvedName = directorMeta
@@ -3810,6 +5344,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         didImportAny = true
         if (isElectron() && currentProjectHandle && newAsset?.absolutePath) {
           enqueuePlaybackTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
+          if (isProxyPlaybackEnabled()) {
+            enqueueProxyTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
+          }
         }
       } catch (err) {
         console.error('Failed to save video:', err)
@@ -3957,6 +5494,27 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         uploadedFilename = uploadResult?.name || fileToUpload.name
       }
 
+      // Music-video-shot workflow needs the song audio uploaded once per job.
+      // It lives on the job as musicAudioAssetId; we grab the asset, fetch it,
+      // upload it to Comfy's input folder, and keep the returned filename so
+      // the modifier can reference it on the LoadAudio node.
+      let uploadedAudioFilename = null
+      if (job.workflowId === MUSIC_VIDEO_SHOT_WORKFLOW_ID && job.musicAudioAssetId) {
+        const audioAsset = assets.find((a) => a.id === job.musicAudioAssetId && a.type === 'audio')
+        if (!audioAsset) {
+          throw new Error('Music Video audio asset not found — re-select the song in the brief and rebuild the plan.')
+        }
+        try {
+          const resp = await fetch(audioAsset.url)
+          const blob = await resp.blob()
+          const file = new File([blob], audioAsset.name || `song_${Date.now()}.mp3`, { type: blob.type || 'audio/mpeg' })
+          const uploadResult = await comfyui.uploadFile(file)
+          uploadedAudioFilename = uploadResult?.name || file.name
+        } catch (audioError) {
+          throw new Error(`Failed to upload song audio: ${audioError?.message || audioError}`)
+        }
+      }
+
       // Upload optional reference images for workflows that support them
       const supportsReferenceImages = (
         job.workflowId === 'image-edit' ||
@@ -4020,7 +5578,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         modifyGrokVideoI2VWorkflow,
         modifyViduQ2I2VWorkflow,
         modifyKlingO3I2VWorkflow,
-        modifyMusicWorkflow
+        modifyMusicWorkflow,
+        modifyMusicVideoShotWorkflow,
       } = await import('../services/comfyui')
 
       let modifiedWorkflow = null
@@ -4052,6 +5611,34 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             filenamePrefix: outputPrefix || 'video/ltx23_i2v',
           })
           break
+        case MUSIC_VIDEO_SHOT_WORKFLOW_ID: {
+          // Music-video shot: a single audio-conditioned LTX 2.3 render.
+          // The audio has already been uploaded above (uploadedAudioFilename)
+          // and the reference still was uploaded via the normal image path
+          // (uploadedFilename).
+          // The USE_VOCALS_ONLY switch flips on when the user selected a
+          // mixed_track and the shot needs vocal alignment — we don't run
+          // the vocal-extract preprocessing step yet (next session), so for
+          // mixed_track we lean on the workflow's built-in vocal-only mode.
+          const audioKind = String(job.musicAudioKind || 'vocal_stem')
+          const shotNeedsVocalAlignment = Boolean(job.musicShot?.shotType
+            && getMusicVideoShotTypeOption(job.musicShot.shotType)?.needsVocalAlignment)
+          const useVocalsOnly = audioKind === 'mixed_track' && shotNeedsVocalAlignment
+          modifiedWorkflow = modifyMusicVideoShotWorkflow(workflowJson, {
+            shot: {
+              ...job.musicShot,
+              seed: job.seed,
+            },
+            inputImage: uploadedFilename,
+            inputAudio: uploadedAudioFilename,
+            useVocalsOnly,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            fps: job.fps,
+            filenamePrefix: outputPrefix || 'video/music_shot',
+          })
+          break
+        }
         case 'kling-o3-i2v':
           modifiedWorkflow = modifyKlingO3I2VWorkflow(workflowJson, {
             prompt: job.prompt,
@@ -4159,7 +5746,6 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           throw new Error('Unhandled workflow: ' + job.workflowId)
       }
 
-      // Queue the prompt
       updateJob(job.id, { status: 'queuing', progress: 40 })
       const promptId = await comfyui.queuePrompt(modifiedWorkflow)
       if (!promptId) throw new Error('Failed to queue prompt')
@@ -4834,19 +6420,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                   </button>
                 </div>
 
-                {yoloCreationType === 'music' ? (
-                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-center">
-                    <div className="text-[10px] uppercase tracking-[0.14em] text-amber-300 font-semibold">
-                      Coming Soon
-                    </div>
-                    <div className="mt-2 text-base font-semibold text-sf-text-primary">
-                      Music Video Creation is in active development.
-                    </div>
-                    <div className="mt-2 text-xs leading-relaxed text-sf-text-secondary">
-                      Lip sync, lyric-aware timing, and the rest of the music-video workflow are not ready yet, but they are planned.
-                    </div>
-                  </div>
-                ) : (
+                {(
                   <>
                     <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/40 p-2">
                       <div
@@ -4894,7 +6468,678 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                       </div>
                     </div>
 
-                    {directorSubTab === 'plan-script' && (
+                    {directorSubTab === 'plan-script' && isYoloMusicMode && (
+                      <>
+                        {/*
+                          Music Video brief — lyrics-first. Produces a plan with
+                          {shotType, audioStart, length, shotPrompt, referenceImagePrompt}
+                          that feeds the shared storyboard + video passes.
+                          Gotcha: the LTX 2.3 audio-conditioned workflow cannot be
+                          swapped for cloud (no lip-sync grounding elsewhere) — the
+                          Quality picker in Setup only affects the storyboard/still
+                          pass, not the video pass.
+                        */}
+                        <div>
+                          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Song Audio</label>
+                          <select
+                            value={yoloMusicAudioAssetId || ''}
+                            onChange={e => setYoloMusicAudioAssetId(e.target.value || null)}
+                            className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                          >
+                            <option value="">Pick an audio asset…</option>
+                            {assets.filter((asset) => asset?.type === 'audio').map((asset) => (
+                              <option key={asset.id} value={asset.id}>{asset.name}</option>
+                            ))}
+                          </select>
+                          {assets.filter((a) => a?.type === 'audio').length === 0 && (
+                            <div className="mt-1 text-[10px] text-yellow-400">
+                              No audio assets in this project yet. Import the song file in the Assets panel first.
+                            </div>
+                          )}
+                          <div className="mt-2 grid grid-cols-3 gap-1">
+                            {MUSIC_VIDEO_AUDIO_KIND_OPTIONS.map((option) => {
+                              const isSelected = yoloMusicAudioKind === option.id
+                              return (
+                                <button
+                                  key={`audio-kind-${option.id}`}
+                                  type="button"
+                                  onClick={() => setYoloMusicAudioKind(option.id)}
+                                  title={option.description}
+                                  className={`rounded px-2 py-1 text-[10px] transition-colors ${
+                                    isSelected
+                                      ? 'bg-sf-accent text-white'
+                                      : 'border border-sf-dark-600 text-sf-text-muted hover:text-sf-text-primary hover:border-sf-dark-500'
+                                  }`}
+                                >
+                                  {option.label}
+                                </button>
+                              )
+                            })}
+                          </div>
+                          <div className="mt-1 text-[10px] text-sf-text-muted">
+                            {getMusicVideoAudioKindOption(yoloMusicAudioKind)?.description || ''}
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">
+                              Lyrics (plain text, SRT, or LRC)
+                            </label>
+                            {yoloMusicParsedLyrics.isTimed && yoloMusicParsedLyrics.lines.length > 0 && (
+                              <span className="text-[10px] text-emerald-400">
+                                {yoloMusicParsedLyrics.format.toUpperCase()} · {yoloMusicParsedLyrics.lines.length} timed lines
+                              </span>
+                            )}
+                            {yoloMusicParsedLyrics.format === 'unknown' && yoloMusicLyrics.trim() && (
+                              <span className="text-[10px] text-sf-text-muted">Plain text · {parseLyricLines(yoloMusicLyrics).length} lines</span>
+                            )}
+                          </div>
+                          <textarea
+                            value={yoloMusicLyrics}
+                            onChange={e => setYoloMusicLyrics(e.target.value)}
+                            rows={10}
+                            className={`mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y ${yoloMusicParsedLyrics.isTimed ? 'font-mono' : ''}`}
+                            placeholder={'Paste the song lyrics here — plain text, SRT, or LRC (auto-detected).\n\nPlain text (no timings — estimated evenly):\n[Rose]\nYou paint your eyelids with correction fluid moons\nChewed up saints on the floor\n\n[Jake]\nSwollen sound inside my head\n\nSRT (recommended — real timings):\n1\n00:00:08,500 --> 00:00:12,300\nYou paint your eyelids with correction fluid moons\n\n2\n00:00:12,400 --> 00:00:16,800\nChewed up saints on the floor\n\nLRC:\n[00:08.50]You paint your eyelids with correction fluid moons\n[00:12.40]Chewed up saints on the floor\n\nTip: generate an SRT automatically with Whisper, Subtitle Edit, or ElevenLabs STT for perfect lip-sync timing.'}
+                          />
+                          {yoloMusicParsedLyrics.error && (
+                            <div className="mt-1 text-[10px] text-amber-400">
+                              {yoloMusicParsedLyrics.error}
+                            </div>
+                          )}
+                          <div className="mt-1 text-[10px] text-sf-text-muted">
+                            {yoloMusicParsedLyrics.isTimed
+                              ? <>Timed lyrics detected — planner uses real times to resolve each shot's <span className="font-mono text-sf-text-secondary">Lyric moment:</span> and to cross-check any <span className="font-mono text-sf-text-secondary">Start at:</span> the LLM produced.</>
+                              : <>Plain text — planner estimates timings linearly across the song. Paste an SRT or LRC for exact lip-sync timing. Optional <span className="font-mono text-sf-text-secondary">[Name]</span> tags above verses pick which cast member sings (plain text only).</>}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Concept (optional)</label>
+                            <textarea
+                              value={yoloMusicConcept}
+                              onChange={e => setYoloMusicConcept(e.target.value)}
+                              rows={3}
+                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y"
+                              placeholder="e.g. a lonely drive through neon-lit city streets, the singer never looks back."
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Style / Look Notes (optional)</label>
+                            <textarea
+                              value={yoloMusicStyleNotes}
+                              onChange={e => setYoloMusicStyleNotes(e.target.value)}
+                              rows={3}
+                              className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y"
+                              placeholder="e.g. grainy 16mm, warm tungsten interiors, cool neon exteriors, wardrobe: denim + leather."
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">
+                              Cast {yoloMusicCast.length > 0 ? `(${yoloMusicCast.length})` : ''}
+                            </label>
+                            <button
+                              type="button"
+                              onClick={handleYoloMusicCastAdd}
+                              className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
+                            >
+                              + Add cast member
+                            </button>
+                          </div>
+                          {yoloMusicCast.length === 0 ? (
+                            <div className="mt-1 rounded-lg border border-dashed border-sf-dark-600 bg-sf-dark-800/40 px-3 py-3 text-[11px] text-sf-text-muted">
+                              No cast yet. Click <span className="text-sf-text-secondary">+ Add cast member</span> to pick an image asset (a still of the singer / band member) and give them a short handle like <span className="font-mono text-sf-text-secondary">rose</span>. You can then reference them in your script with <span className="font-mono text-sf-text-secondary">Artist: rose</span> or in lyrics with <span className="font-mono text-sf-text-secondary">[Rose]</span> tag lines. Leave it empty for reference-free shots (the model will improvise the singer's look).
+                            </div>
+                          ) : (
+                            <div className="mt-1 space-y-1.5">
+                              {yoloMusicCast.map((entry, idx) => {
+                                const assetOption = assets.find((a) => a?.id === entry?.assetId && a?.type === 'image')
+                                const isDefault = idx === 0
+                                return (
+                                  <div
+                                    key={entry.id || `cast-row-${idx}`}
+                                    className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/60 p-2"
+                                  >
+                                    <div className="grid grid-cols-1 md:grid-cols-[1fr_120px_1fr_120px_32px] gap-1.5 items-center">
+                                      <select
+                                        value={entry?.assetId || ''}
+                                        onChange={(e) => handleYoloMusicCastAssetChange(entry.id, e.target.value || null)}
+                                        className="bg-sf-dark-900 border border-sf-dark-600 rounded px-2 py-1 text-[11px] text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                                      >
+                                        <option value="">Pick image asset…</option>
+                                        {assets.filter((asset) => asset?.type === 'image').map((asset) => (
+                                          <option key={`cast-asset-${entry.id}-${asset.id}`} value={asset.id}>{asset.name}</option>
+                                        ))}
+                                      </select>
+                                      <input
+                                        type="text"
+                                        value={entry?.slug || ''}
+                                        onChange={(e) => handleYoloMusicCastSlugChange(entry.id, e.target.value)}
+                                        placeholder="slug (e.g. rose)"
+                                        className="bg-sf-dark-900 border border-sf-dark-600 rounded px-2 py-1 text-[11px] text-sf-text-primary font-mono focus:outline-none focus:border-sf-accent"
+                                      />
+                                      <input
+                                        type="text"
+                                        value={entry?.label || ''}
+                                        onChange={(e) => handleYoloMusicCastLabelChange(entry.id, e.target.value)}
+                                        placeholder="Display name"
+                                        className="bg-sf-dark-900 border border-sf-dark-600 rounded px-2 py-1 text-[11px] text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                                      />
+                                      <select
+                                        value={entry?.role || 'lead'}
+                                        onChange={(e) => handleYoloMusicCastRoleChange(entry.id, e.target.value)}
+                                        className="bg-sf-dark-900 border border-sf-dark-600 rounded px-2 py-1 text-[11px] text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                                      >
+                                        {MUSIC_VIDEO_CAST_ROLE_OPTIONS.map((option) => (
+                                          <option key={`cast-role-${entry.id}-${option.id}`} value={option.id}>{option.label}</option>
+                                        ))}
+                                      </select>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleYoloMusicCastRemove(entry.id)}
+                                        className="h-7 w-7 rounded border border-sf-dark-600 text-sf-text-muted hover:text-red-400 hover:border-red-500/60 transition-colors flex items-center justify-center"
+                                        title="Remove cast member"
+                                        aria-label={`Remove cast member ${entry?.label || ''}`.trim()}
+                                      >
+                                        <X className="h-3 w-3" />
+                                      </button>
+                                    </div>
+                                    {isDefault && (
+                                      <div className="mt-1 text-[10px] text-sf-text-muted">
+                                        Default lead — used when a shot has no <span className="font-mono">Artist:</span> override and the matched lyric line has no <span className="font-mono">[Name]</span> tag.
+                                      </div>
+                                    )}
+                                    {!assetOption && entry?.assetId && (
+                                      <div className="mt-1 text-[10px] text-yellow-400">
+                                        Image asset missing — it may have been deleted. Pick a replacement or remove this row.
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                          <div className="mt-2 text-[10px] text-sf-text-muted">
+                            <div>
+                              Reference cast in your script with <span className="font-mono text-sf-text-secondary">Artist: rose</span>, <span className="font-mono text-sf-text-secondary">Artist: jake</span>, or <span className="font-mono text-sf-text-secondary">Artist: both</span> (also <span className="font-mono">all</span> / <span className="font-mono">band</span>). In lyrics, drop a tag line above the verse: <span className="font-mono text-sf-text-secondary">[Rose]</span>, <span className="font-mono text-sf-text-secondary">[Jake]</span>, <span className="font-mono text-sf-text-secondary">[Rose, Jake]</span>. Section markers like <span className="font-mono">[Chorus]</span> and <span className="font-mono">[Verse 1]</span> are ignored.
+                            </div>
+                            <div className="mt-1">
+                              Works best with storyboard workflows that accept references (e.g. nano-banana-2). z-image-turbo ignores references — switch in the Setup tab if you need identity lock.
+                            </div>
+                          </div>
+                          {yoloMusicResolvedCast.length > 0 && yoloStoryboardWorkflowId === 'z-image-turbo' && (
+                            <div className="mt-1 text-[10px] text-yellow-400">
+                              Heads up: z-image-turbo does not accept reference images, so cast references will be ignored during the keyframe pass. Pick nano-banana-2 or image-edit-model-product in the Setup tab to lock identity.
+                            </div>
+                          )}
+                        </div>
+
+                        <div>
+                          {/* Tab strip — Master + one tab per saved alt pass.
+                              Clicking a tab switches the script panel below to
+                              that slot; the textarea rebinds automatically.
+                              Shared renderer so the banner on Keyframes/Videos
+                              can pivot between passes using the same controls. */}
+                          {renderPassTabStrip('full')}
+
+                          {/* Header row — contents depend on whether the
+                              active tab is Master or an alt pass. */}
+                          {yoloMusicIsMasterActive ? (
+                            <>
+                              <div className="flex items-center justify-between gap-2 mt-2">
+                                <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Director Script</label>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      // Only overwrite when the script is empty — otherwise we'd
+                                      // clobber the user's in-progress work. If they want a fresh
+                                      // start, they can clear the textarea first.
+                                      if (!yoloMusicScript.trim()) {
+                                        setYoloMusicScript(MUSIC_VIDEO_SCRIPT_TEMPLATE)
+                                      } else if (window.confirm('Replace the current script with the template?')) {
+                                        setYoloMusicScript(MUSIC_VIDEO_SCRIPT_TEMPLATE)
+                                      }
+                                    }}
+                                    className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
+                                  >
+                                    Start from template
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => { void copyTextToClipboard(MUSIC_VIDEO_SCRIPT_TEMPLATE) }}
+                                    className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
+                                  >
+                                    Copy Template
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const llmPrompt = buildMusicVideoLLMPrompt({
+                                        songName: yoloMusicAudioAsset?.name || '',
+                                        songDurationSeconds: yoloMusicSongDurationSeconds,
+                                        targetDuration: yoloMusicTargetDuration,
+                                        concept: yoloMusicConcept,
+                                        styleNotes: yoloMusicStyleNotes,
+                                        lyrics: yoloMusicLyrics,
+                                        cast: yoloMusicResolvedCast,
+                                      })
+                                      void copyTextToClipboard(llmPrompt)
+                                    }}
+                                    title="Copy a ready-to-paste prompt (cast + concept + lyrics/SRT + strict format spec) you can hand to Claude/GPT/Gemini to generate a timing-correct script."
+                                    className="px-2 py-1 rounded border border-sf-accent/50 bg-sf-accent/10 text-[10px] text-sf-accent hover:bg-sf-accent/20 transition-colors"
+                                  >
+                                    Copy LLM Prompt
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <span className="text-[10px] uppercase tracking-wider text-sf-text-muted">
+                                  Alt passes:
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!yoloMusicScript.trim()) {
+                                      setFormError('Write or paste your master Director Script first — alt passes inherit its timings.')
+                                      return
+                                    }
+                                    // eslint-disable-next-line no-alert
+                                    const variant = window.prompt(
+                                      'Describe the alt performance setting (e.g. "Jake alone in the Volvo at night, dash glow on his face"). Leave blank to cancel.',
+                                      ''
+                                    )
+                                    if (!variant || !variant.trim()) return
+                                    handleCreateMusicAltScript({ passType: 'alt_performance', variantDescriptor: variant.trim() })
+                                  }}
+                                  title="Second performance pass in a different setting (car, rooftop, etc.) that intercuts with the master. Creates a new tab and copies the LLM prompt."
+                                  className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
+                                >
+                                  + Alt Performance
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    handleCreateMusicAltScript({ passType: 'environmental_broll' })
+                                  }}
+                                  title="No-performer b-roll of the world: empty rooms, exteriors, weather, landscapes. Creates a new tab and copies the LLM prompt."
+                                  className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
+                                >
+                                  + Environmental B-roll
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    handleCreateMusicAltScript({ passType: 'detail_broll' })
+                                  }}
+                                  title="Tight macro/insert b-roll: gear, objects, hands, textures. Creates a new tab and copies the LLM prompt."
+                                  className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
+                                >
+                                  + Detail B-roll
+                                </button>
+                                <span className="text-[10px] text-sf-text-muted">
+                                  Each alt pass opens in its own tab and inherits this master's timings.
+                                </span>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <span className="px-1.5 py-0.5 rounded bg-sf-dark-700 text-[9px] font-bold tracking-wider text-sf-text-secondary">
+                                  {getMusicVideoPassBadge(yoloMusicActiveAltScript.passType)}
+                                </span>
+                                <input
+                                  type="text"
+                                  value={yoloMusicActiveAltScript.label}
+                                  onChange={(e) => handleMusicAltScriptRename(yoloMusicActiveAltScript.id, e.target.value)}
+                                  placeholder="Pass label"
+                                  className="flex-1 min-w-[8rem] max-w-[20rem] bg-sf-dark-900 border border-sf-dark-600 rounded px-2 py-1 text-[11px] text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                                />
+                                {yoloMusicActiveAltScript.passType === 'alt_performance' && yoloMusicActiveAltScript.variantDescriptor && (
+                                  <span className="text-[10px] text-sf-text-muted truncate" title={yoloMusicActiveAltScript.variantDescriptor}>
+                                    variant: {yoloMusicActiveAltScript.variantDescriptor}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!yoloMusicScript.trim()) {
+                                      setFormError('Write or paste your master Director Script first — this alt pass inherits its timings.')
+                                      return
+                                    }
+                                    const prompt = buildMusicVideoAltPrompt({
+                                      passType: yoloMusicActiveAltScript.passType,
+                                      variantDescriptor: yoloMusicActiveAltScript.variantDescriptor,
+                                    })
+                                    void copyTextToClipboard(prompt)
+                                  }}
+                                  title="Re-copy this pass's LLM prompt using the CURRENT master script. Useful when the master changed after the pass was first created."
+                                  className="px-2 py-1 rounded border border-sf-accent/50 bg-sf-accent/10 text-[10px] text-sf-accent hover:bg-sf-accent/20 transition-colors"
+                                >
+                                  Re-copy LLM Prompt
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleMusicAltScriptDelete(yoloMusicActiveAltScript.id)}
+                                  title="Delete this alt pass."
+                                  className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-red-400 hover:border-red-500/60 transition-colors"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          <textarea
+                            value={yoloMusicIsMasterActive ? yoloMusicScript : yoloMusicActiveAltScript.script}
+                            onChange={e => {
+                              if (yoloMusicIsMasterActive) {
+                                setYoloMusicScript(e.target.value)
+                              } else {
+                                handleMusicAltScriptChangeContent(yoloMusicActiveAltScript.id, e.target.value)
+                              }
+                            }}
+                            rows={16}
+                            className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y font-mono"
+                            placeholder={yoloMusicIsMasterActive
+                              ? 'Shot 1: ...\nStart at: 0:00\nLyric moment: "..."\nShot type: performance | performance_wide | b_roll\nArtist: rose | jake | both\nKeyframe prompt: ...\nMotion prompt: ...\nCamera: ...\nLength: 3\n\nShot 2: ...\n'
+                              : 'Paste the alt pass output from your LLM here.\n\nShot 1: ...\nStart at: 0:00\nShot type: b_roll\nKeyframe prompt: ...\nMotion prompt: ...\nCamera: ...\nLength: 4\n\nShot 2: ...\n'
+                            }
+                          />
+                          <div className="mt-1 text-[10px] text-sf-text-muted">
+                            {yoloMusicIsMasterActive ? (
+                              <>One shot per block. <span className="font-mono text-sf-text-secondary">Start at:</span> pins the shot to an absolute time (use the SRT above). <span className="font-mono text-sf-text-secondary">Shot type</span> drives whether the singer is visible lip-syncing (performance / performance_wide) or cut away (b_roll). Each shot runs the LTX 2.3 audio workflow independently.</>
+                            ) : (
+                              <>This is an alt <span className="text-sf-text-secondary">{getMusicVideoPassDisplayName(yoloMusicActiveAltScript.passType)}</span> pass. Click <span className="text-sf-text-secondary">Build Plan</span> to parse it into shots — after that the storyboard, keyframe, and video steps operate on this pass&apos;s shots just like the master. Switch back to Master anytime; each pass keeps its own plan.</>
+                            )}
+                          </div>
+                          {!yoloMusicIsMasterActive && yoloMusicActiveAltParse && (() => {
+                            const parse = yoloMusicActiveAltParse
+                            if (parse.state === 'empty') {
+                              return (
+                                <div className="mt-2 rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 px-3 py-2 text-[10px] text-sf-text-muted">
+                                  Paste the LLM output above to see a parse preview (shot count, coverage, warnings).
+                                </div>
+                              )
+                            }
+                            if (parse.state === 'unparsed') {
+                              return (
+                                <div className="mt-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2">
+                                  <div className="text-[10px] uppercase tracking-wider text-red-400">
+                                    Could not parse this script
+                                  </div>
+                                  <div className="mt-1 text-[11px] text-red-200/90 leading-snug">
+                                    The parser didn't find any valid shot blocks. Make sure each shot starts with <span className="font-mono">Shot N:</span> and includes at least a <span className="font-mono">Keyframe prompt</span> and <span className="font-mono">Motion prompt</span>.
+                                  </div>
+                                  {parse.warnings.length > 0 && (
+                                    <ul className="mt-1 space-y-0.5">
+                                      {parse.warnings.slice(0, 4).map((w, idx) => (
+                                        <li key={`alt-unparsed-w-${idx}`} className="text-[10px] text-red-200/80 leading-snug">
+                                          {w?.message || String(w)}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </div>
+                              )
+                            }
+                            const tone = parse.state === 'warning'
+                              ? { border: 'border-yellow-500/40', bg: 'bg-yellow-500/10', label: 'text-yellow-400', body: 'text-yellow-200/90', soft: 'text-yellow-200/60' }
+                              : { border: 'border-emerald-500/40', bg: 'bg-emerald-500/10', label: 'text-emerald-400', body: 'text-emerald-200/90', soft: 'text-emerald-200/60' }
+                            const coveragePct = yoloMusicSongDurationSeconds > 0
+                              ? Math.round((parse.totalLengthSec / yoloMusicSongDurationSeconds) * 100)
+                              : null
+                            return (
+                              <div className={`mt-2 rounded-lg border ${tone.border} ${tone.bg} px-3 py-2`}>
+                                <div className={`text-[10px] uppercase tracking-wider ${tone.label}`}>
+                                  Parse preview · {parse.state === 'warning' ? `${parse.warnings.length} warning${parse.warnings.length === 1 ? '' : 's'}` : 'clean'}
+                                </div>
+                                <div className={`mt-1 text-[11px] ${tone.body} leading-snug flex flex-wrap gap-x-3 gap-y-0.5`}>
+                                  <span><span className="font-mono">{parse.shotCount}</span> shot{parse.shotCount === 1 ? '' : 's'}</span>
+                                  <span><span className="font-mono">{formatSecondsAsMMSS(parse.totalLengthSec)}</span> total length{coveragePct !== null ? ` (${coveragePct}% of song)` : ''}</span>
+                                  {parse.coverageGaps.length > 0 && (
+                                    <span className={tone.soft}>
+                                      {parse.coverageGaps.length} gap{parse.coverageGaps.length === 1 ? '' : 's'}: {parse.coverageGaps.slice(0, 3).map((g) => `${formatSecondsAsMMSS(g.start)}–${formatSecondsAsMMSS(g.end)}`).join(', ')}{parse.coverageGaps.length > 3 ? '…' : ''}
+                                    </span>
+                                  )}
+                                </div>
+                                {parse.state === 'warning' && parse.warnings.length > 0 && (
+                                  <ul className="mt-1 space-y-0.5">
+                                    {parse.warnings.slice(0, 4).map((w, idx) => (
+                                      <li key={`alt-w-${idx}`} className={`text-[11px] ${tone.body} leading-snug`}>
+                                        {w?.message || String(w)}
+                                      </li>
+                                    ))}
+                                    {parse.warnings.length > 4 && (
+                                      <li className={`text-[10px] ${tone.soft}`}>
+                                        …and {parse.warnings.length - 4} more.
+                                      </li>
+                                    )}
+                                  </ul>
+                                )}
+                                <div className={`mt-1 text-[10px] ${tone.soft}`}>
+                                  Live parse of the textarea. Click <span className="font-mono">Build Plan</span> to promote this into the shot plan for the Storyboard / Keyframes / Videos steps.
+                                </div>
+                              </div>
+                            )
+                          })()}
+                          {!yoloMusicIsMasterActive
+                            && yoloMusicActiveAltParse
+                            && (yoloMusicActiveAltParse.state === 'ok' || yoloMusicActiveAltParse.state === 'warning')
+                            && yoloMusicSongDurationSeconds > 0
+                            && (() => {
+                              // Coverage sparkline — a single-row horizontal bar where each
+                              // parsed shot maps to a proportional slice of the song duration.
+                              // Overlapping shots will overlap visually (that's fine; the
+                              // planner warnings already flag overlaps).
+                              const songDur = yoloMusicSongDurationSeconds
+                              const scenes = yoloMusicActiveAltParse.scenes || []
+                              const isWarning = yoloMusicActiveAltParse.state === 'warning'
+                              const barColor = isWarning ? 'bg-yellow-400/80' : 'bg-emerald-400/80'
+                              const segments = []
+                              for (const scene of scenes) {
+                                for (const shot of scene?.shots || []) {
+                                  const start = Math.max(0, Number(shot?.audioStart ?? 0) || 0)
+                                  const len = Math.max(0, Number(shot?.durationSeconds ?? shot?.length ?? 0) || 0)
+                                  if (len <= 0) continue
+                                  const leftPct = Math.min(100, (start / songDur) * 100)
+                                  const widthPct = Math.max(0.4, Math.min(100 - leftPct, (len / songDur) * 100))
+                                  segments.push({
+                                    key: `${scene.id}-${shot.id}`,
+                                    leftPct,
+                                    widthPct,
+                                    title: `${scene.label || `Shot ${scene.index}`} · ${formatSecondsAsMMSS(start)}–${formatSecondsAsMMSS(start + len)} (${len.toFixed(1)}s)`,
+                                  })
+                                }
+                              }
+                              if (segments.length === 0) return null
+                              return (
+                                <div className="mt-2 rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 px-3 py-2">
+                                  <div className="flex items-center justify-between text-[10px] text-sf-text-muted mb-1">
+                                    <span className="uppercase tracking-wider">Coverage map</span>
+                                    <span>
+                                      <span className="font-mono text-sf-text-secondary">{formatSecondsAsMMSS(0)}</span>
+                                      {' → '}
+                                      <span className="font-mono text-sf-text-secondary">{formatSecondsAsMMSS(songDur)}</span>
+                                    </span>
+                                  </div>
+                                  <div className="relative h-3 w-full rounded bg-sf-dark-900/70 overflow-hidden">
+                                    {segments.map((seg) => (
+                                      <div
+                                        key={seg.key}
+                                        className={`absolute top-0 bottom-0 ${barColor} rounded-sm`}
+                                        style={{ left: `${seg.leftPct}%`, width: `${seg.widthPct}%` }}
+                                        title={seg.title}
+                                      />
+                                    ))}
+                                  </div>
+                                  <div className="mt-1 text-[10px] text-sf-text-muted">
+                                    Each bar is one parsed shot placed at its <span className="font-mono">Start at:</span> on the song timeline. Dark gaps are uncovered seconds — fill them in the LLM prompt if the pass needs full coverage.
+                                  </div>
+                                </div>
+                              )
+                            })()}
+                          {!yoloMusicIsMasterActive
+                            && yoloMusicActiveAltParse
+                            && (yoloMusicActiveAltParse.state === 'ok' || yoloMusicActiveAltParse.state === 'warning')
+                            && (() => {
+                              const scenes = yoloMusicActiveAltParse.scenes || []
+                              const flatShots = []
+                              for (const scene of scenes) {
+                                for (const shot of scene?.shots || []) {
+                                  flatShots.push({ scene, shot })
+                                }
+                              }
+                              if (flatShots.length === 0) return null
+                              const truncate = (text, max = 140) => {
+                                const s = String(text || '').trim()
+                                if (!s) return ''
+                                return s.length > max ? `${s.slice(0, max - 1)}…` : s
+                              }
+                              return (
+                                <div className="mt-2 rounded-lg border border-sf-dark-700 bg-sf-dark-800/40">
+                                  <button
+                                    type="button"
+                                    onClick={() => setAltPassBreakdownExpanded((prev) => !prev)}
+                                    className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
+                                  >
+                                    <span className="text-[10px] uppercase tracking-wider text-sf-text-muted">
+                                      Shot breakdown ({flatShots.length})
+                                    </span>
+                                    {altPassBreakdownExpanded ? (
+                                      <ChevronDown className="h-3.5 w-3.5 text-sf-text-muted" />
+                                    ) : (
+                                      <ChevronRight className="h-3.5 w-3.5 text-sf-text-muted" />
+                                    )}
+                                  </button>
+                                  {altPassBreakdownExpanded && (
+                                    <div className="border-t border-sf-dark-700 px-3 py-2 max-h-80 overflow-y-auto space-y-2">
+                                      {flatShots.map(({ scene, shot }) => {
+                                        const start = Number(shot?.audioStart ?? 0) || 0
+                                        const len = Number(shot?.durationSeconds ?? shot?.length ?? 0) || 0
+                                        const musicShotType = String(shot?.musicShotType || '')
+                                        const lyricMoment = String(shot?.scriptLyricMoment || '').trim()
+                                        const keyframe = truncate(shot?.keyframePromptRaw || shot?.imageBeat)
+                                        const motion = truncate(shot?.motionPromptRaw || shot?.videoBeat)
+                                        const camera = String(shot?.cameraDirection || '').trim()
+                                        return (
+                                          <div
+                                            key={`${scene.id}-${shot.id}`}
+                                            className="rounded border border-sf-dark-700/60 bg-sf-dark-900/40 px-2 py-1.5"
+                                          >
+                                            <div className="flex items-center justify-between gap-2 text-[10px]">
+                                              <span className="font-mono text-sf-text-secondary truncate">
+                                                {scene.label || `Shot ${scene.index}`}
+                                              </span>
+                                              <span className="text-sf-text-muted flex items-center gap-2 flex-shrink-0">
+                                                {musicShotType && (
+                                                  <span className="rounded bg-sf-dark-700 px-1 py-[1px] text-[9px] uppercase tracking-wider">
+                                                    {musicShotType}
+                                                  </span>
+                                                )}
+                                                <span className="font-mono">
+                                                  {formatSecondsAsMMSS(start)} · {len.toFixed(1)}s
+                                                </span>
+                                              </span>
+                                            </div>
+                                            {lyricMoment && (
+                                              <div className="mt-0.5 text-[10px] italic text-sf-text-muted truncate">
+                                                “{lyricMoment}”
+                                              </div>
+                                            )}
+                                            {keyframe && (
+                                              <div className="mt-1 text-[10px] text-sf-text-secondary leading-snug">
+                                                <span className="text-sf-text-muted">Keyframe: </span>
+                                                {keyframe}
+                                              </div>
+                                            )}
+                                            {motion && (
+                                              <div className="mt-0.5 text-[10px] text-sf-text-secondary leading-snug">
+                                                <span className="text-sf-text-muted">Motion: </span>
+                                                {motion}
+                                              </div>
+                                            )}
+                                            {camera && (
+                                              <div className="mt-0.5 text-[10px] text-sf-text-muted leading-snug">
+                                                <span>Camera: </span>
+                                                <span className="font-mono text-sf-text-secondary">{camera}</span>
+                                              </div>
+                                            )}
+                                          </div>
+                                        )
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })()}
+                          <div className="mt-2 rounded-lg border border-sf-dark-700 bg-sf-dark-800/45 p-3">
+                            <button
+                              type="button"
+                              onClick={() => setDirectorFormatExpanded((prev) => !prev)}
+                              className="flex w-full items-center justify-between gap-2 text-left"
+                            >
+                              <span className="text-[10px] uppercase tracking-wider text-yellow-400">Recommended Director Format (Music Video)</span>
+                              {directorFormatExpanded ? (
+                                <ChevronDown className="h-3.5 w-3.5 text-sf-text-muted" />
+                              ) : (
+                                <ChevronRight className="h-3.5 w-3.5 text-sf-text-muted" />
+                              )}
+                            </button>
+                            {directorFormatExpanded && (
+                              <>
+                                <div className="mt-1 text-[10px] text-sf-text-muted">
+                                  Ask your AI to return this exact structure. Each Shot block becomes one generated video clip. <span className="font-mono text-sf-text-secondary">Start at:</span>, Lyric moment, Artist, and Shot type are music-video-only fields; everything else mirrors the ad format. The "Copy LLM Prompt" button assembles this plus your cast, lyrics, and SRT — hand it to Claude/GPT/Gemini and paste the result back.
+                                </div>
+                                <textarea
+                                  readOnly
+                                  value={MUSIC_VIDEO_SCRIPT_TEMPLATE}
+                                  rows={16}
+                                  spellCheck={false}
+                                  onFocus={(event) => event.target.select()}
+                                  onClick={(event) => event.target.select()}
+                                  className="mt-2 w-full resize-y overflow-auto rounded border border-sf-dark-700 bg-sf-dark-900/70 p-2 font-mono text-[10px] leading-5 text-sf-text-secondary focus:outline-none focus:border-sf-accent"
+                                />
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        {yoloMusicActiveTargetPlanWarnings.length > 0 && (
+                          <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-3 py-2">
+                            <div className="text-[10px] uppercase tracking-wider text-yellow-400">
+                              Planner warnings ({yoloMusicActiveTargetPlanWarnings.length})
+                            </div>
+                            <ul className="mt-1 space-y-0.5">
+                              {yoloMusicActiveTargetPlanWarnings.slice(0, 6).map((warning, idx) => (
+                                <li
+                                  key={`mv-warning-${idx}`}
+                                  className="text-[11px] text-yellow-200/90 leading-snug"
+                                >
+                                  {warning?.message || String(warning)}
+                                </li>
+                              ))}
+                              {yoloMusicActiveTargetPlanWarnings.length > 6 && (
+                                <li className="text-[10px] text-yellow-200/60">
+                                  …and {yoloMusicActiveTargetPlanWarnings.length - 6} more. Fix the highlighted rows and rebuild the plan.
+                                </li>
+                              )}
+                            </ul>
+                            <div className="mt-1 text-[10px] text-yellow-200/60">
+                              These are advisory — the plan still built, but those shots fell back to the default cast member (or no reference at all).
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {directorSubTab === 'plan-script' && !isYoloMusicMode && (
                       <>
                         <div>
                           <div className="flex items-center justify-between gap-2">
@@ -4962,7 +7207,75 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                       </>
                     )}
 
-                    {directorSubTab === 'setup' && (
+                    {directorSubTab === 'setup' && isYoloMusicMode && (
+                      <>
+                        {/*
+                          Music Video setup — simplified vs Ad. We only need song
+                          length, keyframe quality, and a heads-up that the video
+                          pass workflow is fixed (LTX 2.3 audio-conditioned).
+                        */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
+                          <div className="h-full p-3 rounded-lg bg-sf-dark-800/45 border border-sf-dark-700">
+                            <div className="text-[10px] text-sf-text-muted uppercase tracking-wider">Song Length</div>
+                            <p className="mt-1 text-[10px] text-sf-text-muted">
+                              Total song duration in seconds. Used to estimate each shot's position
+                              in the song when a Lyric moment is declared in the script. Shot count is
+                              driven entirely by the director script — one "Shot N:" block = one clip.
+                            </p>
+                            <div className="mt-2">
+                              <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Song Duration (s)</label>
+                              <input
+                                type="number"
+                                min={5}
+                                max={600}
+                                value={yoloMusicTargetDuration}
+                                onChange={e => setYoloMusicTargetDuration(Number(e.target.value) || 30)}
+                                className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="h-full p-3 rounded-lg bg-sf-dark-800/45 border border-sf-dark-700">
+                            <div className="text-[10px] text-sf-text-muted uppercase tracking-wider">Quality</div>
+                            <p className="mt-1 text-[10px] text-sf-text-muted">
+                              Picks the keyframe (still) workflow. The video pass is fixed to the
+                              LTX 2.3 audio-conditioned workflow because lip-sync grounding only
+                              works there.
+                            </p>
+                            <div className="mt-2 grid grid-cols-3 gap-1">
+                              {['draft', 'balanced', 'premium'].map((profileId) => {
+                                const isSelected = yoloMusicQualityProfile === profileId
+                                return (
+                                  <button
+                                    key={`mv-quality-${profileId}`}
+                                    type="button"
+                                    onClick={() => setYoloMusicQualityProfile(profileId)}
+                                    className={`rounded px-2 py-1.5 text-[10px] transition-colors capitalize ${
+                                      isSelected
+                                        ? 'bg-sf-accent text-white'
+                                        : 'border border-sf-dark-600 text-sf-text-muted hover:text-sf-text-primary hover:border-sf-dark-500'
+                                    }`}
+                                  >
+                                    {profileId}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="p-3 rounded-lg border border-amber-500/25 bg-amber-500/10">
+                          <div className="text-[10px] uppercase tracking-[0.14em] text-amber-300 font-semibold">Heads up</div>
+                          <div className="mt-1 text-[10px] text-sf-text-secondary leading-relaxed">
+                            The Music Video video pass always runs the LTX 2.3 audio-conditioned
+                            workflow locally (requires ~24GB VRAM). Cloud upscaling is available
+                            after the fact via the Assets panel.
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {directorSubTab === 'setup' && !isYoloMusicMode && (
                       <>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
                           <div className="h-full p-3 rounded-lg bg-sf-dark-800/45 border border-sf-dark-700">
@@ -5445,12 +7758,28 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                         onClick={handleBuildActiveYoloPlan}
                         className="px-3 py-2 rounded-lg bg-sf-accent hover:bg-sf-accent-hover text-white text-xs"
                       >
-                        {yoloActivePlanIsStale ? 'Rebuild Plan' : 'Build Plan'}
+                        {(() => {
+                          const isAltActive = isYoloMusicMode && !yoloMusicIsMasterActive
+                          const verb = yoloActivePlanIsStale ? 'Rebuild' : 'Build'
+                          if (isAltActive) {
+                            const passName = getMusicVideoPassDisplayName(yoloMusicActiveAltScript.passType)
+                            return `${verb} Plan — ${passName}${yoloMusicActiveAltScript.label ? `: ${yoloMusicActiveAltScript.label}` : ''}`
+                          }
+                          return `${verb} Plan`
+                        })()}
                       </button>
                       <div className="text-[10px] text-sf-text-muted">
-                        {yoloActivePlanIsStale
-                          ? 'Your script or reference settings changed since the last build. Rebuild the plan to refresh all keyframe and video prompts.'
-                          : 'Build plan, then continue through Keyframes and Videos for batch generation.'}
+                        {(() => {
+                          const isAltActive = isYoloMusicMode && !yoloMusicIsMasterActive
+                          if (yoloActivePlanIsStale) {
+                            return isAltActive
+                              ? 'This alt pass\u2019s script or the shared settings changed since the last build. Rebuild to refresh its shots.'
+                              : 'Your script or reference settings changed since the last build. Rebuild the plan to refresh all keyframe and video prompts.'
+                          }
+                          return isAltActive
+                            ? 'Each alt pass keeps its own plan. Build it, then continue into Storyboard / Keyframes / Videos to generate just this pass.'
+                            : 'Build plan, then continue through Keyframes and Videos for batch generation.'
+                        })()}
                       </div>
                     </div>
 
@@ -5463,6 +7792,43 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     {yoloDependencyCheckInProgress && (
                       <div className="text-[10px] text-yellow-400">Checking {DIRECTOR_MODE_BETA_LABEL} workflow dependencies...</div>
                     )}
+
+                    {isYoloMusicMode && (() => {
+                      // Active-pass banner — always visible on the Keyframes/Videos
+                      // steps so the user never has to guess which pass they're
+                      // editing. Renders the full pass switcher (Master + every
+                      // alt) so the user can pivot between any pass without
+                      // bouncing back to the Script step first.
+                      //
+                      // The banner also flips border/tone between neutral
+                      // (master) and accent (alt) so a quick glance confirms
+                      // whether the current view is the backbone performance or
+                      // an editorial alt pass.
+                      const isAltActive = !yoloMusicIsMasterActive
+                      const tone = isAltActive
+                        ? 'border-sf-accent/60 bg-sf-accent/10'
+                        : 'border-sf-dark-700 bg-sf-dark-800/60'
+                      return (
+                        <div className={`rounded-lg border ${tone} px-3 py-2`}>
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                              <span className="text-[10px] uppercase tracking-wider text-sf-text-muted whitespace-nowrap">
+                                Editing pass:
+                              </span>
+                              {renderPassTabStrip('compact')}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setDirectorSubTab('plan-script')}
+                              className="text-[10px] px-2 py-1 rounded bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary hover:text-sf-text-primary flex-shrink-0"
+                              title="Jump to the Script step for the active pass"
+                            >
+                              Edit script
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })()}
 
                     <div className="p-3 rounded-lg bg-sf-dark-800/70 border border-sf-dark-700 text-xs text-sf-text-secondary">
                       <div className="font-medium text-sf-text-primary mb-1">{yoloModeLabel} Plan Status</div>
@@ -5653,12 +8019,31 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     </div>
                   </div>
                     <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-800/50 p-3">
-                      <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">
-                        {isYoloStillsStep ? 'Batch Create Keyframes (All Scenes & Shots)' : 'Batch Create Videos (All Scenes & Shots)'}
+                      <div className="text-[10px] uppercase tracking-wider text-sf-text-muted flex items-center gap-2">
+                        <span>
+                          {isYoloStillsStep ? 'Batch Create Keyframes (All Scenes & Shots)' : 'Batch Create Videos (All Scenes & Shots)'}
+                        </span>
+                        {isYoloMusicMode && yoloMusicActiveAltScript && (
+                          <span
+                            className="px-1.5 py-0.5 rounded bg-sf-dark-900 border border-sf-dark-600 text-[9px] tracking-wider text-sf-text-secondary normal-case"
+                            title={`Generating for alt pass: ${yoloMusicActiveAltScript.label}`}
+                          >
+                            For: {getMusicVideoPassBadge(yoloMusicActiveAltScript.passType)} · {yoloMusicActiveAltScript.label}
+                          </span>
+                        )}
+                        {isYoloMusicMode && !yoloMusicActiveAltScript && (
+                          <span className="px-1.5 py-0.5 rounded bg-sf-dark-900 border border-sf-dark-600 text-[9px] tracking-wider text-sf-text-secondary normal-case">
+                            For: Master Performance
+                          </span>
+                        )}
                       </div>
                       <div className="mt-1 text-[10px] text-sf-text-muted">
                         {isYoloStillsStep
-                          ? 'These actions run across the full plan, not just the selected shot.'
+                          ? (
+                            isYoloMusicMode
+                              ? `These actions run across the full plan of the ${yoloMusicActiveAltScript ? `"${yoloMusicActiveAltScript.label}" alt` : 'Master'} pass. Generated assets will be tagged with this pass.`
+                              : 'These actions run across the full plan, not just the selected shot.'
+                          )
                           : `Keyframes ready: ${yoloStoryboardReadyCount}/${yoloQueueVariants.length}. Videos use keyframe images.`}
                       </div>
                       <div className={`mt-2 grid grid-cols-1 gap-2 ${isYoloStillsStep ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
@@ -5668,14 +8053,22 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                               type="button"
                               onClick={() => { void handleQueueYoloStoryboards() }}
                               disabled={yoloDependencyCheckInProgress}
-                              title={yoloDependencyCheckInProgress ? 'Wait for dependency check to finish' : 'Queues still-image jobs for all shots in this plan'}
+                              title={yoloDependencyCheckInProgress
+                                ? 'Wait for dependency check to finish'
+                                : (isYoloMusicMode && yoloMusicActiveAltScript
+                                  ? `Generate keyframes for the "${yoloMusicActiveAltScript.label}" alt pass. Assets will be tagged with this pass.`
+                                  : (isYoloMusicMode
+                                    ? 'Generate keyframes for the Master Performance pass.'
+                                    : 'Queues still-image jobs for all shots in this plan'))}
                               className={`px-3 py-2 rounded-lg text-xs ${
                                 yoloDependencyCheckInProgress
                                   ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
                                   : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
                               }`}
                             >
-                              Create Keyframes
+                              {isYoloMusicMode && yoloMusicActiveAltScript
+                                ? `Create Keyframes [${getMusicVideoPassBadge(yoloMusicActiveAltScript.passType)}]`
+                                : 'Create Keyframes'}
                             </button>
                             <button
                               type="button"
@@ -5718,14 +8111,24 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                               type="button"
                               onClick={() => { void handleQueueYoloVideos() }}
                               disabled={yoloDependencyCheckInProgress || yoloStoryboardReadyCount === 0}
-                              title={yoloDependencyCheckInProgress ? 'Wait for dependency check to finish' : yoloStoryboardReadyCount === 0 ? 'Create keyframes first' : 'Queues video generation jobs for all shots in this plan'}
+                              title={yoloDependencyCheckInProgress
+                                ? 'Wait for dependency check to finish'
+                                : yoloStoryboardReadyCount === 0
+                                  ? 'Create keyframes first'
+                                  : (isYoloMusicMode && yoloMusicActiveAltScript
+                                    ? `Generate videos for the "${yoloMusicActiveAltScript.label}" alt pass. Assets will be tagged with this pass.`
+                                    : (isYoloMusicMode
+                                      ? 'Generate videos for the Master Performance pass.'
+                                      : 'Queues video generation jobs for all shots in this plan'))}
                               className={`px-3 py-2 rounded-lg text-xs ${
                                 yoloDependencyCheckInProgress || yoloStoryboardReadyCount === 0
                                   ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed'
                                   : 'bg-sf-accent hover:bg-sf-accent-hover text-white'
                               }`}
                             >
-                              Create Videos
+                              {isYoloMusicMode && yoloMusicActiveAltScript
+                                ? `Create Videos [${getMusicVideoPassBadge(yoloMusicActiveAltScript.passType)}]`
+                                : 'Create Videos'}
                             </button>
                           </>
                         )}
@@ -6000,6 +8403,16 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                 const consistencyLabel = job?.yolo?.referenceConsistency
                   ? formatReferenceConsistencyLabel(job.yolo.referenceConsistency)
                   : null
+                // Pass origin (music mode only). When set, render a small
+                // badge so the user can see at-a-glance which pass each
+                // queued job is generating for — useful while alternating
+                // between master/alt builds in rapid succession.
+                const jobPassType = String(job?.yolo?.pass?.type || '')
+                const showJobPassBadge = jobPassType && jobPassType !== 'master'
+                const jobPassBadge = showJobPassBadge ? getMusicVideoPassBadge(jobPassType) : ''
+                const jobPassLabel = showJobPassBadge
+                  ? (String(job?.yolo?.pass?.altLabel || '') || getMusicVideoPassDisplayName(jobPassType))
+                  : ''
                 const statusLabel = job.status === 'queued' ? 'Queued'
                   : job.status === 'paused' ? 'Paused'
                   : job.status === 'uploading' ? 'Uploading input'
@@ -6024,8 +8437,16 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     <div className="h-1.5 bg-sf-dark-900 rounded-full overflow-hidden">
                       <div className="h-full bg-sf-accent transition-all duration-300" style={{ width: `${percent}%` }} />
                     </div>
-                    <div className="mt-1 text-[9px] text-sf-text-muted">
-                      {statusLabel}{job.node ? ` · Node ${job.node}` : ''}
+                    <div className="mt-1 text-[9px] text-sf-text-muted flex items-center gap-1.5 flex-wrap">
+                      <span>{statusLabel}{job.node ? ` · Node ${job.node}` : ''}</span>
+                      {showJobPassBadge && (
+                        <span
+                          className="px-1 py-0.5 rounded border border-sf-dark-600 bg-sf-dark-900 text-[8.5px] tracking-wider uppercase text-sf-text-secondary"
+                          title={`Pass: ${jobPassLabel}`}
+                        >
+                          {jobPassBadge}
+                        </span>
+                      )}
                     </div>
                     {hasReferenceAnchors && (
                       <div className="mt-1 flex flex-wrap gap-1">

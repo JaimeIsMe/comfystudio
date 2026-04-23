@@ -17,6 +17,18 @@ import {
   scaleAdjustmentSettings,
   TONAL_ADJUSTMENT_GROUP_KEYS,
 } from '../utils/adjustments'
+import {
+  applyEffectsToTransform,
+  buildLetterboxOverlayStyles,
+  buildVignetteOverlayStyle,
+  getActiveLetterboxEffect,
+  getActiveVignetteEffect,
+  getClipEffectFilterId,
+  hasLetterboxEffect,
+  hasPixelFilterEffect,
+  hasVignetteEffect,
+} from '../utils/effects'
+import ClipEffectSvgFilter from './effects/ClipEffectSvgFilter'
 
 /**
  * Returns true if this layer fully obscures all layers below it (opaque, normal blend, covers frame).
@@ -41,6 +53,12 @@ function isLayerFullyObscuring(clip, playheadPosition, getAssetById) {
   // carves out then shows nothing (black preview backdrop) instead of the
   // layer the user composed underneath.
   if (Array.isArray(clip.effects) && clip.effects.some(e => e?.type === 'mask' && e?.enabled)) {
+    return false
+  }
+  // Camera shake or vignette mean the clip no longer fully covers the frame.
+  if (Array.isArray(clip.effects) && clip.effects.some(e => (
+    e?.enabled !== false && (e?.type === 'cameraShake' || e?.type === 'vignette')
+  ))) {
     return false
   }
   const clipTime = playheadPosition - (clip.startTime || 0)
@@ -240,13 +258,9 @@ function getScaledSpriteStyle(spriteData, time) {
 function getCenteredMediaFitStyle() {
   return {
     position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
-    width: 'auto',
-    height: 'auto',
-    maxWidth: '100%',
-    maxHeight: '100%',
+    inset: 0,
+    width: '100%',
+    height: '100%',
     display: 'block',
     backgroundColor: 'transparent',
   }
@@ -356,11 +370,23 @@ function useDiskCacheLoader(clip) {
  * Now also handles loading stale cache URLs from disk
  */
 function useClipUrl(clip) {
+  // Subscribe to the global proxy-preference toggle so the preview switches
+  // tier live when the user flips it, without remounting components.
+  const useProxyPlaybackForAssets = useTimelineStore(state => state.useProxyPlaybackForAssets)
   // Subscribe to this asset's URL so we re-render when playback cache is set (getAssetUrl alone doesn't trigger re-render)
   const assetUrl = useAssetsStore(state => {
     if (!clip?.assetId) return null
     const asset = state.assets.find(a => a.id === clip.assetId)
     if (!asset) return null
+    // Tier preference for PREVIEW (not export):
+    //   1. proxy (low-res, small decode cost) — only when user opted in
+    //   2. playback cache (same-res H.264)
+    //   3. source URL
+    // Each tier is only used when its status is not 'failed' and the URL
+    // is actually populated. A cache in 'encoding' state is ignored until
+    // it flips to 'ready'.
+    const useProxy = useProxyPlaybackForAssets && !!asset.proxyUrl && asset.proxyStatus !== 'failed'
+    if (useProxy) return asset.proxyUrl
     const usePlaybackCache = !!asset.playbackCacheUrl && asset.playbackCacheStatus !== 'failed'
     return usePlaybackCache ? asset.playbackCacheUrl : (asset.url || null)
   })
@@ -963,12 +989,23 @@ function logPlaybackDiag(event, payload = {}) {
   console.log(`[PlaybackDiag] ${event}`, { t: nowSeconds, ...payload })
 }
 
-function resolvePlaybackUrl(clip, getAssetById) {
+function resolvePlaybackUrl(clip, getAssetById, options = {}) {
   if (!clip || clip.type !== 'video') return null
   if (clip.cacheStatus === 'cached' && clip.cacheUrl) {
     return clip.cacheUrl
   }
   const asset = clip.assetId ? getAssetById(clip.assetId) : null
+  // Tier chain (preview only): proxy → playback cache → source.
+  // If callers don't explicitly pass the preference (e.g. a RAF tick inside
+  // a useEffect that doesn't subscribe to the store), we read it directly
+  // from timelineStore. The outer components that DO subscribe to the
+  // preference will re-render and rebuild these closures when the toggle
+  // flips, so the RAF loops naturally pick up the new tier.
+  const useProxyPreference = Object.prototype.hasOwnProperty.call(options, 'useProxyPlaybackForAssets')
+    ? Boolean(options.useProxyPlaybackForAssets)
+    : Boolean(useTimelineStore.getState().useProxyPlaybackForAssets)
+  const useProxy = useProxyPreference && !!asset?.proxyUrl && asset?.proxyStatus !== 'failed'
+  if (useProxy) return asset.proxyUrl
   const usePlaybackCache = !!asset?.playbackCacheUrl && asset?.playbackCacheStatus !== 'failed'
   return (usePlaybackCache ? asset?.playbackCacheUrl : null) || asset?.url || clip.url || null
 }
@@ -1125,11 +1162,13 @@ const VideoLayer = memo(function VideoLayer({
     markPlaybackCacheBroken,
   ])
   
-  // Get animated transform (with keyframes applied)
+  // Get animated transform (with keyframes applied) and fold in any
+  // camera-shake effect offsets so handheld motion survives export/preview
+  // parity.
   const animatedTransform = useMemo(() => {
     if (!clip) return null
-    // Use keyframe-interpolated values if keyframes exist, otherwise use base transform
-    return getAnimatedTransform(clip, clipTime)
+    const base = getAnimatedTransform(clip, clipTime)
+    return applyEffectsToTransform(base, clip?.effects, clipTime)
   }, [clip, clipTime])
   
   // Get sprite frame info for current time (memoized to prevent recalculations)
@@ -1617,9 +1656,31 @@ const VideoLayer = memo(function VideoLayer({
     const filterValue = buildCssFilterFromAdjustments(adjustmentSettings)
     return filterValue !== 'none' ? filterValue : undefined
   }, [adjustmentFilterId, adjustmentSettings, hasTonalAdjustments])
-  // Combine blur (from transform) with mask filter (e.g. invert) so both apply
-  const combinedFilter = [adjustmentFilterValue, transformStyle.filter, maskStyles.filter].filter(Boolean).join(' ') || undefined
-  const spriteCombinedFilter = [adjustmentFilterValue, transformStyle.filter, spriteMaskStyles.filter].filter(Boolean).join(' ') || undefined
+  const hasClipPixelEffects = hasPixelFilterEffect(clip?.effects)
+  const clipEffectsFilterId = useMemo(
+    () => getClipEffectFilterId(clip?.id, 'video'),
+    [clip?.id]
+  )
+  const clipEffectsFilterValue = hasClipPixelEffects ? `url(#${clipEffectsFilterId})` : undefined
+  const vignetteEffect = useMemo(
+    () => (hasVignetteEffect(clip?.effects) ? getActiveVignetteEffect(clip?.effects, clipTime) : null),
+    [clip?.effects, clipTime]
+  )
+  const vignetteOverlayStyle = useMemo(
+    () => (vignetteEffect ? buildVignetteOverlayStyle(vignetteEffect, clipTime) : null),
+    [vignetteEffect, clipTime]
+  )
+  const letterboxEffect = useMemo(
+    () => (hasLetterboxEffect(clip?.effects) ? getActiveLetterboxEffect(clip?.effects, clipTime) : null),
+    [clip?.effects, clipTime]
+  )
+  const letterboxOverlayStyles = useMemo(
+    () => (letterboxEffect ? buildLetterboxOverlayStyles(letterboxEffect, clipTime) : null),
+    [letterboxEffect, clipTime]
+  )
+  // Combine adjustment filter, effect filter, transform blur, and mask filter.
+  const combinedFilter = [clipEffectsFilterValue, adjustmentFilterValue, transformStyle.filter, maskStyles.filter].filter(Boolean).join(' ') || undefined
+  const spriteCombinedFilter = [clipEffectsFilterValue, adjustmentFilterValue, transformStyle.filter, spriteMaskStyles.filter].filter(Boolean).join(' ') || undefined
 
   // When a mask is active we hand visible rendering off to
   // MaskedVideoCanvas (below). The container div still hosts the <video>
@@ -1637,6 +1698,13 @@ const VideoLayer = memo(function VideoLayer({
     <>
       {hasTonalAdjustments && (
         <AdjustmentSvgFilter filterId={adjustmentFilterId} settings={adjustmentSettings} />
+      )}
+      {hasClipPixelEffects && (
+        <ClipEffectSvgFilter
+          filterId={clipEffectsFilterId}
+          effects={clip?.effects}
+          clipTime={clipTime}
+        />
       )}
       {/* Container for cached video element (displaying cache = no black flash at cuts) */}
       <div
@@ -1659,7 +1727,16 @@ const VideoLayer = memo(function VideoLayer({
           ...maskStyles,
           filter: combinedFilter,
         }}
-      />
+      >
+        {vignetteOverlayStyle && (
+          <div aria-hidden style={vignetteOverlayStyle} />
+        )}
+        {letterboxOverlayStyles && (
+          <div aria-hidden style={letterboxOverlayStyles.wrapper}>
+            <div style={letterboxOverlayStyles.inner} />
+          </div>
+        )}
+      </div>
 
       {/* Masked video compositor. Rendered only when a mask effect is
           active on this clip; reads the same video element as the
@@ -1747,9 +1824,10 @@ const ImageLayer = memo(function ImageLayer({
   // Calculate clip-relative time for keyframe evaluation
   const clipTime = playheadPosition - (clip?.startTime || 0)
   
-  // Get animated transform (with keyframes applied)
+  // Get animated transform (with keyframes applied) + camera shake offsets
   const animatedTransform = useMemo(() => {
-    return getAnimatedTransform(clip, clipTime)
+    const base = getAnimatedTransform(clip, clipTime)
+    return applyEffectsToTransform(base, clip?.effects, clipTime)
   }, [clip, clipTime])
   
   const transformStyle = buildVideoTransform(animatedTransform)
@@ -1771,12 +1849,41 @@ const ImageLayer = memo(function ImageLayer({
     const filterValue = buildCssFilterFromAdjustments(adjustmentSettings)
     return filterValue !== 'none' ? filterValue : undefined
   }, [adjustmentFilterId, adjustmentSettings, hasTonalAdjustments])
-  const combinedFilter = [adjustmentFilterValue, transformStyle.filter, maskStyles.filter].filter(Boolean).join(' ') || undefined
+  const hasClipPixelEffects = hasPixelFilterEffect(clip?.effects)
+  const clipEffectsFilterId = useMemo(
+    () => getClipEffectFilterId(clip?.id, 'image'),
+    [clip?.id]
+  )
+  const clipEffectsFilterValue = hasClipPixelEffects ? `url(#${clipEffectsFilterId})` : undefined
+  const vignetteEffect = useMemo(
+    () => (hasVignetteEffect(clip?.effects) ? getActiveVignetteEffect(clip?.effects, clipTime) : null),
+    [clip?.effects, clipTime]
+  )
+  const vignetteOverlayStyle = useMemo(
+    () => (vignetteEffect ? buildVignetteOverlayStyle(vignetteEffect, clipTime) : null),
+    [vignetteEffect, clipTime]
+  )
+  const letterboxEffect = useMemo(
+    () => (hasLetterboxEffect(clip?.effects) ? getActiveLetterboxEffect(clip?.effects, clipTime) : null),
+    [clip?.effects, clipTime]
+  )
+  const letterboxOverlayStyles = useMemo(
+    () => (letterboxEffect ? buildLetterboxOverlayStyles(letterboxEffect, clipTime) : null),
+    [letterboxEffect, clipTime]
+  )
+  const combinedFilter = [clipEffectsFilterValue, adjustmentFilterValue, transformStyle.filter, maskStyles.filter].filter(Boolean).join(' ') || undefined
 
   return (
     <>
       {hasTonalAdjustments && (
         <AdjustmentSvgFilter filterId={adjustmentFilterId} settings={adjustmentSettings} />
+      )}
+      {hasClipPixelEffects && (
+        <ClipEffectSvgFilter
+          filterId={clipEffectsFilterId}
+          effects={clip?.effects}
+          clipTime={clipTime}
+        />
       )}
       <div
         className="bg-transparent w-full h-full"
@@ -1808,6 +1915,14 @@ const ImageLayer = memo(function ImageLayer({
           onContextMenu={(e) => e.preventDefault()}
           draggable={false}
         />
+        {vignetteOverlayStyle && (
+          <div aria-hidden style={vignetteOverlayStyle} />
+        )}
+        {letterboxOverlayStyles && (
+          <div aria-hidden style={letterboxOverlayStyles.wrapper}>
+            <div style={letterboxOverlayStyles.inner} />
+          </div>
+        )}
       </div>
     </>
   )
@@ -1833,9 +1948,10 @@ const TextLayer = memo(function TextLayer({
   // Calculate clip-relative time for keyframe evaluation
   const clipTime = playheadPosition - (clip?.startTime || 0)
   
-  // Get animated transform (with keyframes applied)
+  // Get animated transform (with keyframes applied) + camera shake offsets
   const animatedTransform = useMemo(() => {
-    return getAnimatedTransform(clip, clipTime)
+    const base = getAnimatedTransform(clip, clipTime)
+    return applyEffectsToTransform(base, clip?.effects, clipTime)
   }, [clip, clipTime])
   
   const transformStyle = buildVideoTransform(animatedTransform)
@@ -1857,7 +1973,29 @@ const TextLayer = memo(function TextLayer({
     const filterValue = buildCssFilterFromAdjustments(adjustmentSettings)
     return filterValue !== 'none' ? filterValue : undefined
   }, [adjustmentFilterId, adjustmentSettings, hasTonalAdjustments])
-  const combinedFilter = [adjustmentFilterValue, transformStyle.filter].filter(Boolean).join(' ') || undefined
+  const hasClipPixelEffects = hasPixelFilterEffect(clip?.effects)
+  const clipEffectsFilterId = useMemo(
+    () => getClipEffectFilterId(clip?.id, 'text'),
+    [clip?.id]
+  )
+  const clipEffectsFilterValue = hasClipPixelEffects ? `url(#${clipEffectsFilterId})` : undefined
+  const vignetteEffect = useMemo(
+    () => (hasVignetteEffect(clip?.effects) ? getActiveVignetteEffect(clip?.effects, clipTime) : null),
+    [clip?.effects, clipTime]
+  )
+  const vignetteOverlayStyle = useMemo(
+    () => (vignetteEffect ? buildVignetteOverlayStyle(vignetteEffect, clipTime) : null),
+    [vignetteEffect, clipTime]
+  )
+  const letterboxEffect = useMemo(
+    () => (hasLetterboxEffect(clip?.effects) ? getActiveLetterboxEffect(clip?.effects, clipTime) : null),
+    [clip?.effects, clipTime]
+  )
+  const letterboxOverlayStyles = useMemo(
+    () => (letterboxEffect ? buildLetterboxOverlayStyles(letterboxEffect, clipTime) : null),
+    [letterboxEffect, clipTime]
+  )
+  const combinedFilter = [clipEffectsFilterValue, adjustmentFilterValue, transformStyle.filter].filter(Boolean).join(' ') || undefined
   const textProps = clip.textProperties || {}
   const safePreviewScale = Number.isFinite(previewScale) && previewScale > 0 ? previewScale : 1
   const scaledFontSize = (textProps.fontSize || 64) * safePreviewScale
@@ -1911,6 +2049,13 @@ const TextLayer = memo(function TextLayer({
       {hasTonalAdjustments && (
         <AdjustmentSvgFilter filterId={adjustmentFilterId} settings={adjustmentSettings} />
       )}
+      {hasClipPixelEffects && (
+        <ClipEffectSvgFilter
+          filterId={clipEffectsFilterId}
+          effects={clip?.effects}
+          clipTime={clipTime}
+        />
+      )}
       <div
         className="absolute inset-0 flex items-center justify-center"
         onPointerDown={(e) => {
@@ -1941,6 +2086,14 @@ const TextLayer = memo(function TextLayer({
             {textProps.text || 'Sample Text'}
           </span>
         </div>
+        {vignetteOverlayStyle && (
+          <div aria-hidden style={vignetteOverlayStyle} />
+        )}
+        {letterboxOverlayStyles && (
+          <div aria-hidden style={letterboxOverlayStyles.wrapper}>
+            <div style={letterboxOverlayStyles.inner} />
+          </div>
+        )}
       </div>
     </>
   )
@@ -1964,9 +2117,15 @@ const AdjustmentWrapper = memo(function AdjustmentWrapper({ clip, playheadPositi
     return normalizeAdjustmentSettings(animated)
   }, [clip, clipTime])
 
+  // Compose camera shake (and any other transform-affecting effects) onto
+  // the adjustment clip's transform so it shakes all layers beneath.
+  const effectsTransform = useMemo(() => {
+    const base = getAnimatedTransform(clip, clipTime) || clip?.transform || {}
+    return applyEffectsToTransform(base, clip?.effects, clipTime)
+  }, [clip, clipTime])
+
   const wrapperStyle = useMemo(() => {
-    const animatedTransform = getAnimatedTransform(clip, clipTime)
-    const t = animatedTransform || clip?.transform || {}
+    const t = effectsTransform || clip?.transform || {}
     const opacity = typeof t.opacity === 'number' ? t.opacity : 100
     const opacityFactor = Math.max(0, Math.min(1, opacity / 100))
 
@@ -1980,7 +2139,7 @@ const AdjustmentWrapper = memo(function AdjustmentWrapper({ clip, playheadPositi
 
     // Use buildVideoTransform to get properly scaled CSS styles (position,
     // scale, rotation, anchor, crop, blend mode — all preview-scale aware).
-    const baseStyle = buildVideoTransform(animatedTransform) || {}
+    const baseStyle = buildVideoTransform(effectsTransform) || {}
 
     const ws = {
       position: 'absolute',
@@ -2001,15 +2160,14 @@ const AdjustmentWrapper = memo(function AdjustmentWrapper({ clip, playheadPositi
 
     ws._hasVisualEffect = hasEffect
     return ws
-  }, [clip, clipTime, buildVideoTransform, adjustmentSettings])
+  }, [clip, buildVideoTransform, adjustmentSettings, effectsTransform])
 
   const scaledAdjustmentSettings = useMemo(() => {
-    const animatedTransform = getAnimatedTransform(clip, clipTime)
-    const t = animatedTransform || clip?.transform || {}
+    const t = effectsTransform || clip?.transform || {}
     const opacity = typeof t.opacity === 'number' ? t.opacity : 100
     const opacityFactor = Math.max(0, Math.min(1, opacity / 100))
     return scaleAdjustmentSettings(adjustmentSettings, opacityFactor)
-  }, [adjustmentSettings, clip, clipTime])
+  }, [adjustmentSettings, effectsTransform, clip])
 
   const hasTonalAdjustments = useMemo(
     () => hasTonalAdjustmentEffect(scaledAdjustmentSettings),
@@ -2019,30 +2177,74 @@ const AdjustmentWrapper = memo(function AdjustmentWrapper({ clip, playheadPositi
     () => `clip-adjustment-${sanitizeAdjustmentFilterId(clip?.id)}-adjustment`,
     [clip?.id]
   )
+  const hasClipPixelEffects = hasPixelFilterEffect(clip?.effects)
+  const clipEffectsFilterId = useMemo(
+    () => getClipEffectFilterId(clip?.id, 'adjustment'),
+    [clip?.id]
+  )
+  const clipEffectsFilterValue = hasClipPixelEffects ? `url(#${clipEffectsFilterId})` : undefined
+  const vignetteEffect = useMemo(
+    () => (hasVignetteEffect(clip?.effects) ? getActiveVignetteEffect(clip?.effects, clipTime) : null),
+    [clip?.effects, clipTime]
+  )
+  const vignetteOverlayStyle = useMemo(
+    () => (vignetteEffect ? buildVignetteOverlayStyle(vignetteEffect, clipTime) : null),
+    [vignetteEffect, clipTime]
+  )
+  const letterboxEffect = useMemo(
+    () => (hasLetterboxEffect(clip?.effects) ? getActiveLetterboxEffect(clip?.effects, clipTime) : null),
+    [clip?.effects, clipTime]
+  )
+  const letterboxOverlayStyles = useMemo(
+    () => (letterboxEffect ? buildLetterboxOverlayStyles(letterboxEffect, clipTime) : null),
+    [letterboxEffect, clipTime]
+  )
 
   const hasTransform = wrapperStyle.transform || wrapperStyle.clipPath
-  if (!wrapperStyle._hasVisualEffect && !hasTransform) {
+  const hasAnyClipEffect = hasClipPixelEffects || !!vignetteOverlayStyle || !!letterboxOverlayStyles
+  if (!wrapperStyle._hasVisualEffect && !hasTransform && !hasAnyClipEffect) {
     return <>{children}</>
   }
 
   const style = { ...wrapperStyle }
   delete style._hasVisualEffect
 
+  const combinedFilter = [
+    clipEffectsFilterValue,
+    hasTonalAdjustments ? `url(#${adjustmentFilterId})` : null,
+    style.filter,
+  ].filter(Boolean).join(' ') || undefined
+
   return (
     <>
       {hasTonalAdjustments && (
         <AdjustmentSvgFilter filterId={adjustmentFilterId} settings={scaledAdjustmentSettings} />
       )}
+      {hasClipPixelEffects && (
+        <ClipEffectSvgFilter
+          filterId={clipEffectsFilterId}
+          effects={clip?.effects}
+          clipTime={clipTime}
+        />
+      )}
       <div
         style={{
           ...style,
-          ...(hasTonalAdjustments ? {
-            filter: [`url(#${adjustmentFilterId})`, style.filter].filter(Boolean).join(' ') || undefined,
-            WebkitFilter: [`url(#${adjustmentFilterId})`, style.WebkitFilter].filter(Boolean).join(' ') || undefined,
+          ...(combinedFilter ? {
+            filter: combinedFilter,
+            WebkitFilter: combinedFilter,
           } : null),
         }}
       >
         {children}
+        {vignetteOverlayStyle && (
+          <div aria-hidden style={vignetteOverlayStyle} />
+        )}
+        {letterboxOverlayStyles && (
+          <div aria-hidden style={letterboxOverlayStyles.wrapper}>
+            <div style={letterboxOverlayStyles.inner} />
+          </div>
+        )}
       </div>
     </>
   )
@@ -2085,6 +2287,26 @@ function VideoLayerRenderer({
 
   const getAssetById = useAssetsStore(state => state.getAssetById)
   const { currentProjectHandle } = useProjectStore()
+  // Subscribe to the proxy-preference toggle so preload/pre-seek effects
+  // re-run when the user flips it, which refreshes the video-cache URLs
+  // keyed to `resolvePlaybackUrl`. Included in dep arrays below.
+  const useProxyPlaybackForAssets = useTimelineStore(state => state.useProxyPlaybackForAssets)
+
+  // Keep videoCache's LRU cap in sync with the timeline's layer count.
+  // At the old hardcoded cap (12), a 4-layer timeline would constantly
+  // evict recently-preloaded elements to make room for the next preload,
+  // causing black frames at cuts whose downstream <video> had already
+  // been dropped from the pool. The formula gives each video track a
+  // generous slot budget (active clip + ~2s preload window + LRU grace),
+  // with a floor of 32 so single-layer timelines also benefit.
+  const videoTrackCount = useMemo(
+    () => tracks.filter(t => t.type === 'video').length,
+    [tracks]
+  )
+  useEffect(() => {
+    const target = Math.max(32, videoTrackCount * 12)
+    videoCache.setMaxCacheSize(target)
+  }, [videoTrackCount])
   
   /**
    * Get clips that should be preloaded based on current position
@@ -2202,7 +2424,7 @@ function VideoLayerRenderer({
     })
     
     lastPreloadPosition.current = playheadPosition
-  }, [playheadPosition, getClipsToPreload, getAssetById])
+  }, [playheadPosition, getClipsToPreload, getAssetById, useProxyPlaybackForAssets])
 
   // Auto-render cache for clips with mask effects (smooth playback)
   useEffect(() => {

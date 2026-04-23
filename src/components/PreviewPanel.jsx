@@ -18,6 +18,7 @@ import {
   getPreviewComplexity,
   shouldAutoGeneratePreviewProxy,
 } from '../services/previewCache'
+import { generateMissingProxiesForAllVideos, hasUsableProxy, isProxyableVideoAsset } from '../services/proxyCache'
 import { importAsset } from '../services/fileSystem'
 
 /**
@@ -176,8 +177,8 @@ const ZOOM_PRESETS = [
 // Safe guide presets
 const SAFE_GUIDES = [
   { id: 'none', label: 'No Guides', description: 'Hide all guides' },
-  { id: 'title-safe', label: 'Title Safe', description: '80% - Keep text inside', percent: 80 },
-  { id: 'action-safe', label: 'Action Safe', description: '90% - Keep action inside', percent: 90 },
+  { id: 'title-safe', label: 'Title Safe', description: '90% - Keep text inside', percent: 90 },
+  { id: 'action-safe', label: 'Action Safe', description: '93% - Keep action inside', percent: 93 },
   { id: 'rule-of-thirds', label: 'Rule of Thirds', description: '3x3 grid overlay' },
   { id: 'center', label: 'Center Crosshair', description: 'Center point marker' },
   { id: 'all-safe', label: 'Title + Action Safe', description: 'Both safe zones' },
@@ -284,6 +285,8 @@ function PreviewPanel() {
     setPreviewProxyGenerating,
     setPreviewProxyReady,
     setPreviewProxyInvalid,
+    useProxyPlaybackForAssets,
+    setUseProxyPlaybackForAssets,
   } = useTimelineStore()
   
   // Use timeline playback hook
@@ -433,10 +436,14 @@ function PreviewPanel() {
     }
   })
   const [autoSmoothPreviewEnabled, setAutoSmoothPreviewEnabled] = useState(() => {
+    // Default OFF now that per-asset proxies cover the common case. Users
+    // who previously opted in (true) keep their setting; fresh/cleared
+    // installs no longer trigger full-timeline re-renders on every edit,
+    // which was the main friction for music-video workflows.
     try {
-      return localStorage.getItem(AUTO_SMOOTH_PREVIEW_KEY) !== 'false'
+      return localStorage.getItem(AUTO_SMOOTH_PREVIEW_KEY) === 'true'
     } catch {
-      return true
+      return false
     }
   })
   
@@ -470,6 +477,87 @@ function PreviewPanel() {
     () => getPreviewComplexity({ clips, tracks, transitions }),
     [clips, tracks, transitions]
   )
+  // Proxy coverage snapshot: how many video assets have a ready proxy vs.
+  // total video assets. Drives the "12/34 ready" hint on the toggle and
+  // gates the "Generate missing proxies" CTA. Recomputed when assets change.
+  //
+  // Buckets (must sum to the total video count):
+  //   - ready:       proxy encoded and usable for playback
+  //   - encoding:    currently being transcoded
+  //   - missing:     *proxyable* (local path present) and hasn't been
+  //                  tried yet — "Generate missing" will process these
+  //   - unavailable: can't be proxied right now, either because no local
+  //                  file was found OR a previous attempt failed (broken
+  //                  link, unreadable file, ffmpeg error). Surfaced as an
+  //                  amber badge so users understand why the numbers don't
+  //                  add up and can re-link / re-import / Rebuild all to
+  //                  retry. Keeping failed + not-proxyable together keeps
+  //                  the UI to a single "something's wrong here" signal.
+  const proxyCoverage = useMemo(() => {
+    const videoAssets = (assets || []).filter((a) => a?.type === 'video')
+    const total = videoAssets.length
+    const ready = videoAssets.filter(hasUsableProxy).length
+    const encoding = videoAssets.filter((a) => a.proxyStatus === 'encoding').length
+    const proxyableAssets = videoAssets.filter(isProxyableVideoAsset)
+    const failedProxyable = proxyableAssets.filter((a) => a.proxyStatus === 'failed').length
+    const missing = proxyableAssets.filter((a) => (
+      !hasUsableProxy(a)
+      && a.proxyStatus !== 'encoding'
+      && a.proxyStatus !== 'failed'
+    )).length
+    const unavailable = (total - proxyableAssets.length) + failedProxyable
+    return { total, ready, encoding, missing, unavailable }
+  }, [assets])
+  const [generatingProxies, setGeneratingProxies] = useState(false)
+  const [proxyGenerationMode, setProxyGenerationMode] = useState('missing')
+  // Progress indicator for the rebuild/generate flow. Without this the UI
+  // can look frozen because the ready-count oscillates around its starting
+  // value while each re-encoded asset briefly drops to `encoding`.
+  const [proxyGenerationProgress, setProxyGenerationProgress] = useState({ current: 0, total: 0 })
+  const generateProxiesForAll = useCallback(async ({ force = false } = {}) => {
+    if (!currentProjectHandle || generatingProxies) return
+    setGeneratingProxies(true)
+    setProxyGenerationMode(force ? 'rebuild' : 'missing')
+
+    // Pre-compute the expected batch size from a store snapshot so the
+    // button can show N/total even before the first asset is processed.
+    // Uses the same proxyable/ready predicates as the bulk transcoder — any
+    // drift here and the progress counter ends up pointing at the wrong
+    // denominator. "Generate missing" excludes `failed` (those live in the
+    // unavailable badge); "Rebuild all" (`force`) retries everything
+    // proxyable so fixing a broken link + Rebuild all recovers cleanly.
+    const initialAssets = useAssetsStore.getState().assets || []
+    const expectedTotal = initialAssets.filter((a) => {
+      if (!isProxyableVideoAsset(a)) return false
+      if (force) return true
+      if (a.proxyStatus === 'encoding') return false
+      if (a.proxyStatus === 'failed') return false
+      return !hasUsableProxy(a)
+    }).length
+    setProxyGenerationProgress({ current: 0, total: expectedTotal })
+
+    try {
+      let started = 0
+      const label = force ? 'rebuild' : 'generate-missing'
+      console.log(`[ProxyCache] ${label} starting for ${expectedTotal} asset(s)`)
+      const summary = await generateMissingProxiesForAllVideos(currentProjectHandle, {
+        force,
+        onStart: (asset) => {
+          started += 1
+          console.log(`[ProxyCache] ${label} ${started}/${expectedTotal}: ${asset?.name || asset?.id}`)
+          setProxyGenerationProgress((prev) => ({
+            current: started,
+            total: Math.max(prev.total, started),
+          }))
+        },
+      })
+      console.log(`[ProxyCache] ${label} complete:`, summary)
+    } finally {
+      setGeneratingProxies(false)
+      setProxyGenerationMode('missing')
+      setProxyGenerationProgress({ current: 0, total: 0 })
+    }
+  }, [currentProjectHandle, generatingProxies])
   const shouldAutoGenerateProxy = useMemo(
     () => shouldAutoGeneratePreviewProxy({ clips, tracks, transitions }),
     [clips, tracks, transitions]
@@ -1232,12 +1320,6 @@ function PreviewPanel() {
     }
   }, [showZoomDropdown, showGuidesDropdown])
   
-  // Calculate actual zoom scale
-  const getZoomScale = () => {
-    if (zoom === 'fit') return 1
-    return zoom / 100
-  }
-  
   // Get zoom display label
   const getZoomLabel = () => {
     if (zoom === 'fit') return 'Fit'
@@ -1439,12 +1521,28 @@ function PreviewPanel() {
   }
   
   const timelineAspectRatio = getTimelineAspectRatio()
+  const timelineWidth = Math.max(1, Number(timelineSettings?.width) || 1920)
+  const timelineHeight = Math.max(1, Number(timelineSettings?.height) || 1080)
+  const numericZoom = zoom === 'fit'
+    ? null
+    : Math.max(10, Math.min(400, Number(zoom) || 100))
 
-  // State for computed video dimensions
-  const [videoDimensions, setVideoDimensions] = useState({ width: 0, height: 0 })
+  // Fit dimensions are measured from the viewport. Numeric zoom levels are
+  // derived from project resolution so 50/75/100% mean the same thing on
+  // every monitor instead of being relative to each monitor's fit size.
+  const [fitVideoDimensions, setFitVideoDimensions] = useState({ width: 0, height: 0 })
+  const videoDimensions = useMemo(() => {
+    if (numericZoom !== null) {
+      const scale = numericZoom / 100
+      return {
+        width: timelineWidth * scale,
+        height: timelineHeight * scale,
+      }
+    }
+    return fitVideoDimensions
+  }, [fitVideoDimensions, numericZoom, timelineWidth, timelineHeight])
+
   const previewScale = useMemo(() => {
-    const timelineWidth = Math.max(1, Number(timelineSettings?.width) || 1920)
-    const timelineHeight = Math.max(1, Number(timelineSettings?.height) || 1080)
     const displayWidth = Number(videoDimensions?.width) > 0 ? Number(videoDimensions.width) : timelineWidth
     const displayHeight = Number(videoDimensions?.height) > 0 ? Number(videoDimensions.height) : timelineHeight
 
@@ -1455,9 +1553,10 @@ function PreviewPanel() {
       y,
       uniform: Math.min(x, y),
     }
-  }, [timelineSettings?.width, timelineSettings?.height, videoDimensions?.width, videoDimensions?.height])
+  }, [timelineWidth, timelineHeight, videoDimensions?.width, videoDimensions?.height])
   
-  // Calculate video container dimensions to fill viewport while maintaining aspect ratio
+  // Calculate fit-to-view dimensions for the current viewport. Numeric zoom
+  // levels are derived from project resolution instead of this measured box.
   useEffect(() => {
     const calculateDimensions = () => {
       if (!viewportRef.current) return
@@ -1482,7 +1581,7 @@ function PreviewPanel() {
         height = width / ar
       }
       
-      setVideoDimensions({ width, height })
+      setFitVideoDimensions({ width, height })
     }
     
     calculateDimensions()
@@ -1496,9 +1595,9 @@ function PreviewPanel() {
     return () => resizeObserver.disconnect()
   }, [timelineAspectRatio])
   
-  // Get video container style with computed dimensions
-  // IMPORTANT: use the same measured dimensions source in both normal + fullscreen
-  // so transform scaling (previewScale) and render box size always match.
+  // Get video container style with computed dimensions. In `fit` mode this uses
+  // measured viewport dimensions; numeric zoom uses project-based dimensions so
+  // percentages stay consistent across monitors.
   const getAspectRatioStyle = () => {
     // Use computed dimensions for exact fit in both modes.
     if (videoDimensions.width > 0 && videoDimensions.height > 0) {
@@ -1528,9 +1627,9 @@ function PreviewPanel() {
     const guideColor = 'rgba(255, 255, 255, 0.4)'
     const guides = []
     
-    // Title Safe (80%)
+    // Title Safe (90% / modern HD default)
     if (safeGuide === 'title-safe' || safeGuide === 'all-safe') {
-      const inset = 10 // 10% from each edge = 80% safe area
+      const inset = 5 // 5% from each edge = 90% title-safe area
       guides.push(
         <div
           key="title-safe"
@@ -1548,9 +1647,9 @@ function PreviewPanel() {
       )
     }
     
-    // Action Safe (90%)
+    // Action Safe (93% / modern HD default)
     if (safeGuide === 'action-safe' || safeGuide === 'all-safe') {
-      const inset = 5 // 5% from each edge = 90% safe area
+      const inset = 3.5 // 3.5% from each edge = 93% action-safe area
       guides.push(
         <div
           key="action-safe"
@@ -1646,7 +1745,7 @@ function PreviewPanel() {
   }
 
   const previewStageStyle = {
-    transform: `translate(${pan.x}px, ${pan.y}px) scale(${getZoomScale()})`,
+    transform: `translate(${pan.x}px, ${pan.y}px)`,
     transformOrigin: 'center center',
     transition: isZooming || isPanning ? 'none' : 'transform 0.1s ease-out',
   }
@@ -1960,6 +2059,54 @@ function PreviewPanel() {
                           <span>{Math.round(previewProxyProgress)}%</span>
                         </div>
                       )}
+                      {currentProjectHandle && window.electronAPI && (
+                        <button
+                          type="button"
+                          onClick={() => setUseProxyPlaybackForAssets(!useProxyPlaybackForAssets)}
+                          className={`px-2 py-1 rounded text-xs transition-colors ${useProxyPlaybackForAssets ? 'bg-green-700/70 hover:bg-green-700 text-white' : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-muted'}`}
+                          title={useProxyPlaybackForAssets
+                            ? `Using low-res proxies for preview (export still uses originals). ${proxyCoverage.ready}/${proxyCoverage.total} videos have proxies.`
+                            : 'Use low-res 540p proxies during timeline playback. Reduces decode load by ~4×. Export always uses originals.'}
+                        >
+                          {useProxyPlaybackForAssets
+                            ? `Proxies: On${proxyCoverage.total > 0 ? ` (${proxyCoverage.ready}/${proxyCoverage.total})` : ''}`
+                            : 'Proxies: Off'}
+                        </button>
+                      )}
+                      {useProxyPlaybackForAssets && currentProjectHandle && window.electronAPI && proxyCoverage.total > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => { void generateProxiesForAll({ force: true }) }}
+                          disabled={generatingProxies}
+                          className={`px-2 py-1 rounded text-xs transition-colors ${generatingProxies ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed' : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'}`}
+                          title={`Force-regenerate proxies for all ${proxyCoverage.total} video${proxyCoverage.total === 1 ? '' : 's'}. Existing proxy files are overwritten.`}
+                        >
+                          {generatingProxies && proxyGenerationMode === 'rebuild'
+                            ? `Rebuilding ${proxyGenerationProgress.current}/${proxyGenerationProgress.total || proxyCoverage.total}…`
+                            : 'Rebuild all'}
+                        </button>
+                      )}
+                      {useProxyPlaybackForAssets && currentProjectHandle && window.electronAPI && proxyCoverage.missing > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => { void generateProxiesForAll() }}
+                          disabled={generatingProxies}
+                          className={`px-2 py-1 rounded text-xs transition-colors ${generatingProxies ? 'bg-sf-dark-700 text-sf-text-muted cursor-not-allowed' : 'bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary'}`}
+                          title={`Generate proxies for ${proxyCoverage.missing} video${proxyCoverage.missing === 1 ? '' : 's'} that don't have one yet. Runs in the background.`}
+                        >
+                          {generatingProxies && proxyGenerationMode === 'missing'
+                            ? `Generating ${proxyGenerationProgress.current}/${proxyGenerationProgress.total || proxyCoverage.missing}…`
+                            : `Generate ${proxyCoverage.missing} missing`}
+                        </button>
+                      )}
+                      {useProxyPlaybackForAssets && currentProjectHandle && window.electronAPI && proxyCoverage.unavailable > 0 && (
+                        <span
+                          className="px-2 py-1 rounded text-xs bg-amber-900/40 text-amber-300 border border-amber-700/40 cursor-help select-none"
+                          title={`${proxyCoverage.unavailable} video${proxyCoverage.unavailable === 1 ? '' : 's'} can't be proxied right now — either no local file was found, or a previous encode failed (broken link, unreadable file, ffmpeg error). Common causes: the asset was imported with only a remote URL, or the original file was moved or deleted. Re-link or re-import these assets, then click Rebuild all to retry.`}
+                        >
+                          {proxyCoverage.unavailable} unavailable
+                        </span>
+                      )}
                       {currentProjectHandle && window.electronAPI && clips.length > 0 && (
                         <button
                           type="button"
@@ -2217,7 +2364,7 @@ function PreviewPanel() {
                 transform={selectedPreviewTransform}
                 buildVideoTransform={buildVideoTransform}
                 previewScale={previewScale}
-                zoomScale={getZoomScale()}
+                zoomScale={1}
                 disabled={isSpaceHeld || isPanning || isZooming}
                 onInteractionStart={handlePreviewTransformInteractionStart}
                 onTransformChange={handlePreviewTransformChange}
@@ -2226,8 +2373,14 @@ function PreviewPanel() {
             </div>
           )}
           
-          {/* Safe Guides Overlay - positioned outside the transformed container */}
-          {renderSafeGuides()}
+          {/* Safe Guides Overlay - use the same zoom/pan transform as the stage
+              so guides always stay locked to the project frame on every monitor. */}
+          <div
+            className="absolute inset-0 overflow-visible pointer-events-none z-30"
+            style={previewStageStyle}
+          >
+            {renderSafeGuides()}
+          </div>
         </div>
       </div>
       

@@ -1,3 +1,6 @@
+import { TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID } from './topazVideoUpscaleConfig'
+import { MUSIC_VIDEO_SHOT_WORKFLOW_ID, VOCAL_EXTRACT_WORKFLOW_ID } from './musicVideoShotConfig'
+
 /**
  * Central workflow registry - shared by GenerateWorkspace, Settings, and workflow store.
  * Defines all known workflows: built-in (always installed) and available (user can download).
@@ -7,6 +10,7 @@ export const WORKFLOW_CATEGORIES = {
   video: 'video',
   image: 'image',
   audio: 'audio',
+  text: 'text',
 }
 
 const WORKFLOW_BASE_URL = (() => {
@@ -28,6 +32,9 @@ export const BUILTIN_WORKFLOWS = [
   { id: 'kling-o3-i2v', label: 'Image to Video (Kling O3 Omni)', category: 'video', needsImage: true, description: 'Premium image-to-video with Kling 3.0 Omni', file: 'api_kling_o3_i2v.json' },
   { id: 'grok-video-i2v', label: 'Image to Video (Grok Imagine Video)', category: 'video', needsImage: true, description: 'Cloud image-to-video with Grok Imagine Video Beta', file: 'api_grok_video.json' },
   { id: 'vidu-q2-i2v', label: 'Image to Video (Vidu Q2)', category: 'video', needsImage: true, description: 'Cloud image-to-video with Vidu Q2 Pro Fast', file: 'api_vidu_q2_i2v.json' },
+  { id: TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID, label: 'Topaz Video Upscale', category: 'video', needsImage: false, description: 'Cloud video upscaling with Topaz Starlight and Astra models', file: 'api_topaz_video_enhance.json' },
+  { id: MUSIC_VIDEO_SHOT_WORKFLOW_ID, label: 'Music Video Shot (LTX 2.3 + Audio)', category: 'video', needsImage: true, description: 'Per-shot image-to-video with audio conditioning and lip-sync, for Director Mode music videos', file: 'music_video_shot_ltx2_3_i2v_audio.json' },
+  { id: VOCAL_EXTRACT_WORKFLOW_ID, label: 'Vocal Extract (Mel-Band RoFormer)', category: 'audio', needsImage: false, description: 'Isolate vocals from a mixed song using Mel-Band RoFormer. Used as a one-time preprocessing step for music-video projects.', file: 'vocal_extract_melband.json' },
   { id: 'multi-angles', label: 'Multiple Angles (Characters)', category: 'image', needsImage: true, description: 'Generate 8 camera angles from one character image', file: '1_click_multiple_angles.json' },
   { id: 'multi-angles-scene', label: 'Multiple Angles (Scenes)', category: 'image', needsImage: true, description: 'Generate 8 camera angles from one scene image', file: '1_click_multiple_scene_angles-v1.0.json' },
   { id: 'image-edit', label: 'Image Edit', category: 'image', needsImage: true, description: 'Edit image with text prompt', file: 'image_qwen_image_edit_2509.json' },
@@ -36,6 +43,7 @@ export const BUILTIN_WORKFLOWS = [
   { id: 'grok-text-to-image', label: 'Text to Image (Grok Imagine)', category: 'image', needsImage: false, description: 'Cloud text-to-image using Grok Imagine Image Beta', file: 'api_grok_text_to_image.json' },
   { id: 'seedream-5-lite-image-edit', label: 'Image Edit (Seedream 5.0 Lite)', category: 'image', needsImage: true, description: 'Cloud image edit with ByteDance Seedream 5.0 Lite', file: 'api_bytedance_seedream_5_0_lite_image_edit.json' },
   { id: 'music-gen', label: 'Music Generation', category: 'audio', needsImage: false, description: 'Generate music from tags and lyrics', file: 'music_generation.json' },
+  { id: 'google-gemini-flash-lite', label: 'Prompt Helper (Gemini 3.1 Flash Lite)', category: 'text', needsImage: false, description: 'Cloud prompt-writing helper using Gemini 3.1 Flash Lite', file: 'api_google_gemini.json' },
 ]
 
 // Map workflow id -> public path (for loading JSON)
@@ -45,6 +53,9 @@ export const BUILTIN_WORKFLOW_PATHS = {
   'kling-o3-i2v': getBundledWorkflowPath('api_kling_o3_i2v.json'),
   'grok-video-i2v': getBundledWorkflowPath('api_grok_video.json'),
   'vidu-q2-i2v': getBundledWorkflowPath('api_vidu_q2_i2v.json'),
+  [TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID]: getBundledWorkflowPath('api_topaz_video_enhance.json'),
+  [MUSIC_VIDEO_SHOT_WORKFLOW_ID]: getBundledWorkflowPath('music_video_shot_ltx2_3_i2v_audio.json'),
+  [VOCAL_EXTRACT_WORKFLOW_ID]: getBundledWorkflowPath('vocal_extract_melband.json'),
   'multi-angles': getBundledWorkflowPath('1_click_multiple_angles.json'),
   'multi-angles-scene': getBundledWorkflowPath('1_click_multiple_scene_angles-v1.0.json'),
   'image-edit': getBundledWorkflowPath('image_qwen_image_edit_2509.json'),
@@ -55,6 +66,7 @@ export const BUILTIN_WORKFLOW_PATHS = {
   'seedream-5-lite-image-edit': getBundledWorkflowPath('api_bytedance_seedream_5_0_lite_image_edit.json'),
   'nano-banana-pro': getBundledWorkflowPath('api_google_nano_banana2_image_edit.json'), // legacy id alias
   'music-gen': getBundledWorkflowPath('music_generation.json'),
+  'google-gemini-flash-lite': getBundledWorkflowPath('api_google_gemini.json'),
   'caption-qwen-asr': getBundledWorkflowPath('caption_qwen_asr_transcription.json'),
   'mask-gen': getBundledWorkflowPath('mask_generation_text_prompt.json'),
 }
@@ -72,4 +84,5 @@ export const CATEGORY_LABELS = {
   video: 'Video',
   image: 'Image',
   audio: 'Audio',
+  text: 'Text',
 }

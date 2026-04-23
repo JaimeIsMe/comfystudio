@@ -278,12 +278,29 @@ const normalizeClipTimebases = (clips, assets, timelineFps) => {
     const normalizedSpeed = Number.isFinite(Number(clip.speed)) && Number(clip.speed) > 0 ? Number(clip.speed) : 1
     const normalizedReverse = Boolean(clip.reverse)
 
+    // Timeline duration: prefer the user-set value saved with the project.
+    // Previously we unconditionally wrote `duration: sourceSpan`, which
+    // ignored `speed`: a clip slowed to 0.5x and stretched to 2x its source
+    // length on the timeline would be snapped back to the source's native
+    // length every reload, and the ensuing trimEnd recomputation in
+    // loadFromProject would progressively corrupt the trim on each restart.
+    //
+    // The saved `duration` IS the timeline length the user intended. Trust
+    // it when present and positive; fall back to deriving from source span
+    // divided by speed so we don't re-introduce the same bug for clips that
+    // arrive without a saved duration (e.g. brand-new imports mid-hydrate).
+    const savedDuration = Number(clip.duration)
+    const fallbackDuration = normalizedSpeed > 0 ? sourceSpan / normalizedSpeed : sourceSpan
+    const resolvedDuration = Number.isFinite(savedDuration) && savedDuration > 0
+      ? savedDuration
+      : fallbackDuration
+
     return {
       ...clip,
       sourceDuration,
       trimStart,
       trimEnd: Math.min(trimEnd, sourceDuration),
-      duration: sourceSpan,
+      duration: resolvedDuration,
       sourceFps: Number.isFinite(sourceFps) && sourceFps > 0 ? sourceFps : clip.sourceFps ?? null,
       timelineFps: Number.isFinite(normalizedTimelineFps) && normalizedTimelineFps > 0 ? normalizedTimelineFps : clip.timelineFps ?? null,
       sourceTimeScale: 1,
@@ -419,6 +436,11 @@ export const useTimelineStore = create(
   previewProxyProgress: 0,
   previewProxyPath: null,
   previewProxySignature: null,
+
+  // Per-asset low-res proxy preference. When true, VideoLayerRenderer prefers
+  // asset.proxyUrl over asset.playbackCacheUrl/url for preview only. Export
+  // always uses asset.path. Hydrated from localStorage on boot in PreviewPanel.
+  useProxyPlaybackForAssets: (typeof localStorage !== 'undefined' && localStorage.getItem('comfystudio-use-playback-proxies') === 'true'),
   
   // Snapping settings
   snappingEnabled: true,
@@ -2856,22 +2878,23 @@ export const useTimelineStore = create(
    */
   reorderEffect: (clipId, effectId, direction) => {
     get().saveToHistory()
-    
+
     set((state) => ({
       clips: state.clips.map(clip => {
         if (clip.id !== clipId) return clip
-        
+
         const effects = [...(clip.effects || [])]
         const index = effects.findIndex(e => e.id === effectId)
-        
+
         if (index === -1) return clip
-        
+
         const newIndex = index + direction
         if (newIndex < 0 || newIndex >= effects.length) return clip
-        
-        // Swap
-        [effects[index], effects[newIndex]] = [effects[newIndex], effects[index]]
-        
+
+        const tmp = effects[index]
+        effects[index] = effects[newIndex]
+        effects[newIndex] = tmp
+
         return { ...clip, effects }
       })
     }))
@@ -3011,6 +3034,12 @@ export const useTimelineStore = create(
       previewProxyPath: path,
       previewProxySignature: signature,
     })
+  },
+  setUseProxyPlaybackForAssets: (enabled) => {
+    set({ useProxyPlaybackForAssets: Boolean(enabled) })
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('comfystudio-use-playback-proxies', enabled ? 'true' : 'false')
+    }
   },
   setPreviewProxyInvalid: () => {
     set({
@@ -4059,9 +4088,10 @@ export const useTimelineStore = create(
       }
     })
     
+    const customName = typeof options?.name === 'string' ? options.name.trim() : ''
     const newTrack = {
       id: `${type}-${maxNum + 1}`,
-      name: `${type === 'video' ? 'Video' : 'Audio'} ${maxNum + 1}`,
+      name: customName || `${type === 'video' ? 'Video' : 'Audio'} ${maxNum + 1}`,
       type,
       muted: false,
       locked: false,

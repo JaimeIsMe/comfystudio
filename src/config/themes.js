@@ -33,7 +33,7 @@ export const THEMES = [
   },
 ]
 
-export const DEFAULT_THEME_ID = 'midnight'
+export const DEFAULT_THEME_ID = 'high-contrast'
 
 export function getStoredThemeId() {
   try {

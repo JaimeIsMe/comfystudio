@@ -3,6 +3,7 @@ import { RefreshCw, ExternalLink } from 'lucide-react'
 import TitleBar from './components/TitleBar'
 import ExportPanel from './components/ExportPanel'
 import GenerateWorkspace from './components/GenerateWorkspace'
+import FlowAIWorkspace from './components/FlowAIWorkspace'
 import LLMAssistantWorkspace from './components/LLMAssistantWorkspace'
 import MOGWorkspace from './components/MOGWorkspace'
 import StockPanel from './components/StockPanel'
@@ -37,6 +38,7 @@ function App() {
   const [gettingStartedOpen, setGettingStartedOpen] = useState(false)
   const [selectedItem, setSelectedItem] = useState({ type: 'shot', id: '2.1' })
   const [mainTab, setMainTab] = useState('editor')
+  const [hasMountedFlowAi, setHasMountedFlowAi] = useState(false)
   const [bottomEditorView, setBottomEditorView] = useState('timeline')
   
   // Left panel state
@@ -139,6 +141,16 @@ function App() {
     if (!showComfyUiTab && mainTab === 'comfyui') setMainTab('editor')
   }, [showComfyUiTab, mainTab])
 
+  // Flow AI used to mount immediately after project-open even while its tab was
+  // hidden. That means a runtime error in Flow AI could black out the whole app
+  // during project selection. Lazy-mount it on first visit so hidden-tab
+  // failures cannot take down the main editor.
+  useEffect(() => {
+    if (mainTab === 'flow-ai') {
+      setHasMountedFlowAi(true)
+    }
+  }, [mainTab])
+
   // When user sends timeline frame to Generate (right-click preview → Extend with AI / Starting keyframe for AI)
   useEffect(() => {
     const handler = () => setMainTab('generate')
@@ -190,7 +202,7 @@ function App() {
     } catch (_) { /* ignore */ }
   }, [])
 
-  const isFullScreenTab = mainTab === 'export' || mainTab === 'generate' || mainTab === 'mog' || mainTab === 'llm-assistant' || mainTab === 'stock' || (showComfyUiTab && mainTab === 'comfyui')
+  const isFullScreenTab = mainTab === 'export' || mainTab === 'generate' || mainTab === 'flow-ai' || mainTab === 'mog' || mainTab === 'llm-assistant' || mainTab === 'stock' || (showComfyUiTab && mainTab === 'comfyui')
   // Editor layout insets (used for content when on Editor, and always for tab bar so it doesn't shift)
   const editorLeftInset = leftPanelExpanded ? ICON_BAR_WIDTH + leftPanelWidth : ICON_BAR_WIDTH
   const editorRightInset = inspectorExpanded ? ICON_BAR_WIDTH + inspectorWidth : ICON_BAR_WIDTH
@@ -376,6 +388,16 @@ function App() {
         >
           <GenerateWorkspace onOpenWorkflowSetup={() => openSettingsModal(WORKFLOW_SETUP_SECTION_ID)} />
         </div>
+        {hasMountedFlowAi && (
+          <div
+            className="flex-1 flex flex-col min-h-0 overflow-hidden bg-sf-dark-950"
+            style={{ display: mainTab === 'flow-ai' ? 'flex' : 'none' }}
+          >
+            <WorkspaceErrorBoundary>
+              <FlowAIWorkspace onOpenWorkflowSetup={() => openSettingsModal(WORKFLOW_SETUP_SECTION_ID)} />
+            </WorkspaceErrorBoundary>
+          </div>
+        )}
         {mainTab === 'mog' && (
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-sf-dark-950">
             <WorkspaceErrorBoundary>
@@ -389,7 +411,7 @@ function App() {
           <StockPanel />
         ) : mainTab === 'llm-assistant' ? (
           <LLMAssistantWorkspace />
-        ) : mainTab === 'comfyui' || mainTab === 'generate' || mainTab === 'mog' ? null : (
+        ) : mainTab === 'comfyui' || mainTab === 'generate' || mainTab === 'flow-ai' || mainTab === 'mog' ? null : (
           <>
             {/* Left Panel - Full Height Mode (spans entire left side) */}
             {leftPanelFullHeight && (

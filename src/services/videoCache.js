@@ -9,8 +9,16 @@
  * - Memory management (LRU eviction)
  */
 
-// Maximum number of video elements to keep in cache
-const MAX_CACHE_SIZE = 12
+// Default maximum number of video elements to keep in cache.
+// Starting floor: 32. At 12 (the old value) a 4-layer timeline was
+// constantly self-evicting — active + preloaded elements across 4 tracks
+// can easily exceed 12, causing black frames at cuts as recently-used
+// elements get dropped to make room for the next preload.
+// Callers can raise this via videoCache.setMaxCacheSize(n) — see
+// VideoLayerRenderer, which scales it with the number of video tracks.
+const DEFAULT_MAX_CACHE_SIZE = 32
+const MIN_MAX_CACHE_SIZE = 12
+const HARD_CAP_MAX_CACHE_SIZE = 128
 
 // How far ahead to preload (in seconds)
 const PRELOAD_LOOKAHEAD = 2.0
@@ -20,6 +28,8 @@ const PRELOAD_TRIGGER_TIME = 1.5
 
 class VideoCache {
   constructor() {
+    // Effective cap; mutable via setMaxCacheSize().
+    this.maxCacheSize = DEFAULT_MAX_CACHE_SIZE
     // Map of clipId -> { videoElement, lastUsed, ready, url }
     this.cache = new Map()
     
@@ -299,10 +309,26 @@ class VideoCache {
   }
 
   /**
+   * Raise or lower the LRU cap. VideoLayerRenderer scales this with the
+   * number of video tracks so multi-layer timelines don't self-evict
+   * preloaded elements mid-playback. Clamped to a sane range so a bug
+   * or stale state can't DOS the page with hundreds of video elements.
+   */
+  setMaxCacheSize(n) {
+    const requested = Math.floor(Number(n) || DEFAULT_MAX_CACHE_SIZE)
+    const clamped = Math.max(MIN_MAX_CACHE_SIZE, Math.min(HARD_CAP_MAX_CACHE_SIZE, requested))
+    if (clamped === this.maxCacheSize) return
+    this.maxCacheSize = clamped
+    // If we just lowered the cap, evict immediately; if we raised it,
+    // this is a no-op (cache is already below the new limit).
+    this._evictIfNeeded()
+  }
+
+  /**
    * Evict least recently used entries if cache is full
    */
   _evictIfNeeded() {
-    if (this.cache.size <= MAX_CACHE_SIZE) return
+    if (this.cache.size <= this.maxCacheSize) return
 
     // Sort by lastUsed, oldest first; don't evict entries whose base clip is active
     const entries = [...this.cache.entries()]
@@ -310,7 +336,7 @@ class VideoCache {
       .sort((a, b) => a[1].lastUsed - b[1].lastUsed)
 
     // Evict oldest entries until we're under the limit
-    const toEvict = this.cache.size - MAX_CACHE_SIZE
+    const toEvict = this.cache.size - this.maxCacheSize
     for (let i = 0; i < toEvict && i < entries.length; i++) {
       const [key, entry] = entries[i]
       
@@ -371,7 +397,7 @@ class VideoCache {
       total: this.cache.size,
       ready,
       active: this.activeElements.size,
-      maxSize: MAX_CACHE_SIZE,
+      maxSize: this.maxCacheSize,
     }
   }
 

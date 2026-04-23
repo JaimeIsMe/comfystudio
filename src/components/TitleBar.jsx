@@ -5,6 +5,7 @@ import ComfyLauncherChip from './ComfyLauncherChip'
 const TOP_TABS = [
   { id: 'editor', label: 'Editor' },
   { id: 'generate', label: 'Generate' },
+  { id: 'flow-ai', label: 'Flow AI' },
   { id: 'mog', label: 'MoGraph' },
   { id: 'stock', label: 'Stock' },
   { id: 'comfyui', label: 'ComfyUI' },

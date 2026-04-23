@@ -1,0 +1,29 @@
+{
+  "1": {
+    "inputs": {
+      "prompt": "Describe an image in extreme detail, including subject appearance, clothing, pose, expression, background elements, lighting, camera angle, composition, color palette, and overall aesthetic style. Use precise, descriptive language suitable for AI image generation prompts. Do not use vague terms. Only return the prompts itself. Focus on 90s retro tech aesthetic and photorealistic quality.",
+      "model": "gemini-3-1-flash-lite",
+      "seed": 57508441257468,
+      "system_prompt": "- Role: AI Image Analysis and Description Specialist\n- Background: The user requires a prompt that enables AI to analyze images and generate detailed descriptions which can be used as drawing prompts to create similar images. This is essential for tasks like content creation, design inspiration, and artistic exploration.\n- Profile: As an AI Image Analysis and Description Specialist, you possess extensive knowledge in computer vision, image processing, and natural language generation. You are adept at interpreting visual data and translating it into descriptive text that can guide the creation of new images.\n- Skills: Proficiency in image recognition, feature extraction, descriptive language generation, and understanding of artistic elements such as composition, color, and texture.\n- Goals: To analyze the provided image, generate a comprehensive and detailed description that captures the key visual elements, and ensure this description can effectively serve as a drawing prompt for creating similar images.\n- Constrains: The description must be clear, concise, and specific enough to guide the creation of a similar image. It should avoid ambiguity and focus on the most salient features of the image. The output should only contain the drawing prompt.\n- OutputFormat: A detailed text description of the image, highlighting key visual elements such as objects, colors, composition, and any unique features.\n- Workflow:\n  1. Analyze the image to identify key visual elements including objects, colors, and composition.\n  2. Generate a detailed description that captures the essence of the image, ensuring it is specific and actionable.\n  3. Refine the description to ensure clarity and conciseness, making it suitable for use as a drawing prompt."
+    },
+    "class_type": "GeminiNode",
+    "_meta": {
+      "title": "Google Gemini"
+    }
+  },
+  "7": {
+    "inputs": {
+      "preview_markdown": "A medium shot of a young adult in a dimly lit, cluttered 1990s bedroom, captured with the distinct chromatic aberration and slight grain of 35mm film. The subject is hunched over a bulky, beige CRT computer monitor, their face illuminated by the cool, flickering blue-green glow of a command-line interface. The subject is wearing an oversized, acid-washed denim jacket over a faded graphic band t-shirt and loose-fit corduroy pants. Their expression is one of intense focus, brows slightly furrowed, with soft, directional light casting sharp shadows across their face. \n\nThe background is densely packed with period-accurate tech detritus: tangled black telephone wires snaking across a wooden desk, a stack of translucent plastic CD jewel cases, a neon-colored translucent mechanical keyboard, and a mechanical ball mouse with a frayed cord. On the wall, a cluttered corkboard displays Polaroids and handwritten sticky notes. The color palette consists of muted earth tones-mustard yellows, burnt oranges, and dull beiges-contrasted sharply by the vibrant, synthetic cyan and phosphor-green glow from the screen. The composition uses a shallow depth of field, blurring the background shelves filled with VHS tapes and gaming consoles. High-detail textures, including the matte plastic grain of the hardware and the soft weave of the denim, rendered in a hyper-realistic, nostalgic cinematic style.",
+      "preview_text": "A medium shot of a young adult in a dimly lit, cluttered 1990s bedroom, captured with the distinct chromatic aberration and slight grain of 35mm film. The subject is hunched over a bulky, beige CRT computer monitor, their face illuminated by the cool, flickering blue-green glow of a command-line interface. The subject is wearing an oversized, acid-washed denim jacket over a faded graphic band t-shirt and loose-fit corduroy pants. Their expression is one of intense focus, brows slightly furrowed, with soft, directional light casting sharp shadows across their face. \n\nThe background is densely packed with period-accurate tech detritus: tangled black telephone wires snaking across a wooden desk, a stack of translucent plastic CD jewel cases, a neon-colored translucent mechanical keyboard, and a mechanical ball mouse with a frayed cord. On the wall, a cluttered corkboard displays Polaroids and handwritten sticky notes. The color palette consists of muted earth tones-mustard yellows, burnt oranges, and dull beiges-contrasted sharply by the vibrant, synthetic cyan and phosphor-green glow from the screen. The composition uses a shallow depth of field, blurring the background shelves filled with VHS tapes and gaming consoles. High-detail textures, including the matte plastic grain of the hardware and the soft weave of the denim, rendered in a hyper-realistic, nostalgic cinematic style.",
+      "previewMode": null,
+      "source": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "Preview as Text"
+    }
+  }
+}

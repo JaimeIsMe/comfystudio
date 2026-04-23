@@ -138,6 +138,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<{ success: boolean, error?: string }>}
    */
   transcodeForPlayback: (options) => ipcRenderer.invoke('playback:transcode', options),
+
+  /**
+   * Transcode video to a low-res proxy (default 540p, CRF 28, keyframe every 6)
+   * for fast multi-layer timeline preview. Never used for export.
+   * @param {{ inputPath: string, outputPath: string, targetHeight?: number }}
+   * @returns {Promise<{ success: boolean, error?: string }>}
+   */
+  transcodeForProxy: (options) => ipcRenderer.invoke('proxy:transcode', options),
   
   /**
    * Delete a file
@@ -231,6 +239,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<string>}
    */
   getAppPath: (name) => ipcRenderer.invoke('path:getAppPath', name),
+
+  /**
+   * Check whether an absolute filesystem path exists (file or directory).
+   * Resolves to false for missing paths, empty strings, or any error.
+   * @param {string} filePath - Absolute path to check
+   * @returns {Promise<boolean>}
+   */
+  pathExists: (filePath) => ipcRenderer.invoke('path:exists', filePath),
   
   // ============================================
   // Media URL Operations

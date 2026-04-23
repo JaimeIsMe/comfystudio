@@ -1124,17 +1124,63 @@ async function createWindow() {
   //   - window.open(url, '_blank', ...)
   //   - <a href="..." target="_blank">
   //   - plain navigations that target an http(s) URL outside our app bundle.
-  // Safe because we only hand off http(s) and mailto; anything else is denied.
+  //
+  // Safe because we only hand off http(s), mailto, and file URLs:
+  //   - http(s)/mailto go through shell.openExternal (default browser / mail).
+  //   - file:// URLs come from our own project-relative exports (e.g. the
+  //     "Create Storyboard PDF" button, which writes the PDF into the
+  //     project's Images folder and then asks the OS to preview it). These
+  //     go through shell.openPath which opens the file in the user's default
+  //     associated app (PDF viewer for .pdf, image viewer for images, etc.).
+  //     Anything else is denied.
   {
     const { shell } = require('electron')
     const isSafeExternalUrl = (url) => /^(https?:|mailto:)/i.test(String(url || ''))
+    const isLocalFileUrl = (url) => /^file:/i.test(String(url || ''))
 
-    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // Resolve a file:// URL back to an OS-native path. We URL-decode first so
+    // percent-escapes (spaces, non-ASCII filenames) round-trip correctly, then
+    // strip the scheme + leading slashes. On Windows the URL looks like
+    // "file:///C:/..." so we end up with "C:/..."; on POSIX it's
+    // "file:///Users/..." which stays "/Users/...". shell.openPath handles
+    // both forms natively.
+    const fileUrlToPath = (url) => {
+      try {
+        const decoded = decodeURI(String(url || '').trim())
+        let path = decoded.replace(/^file:\/+/i, '')
+        if (/^[A-Za-z]:/.test(path)) return path // Windows drive letter
+        return `/${path}` // POSIX — restore the leading slash we stripped
+      } catch (_) {
+        return ''
+      }
+    }
+
+    const handoffExternalUrl = (url) => {
       if (isSafeExternalUrl(url)) {
         shell.openExternal(url).catch((err) => {
           console.warn('[shell.openExternal] failed:', err?.message || err)
         })
+        return true
       }
+      if (isLocalFileUrl(url)) {
+        const filePath = fileUrlToPath(url)
+        if (!filePath) return false
+        shell.openPath(filePath).then((result) => {
+          // shell.openPath resolves with an error string (truthy on failure),
+          // not a throw — log it so a broken association doesn't silently fail.
+          if (result) {
+            console.warn('[shell.openPath] failed:', result, 'path=', filePath)
+          }
+        }).catch((err) => {
+          console.warn('[shell.openPath] threw:', err?.message || err)
+        })
+        return true
+      }
+      return false
+    }
+
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+      handoffExternalUrl(url)
       return { action: 'deny' }
     })
 
@@ -1517,6 +1563,19 @@ ipcMain.handle('path:normalize', (event, filePath) => {
 ipcMain.handle('path:getAppPath', (event, name) => {
   // Valid names: home, appData, userData, documents, downloads, music, pictures, videos, temp
   return app.getPath(name)
+})
+
+// Cheap synchronous existence check. Used by the proxy bulk flow to avoid
+// spawning ffmpeg on assets whose source file is missing on disk, and by
+// the UI coverage counter to classify broken-link assets as "unavailable"
+// instead of hopelessly re-trying them as "missing" forever.
+ipcMain.handle('path:exists', (event, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) return false
+  try {
+    return fsSync.existsSync(filePath)
+  } catch {
+    return false
+  }
 })
 
 // ============================================
@@ -2920,6 +2979,67 @@ ipcMain.handle('playback:transcode', async (event, { inputPath, outputPath }) =>
     '-movflags', '+faststart',
     '-c:a', 'aac',
     '-b:a', '192k',
+    outputPath
+  ]
+
+  return await new Promise((resolve) => {
+    const ffmpeg = spawn(ffmpegPath, args, { windowsHide: true })
+    let stderr = ''
+
+    ffmpeg.stderr.on('data', (data) => {
+      stderr += data.toString()
+    })
+
+    ffmpeg.on('error', (err) => {
+      resolve({ success: false, error: err.message })
+    })
+
+    ffmpeg.on('close', (code) => {
+      if (code === 0) {
+        resolve({ success: true })
+      } else {
+        resolve({ success: false, error: stderr || `FFmpeg exited with code ${code}` })
+      }
+    })
+  })
+})
+
+// ============================================
+// Proxy cache (NLE-style: low-res preview proxies)
+//
+// Separate from the playback cache above. The playback cache keeps source
+// resolution so single-layer preview is smooth; the proxy cache drops to
+// a short dimension (default 540px) so multi-layer timelines with heavy
+// effect stacks decode a fraction of the pixels. Export never uses these.
+// ============================================
+ipcMain.handle('proxy:transcode', async (event, { inputPath, outputPath, targetHeight = 540 }) => {
+  if (!ffmpegPath) {
+    return { success: false, error: 'FFmpeg binary not available.' }
+  }
+  if (!inputPath || !outputPath) {
+    return { success: false, error: 'Missing inputPath or outputPath.' }
+  }
+
+  // scale=-2:H → preserve aspect, force-even width (H.264 requirement).
+  // veryfast + crf 28 gives small files (~1/4 playback-cache size) and
+  // keeps ffmpeg fast enough to run in the background at import time.
+  // Keyframe every 6 frames matches the playback cache so scrubbing is
+  // identical across both tiers.
+  const scaleFilter = `scale=-2:${Math.max(180, Math.min(1080, Number(targetHeight) || 540))}`
+  const args = [
+    '-y',
+    '-i', inputPath,
+    '-vf', scaleFilter,
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '28',
+    '-g', '6',
+    '-keyint_min', '6',
+    '-bf', '0',
+    '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
+    '-c:a', 'aac',
+    '-b:a', '128k',
     outputPath
   ]
 

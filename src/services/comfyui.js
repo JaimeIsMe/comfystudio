@@ -12,9 +12,19 @@ import {
   isInsufficientCreditsError,
   notifyComfyPartnerCreditsLow,
 } from './comfyPartnerAuth'
+import { extractCreditCountFromText } from '../utils/comfyCredits'
+import {
+  MUSIC_VIDEO_SHOT_DEFAULTS,
+  getMusicVideoShotTypeOption,
+  normalizeMusicVideoShot,
+} from '../config/musicVideoShotConfig'
 
 const COMFY_ORG_API_KEY_SETTING_KEY = 'comfyApiKeyComfyOrg';
 const COMFY_ORG_API_KEY_LOCAL_KEY = 'comfystudio-comfy-api-key';
+const COMFY_BINARY_EVENT_TYPES = Object.freeze({
+  TEXT: 3,
+})
+const UTF8_DECODER = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf-8') : null
 
 function parseNumericLike(value) {
   if (typeof value === 'number' && Number.isFinite(value)) return value
@@ -86,6 +96,9 @@ class ComfyUIService {
     // their class_type in human-readable log output.
     this._promptNodeMeta = new Map();
     this._promptNodeMetaMax = 32;
+    this._currentExecutionPromptId = null;
+    this._recentPromptByNodeId = new Map();
+    this._recentPromptByNodeIdMax = 64;
     void hydrateLocalComfyConnection()
   }
 
@@ -117,6 +130,94 @@ class ComfyUIService {
         this._promptNodeMeta.delete(firstKey);
       }
     } catch (_) { /* ignore */ }
+  }
+
+  _rememberExecutingNodePrompt(promptId, nodeId) {
+    if (!promptId || nodeId == null) return;
+    const normalizedPromptId = String(promptId);
+    const normalizedNodeId = String(nodeId);
+    this._currentExecutionPromptId = normalizedPromptId;
+    this._recentPromptByNodeId.set(normalizedNodeId, normalizedPromptId);
+    while (this._recentPromptByNodeId.size > this._recentPromptByNodeIdMax) {
+      const firstKey = this._recentPromptByNodeId.keys().next().value;
+      if (firstKey === undefined) break;
+      this._recentPromptByNodeId.delete(firstKey);
+    }
+  }
+
+  _clearExecutionPrompt(promptId) {
+    if (!promptId) {
+      this._currentExecutionPromptId = null;
+      return;
+    }
+    const normalizedPromptId = String(promptId);
+    if (this._currentExecutionPromptId === normalizedPromptId) {
+      this._currentExecutionPromptId = null;
+    }
+  }
+
+  _resolvePromptIdForNode(nodeId) {
+    if (nodeId != null) {
+      const recentPromptId = this._recentPromptByNodeId.get(String(nodeId));
+      if (recentPromptId) return recentPromptId;
+    }
+    return this._currentExecutionPromptId;
+  }
+
+  _parseProgressTextPayload(bytes) {
+    if (!UTF8_DECODER || !(bytes instanceof Uint8Array) || bytes.byteLength < 4) return null;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const nodeIdByteLength = view.getUint32(0);
+    const nodeIdStart = 4;
+    const textStart = nodeIdStart + nodeIdByteLength;
+    if (nodeIdByteLength < 0 || textStart > bytes.byteLength) return null;
+    return {
+      nodeId: UTF8_DECODER.decode(bytes.slice(nodeIdStart, textStart)),
+      text: UTF8_DECODER.decode(bytes.slice(textStart)),
+    };
+  }
+
+  async handleSocketData(rawData) {
+    if (typeof rawData === 'string') {
+      this.handleMessage(JSON.parse(rawData));
+      return;
+    }
+
+    if (rawData instanceof ArrayBuffer) {
+      this.handleBinaryMessage(rawData);
+      return;
+    }
+
+    if (ArrayBuffer.isView(rawData)) {
+      const view = rawData;
+      this.handleBinaryMessage(view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength));
+      return;
+    }
+
+    if (typeof Blob !== 'undefined' && rawData instanceof Blob) {
+      const buffer = await rawData.arrayBuffer();
+      this.handleBinaryMessage(buffer);
+    }
+  }
+
+  handleBinaryMessage(buffer) {
+    if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 4) return;
+    const view = new DataView(buffer);
+    const eventType = view.getUint32(0);
+    if (eventType !== COMFY_BINARY_EVENT_TYPES.TEXT) return;
+
+    const payload = this._parseProgressTextPayload(new Uint8Array(buffer, 4));
+    if (!payload?.text) return;
+
+    const promptId = this._resolvePromptIdForNode(payload.nodeId);
+    const nodeType = promptId ? this.getNodeClassType(promptId, payload.nodeId) : null;
+    this.emit('progress_text', {
+      nodeId: payload.nodeId,
+      nodeType,
+      promptId,
+      text: payload.text,
+      credits: extractCreditCountFromText(payload.text),
+    });
   }
 
   generateClientId() {
@@ -167,6 +268,7 @@ class ComfyUIService {
         console.log('Connecting to ComfyUI WebSocket:', wsUrl);
       }
       this.ws = new WebSocket(wsUrl);
+      this.ws.binaryType = 'arraybuffer';
       
       // Set a timeout for connection
       const timeout = setTimeout(() => {
@@ -196,10 +298,9 @@ class ComfyUIService {
         reject(error);
       };
 
-      this.ws.onmessage = (event) => {
+      this.ws.onmessage = async (event) => {
         try {
-          const data = JSON.parse(event.data);
-          this.handleMessage(data);
+          await this.handleSocketData(event.data);
         } catch (e) {
           console.error('Error parsing WebSocket message:', e);
         }
@@ -234,8 +335,10 @@ class ComfyUIService {
     } else if (type === 'executing') {
       if (data.data.node === null) {
         // Execution complete
+        this._clearExecutionPrompt(data.data?.prompt_id);
         this.emit('complete', { promptId: data.data.prompt_id });
       } else {
+        this._rememberExecutingNodePrompt(data.data?.prompt_id, data.data?.node);
         this.emit('executing', { 
           node: data.data.node,
           promptId: data.data.prompt_id 
@@ -250,6 +353,9 @@ class ComfyUIService {
     } else if (type === 'status') {
       this.emit('status', data.data);
     } else if (type === 'execution_start') {
+      if (data.data?.prompt_id) {
+        this._currentExecutionPromptId = String(data.data.prompt_id);
+      }
       this.emit('execution_start', {
         promptId: data.data?.prompt_id,
         timestamp: data.data?.timestamp,
@@ -260,11 +366,13 @@ class ComfyUIService {
         nodes: Array.isArray(data.data?.nodes) ? data.data.nodes : [],
       });
     } else if (type === 'execution_success') {
+      this._clearExecutionPrompt(data.data?.prompt_id);
       this.emit('execution_success', {
         promptId: data.data?.prompt_id,
         timestamp: data.data?.timestamp,
       });
     } else if (type === 'execution_error') {
+      this._clearExecutionPrompt(data.data?.prompt_id);
       this.emit('execution_error', {
         promptId: data.data?.prompt_id,
         nodeId: data.data?.node_id,
@@ -273,6 +381,7 @@ class ComfyUIService {
         traceback: Array.isArray(data.data?.traceback) ? data.data.traceback : undefined,
       });
     } else if (type === 'execution_interrupted') {
+      this._clearExecutionPrompt(data.data?.prompt_id);
       this.emit('execution_interrupted', {
         promptId: data.data?.prompt_id,
         nodeId: data.data?.node_id,
@@ -1252,12 +1361,14 @@ export function modifyZImageTurboWorkflow(workflow, options = {}) {
     seed = Math.floor(Math.random() * 1000000000000),
     width = 1024,
     height = 1024,
+    variantCount = 1,
     filenamePrefix = '',
   } = options
 
   const modified = JSON.parse(JSON.stringify(workflow))
   const numericWidth = Math.max(256, Math.round(Number(width) || 1024))
   const numericHeight = Math.max(256, Math.round(Number(height) || 1024))
+  const safeVariantCount = Math.max(1, Math.min(10, Math.round(Number(variantCount) || 1)))
 
   for (const node of Object.values(modified)) {
     if (!node?.inputs) continue
@@ -1270,6 +1381,7 @@ export function modifyZImageTurboWorkflow(workflow, options = {}) {
     if ((node.class_type === 'EmptySD3LatentImage' || node.class_type === 'EmptyLatentImage')) {
       if ('width' in node.inputs) node.inputs.width = numericWidth
       if ('height' in node.inputs) node.inputs.height = numericHeight
+      if ('batch_size' in node.inputs) node.inputs.batch_size = safeVariantCount
     }
     if (node.class_type === 'SaveImage' && 'filename_prefix' in node.inputs) {
       node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'image/z_image_turbo'
@@ -1290,6 +1402,7 @@ export function modifyGrokTextToImageWorkflow(workflow, options = {}) {
     model = 'grok-imagine-image-beta',
     width = 1024,
     height = 1024,
+    variantCount = 1,
     filenamePrefix = 'image/grok_text_to_image',
   } = options
 
@@ -1297,6 +1410,7 @@ export function modifyGrokTextToImageWorkflow(workflow, options = {}) {
   const safeAspectRatio = resolveClosestAspectRatio(width, height)
   const longestEdge = Math.max(Number(width) || 0, Number(height) || 0)
   const safeResolution = longestEdge >= 1800 ? '2K' : '1K'
+  const safeVariantCount = Math.max(1, Math.min(10, Math.round(Number(variantCount) || 1)))
 
   for (const node of Object.values(modified)) {
     if (!node?.inputs) continue
@@ -1307,7 +1421,7 @@ export function modifyGrokTextToImageWorkflow(workflow, options = {}) {
       if ('seed' in node.inputs) node.inputs.seed = seed
       if ('aspect_ratio' in node.inputs) node.inputs.aspect_ratio = safeAspectRatio
       if ('resolution' in node.inputs) node.inputs.resolution = safeResolution
-      if ('number_of_images' in node.inputs) node.inputs.number_of_images = 1
+      if ('number_of_images' in node.inputs) node.inputs.number_of_images = safeVariantCount
     }
 
     if (node.class_type === 'SaveImage' && 'filename_prefix' in node.inputs) {
@@ -1330,6 +1444,7 @@ export function modifySeedream5LiteImageEditWorkflow(workflow, options = {}) {
     inputImage = '',
     width = 2048,
     height = 2048,
+    variantCount = 1,
     model = 'seedream 5.0 lite',
     filenamePrefix = 'image/seedream_5_lite',
     referenceImages = [],
@@ -1339,6 +1454,7 @@ export function modifySeedream5LiteImageEditWorkflow(workflow, options = {}) {
   const numericWidth = Math.max(256, Math.round(Number(width) || 0))
   const numericHeight = Math.max(256, Math.round(Number(height) || 0))
   const sizePreset = resolveSeedreamSizePreset(numericWidth, numericHeight)
+  const safeVariantCount = Math.max(1, Math.min(10, Math.round(Number(variantCount) || 1)))
   const validReferences = (Array.isArray(referenceImages) ? referenceImages : [])
     .map((name) => String(name || '').trim())
     .filter(Boolean)
@@ -1374,7 +1490,7 @@ export function modifySeedream5LiteImageEditWorkflow(workflow, options = {}) {
       if ('size_preset' in node.inputs && sizePreset) node.inputs.size_preset = sizePreset
       if ('width' in node.inputs && Number.isFinite(numericWidth)) node.inputs.width = numericWidth
       if ('height' in node.inputs && Number.isFinite(numericHeight)) node.inputs.height = numericHeight
-      if ('max_images' in node.inputs) node.inputs.max_images = 1
+      if ('max_images' in node.inputs) node.inputs.max_images = safeVariantCount
       if ('sequential_image_generation' in node.inputs) node.inputs.sequential_image_generation = 'disabled'
     }
 
@@ -1527,6 +1643,58 @@ export function modifyNanoBanana2Workflow(workflow, options = {}) {
       }
       geminiNode.inputs.images = [batchNodeId, 0]
     }
+  }
+
+  return modified
+}
+
+export function modifyGeminiPromptWorkflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    seed = Math.floor(Math.random() * 1000000000000),
+    model = 'gemini-3-1-flash-lite',
+    systemPrompt = null,
+    inputImage = null,
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  let geminiNode = null
+
+  const getUniqueNodeId = (baseId) => {
+    let nextId = baseId
+    let suffix = 1
+    while (modified[nextId]) {
+      nextId = `${baseId}_${suffix}`
+      suffix += 1
+    }
+    return nextId
+  }
+
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+    if (node.class_type !== 'GeminiNode') continue
+
+    geminiNode = node
+    if ('prompt' in node.inputs) node.inputs.prompt = prompt
+    if ('model' in node.inputs) node.inputs.model = model
+    if ('seed' in node.inputs) node.inputs.seed = seed
+    if (typeof systemPrompt === 'string' && systemPrompt.trim() && 'system_prompt' in node.inputs) {
+      node.inputs.system_prompt = systemPrompt
+    }
+  }
+
+  if (!geminiNode) return modified
+
+  if (inputImage) {
+    const loadNodeId = getUniqueNodeId('gemini_ref_img')
+    modified[loadNodeId] = {
+      class_type: 'LoadImage',
+      inputs: { image: inputImage },
+      _meta: { title: 'Load Image (reference)' },
+    }
+    geminiNode.inputs.images = [loadNodeId, 0]
+  } else if (Object.prototype.hasOwnProperty.call(geminiNode.inputs, 'images')) {
+    delete geminiNode.inputs.images
   }
 
   return modified
@@ -1732,6 +1900,208 @@ export function modifyKlingO3I2VWorkflow(workflow, options = {}) {
     if (node.class_type === 'SaveVideo' && 'filename_prefix' in node.inputs) {
       node.inputs.filename_prefix = filenamePrefix
     }
+  }
+
+  return modified
+}
+
+/**
+ * Workflow modifier for Topaz Video Upscale.
+ * Expects LoadVideo + TopazVideoEnhance + SaveVideo in the workflow JSON.
+ */
+export function modifyTopazVideoUpscaleWorkflow(workflow, options = {}) {
+  const {
+    inputVideo = '',
+    upscalerModel = 'Starlight Precise 2.5',
+    upscalerResolution = 'FullHD (1080p)',
+    upscalerCreativity = 'low',
+    filenamePrefix = 'video/topaz_video_upscale',
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const creativity = upscalerModel === 'Starlight (Astra) Creative'
+    ? String(upscalerCreativity || 'low').trim() || 'low'
+    : 'low'
+
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+
+    if (node.class_type === 'LoadVideo' && 'file' in node.inputs) {
+      node.inputs.file = inputVideo
+    }
+
+    if (node.class_type === 'TopazVideoEnhance') {
+      if ('upscaler_enabled' in node.inputs) node.inputs.upscaler_enabled = true
+      if ('upscaler_model' in node.inputs) node.inputs.upscaler_model = upscalerModel
+      if ('upscaler_resolution' in node.inputs) node.inputs.upscaler_resolution = upscalerResolution
+      if ('upscaler_creativity' in node.inputs) node.inputs.upscaler_creativity = creativity
+      if ('interpolation_enabled' in node.inputs) node.inputs.interpolation_enabled = false
+    }
+
+    if (node.class_type === 'SaveVideo' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'video/topaz_video_upscale'
+    }
+  }
+
+  return modified
+}
+
+/**
+ * Workflow modifier for Vocal Extract (Mel-Band RoFormer).
+ *
+ * Runs once per project as a preprocessing step when the user imports a
+ * mixed-track song and needs an isolated vocal stem for lip-sync.
+ */
+export function modifyVocalExtractWorkflow(workflow, options = {}) {
+  const {
+    inputAudio = '',
+    filenamePrefix = 'audio/vocal_stem',
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+    if (node.class_type === 'LoadAudio' && 'audio' in node.inputs) {
+      node.inputs.audio = inputAudio || node.inputs.audio
+    }
+    if (node.class_type === 'SaveAudioMP3' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'audio/vocal_stem'
+    }
+  }
+  return modified
+}
+
+/**
+ * Workflow modifier for Music Video Shot (LTX 2.3 + Audio).
+ *
+ * Maps a normalized shot object (see musicVideoShotConfig.normalizeMusicVideoShot)
+ * plus per-project audio onto the node inputs of
+ * public/workflows/music_video_shot_ltx2_3_i2v_audio.json.
+ *
+ * Shape of `options`:
+ *   {
+ *     shot: { shotType, length, audioStart, shotPrompt, ... },
+ *     inputAudio: 'song_or_vocal_stem.mp3' (uploaded to ComfyUI),
+ *     inputImage: 'shot_reference.png' (uploaded to ComfyUI),
+ *     useVocalsOnly: false (true = run Mel-Band at graph time; prefer false +
+ *       pre-extracted stem),
+ *     enablePromptEnhancer: false,
+ *     width, height, fps,
+ *     filenamePrefix: 'video/music_video/shot_01',
+ *     seed: <optional override; shot.seed wins if set>,
+ *     negativePrompt: <optional; keeps workflow default if omitted>,
+ *   }
+ */
+export function modifyMusicVideoShotWorkflow(workflow, options = {}) {
+  const {
+    shot: rawShot = {},
+    inputAudio = '',
+    inputImage = '',
+    useVocalsOnly = false,
+    enablePromptEnhancer = false,
+    width = MUSIC_VIDEO_SHOT_DEFAULTS.width,
+    height = MUSIC_VIDEO_SHOT_DEFAULTS.height,
+    fps = MUSIC_VIDEO_SHOT_DEFAULTS.fps,
+    filenamePrefix = 'video/music_video/shot',
+    seed: seedOverride = null,
+    negativePrompt = '',
+  } = options
+
+  const shot = normalizeMusicVideoShot(rawShot)
+  const shotTypeOption = getMusicVideoShotTypeOption(shot.shotType) || getMusicVideoShotTypeOption('performance')
+
+  const resolvedPrompt = [shot.shotPrompt, shotTypeOption.promptSuffix]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join('\n\n')
+
+  const resolvedSeed = Number.isFinite(Number(shot.seed))
+    ? Math.round(Number(shot.seed))
+    : Number.isFinite(Number(seedOverride))
+      ? Math.round(Number(seedOverride))
+      : Math.floor(Math.random() * 1000000000000)
+
+  const numericWidth = Math.max(256, Math.round(Number(width) || MUSIC_VIDEO_SHOT_DEFAULTS.width))
+  const numericHeight = Math.max(256, Math.round(Number(height) || MUSIC_VIDEO_SHOT_DEFAULTS.height))
+  const numericFps = Math.max(1, Math.round(Number(fps) || MUSIC_VIDEO_SHOT_DEFAULTS.fps))
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+
+  // LoadImage (reference still) — node 444
+  if (modified['444']?.inputs && 'image' in modified['444'].inputs) {
+    modified['444'].inputs.image = inputImage || modified['444'].inputs.image
+  }
+  // LoadAudio (project song or pre-extracted vocal stem) — node 1594
+  if (modified['1594']?.inputs && 'audio' in modified['1594'].inputs) {
+    modified['1594'].inputs.audio = inputAudio || modified['1594'].inputs.audio
+  }
+  // USE VOCALS ONLY switch — node 1616
+  // Keep this false when we have a pre-extracted stem (the normal path) so we
+  // don't pay the Mel-Band RoFormer cost on every shot.
+  if (modified['1616']?.inputs && 'switch' in modified['1616'].inputs) {
+    modified['1616'].inputs.switch = Boolean(useVocalsOnly)
+  }
+  // Audio start / length — nodes 5100 and 2012
+  if (modified['5100']?.inputs && 'value' in modified['5100'].inputs) {
+    modified['5100'].inputs.value = shot.audioStart
+  }
+  if (modified['2012']?.inputs && 'value' in modified['2012'].inputs) {
+    modified['2012'].inputs.value = shot.length
+  }
+  // Video geometry — nodes 1586 (FPS), 1606 (WIDTH), 1591 (HEIGHT)
+  if (modified['1586']?.inputs && 'value' in modified['1586'].inputs) {
+    modified['1586'].inputs.value = numericFps
+  }
+  if (modified['1606']?.inputs && 'value' in modified['1606'].inputs) {
+    modified['1606'].inputs.value = numericWidth
+  }
+  if (modified['1591']?.inputs && 'value' in modified['1591'].inputs) {
+    modified['1591'].inputs.value = numericHeight
+  }
+  // Prompt — node 1624
+  if (modified['1624']?.inputs && 'value' in modified['1624'].inputs) {
+    modified['1624'].inputs.value = resolvedPrompt || modified['1624'].inputs.value
+  }
+  // Negative prompt — node 1626 (only override if caller supplied one)
+  if (negativePrompt && modified['1626']?.inputs && 'text' in modified['1626'].inputs) {
+    modified['1626'].inputs.text = negativePrompt
+  }
+  // Image strength — node 1722
+  if (modified['1722']?.inputs && 'value' in modified['1722'].inputs) {
+    modified['1722'].inputs.value = shot.imageStrength
+  }
+  // Prompt enhancer toggle — node 2116
+  if (modified['2116']?.inputs && 'value' in modified['2116'].inputs) {
+    modified['2116'].inputs.value = Boolean(enablePromptEnhancer)
+  }
+  // LoRA toggles (Power Lora Loader rgthree) — node 2150
+  //   lora_1 = talking-head (performance)
+  //   lora_2 = Licon-VBVR (foundational, always on)
+  //   lora_3 = Image2Vid-Adapter (foundational, always on)
+  //   lora_4 = camera control / dolly-out (optional per shot)
+  if (modified['2150']?.inputs) {
+    const loraInputs = modified['2150'].inputs
+    if (loraInputs.lora_1 && typeof loraInputs.lora_1 === 'object') {
+      loraInputs.lora_1.on = Boolean(shotTypeOption.talkingHeadLoraOn)
+      loraInputs.lora_1.strength = Number(shotTypeOption.talkingHeadLoraStrength) || 0
+    }
+    if (loraInputs.lora_4 && typeof loraInputs.lora_4 === 'object') {
+      loraInputs.lora_4.on = Boolean(shotTypeOption.cameraLoraOn)
+      loraInputs.lora_4.strength = Number(shotTypeOption.cameraLoraStrength) || 0
+    }
+  }
+  // Seeds — Pass 1 (2179) and Pass 2 (2169)
+  if (modified['2179']?.inputs && 'noise_seed' in modified['2179'].inputs) {
+    modified['2179'].inputs.noise_seed = resolvedSeed
+  }
+  if (modified['2169']?.inputs && 'noise_seed' in modified['2169'].inputs) {
+    // Offset the pass-2 seed so the two passes don't collapse into the same
+    // noise, which visibly hurts detail on LTX 2.3.
+    modified['2169'].inputs.noise_seed = (resolvedSeed + 1000003) >>> 0
+  }
+  // Output — node 5001 (SaveVideo)
+  if (modified['5001']?.inputs && 'filename_prefix' in modified['5001'].inputs) {
+    modified['5001'].inputs.filename_prefix = filenamePrefix || modified['5001'].inputs.filename_prefix || 'video/music_video/shot'
   }
 
   return modified

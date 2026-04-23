@@ -437,12 +437,51 @@ export const useAssetsStore = create(
               console.warn(`Could not load playback cache for ${asset.name}:`, e)
             }
           }
+          // Regenerate proxy URL (low-res NLE-style proxy) the same way.
+          // Kept separate from playbackCache so both tiers can coexist:
+          // proxy is strongly preferred for multi-layer preview, playback
+          // cache is used when proxy is missing/disabled.
+          let proxyUrl = null
+          let proxyPath = asset.proxyPath
+          let proxyStatus = asset.proxyStatus
+          if (asset.proxyPath) {
+            try {
+              let canUseProxy = true
+              if (
+                isElectron() &&
+                typeof projectHandle === 'string' &&
+                window.electronAPI?.pathJoin &&
+                window.electronAPI?.exists
+              ) {
+                const absoluteProxyPath = await window.electronAPI.pathJoin(projectHandle, asset.proxyPath)
+                canUseProxy = await window.electronAPI.exists(absoluteProxyPath)
+              }
+
+              if (canUseProxy) {
+                proxyUrl = await getProjectFileUrl(projectHandle, asset.proxyPath)
+              } else {
+                proxyPath = null
+                proxyStatus = 'failed'
+                console.warn(`[ProxyCache] Missing proxy file for ${asset.name}; falling back to source`, {
+                  assetId: asset.id,
+                  proxyPath: asset.proxyPath,
+                })
+              }
+            } catch (e) {
+              proxyPath = null
+              proxyStatus = 'failed'
+              console.warn(`Could not load proxy for ${asset.name}:`, e)
+            }
+          }
           assetsWithUrls.push({
             ...asset,
             url,
             playbackCachePath: playbackCachePath ?? undefined,
             playbackCacheStatus,
             playbackCacheUrl: playbackCacheUrl ?? undefined,
+            proxyPath: proxyPath ?? undefined,
+            proxyStatus,
+            proxyUrl: proxyUrl ?? undefined,
           })
         } catch (err) {
           console.warn(`Could not load asset ${asset.name}:`, err)
@@ -480,6 +519,7 @@ export const useAssetsStore = create(
       // Don't save blob URLs - they're session-specific
       url: asset.isImported ? null : asset.url, // Keep URL for AI assets (they're external)
       playbackCacheUrl: undefined, // Session-only; path is persisted
+      proxyUrl: undefined, // Session-only; path is persisted
     }))
   },
 
@@ -664,6 +704,67 @@ export const useAssetsStore = create(
       ),
       currentPreview: state.currentPreview?.id === assetId
         ? { ...state.currentPreview, playbackCacheStatus: status }
+        : state.currentPreview,
+    }))
+  },
+
+  /**
+   * Set proxy path + URL for an asset (after low-res proxy transcode completes).
+   * Kept distinct from playback cache so a single asset can have both tiers
+   * (proxy = small low-res for multi-layer preview, playback = same-res fast
+   * decode for single-layer smoothness).
+   */
+  setProxyCache: (assetId, proxyPath, proxyUrl) => {
+    set((state) => ({
+      assets: state.assets.map(a =>
+        a.id === assetId ? { ...a, proxyPath, proxyUrl } : a
+      ),
+      currentPreview: state.currentPreview?.id === assetId
+        ? { ...state.currentPreview, proxyPath, proxyUrl }
+        : state.currentPreview,
+    }))
+  },
+
+  /**
+   * Set proxy status for UI (encoding | ready | failed | skipped).
+   */
+  setProxyCacheStatus: (assetId, status) => {
+    set((state) => ({
+      assets: state.assets.map(a =>
+        a.id === assetId ? { ...a, proxyStatus: status } : a
+      ),
+      currentPreview: state.currentPreview?.id === assetId
+        ? { ...state.currentPreview, proxyStatus: status }
+        : state.currentPreview,
+    }))
+  },
+
+  /**
+   * Mark proxy as unusable and fall back to playback cache / source.
+   * Does not touch playbackCache* fields; those recover independently.
+   */
+  markProxyCacheBroken: (assetId, reason = 'unknown') => {
+    if (!assetId) return
+    set((state) => ({
+      assets: state.assets.map(a =>
+        a.id === assetId
+          ? {
+              ...a,
+              proxyUrl: undefined,
+              proxyPath: undefined,
+              proxyStatus: 'failed',
+              proxyError: reason,
+            }
+          : a
+      ),
+      currentPreview: state.currentPreview?.id === assetId
+        ? {
+            ...state.currentPreview,
+            proxyUrl: undefined,
+            proxyPath: undefined,
+            proxyStatus: 'failed',
+            proxyError: reason,
+          }
         : state.currentPreview,
     }))
   },

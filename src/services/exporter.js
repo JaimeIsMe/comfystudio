@@ -11,6 +11,19 @@ import {
 } from '../utils/adjustments'
 import { getAudioClipFadeGain, getAudioClipFadeValues } from '../utils/audioClipFades'
 import { getAudioClipLinearGain, normalizeAudioClipGainDb } from '../utils/audioClipGain'
+import {
+  applyEffectsToTransform,
+  applyGlowPassesToCanvas,
+  applyPixelEffectsToImageData,
+  drawLetterboxOverlay,
+  drawVignetteOverlay,
+  getActiveLetterboxEffect,
+  getActiveVignetteEffect,
+  hasGlowEffect,
+  hasLetterboxEffect,
+  hasPixelFilterEffect,
+  hasVignetteEffect,
+} from '../utils/effects'
 
 const DEFAULT_SAMPLE_RATE = 44100
 const AUDIO_FETCH_TIMEOUT_MS = 15000
@@ -127,17 +140,134 @@ const loadVideo = async (url) => {
   return video
 }
 
+// Diagnostics for the cut-boundary stale-frame race. Enable by running the
+// app with `localStorage.setItem('exportSeekDebug', '1')` in DevTools; on
+// reload, every seekVideo call logs which path it took and whether the
+// decoder actually confirmed a fresh presentation. Rate-limited so we don't
+// drown the console on large exports.
+const SEEK_DEBUG_ENABLED = (() => {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem('exportSeekDebug') === '1'
+  } catch {
+    return false
+  }
+})()
+let seekDebugLogCount = 0
+const SEEK_DEBUG_LIMIT = 120
+const seekDebug = (...args) => {
+  if (!SEEK_DEBUG_ENABLED) return
+  if (seekDebugLogCount >= SEEK_DEBUG_LIMIT) return
+  seekDebugLogCount += 1
+  console.log('[Export:seek]', ...args)
+  if (seekDebugLogCount === SEEK_DEBUG_LIMIT) {
+    console.log('[Export:seek] further seek logs suppressed (limit reached)')
+  }
+}
+
+/**
+ * Force the <video> element to present a fresh frame to the compositor and
+ * resolve only after the rVFC callback fires (or a conservative timeout).
+ *
+ * Why this is the real fix for the cut-boundary flash:
+ *   - drawImage(video) reads from the compositor's currently-presented frame.
+ *   - 'seeked' fires on demux completion, NOT on presentation.
+ *   - play()'s returned promise resolves on the play-state transition, NOT
+ *     on presentation. If you call pause() immediately after awaiting it,
+ *     Chromium often never commits a new frame at all, because the
+ *     decoder/compositor pipeline was torn down before producing one.
+ *   - rVFC is the only public API that actually fires on a genuine
+ *     presentation event. Staying in the playing state while we await it
+ *     guarantees the pipeline completes at least one present.
+ *
+ * Sequence:
+ *   1. Register an rVFC callback that records the first real presentation.
+ *   2. Call play() and await its state-transition promise.
+ *   3. Wait up to `maxPlayMs` in the playing state for the rVFC to fire.
+ *   4. Pause. (Always — even on timeout.)
+ *   5. Return whether a presentation was confirmed.
+ *
+ * If rVFC is unavailable, we sleep `maxPlayMs` while playing as a
+ * best-effort. That's worse than rVFC but strictly better than pausing
+ * immediately.
+ */
+const presentFreshFrame = async (video, { maxPlayMs = 600 } = {}) => {
+  const hasRVFC = typeof video.requestVideoFrameCallback === 'function'
+  let confirmed = false
+  let rvfcHandle = null
+
+  const presentedPromise = hasRVFC
+    ? new Promise((resolve) => {
+        let done = false
+        const callback = () => {
+          if (done) return
+          done = true
+          confirmed = true
+          resolve()
+        }
+        try {
+          rvfcHandle = video.requestVideoFrameCallback(callback)
+        } catch {
+          done = true
+          resolve()
+        }
+        setTimeout(() => {
+          if (done) return
+          done = true
+          resolve()
+        }, maxPlayMs)
+      })
+    : new Promise((resolve) => setTimeout(resolve, maxPlayMs))
+
+  try {
+    video.muted = true
+    const playPromise = video.play()
+    if (playPromise) await playPromise.catch(() => {})
+  } catch {
+    // If play() outright throws, we still await the timer to give the
+    // decoder a chance. Better than returning immediately.
+  }
+
+  await presentedPromise
+
+  try {
+    video.pause()
+  } catch {
+    // non-fatal
+  }
+
+  if (!confirmed && rvfcHandle != null && typeof video.cancelVideoFrameCallback === 'function') {
+    try { video.cancelVideoFrameCallback(rvfcHandle) } catch { /* ignore */ }
+  }
+
+  return confirmed
+}
+
+// Per-element memory of the last requested source time. A "large seek" —
+// meaning a jump that's outside the decoder's natural frame-to-frame
+// continuity — is the specific condition that produces the cut-boundary
+// stale-frame race, because the decoder has to reset to a new GOP and the
+// compositor may still be showing the prior clip's frame by the time
+// drawImage reads. Sequential within-clip frames advance by ~1/fps (16–42ms)
+// and never hit that race; doing the heavy play+rVFC dance on them would
+// just slow exports down without benefit.
+const lastSeekTimeByVideo = new WeakMap()
+const LARGE_SEEK_THRESHOLD_SEC = 0.3
+
 const seekVideo = async (video, time, fastSeek = true) => {
   const targetTime = clamp(time, 0, video.duration || time)
-  
-  // Set the time (fast seek uses keyframe jumps when available)
+  const prevTime = lastSeekTimeByVideo.get(video)
+  // First seek on this element OR a jump larger than threshold (= cut
+  // boundary, or any discontinuity that requires a decoder reset) = we must
+  // force-and-confirm a fresh presentation.
+  const isLargeSeek = prevTime == null || Math.abs(targetTime - prevTime) > LARGE_SEEK_THRESHOLD_SEC
+  lastSeekTimeByVideo.set(video, targetTime)
+
   if (fastSeek && typeof video.fastSeek === 'function') {
     video.fastSeek(targetTime)
   } else {
     video.currentTime = targetTime
   }
-  
-  // Wait for seek to complete
+
   if (video.seeking) {
     try {
       await Promise.race([
@@ -145,35 +275,43 @@ const seekVideo = async (video, time, fastSeek = true) => {
         new Promise((resolve) => setTimeout(resolve, 2000))
       ])
     } catch (err) {
-      // Some media elements dispatch transient demux/decode errors while seeking.
-      // Keep export running and let draw step decide whether to skip this frame.
+      // Some media elements dispatch transient demux/decode errors while
+      // seeking. Keep export running and let the draw step decide whether to
+      // skip this frame.
       console.warn('[Export] Seek warning:', getMediaErrorMessage(err))
     }
   }
 
-  // Fast mode: minimal wait, may be less accurate
   if (fastSeek) {
-    await new Promise((resolve) => setTimeout(resolve, 5))
+    // Fast path: callers opted into keyframe-accurate seeks, so we don't try
+    // to force a presentation. Give the decoder a short settling window.
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    seekDebug('fastSeek', { targetTime, prevTime })
     return
   }
-  
-  // CRITICAL: Force the frame to decode by briefly playing
-  // requestVideoFrameCallback doesn't work reliably on paused/seeking video
-  // This play/pause trick forces the decoder to present the frame
-  try {
-    video.muted = true
-    const playPromise = video.play()
-    if (playPromise) {
-      await playPromise.catch(() => {}) // Ignore play errors
-    }
-    // Immediately pause - we just needed to trigger frame decode
-    video.pause()
-    
-    // Small delay to ensure the frame is rendered to the video element
-    await new Promise(resolve => setTimeout(resolve, 20))
-  } catch (e) {
-    // If play fails, just wait a bit for decode
-    await new Promise(resolve => setTimeout(resolve, 50))
+
+  if (!isLargeSeek) {
+    // Small forward seek on a decoder that already has continuity. No
+    // stale-frame risk — the next frame has naturally followed. Keep it
+    // fast; the old 20ms settle is fine for this case.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    seekDebug('small-seek', { targetTime, prevTime })
+    return
+  }
+
+  // Large seek: this is the condition that causes the cut-boundary flash.
+  // Force and confirm a presentation so drawImage doesn't pull the previous
+  // clip's frame out of the compositor buffer.
+  const confirmed = await presentFreshFrame(video, { maxPlayMs: 600 })
+
+  if (!confirmed) {
+    seekDebug('large-seek NO rVFC confirm, fallback delay', { targetTime, prevTime, currentTime: video.currentTime })
+    // 600ms of playing already happened above — stale frame risk is now
+    // very low even without explicit confirmation. Small extra settle for
+    // safety.
+    await new Promise((resolve) => setTimeout(resolve, 40))
+  } else {
+    seekDebug('large-seek confirmed', { targetTime, prevTime, currentTime: video.currentTime })
   }
 }
 
@@ -353,6 +491,53 @@ export const applyClipCrop = (ctx, rect, transform) => {
   ctx.beginPath()
   ctx.rect(left, top, rect.width - left - right, rect.height - top - bottom)
   ctx.clip()
+}
+
+const hasManagedPixelOrVignetteEffect = (clip, clipTime) => {
+  if (!clip) return false
+  const effects = clip.effects || []
+  return hasPixelFilterEffect(effects, clipTime)
+    || hasVignetteEffect(effects, clipTime)
+    || hasLetterboxEffect(effects, clipTime)
+}
+
+/**
+ * Apply a clip's managed pixel effects (chromatic aberration, film grain) and
+ * vignette to an offscreen canvas that already contains the clip content at
+ * its final transformed position. Pixel effects run in-place on the canvas's
+ * ImageData. Vignette is composited with `source-atop` so it only darkens
+ * the clip's rendered pixels, keeping surrounding transparent areas clean.
+ */
+const applyClipManagedEffectsToOffCanvas = (offCanvas, offCtx, width, height, clip, clipTime, frameIndex) => {
+  if (!clip) return
+  const effects = clip.effects || []
+  // CA + film grain: ImageData pass. applyPixelEffectsToImageData silently
+  // skips glow, so this stays fast when only glow is enabled.
+  const hasCAorGrain = effects.some((e) => (
+    e && e.enabled !== false && (e.type === 'chromaticAberration' || e.type === 'filmGrain')
+  ))
+  if (hasCAorGrain) {
+    const imageData = offCtx.getImageData(0, 0, width, height)
+    applyPixelEffectsToImageData(imageData, effects, clipTime, frameIndex)
+    offCtx.putImageData(imageData, 0, 0)
+  }
+  // Glow runs as a canvas pass because blur + screen-blend needs the canvas
+  // filter API and globalCompositeOperation.
+  if (hasGlowEffect(effects)) {
+    applyGlowPassesToCanvas(offCanvas, offCtx, width, height, effects, clipTime)
+  }
+  const vignetteEffect = getActiveVignetteEffect(effects, clipTime)
+  if (vignetteEffect) {
+    drawVignetteOverlay(offCtx, width, height, vignetteEffect, clipTime, {
+      compositeOperation: 'source-atop',
+    })
+  }
+  const letterboxEffect = getActiveLetterboxEffect(effects, clipTime)
+  if (letterboxEffect) {
+    drawLetterboxOverlay(offCtx, width, height, letterboxEffect, clipTime, {
+      compositeOperation: 'source-atop',
+    })
+  }
 }
 
 const applyTransitionClip = (ctx, rect, transitionStyle) => {
@@ -722,8 +907,14 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         const adjustmentSettings = normalizeAdjustmentSettings(
           getAnimatedAdjustmentSettings(clip, clipTime) || clip.adjustments || {}
         )
-        const clipTransform = getAnimatedTransform(clip, clipTime) || clip.transform || {}
-        if (adjustmentCtx && hasAdjustmentEffect(adjustmentSettings)) {
+        const baseClipTransform = getAnimatedTransform(clip, clipTime) || clip.transform || {}
+        // Apply camera shake / transform-affecting effects to the adjustment
+        // layer so shake propagates to every clip beneath.
+        const clipTransform = applyEffectsToTransform(baseClipTransform, clip.effects, clipTime)
+        const usesManagedPixelEffects = hasManagedPixelOrVignetteEffect(clip, clipTime)
+        const adjustmentIsActive = hasAdjustmentEffect(adjustmentSettings)
+
+        if (adjustmentCtx && (adjustmentIsActive || usesManagedPixelEffects)) {
           const usesTonalAdjustments = hasTonalAdjustmentEffect(adjustmentSettings)
           let adjustmentOutputCanvas = null
 
@@ -731,7 +922,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
             adjustmentCtx.clearRect(0, 0, width, height)
             adjustmentCtx.drawImage(canvas, 0, 0)
             adjustmentOutputCanvas = applyAdvancedAdjustmentsToCanvas(adjustmentCanvas, adjustmentSettings)
-          } else {
+          } else if (adjustmentIsActive) {
             const adjustmentFilter = buildCssFilterFromAdjustments(adjustmentSettings)
             if (adjustmentFilter !== 'none') {
               adjustmentCtx.clearRect(0, 0, width, height)
@@ -741,6 +932,28 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
               adjustmentCtx.restore()
               adjustmentOutputCanvas = adjustmentCanvas
             }
+          } else if (usesManagedPixelEffects) {
+            // No color adjustment but there are managed effects to apply to
+            // the composited layers beneath this adjustment clip.
+            adjustmentCtx.clearRect(0, 0, width, height)
+            adjustmentCtx.drawImage(canvas, 0, 0)
+            adjustmentOutputCanvas = adjustmentCanvas
+          }
+
+          if (adjustmentOutputCanvas && usesManagedPixelEffects) {
+            // Apply managed pixel effects and vignette to the adjusted
+            // snapshot before drawing it back.
+            let managedCanvas = adjustmentOutputCanvas
+            let managedCtx = managedCanvas.getContext('2d')
+            if (!managedCtx || managedCanvas === canvas) {
+              managedCanvas = document.createElement('canvas')
+              managedCanvas.width = width
+              managedCanvas.height = height
+              managedCtx = managedCanvas.getContext('2d')
+              managedCtx.drawImage(adjustmentOutputCanvas, 0, 0)
+            }
+            applyClipManagedEffectsToOffCanvas(managedCanvas, managedCtx, width, height, clip, clipTime, frameIndex)
+            adjustmentOutputCanvas = managedCanvas
           }
 
           if (adjustmentOutputCanvas) {
@@ -766,13 +979,15 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       const transitionStyle = (isVideoA || isVideoB) ? getTransitionCanvasStyle(transitionInfo, isVideoA) : null
       
       const clipTime = time - clip.startTime
-      const clipTransform = getAnimatedTransform(clip, clipTime) || clip.transform || {}
+      const baseClipTransform = getAnimatedTransform(clip, clipTime) || clip.transform || {}
+      const clipTransform = applyEffectsToTransform(baseClipTransform, clip.effects, clipTime)
       const clipAdjustmentSettings = normalizeAdjustmentSettings(
         getAnimatedAdjustmentSettings(clip, clipTime) || clip.adjustments || {}
       )
       const usesTonalAdjustments = hasTonalAdjustmentEffect(clipAdjustmentSettings)
       const clipAdjustmentFilter = buildCssFilterFromAdjustments(clipAdjustmentSettings)
       const clipAdjustmentFilterValue = clipAdjustmentFilter !== 'none' ? clipAdjustmentFilter : null
+      const usesManagedPixelEffects = hasManagedPixelOrVignetteEffect(clip, clipTime)
       if (clip.type === 'text') {
         const rect = getBaseDrawRect(width, height, width, height)
         const baseOpacity = typeof clipTransform.opacity === 'number' ? clipTransform.opacity / 100 : 1
@@ -809,11 +1024,50 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
 
           const processedCanvasForText = applyAdvancedAdjustmentsToCanvas(offCanvas, clipAdjustmentSettings, blurPx)
 
+          if (usesManagedPixelEffects) {
+            const outCtx = processedCanvasForText.getContext('2d')
+            applyClipManagedEffectsToOffCanvas(processedCanvasForText, outCtx, width, height, clip, clipTime, frameIndex)
+          }
+
           ctx.save()
           ctx.globalAlpha = clipOpacity
           ctx.globalCompositeOperation = blendMode === 'normal' ? 'source-over' : blendMode
           ctx.filter = 'none'
           ctx.drawImage(processedCanvasForText, 0, 0)
+          ctx.restore()
+          continue
+        }
+
+        if (usesManagedPixelEffects) {
+          let buffers = maskRenderBuffers.get(clip.id)
+          if (!buffers) {
+            const offCanvas = document.createElement('canvas')
+            offCanvas.width = width
+            offCanvas.height = height
+            const offCtx = offCanvas.getContext('2d')
+            buffers = { offCanvas, offCtx }
+            maskRenderBuffers.set(clip.id, buffers)
+          }
+          const { offCanvas, offCtx } = buffers
+          offCtx.clearRect(0, 0, width, height)
+          offCtx.save()
+          const filterPartsInner = []
+          if (clipAdjustmentFilterValue) filterPartsInner.push(clipAdjustmentFilterValue)
+          if (blurPx != null) filterPartsInner.push(`blur(${blurPx}px)`)
+          offCtx.filter = filterPartsInner.length > 0 ? filterPartsInner.join(' ') : 'none'
+          applyClipTransform(offCtx, rect, clipTransform, transitionStyle)
+          applyClipCrop(offCtx, rect, clipTransform)
+          applyTransitionClip(offCtx, rect, transitionStyle)
+          drawText(offCtx, rect, clip)
+          offCtx.restore()
+
+          applyClipManagedEffectsToOffCanvas(offCanvas, offCtx, width, height, clip, clipTime, frameIndex)
+
+          ctx.save()
+          ctx.globalAlpha = clipOpacity
+          ctx.globalCompositeOperation = blendMode === 'normal' ? 'source-over' : blendMode
+          ctx.filter = 'none'
+          ctx.drawImage(offCanvas, 0, 0)
           ctx.restore()
           continue
         }
@@ -1001,6 +1255,11 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
 
         advancedOutputCanvas = applyAdvancedAdjustmentsToCanvas(advancedOutputCanvas, clipAdjustmentSettings, blurPx)
 
+        if (usesManagedPixelEffects) {
+          const outCtx = advancedOutputCanvas.getContext('2d')
+          applyClipManagedEffectsToOffCanvas(advancedOutputCanvas, outCtx, width, height, clip, clipTime, frameIndex)
+        }
+
         ctx.save()
         ctx.globalAlpha = clipOpacity
         ctx.globalCompositeOperation = blendMode === 'normal' ? 'source-over' : blendMode
@@ -1010,6 +1269,68 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         continue
       }
       
+      if (usesManagedPixelEffects && !maskEffect) {
+        let buffers = maskRenderBuffers.get(clip.id)
+        if (!buffers) {
+          const offCanvas = document.createElement('canvas')
+          offCanvas.width = width
+          offCanvas.height = height
+          const offCtx = offCanvas.getContext('2d')
+          buffers = { offCanvas, offCtx }
+          maskRenderBuffers.set(clip.id, buffers)
+        }
+        const { offCanvas, offCtx } = buffers
+        offCtx.clearRect(0, 0, width, height)
+
+        offCtx.save()
+        const filterPartsInner = []
+        if (clipAdjustmentFilterValue) filterPartsInner.push(clipAdjustmentFilterValue)
+        if (blurPx != null) filterPartsInner.push(`blur(${blurPx}px)`)
+        offCtx.filter = filterPartsInner.length > 0 ? filterPartsInner.join(' ') : 'none'
+        applyClipTransform(offCtx, rect, clipTransform, transitionStyle)
+        applyClipCrop(offCtx, rect, clipTransform)
+        applyTransitionClip(offCtx, rect, transitionStyle)
+
+        if (shouldBlend && sourceTime !== null) {
+          const sourceFrameDuration = 1 / sourceFps
+          const baseIndex = Math.floor(sourceTime / sourceFrameDuration)
+          const baseTime = baseIndex * sourceFrameDuration
+          const nextTime = Math.min(baseTime + sourceFrameDuration, (maxSourceTime ?? sourceTime) - 0.001)
+          const blend = clamp((sourceTime - baseTime) / sourceFrameDuration, 0, 1)
+          try {
+            offCtx.globalAlpha = 1 - blend
+            await seekVideo(videoElement, baseTime, fastSeek)
+            offCtx.drawImage(videoElement, 0, 0, rect.width, rect.height)
+            if (blend > 0.001 && nextTime > baseTime + 1e-6) {
+              offCtx.globalAlpha = blend
+              await seekVideo(videoElement, nextTime, fastSeek)
+              offCtx.drawImage(videoElement, 0, 0, rect.width, rect.height)
+            }
+          } catch (err) {
+            console.warn('[Export] Failed blended seek/draw, skipping clip frame:', getMediaErrorMessage(err))
+            if (clip.type === 'video') {
+              const badSourceUrl = cachedVideoSources.get(clip.id) || resolvedAssetUrls.get(clip.assetId) || asset?.url
+              if (badSourceUrl) failedVideoSources.add(badSourceUrl)
+            }
+            offCtx.restore()
+            continue
+          }
+        } else {
+          offCtx.drawImage(drawSource, 0, 0, rect.width, rect.height)
+        }
+        offCtx.restore()
+
+        applyClipManagedEffectsToOffCanvas(offCanvas, offCtx, width, height, clip, clipTime, frameIndex)
+
+        ctx.save()
+        ctx.globalAlpha = clipOpacity
+        ctx.globalCompositeOperation = blendMode === 'normal' ? 'source-over' : blendMode
+        ctx.filter = 'none'
+        ctx.drawImage(offCanvas, 0, 0)
+        ctx.restore()
+        continue
+      }
+
       ctx.save()
       ctx.globalAlpha = clipOpacity
       const filterParts = []
@@ -1108,7 +1429,11 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
           }
           
           offCtx.putImageData(frameData, 0, 0)
-          
+
+          if (usesManagedPixelEffects) {
+            applyClipManagedEffectsToOffCanvas(offCanvas, offCtx, width, height, clip, clipTime, frameIndex)
+          }
+
           ctx.drawImage(offCanvas, 0, 0)
           ctx.restore()
           continue

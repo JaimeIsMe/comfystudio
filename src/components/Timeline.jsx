@@ -18,6 +18,7 @@ import useViewportClampedPosition from '../hooks/useViewportClampedPosition'
 import { getAllKeyframeTimes } from '../utils/keyframes'
 import { TRANSITION_TYPES, TRANSITION_DURATIONS, FRAME_RATE } from '../constants/transitions'
 import { getAudioClipFadeValues } from '../utils/audioClipFades'
+import { getEffectTypeDefinition } from '../utils/effects'
 import {
   DEFAULT_EDITOR_HOTKEYS,
   EDITOR_HOTKEYS_CHANGED_EVENT,
@@ -648,6 +649,7 @@ function Timeline({ onOpenAudioGenerate }) {
     selectTransition,
     getMaxTransitionDuration,
     addMaskEffect,
+    addEffect,
     toggleSnapping,
     toggleRippleEdit,
     setActiveSnapTime,
@@ -2488,9 +2490,11 @@ function Timeline({ onOpenAudioGenerate }) {
     return Array.isArray(assetIds) && assetIds.length > 0 ? assetIds[0] : null
   }
 
-  const getDropStartTimeFromClientX = (clientX, laneLeft) => {
-    const scrollLeft = timelineRef.current?.scrollLeft || 0
-    const x = clientX - laneLeft + scrollLeft
+  const getDropStartTimeFromClientX = (clientX) => {
+    if (!timelineRef.current) return 0
+    const rect = timelineRef.current.getBoundingClientRect()
+    const scrollLeft = timelineRef.current.scrollLeft || 0
+    const x = clientX - rect.left + scrollLeft
     const fps = Number.isFinite(Number(timelineFps)) && Number(timelineFps) > 0
       ? Number(timelineFps)
       : FRAME_RATE
@@ -2499,8 +2503,7 @@ function Timeline({ onOpenAudioGenerate }) {
   }
 
   const getDropStartTime = (e) => {
-    const rect = e.currentTarget.getBoundingClientRect()
-    return getDropStartTimeFromClientX(e.clientX, rect.left)
+    return getDropStartTimeFromClientX(e.clientX)
   }
 
   const getSnappedDropStartTime = (rawStartTime, clipDuration) => {
@@ -2629,12 +2632,10 @@ function Timeline({ onOpenAudioGenerate }) {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
 
-    const laneLeft = e.currentTarget.getBoundingClientRect().left
     pendingAssetDragOverRef.current = {
       trackId,
       assetId: getDraggedAssetId(e.dataTransfer),
       clientX: e.clientX,
-      laneLeft,
     }
 
     if (dragOverRafRef.current !== null) return
@@ -2645,7 +2646,7 @@ function Timeline({ onOpenAudioGenerate }) {
       pendingAssetDragOverRef.current = null
       if (!payload) return
 
-      const { assetId, clientX, laneLeft: pendingLaneLeft, trackId: pendingTrackId } = payload
+      const { assetId, clientX, trackId: pendingTrackId } = payload
 
       if (!assetId) {
         setDropTarget(pendingTrackId)
@@ -2662,7 +2663,7 @@ function Timeline({ onOpenAudioGenerate }) {
         return
       }
 
-      const rawStartTime = getDropStartTimeFromClientX(clientX, pendingLaneLeft)
+      const rawStartTime = getDropStartTimeFromClientX(clientX)
       const { targetTrackId, willCreateTrack } = resolveDropTrackForAsset(asset, pendingTrackId, { allowCreateTrack: false })
       const latestTracks = useTimelineStore.getState().tracks
       const targetTrack = latestTracks.find(t => t.id === targetTrackId) || tracks.find(t => t.id === targetTrackId)
@@ -3634,6 +3635,16 @@ function Timeline({ onOpenAudioGenerate }) {
   
   const parseTransitionDrop = (e) => {
     const raw = e.dataTransfer.getData('application/x-comfystudio-transition')
+    if (!raw) return null
+    try {
+      return JSON.parse(raw)
+    } catch {
+      return null
+    }
+  }
+
+  const parseEffectDrop = (e) => {
+    const raw = e.dataTransfer.getData('application/x-comfystudio-effect')
     if (!raw) return null
     try {
       return JSON.parse(raw)
@@ -4741,6 +4752,28 @@ function Timeline({ onOpenAudioGenerate }) {
                     onClick={(e) => handleClipClick(e, clip)}
                     onDoubleClick={isTextClip ? (e) => handleTextClipDoubleClick(e, clip) : undefined}
                     onContextMenu={(e) => handleClipContextMenu(e, clip)}
+                    onDragOver={(e) => {
+                      if (parseEffectDrop(e)) {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        e.dataTransfer.dropEffect = 'copy'
+                      }
+                    }}
+                    onDrop={(e) => {
+                      const payload = parseEffectDrop(e)
+                      if (!payload) return
+                      e.preventDefault()
+                      e.stopPropagation()
+                      const def = getEffectTypeDefinition(payload.effectType)
+                      if (!def) return
+                      const preset = payload.presetId
+                        ? def.presets?.find((p) => p.id === payload.presetId)
+                        : null
+                      const settings = preset
+                        ? { ...def.defaults, ...preset.settings }
+                        : { ...def.defaults }
+                      addEffect(clip.id, { type: payload.effectType, settings })
+                    }}
                     className={`absolute top-0.5 bottom-0.5 rounded-sm cursor-grab group overflow-hidden ${
                       selectedClipIds.includes(clip.id) ? 'ring-2 ring-white ring-offset-1 ring-offset-sf-dark-900' : ''
                     } ${trimState?.clipId === clip.id ? 'ring-2 ring-sf-accent' : ''} ${
