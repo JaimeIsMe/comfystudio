@@ -24,10 +24,12 @@ The current public release is marked as a pre-release while early setup feedback
 
 Desktop app release assets include:
 
-- Windows installer
-- Windows portable build
-- macOS Apple Silicon DMG
-- macOS Intel DMG
+- `Windows Installer`
+- `Windows Portable`
+- `Mac (Apple Silicon)`
+- `Mac (Intel)`
+
+Release assets are labeled by platform so users can quickly pick the right download without guessing from raw filenames.
 
 Advanced ComfyUI users can also optionally download the `Workflow Starter Pack` release asset to inspect workflows directly in ComfyUI and prepare dependencies manually before queueing inside ComfyStudio.
 
@@ -248,6 +250,8 @@ npm run electron:build:linux
 ```
 
 Packaged artifacts are written to `release/`.
+
+For the GitHub-hosted Windows + macOS release workflow, required Apple signing secrets, and the Windows-first release process, see `docs/CI_SECRETS.md`.
 
 ### Building the Linux app with Docker
 

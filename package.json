@@ -122,7 +122,7 @@
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "artifactName": "${productName}-${version}-windows-${arch}.${ext}"
     },
     "mac": {
       "target": [
@@ -136,7 +136,7 @@
       ],
       "icon": "build/icon.icns",
       "category": "public.app-category.video",
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
       "notarize": {
         "teamId": "4T66ZQ5AC3"
       }
@@ -159,10 +159,10 @@
       "icon": "build/icons",
       "category": "Video",
       "maintainer": "ComfyStudio contributors <opensource@comfystudio.app>",
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
     },
     "nsis": {
-      "artifactName": "${productName}-${version}-setup-${arch}.${ext}",
+      "artifactName": "${productName}-${version}-windows-installer-${arch}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "installerIcon": "build/icon.ico",
@@ -170,7 +170,7 @@
       "installerHeaderIcon": "build/icon.ico"
     },
     "portable": {
-      "artifactName": "${productName}-${version}-portable-${arch}.${ext}"
+      "artifactName": "${productName}-${version}-windows-portable-${arch}.${ext}"
     },
     "dmg": {
       "contents": [
