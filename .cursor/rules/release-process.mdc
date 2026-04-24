@@ -1,0 +1,16 @@
+---
+description: Use the documented Windows and macOS release flow
+alwaysApply: true
+---
+
+# Release Process
+
+Before doing release, packaging, tagging, publishing, or release-cleanup work:
+
+- Read `docs/RELEASE_PROCESS.md`
+- Follow `.github/workflows/release.yml` for Windows and macOS release builds
+- Keep secrets only in GitHub Actions repository secrets
+- Never commit certificate files, passwords, app-specific passwords, or API keys
+- Prefer throwaway test tags when validating release automation
+
+If the release workflow changes, update `docs/RELEASE_PROCESS.md` too.
