@@ -4,6 +4,7 @@ import useAssetsStore from '../stores/assetsStore'
 import useTimelineStore from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
 import TimelineSwitcher from './TimelineSwitcher'
+import { isTextEditingElement } from '../utils/keyboardFocus'
 
 // Playback mode options
 const PLAYBACK_MODES = [
@@ -192,10 +193,10 @@ function TransportControls() {
         return
       }
 
-      // For other shortcuts, don't trigger while typing in inputs (use activeElement so
-      // we don't steal keys from prompt/search, textareas, etc.)
+      // For other shortcuts, don't trigger while typing text. Range sliders and
+      // buttons should not trap playback shortcuts after the user adjusts them.
       const active = document.activeElement
-      if (active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable)) return
+      if (isTextEditingElement(active)) return
       
       // JKL Controls
       if (e.key === 'j' || e.key === 'J') {
@@ -244,7 +245,7 @@ function TransportControls() {
       // Enter = Play/Pause toggle (legacy shortcut)
       if (e.key === 'Enter' && !e.repeat) {
         const target = e.target
-        if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return
+        if (isTextEditingElement(target)) return
         if (hasContent) {
           e.preventDefault()
           togglePlay()

@@ -513,6 +513,23 @@ export const WORKFLOW_DEPENDENCY_PACKS = Object.freeze({
     docsUrl: COMFY_REGISTRY_URL,
   }),
 
+  'caption-qwen-asr': Object.freeze({
+    id: 'caption-qwen-asr',
+    displayName: 'Caption Transcription (Qwen ASR)',
+    requiredNodes: Object.freeze([
+      { classType: 'VHS_LoadVideo' },
+      { classType: 'VHS_LoadAudioUpload', notes: 'Needed when Music Video sends an audio asset directly to the caption workflow.' },
+      { classType: 'Qwen3TTSEngineNode' },
+      { classType: 'UnifiedASRTranscribeNode' },
+      { classType: 'ASRPunctuationTruecaseNode' },
+      { classType: 'SRTAdvancedOptionsNode' },
+      { classType: 'TextToSRTBuilderNode' },
+      { classType: 'ShowText|pysssss' },
+    ]),
+    requiredModels: Object.freeze([]),
+    docsUrl: 'https://github.com/diodiogod/TTS-Audio-Suite',
+  }),
+
   'mask-gen': Object.freeze({
     id: 'mask-gen',
     displayName: 'Mask Generation',

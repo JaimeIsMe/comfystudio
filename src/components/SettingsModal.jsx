@@ -37,7 +37,6 @@ import {
   saveLocalComfyConnectionPort,
 } from '../services/localComfyConnection'
 
-const SHOW_COMFYUI_TAB_KEY = 'comfystudio-show-comfyui-tab'
 const AUTO_IMPORT_KEY = 'comfystudio-auto-import-comfy-outputs'
 
 const SETTINGS_SECTIONS = [
@@ -156,16 +155,6 @@ function GeneralTab({ initialSection = null }) {
     () => getEditorHotkeyPresetMatch(editorHotkeys),
     [editorHotkeys]
   )
-
-  const [showComfyUiTab, setShowComfyUiTab] = useState(() => {
-    try {
-      const stored = localStorage.getItem(SHOW_COMFYUI_TAB_KEY)
-      if (stored === null) return false
-      return stored === 'true'
-    } catch {
-      return false
-    }
-  })
 
   const [autoImportComfyOutputs, setAutoImportComfyOutputs] = useState(() => {
     try {
@@ -287,15 +276,6 @@ function GeneralTab({ initialSection = null }) {
     window.addEventListener(COMFY_PARTNER_KEY_CHANGED_EVENT, handler)
     return () => window.removeEventListener(COMFY_PARTNER_KEY_CHANGED_EVENT, handler)
   }, [])
-
-  const handleToggleShowComfyUiTab = () => {
-    const next = !showComfyUiTab
-    setShowComfyUiTab(next)
-    try {
-      localStorage.setItem(SHOW_COMFYUI_TAB_KEY, String(next))
-      window.dispatchEvent(new CustomEvent('comfystudio-show-comfyui-tab-changed', { detail: next }))
-    } catch (_) {}
-  }
 
   const handleToggleAutoImportComfyOutputs = () => {
     const next = !autoImportComfyOutputs
@@ -589,26 +569,6 @@ function GeneralTab({ initialSection = null }) {
                 </button>
               </div>
             </div>
-          </div>
-
-          <div className="flex items-center justify-between rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
-            <div>
-              <label className="text-sm text-sf-text-primary">Show ComfyUI tab</label>
-              <p className="text-[10px] text-sf-text-muted">For advanced users. When off, the ComfyUI tab is hidden from the app bar.</p>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={showComfyUiTab}
-              onClick={handleToggleShowComfyUiTab}
-              className={`w-10 h-5 rounded-full transition-colors flex-shrink-0 relative ${showComfyUiTab ? 'bg-sf-accent' : 'bg-sf-dark-600'}`}
-              title={showComfyUiTab ? 'Hide ComfyUI tab' : 'Show ComfyUI tab'}
-            >
-              <span
-                className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${showComfyUiTab ? 'left-[calc(100%-1.25rem)]' : 'left-0.5'}`}
-                aria-hidden
-              />
-            </button>
           </div>
 
           <div className="flex items-center justify-between rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">

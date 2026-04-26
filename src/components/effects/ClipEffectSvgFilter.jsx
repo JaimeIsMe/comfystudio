@@ -24,7 +24,40 @@ const ClipEffectSvgFilter = memo(function ClipEffectSvgFilter({ filterId, effect
     const children = []
 
     active.forEach((effect, index) => {
-      if (effect.type === 'chromaticAberration') {
+      if (effect.type === 'gaussianBlur') {
+        const animated = getAnimatedEffectSettings({ keyframes: null }, effect, clipTime || 0)
+        const amount = Math.max(0, Number(animated.settings?.amount) || 0)
+        if (amount <= 0) return
+
+        const blurName = `${filterId}-gaussian-blur-${index}`
+        children.push(
+          <feGaussianBlur
+            key={blurName}
+            in={inputName}
+            stdDeviation={amount}
+            result={blurName}
+          />
+        )
+        inputName = blurName
+      } else if (effect.type === 'directionalBlur') {
+        const animated = getAnimatedEffectSettings({ keyframes: null }, effect, clipTime || 0)
+        const amount = Math.max(0, Number(animated.settings?.amount) || 0)
+        const angleRad = ((Number(animated.settings?.angle) || 0) * Math.PI) / 180
+        if (amount <= 0) return
+
+        const blurName = `${filterId}-directional-blur-${index}`
+        const stdX = Math.max(0.001, Math.abs(Math.cos(angleRad) * amount) * 0.65)
+        const stdY = Math.max(0.001, Math.abs(Math.sin(angleRad) * amount) * 0.65)
+        children.push(
+          <feGaussianBlur
+            key={blurName}
+            in={inputName}
+            stdDeviation={`${stdX} ${stdY}`}
+            result={blurName}
+          />
+        )
+        inputName = blurName
+      } else if (effect.type === 'chromaticAberration') {
         const animated = getAnimatedEffectSettings({ keyframes: null }, effect, clipTime || 0)
         const amount = Number(animated.settings?.amount) || 0
         const angleRad = ((Number(animated.settings?.angle) || 0) * Math.PI) / 180
@@ -93,6 +126,158 @@ const ClipEffectSvgFilter = memo(function ClipEffectSvgFilter({ filterId, effect
         )
 
         inputName = blendTwo
+      } else if (effect.type === 'vhsDamage') {
+        const animated = getAnimatedEffectSettings({ keyframes: null }, effect, clipTime || 0)
+        const amount = Math.max(0, Math.min(100, Number(animated.settings?.amount) || 0))
+        const jitter = Math.max(0, Number(animated.settings?.jitter) || 0)
+        const scanlines = Math.max(0, Math.min(100, Number(animated.settings?.scanlines) || 0))
+        const colorBleed = Math.max(0, Number(animated.settings?.colorBleed) || 0)
+        if (amount <= 0) return
+
+        const prefix = `${filterId}-vhs-${index}`
+        const jitterNoiseName = `${prefix}-jitter-noise`
+        const displacedName = `${prefix}-displaced`
+        const redMatrixName = `${prefix}-rMat`
+        const greenMatrixName = `${prefix}-gMat`
+        const blueMatrixName = `${prefix}-bMat`
+        const redOffsetName = `${prefix}-rOff`
+        const blueOffsetName = `${prefix}-bOff`
+        const colorBlendOne = `${prefix}-rg`
+        const colorBlendTwo = `${prefix}-rgb`
+        const scanNoiseName = `${prefix}-scan-noise`
+        const scanCurveName = `${prefix}-scan-curve`
+        const scanBlendName = `${prefix}-scan-blend`
+        const grainNoiseName = `${prefix}-grain-noise`
+        const grainMatrixName = `${prefix}-grain-matrix`
+        const grainBlendName = `${prefix}-grain-blend`
+        const seed = Math.floor(((clipTime || 0) * 24) % 4096) + index
+        const amountNorm = amount / 100
+        const displacement = Math.max(0, jitter * amountNorm)
+        const bleed = Math.max(0, colorBleed * amountNorm)
+        const scanStrength = Math.max(0, Math.min(1, (scanlines / 100) * amountNorm))
+        const scanLow = (1 - scanStrength * 0.5).toFixed(3)
+        const scanMid = (1 - scanStrength * 0.18).toFixed(3)
+        const scanTableValues = `${scanLow} 1 ${scanMid} 1`
+        const scanFrequencyY = (0.65 + scanStrength * 1.9).toFixed(3)
+        const grainFrequency = (1.1 + amountNorm * 1.35).toFixed(3)
+        const grainAlpha = (amountNorm * 0.3).toFixed(3)
+
+        children.push(
+          <feTurbulence
+            key={jitterNoiseName}
+            type="turbulence"
+            baseFrequency="0.006 0.42"
+            numOctaves={1}
+            seed={seed}
+            result={jitterNoiseName}
+          />,
+          <feDisplacementMap
+            key={displacedName}
+            in={inputName}
+            in2={jitterNoiseName}
+            scale={displacement}
+            xChannelSelector="R"
+            yChannelSelector="G"
+            result={displacedName}
+          />,
+          <feColorMatrix
+            key={redMatrixName}
+            in={displacedName}
+            type="matrix"
+            values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"
+            result={redMatrixName}
+          />,
+          <feOffset
+            key={redOffsetName}
+            in={redMatrixName}
+            dx={bleed}
+            dy={0}
+            result={redOffsetName}
+          />,
+          <feColorMatrix
+            key={greenMatrixName}
+            in={displacedName}
+            type="matrix"
+            values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0"
+            result={greenMatrixName}
+          />,
+          <feColorMatrix
+            key={blueMatrixName}
+            in={displacedName}
+            type="matrix"
+            values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0"
+            result={blueMatrixName}
+          />,
+          <feOffset
+            key={blueOffsetName}
+            in={blueMatrixName}
+            dx={-bleed}
+            dy={0}
+            result={blueOffsetName}
+          />,
+          <feBlend
+            key={colorBlendOne}
+            in={redOffsetName}
+            in2={greenMatrixName}
+            mode="screen"
+            result={colorBlendOne}
+          />,
+          <feBlend
+            key={colorBlendTwo}
+            in={colorBlendOne}
+            in2={blueOffsetName}
+            mode="screen"
+            result={colorBlendTwo}
+          />,
+          <feTurbulence
+            key={scanNoiseName}
+            type="turbulence"
+            baseFrequency={`0.002 ${scanFrequencyY}`}
+            numOctaves={1}
+            seed={seed + 11}
+            result={scanNoiseName}
+          />,
+          <feComponentTransfer
+            key={scanCurveName}
+            in={scanNoiseName}
+            result={scanCurveName}
+          >
+            <feFuncR type="table" tableValues={scanTableValues} />
+            <feFuncG type="table" tableValues={scanTableValues} />
+            <feFuncB type="table" tableValues={scanTableValues} />
+            <feFuncA type="identity" />
+          </feComponentTransfer>,
+          <feBlend
+            key={scanBlendName}
+            in={colorBlendTwo}
+            in2={scanCurveName}
+            mode="multiply"
+            result={scanBlendName}
+          />,
+          <feTurbulence
+            key={grainNoiseName}
+            type="fractalNoise"
+            baseFrequency={`${grainFrequency} ${grainFrequency}`}
+            numOctaves={1}
+            seed={seed + 23}
+            result={grainNoiseName}
+          />,
+          <feColorMatrix
+            key={grainMatrixName}
+            in={grainNoiseName}
+            type="matrix"
+            values={`1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${grainAlpha} 0`}
+            result={grainMatrixName}
+          />,
+          <feBlend
+            key={grainBlendName}
+            in={scanBlendName}
+            in2={grainMatrixName}
+            mode="overlay"
+            result={grainBlendName}
+          />
+        )
+        inputName = grainBlendName
       } else if (effect.type === 'filmGrain') {
         const animated = getAnimatedEffectSettings({ keyframes: null }, effect, clipTime || 0)
         const amount = Number(animated.settings?.amount) || 0
@@ -169,7 +354,7 @@ const ClipEffectSvgFilter = memo(function ClipEffectSvgFilter({ filterId, effect
         )
 
         inputName = blendedName
-      } else if (effect.type === 'glow') {
+      } else if (effect.type === 'glow' || effect.type === 'halation') {
         const animated = getAnimatedEffectSettings({ keyframes: null }, effect, clipTime || 0)
         const intensity = Number(animated.settings?.intensity) || 0
         const size = Math.max(0.1, Number(animated.settings?.size) || 0)
@@ -180,6 +365,7 @@ const ClipEffectSvgFilter = memo(function ClipEffectSvgFilter({ filterId, effect
         const thresholdName = `${prefix}-thresh`
         const blurName = `${prefix}-blur`
         const boostName = `${prefix}-boost`
+        const tintName = `${prefix}-tint`
         const blendedName = `${prefix}-blended`
 
         // Build a piecewise-linear tableValues that maps:
@@ -203,6 +389,9 @@ const ClipEffectSvgFilter = memo(function ClipEffectSvgFilter({ filterId, effect
         const tableValuesStr = table.join(' ')
 
         const intensityScale = Math.max(0, Math.min(2, intensity / 100))
+        const isHalation = effect.type === 'halation'
+        const warmth = Math.max(0, Math.min(1, Number(animated.settings?.warmth || 0) / 100))
+        const boostInput = isHalation ? tintName : blurName
 
         children.push(
           <feComponentTransfer
@@ -220,10 +409,23 @@ const ClipEffectSvgFilter = memo(function ClipEffectSvgFilter({ filterId, effect
             in={thresholdName}
             stdDeviation={size}
             result={blurName}
-          />,
+          />
+        )
+        if (isHalation) {
+          children.push(
+            <feColorMatrix
+              key={tintName}
+              in={blurName}
+              type="matrix"
+              values={`${1.05 + warmth * 0.65} 0 0 0 0  0 ${0.55 + warmth * 0.22} 0 0 0  0 0 ${0.22 + warmth * 0.08} 0 0  0 0 0 1 0`}
+              result={tintName}
+            />
+          )
+        }
+        children.push(
           <feComponentTransfer
             key={boostName}
-            in={blurName}
+            in={boostInput}
             result={boostName}
           >
             <feFuncR type="linear" slope={intensityScale} />
@@ -270,10 +472,10 @@ const ClipEffectSvgFilter = memo(function ClipEffectSvgFilter({ filterId, effect
       <defs>
         <filter
           id={filterId}
-          x="-20%"
-          y="-20%"
-          width="140%"
-          height="140%"
+          x="-40%"
+          y="-40%"
+          width="180%"
+          height="180%"
           colorInterpolationFilters="sRGB"
         >
           {nodes}

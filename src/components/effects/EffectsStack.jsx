@@ -14,6 +14,8 @@ import {
   CircleDot,
   Sun,
   RectangleHorizontal,
+  MoveRight,
+  Tv,
 } from 'lucide-react'
 import {
   EFFECT_TYPES,
@@ -27,9 +29,13 @@ import { getKeyframeAtTime } from '../../utils/keyframes'
 
 const EFFECT_ICONS = {
   cameraShake: Waves,
+  gaussianBlur: CircleDot,
+  directionalBlur: MoveRight,
   chromaticAberration: Radio,
   filmGrain: Sparkles,
   glow: Sun,
+  halation: Sun,
+  vhsDamage: Tv,
   vignette: CircleDot,
   letterbox: RectangleHorizontal,
 }

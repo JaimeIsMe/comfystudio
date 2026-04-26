@@ -8,13 +8,15 @@
 ## Highlights
 
 - Adds Director Mode music-video workflow support with structured shot planning, coverage passes, and lip-sync-oriented tooling
+- Adds Flow AI, a node-based workspace for chaining generation steps and routing results back into the same project
 - Adds source-proxy playback plus commit renders to make heavier timelines easier to preview and iterate on
 - Improves export and timeline reliability with cut-boundary frame fixes, zoom/playback polish, and persisted speed-adjusted clip timing
 
 ## Music Video And Flow Improvements
 
 - Director Mode now supports richer music-video shot planning with workflow-backed performance, environmental, and detail coverage passes
-- Added flow-oriented workspace plumbing and schema/runtime helpers for chaining generation steps inside the app
+- Added Flow AI, a visual node-based workspace for chaining prompt, image, video, and audio steps inside ComfyStudio
+- Flow AI writes results back into the same project asset pipeline used by Generate, making multi-step iteration easier without leaving the app
 - Added bundled workflow definitions for Gemini prompt help, Topaz video enhance, vocal extraction, and music-video shot generation
 
 ## Editing And Playback Improvements

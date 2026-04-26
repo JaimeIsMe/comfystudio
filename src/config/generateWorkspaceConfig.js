@@ -81,7 +81,7 @@ export const YOLO_AD_PROFILES = Object.freeze({
 // The only knob is storyboard quality; the video pass workflow is fixed.
 export const YOLO_MUSIC_PROFILES = Object.freeze({
   draft: Object.freeze({
-    storyboardWorkflowId: 'z-image-turbo',
+    storyboardWorkflowId: 'image-edit',
     videoWorkflowId: MUSIC_VIDEO_SHOT_WORKFLOW_ID,
   }),
   balanced: Object.freeze({
@@ -148,6 +148,7 @@ const WORKFLOW_DISPLAY_LABELS = Object.freeze({
   [TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID]: 'Topaz Video Upscale',
   [MUSIC_VIDEO_SHOT_WORKFLOW_ID]: 'Music Video Shot (LTX 2.3 + Audio)',
   [VOCAL_EXTRACT_WORKFLOW_ID]: 'Vocal Extract (Mel-Band)',
+  'caption-qwen-asr': 'Caption Transcription (Qwen ASR)',
   'grok-text-to-image': 'Grok Imagine',
   'google-gemini-flash-lite': 'Prompt Helper (Gemini 3.1 Flash Lite)',
   'seedream-5-lite-image-edit': 'Seedream 5.0 Lite',

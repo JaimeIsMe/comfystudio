@@ -100,6 +100,42 @@ export function parseCaptionSubtitles(rawText) {
   return parseLegacyQwenSubtitles(text)
 }
 
+function formatSecondsAsSrtTimestamp(seconds) {
+  const totalMs = Math.max(0, Math.round(Number(seconds || 0) * 1000))
+  const ms = totalMs % 1000
+  const totalSeconds = Math.floor(totalMs / 1000)
+  const ss = totalSeconds % 60
+  const totalMinutes = Math.floor(totalSeconds / 60)
+  const mm = totalMinutes % 60
+  const hh = Math.floor(totalMinutes / 60)
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')},${String(ms).padStart(3, '0')}`
+}
+
+export function formatCaptionCuesAsSrt(cues = []) {
+  if (!Array.isArray(cues) || cues.length === 0) return ''
+  return cues
+    .map((cue, index) => {
+      const start = Number(cue?.start) || 0
+      const endRaw = Number(cue?.end)
+      const end = Number.isFinite(endRaw) && endRaw > start ? endRaw : start + 0.4
+      const text = String(cue?.text || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .join('\n')
+      if (!text) return null
+      return [
+        String(index + 1),
+        `${formatSecondsAsSrtTimestamp(start)} --> ${formatSecondsAsSrtTimestamp(end)}`,
+        text,
+      ].join('\n')
+    })
+    .filter(Boolean)
+    .join('\n\n')
+}
+
 async function loadCaptionWorkflow() {
   const response = await fetch(CAPTION_WORKFLOW_PATH)
   if (!response.ok) {

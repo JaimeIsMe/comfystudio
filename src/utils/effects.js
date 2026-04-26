@@ -54,6 +54,46 @@ export const EFFECT_TYPES = Object.freeze([
     ]),
   },
   {
+    id: 'gaussianBlur',
+    label: 'Gaussian Blur',
+    category: EFFECT_CATEGORIES.stylistic,
+    icon: 'CircleDot',
+    description: 'Soft, even blur for dreamy focus pulls, privacy blur, or background defocus.',
+    params: [
+      { key: 'amount', label: 'Amount', min: 0, max: 80, step: 0.25, unit: 'px' },
+    ],
+    defaults: Object.freeze({
+      amount: 8,
+    }),
+    presets: Object.freeze([
+      { id: 'soft', label: 'Soft', settings: { amount: 4 } },
+      { id: 'dream', label: 'Dreamy', settings: { amount: 12 } },
+      { id: 'heavy', label: 'Heavy', settings: { amount: 28 } },
+    ]),
+  },
+  {
+    id: 'directionalBlur',
+    label: 'Directional Blur',
+    category: EFFECT_CATEGORIES.stylistic,
+    icon: 'MoveRight',
+    description: 'Streaks the image along an angle for motion smears and speed-ramp accents.',
+    params: [
+      { key: 'amount', label: 'Amount', min: 0, max: 80, step: 0.25, unit: 'px' },
+      { key: 'angle', label: 'Angle', min: -180, max: 180, step: 1, unit: '°' },
+      { key: 'samples', label: 'Samples', min: 3, max: 15, step: 2, unit: '' },
+    ],
+    defaults: Object.freeze({
+      amount: 10,
+      angle: 0,
+      samples: 7,
+    }),
+    presets: Object.freeze([
+      { id: 'horizontal', label: 'Horizontal', settings: { amount: 10, angle: 0, samples: 7 } },
+      { id: 'vertical', label: 'Vertical', settings: { amount: 10, angle: 90, samples: 7 } },
+      { id: 'speedLine', label: 'Speed Line', settings: { amount: 26, angle: 0, samples: 11 } },
+    ]),
+  },
+  {
     id: 'chromaticAberration',
     label: 'Chromatic Aberration',
     category: EFFECT_CATEGORIES.stylistic,
@@ -94,6 +134,54 @@ export const EFFECT_TYPES = Object.freeze([
       { id: 'clean16mm', label: 'Clean 16mm', settings: { amount: 14, size: 1, monochrome: 1 } },
       { id: 'super8', label: 'Super8', settings: { amount: 32, size: 1.8, monochrome: 0 } },
       { id: 'vhs', label: 'Heavy VHS', settings: { amount: 55, size: 2.6, monochrome: 0 } },
+    ]),
+  },
+  {
+    id: 'halation',
+    label: 'Halation',
+    category: EFFECT_CATEGORIES.stylistic,
+    icon: 'Sun',
+    description: 'Warm red-orange glow around bright highlights, like film halation.',
+    params: [
+      { key: 'intensity', label: 'Intensity', min: 0, max: 200, step: 1, unit: '%' },
+      { key: 'size', label: 'Size', min: 1, max: 80, step: 0.5, unit: 'px' },
+      { key: 'threshold', label: 'Threshold', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'warmth', label: 'Warmth', min: 0, max: 100, step: 1, unit: '%' },
+    ],
+    defaults: Object.freeze({
+      intensity: 60,
+      size: 14,
+      threshold: 65,
+      warmth: 75,
+    }),
+    presets: Object.freeze([
+      { id: 'subtle', label: 'Subtle Film', settings: { intensity: 35, size: 10, threshold: 70, warmth: 65 } },
+      { id: 'print', label: 'Print Glow', settings: { intensity: 70, size: 16, threshold: 62, warmth: 80 } },
+      { id: 'neonBleed', label: 'Neon Bleed', settings: { intensity: 120, size: 24, threshold: 55, warmth: 90 } },
+    ]),
+  },
+  {
+    id: 'vhsDamage',
+    label: 'VHS / Analog Damage',
+    category: EFFECT_CATEGORIES.stylistic,
+    icon: 'Radio',
+    description: 'Scanlines, horizontal jitter, color bleed, and analog noise.',
+    params: [
+      { key: 'amount', label: 'Amount', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'jitter', label: 'Jitter', min: 0, max: 40, step: 0.5, unit: 'px' },
+      { key: 'scanlines', label: 'Scanlines', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'colorBleed', label: 'Color Bleed', min: 0, max: 30, step: 0.25, unit: 'px' },
+    ],
+    defaults: Object.freeze({
+      amount: 35,
+      jitter: 5,
+      scanlines: 35,
+      colorBleed: 5,
+    }),
+    presets: Object.freeze([
+      { id: 'cleanTape', label: 'Clean Tape', settings: { amount: 18, jitter: 2, scanlines: 20, colorBleed: 3 } },
+      { id: 'musicVideo', label: '90s Music Video', settings: { amount: 38, jitter: 5, scanlines: 35, colorBleed: 6 } },
+      { id: 'damaged', label: 'Damaged Tape', settings: { amount: 70, jitter: 14, scanlines: 60, colorBleed: 12 } },
     ]),
   },
   {
@@ -371,7 +459,7 @@ export function applyEffectsToTransform(transform, effects, clipTime) {
 
 /**
  * Returns the subset of a clip's effects that contribute to the pixel filter
- * chain (currently chromatic aberration, film grain, and glow). Vignette is
+ * chain. Vignette and letterbox are
  * applied as an overlay so it is excluded here.
  */
 export function getFilterChainEffects(effects, clipTime) {
@@ -379,9 +467,13 @@ export function getFilterChainEffects(effects, clipTime) {
   const result = []
   for (const effect of effects) {
     if (!effect || effect.enabled === false) continue
-    if (effect.type !== 'chromaticAberration'
+    if (effect.type !== 'gaussianBlur'
+      && effect.type !== 'directionalBlur'
+      && effect.type !== 'chromaticAberration'
       && effect.type !== 'filmGrain'
-      && effect.type !== 'glow') continue
+      && effect.type !== 'glow'
+      && effect.type !== 'halation'
+      && effect.type !== 'vhsDamage') continue
     const animated = getAnimatedEffectSettings({ keyframes: null }, effect, clipTime)
     result.push(animated)
   }
@@ -412,18 +504,26 @@ export function hasPixelFilterEffect(effects) {
     && effects.some((e) => (
       e
       && e.enabled !== false
-      && (e.type === 'chromaticAberration' || e.type === 'filmGrain' || e.type === 'glow')
+      && (
+        e.type === 'gaussianBlur'
+        || e.type === 'directionalBlur'
+        || e.type === 'chromaticAberration'
+        || e.type === 'filmGrain'
+        || e.type === 'glow'
+        || e.type === 'halation'
+        || e.type === 'vhsDamage'
+      )
     ))
 }
 
 export function hasGlowEffect(effects) {
   return Array.isArray(effects)
-    && effects.some((e) => e && e.enabled !== false && e.type === 'glow')
+    && effects.some((e) => e && e.enabled !== false && (e.type === 'glow' || e.type === 'halation'))
 }
 
 export function getActiveGlowEffects(effects) {
   if (!Array.isArray(effects)) return []
-  return effects.filter((e) => e && e.enabled !== false && e.type === 'glow')
+  return effects.filter((e) => e && e.enabled !== false && (e.type === 'glow' || e.type === 'halation'))
 }
 
 export function hasVignetteEffect(effects) {
@@ -563,8 +663,54 @@ function applyFilmGrainToImageData(imageData, settings, clipTime, frameIndex) {
   }
 }
 
+function applyVhsDamageToImageData(imageData, effect, settings, clipTime, frameIndex) {
+  const amount = Math.max(0, Math.min(100, Number(settings?.amount) || 0))
+  const jitter = Math.max(0, Number(settings?.jitter) || 0)
+  const scanlines = Math.max(0, Math.min(100, Number(settings?.scanlines) || 0))
+  const colorBleed = Math.max(0, Number(settings?.colorBleed) || 0)
+  if (amount <= 0 && jitter <= 0 && scanlines <= 0 && colorBleed <= 0) return
+
+  const { data, width, height } = imageData
+  const src = new Uint8ClampedArray(data)
+  const random = mulberry32(grainSeedFor(effect, clipTime, frameIndex))
+  const amountNorm = amount / 100
+  const maxJitter = jitter * amountNorm
+  const bleedPx = Math.round(colorBleed * amountNorm)
+  const scanStrength = (scanlines / 100) * amountNorm
+  const dropoutChance = amountNorm * 0.018
+
+  for (let y = 0; y < height; y++) {
+    const band = Math.floor(y / 8)
+    const bandNoise = Math.sin((clipTime * 17 + band * 1.73) * Math.PI * 2)
+    const rowShift = Math.round(bandNoise * maxJitter + (random() - 0.5) * maxJitter * 0.75)
+    const scanPhase = y % 3
+    const scanDarken = scanPhase === 0
+      ? scanStrength * 54
+      : (scanPhase === 1 ? scanStrength * 12 : 0)
+    const dropout = random() < dropoutChance
+    const dropoutShift = dropout ? Math.round((random() - 0.5) * maxJitter * 3) : 0
+    const dropoutLift = dropout ? (random() * 2 - 1) * 52 * amountNorm : 0
+
+    for (let x = 0; x < width; x++) {
+      const dst = (y * width + x) * 4
+      const sx = Math.max(0, Math.min(width - 1, x - rowShift - dropoutShift))
+      const redX = Math.max(0, Math.min(width - 1, sx - bleedPx))
+      const blueX = Math.max(0, Math.min(width - 1, sx + bleedPx))
+      const srcBase = (y * width + sx) * 4
+      const redBase = (y * width + redX) * 4
+      const blueBase = (y * width + blueX) * 4
+      const noise = (random() - 0.5) * 58 * amountNorm + dropoutLift
+
+      data[dst] = Math.max(0, Math.min(255, src[redBase] + noise - scanDarken))
+      data[dst + 1] = Math.max(0, Math.min(255, src[srcBase + 1] + noise * 0.55 - scanDarken))
+      data[dst + 2] = Math.max(0, Math.min(255, src[blueBase + 2] + noise - scanDarken))
+      data[dst + 3] = src[srcBase + 3]
+    }
+  }
+}
+
 /**
- * Apply pixel effects (chromatic aberration, film grain) to image data
+ * Apply pixel effects (chromatic aberration, film grain, VHS damage) to image data
  * in-place. Vignette is handled separately via `drawVignetteOverlay` because
  * it composites on top rather than inside the clip's pixel pipeline.
  */
@@ -582,10 +728,71 @@ export function applyPixelEffectsToImageData(imageData, effects, clipTime, frame
     } else if (effect.type === 'filmGrain') {
       const animated = getAnimatedEffectSettings({ keyframes: null }, effect, clipTime)
       applyFilmGrainToImageData(imageData, animated.settings, clipTime, frameIndex)
+    } else if (effect.type === 'vhsDamage') {
+      const animated = getAnimatedEffectSettings({ keyframes: null }, effect, clipTime)
+      applyVhsDamageToImageData(imageData, effect, animated.settings, clipTime, frameIndex)
     }
   }
 
   return imageData
+}
+
+export function applyBlurPassesToCanvas(canvas, ctx, width, height, effects, clipTime) {
+  if (!canvas || !ctx || !Array.isArray(effects)) return
+
+  let scratch = null
+  let scratchCtx = null
+  const ensureScratch = () => {
+    if (!scratch) {
+      scratch = document.createElement('canvas')
+      scratch.width = width
+      scratch.height = height
+      scratchCtx = scratch.getContext('2d')
+    }
+    scratchCtx.save()
+    scratchCtx.filter = 'none'
+    scratchCtx.globalCompositeOperation = 'copy'
+    scratchCtx.globalAlpha = 1
+    scratchCtx.drawImage(canvas, 0, 0)
+    scratchCtx.restore()
+  }
+
+  for (const effect of effects) {
+    if (!effect || effect.enabled === false) continue
+    const animated = getAnimatedEffectSettings({ keyframes: null }, effect, clipTime)
+    if (effect.type === 'gaussianBlur') {
+      const amount = Math.max(0, Number(animated.settings?.amount) || 0)
+      if (amount <= 0) continue
+      ensureScratch()
+      ctx.save()
+      ctx.filter = `blur(${amount}px)`
+      ctx.globalCompositeOperation = 'copy'
+      ctx.drawImage(scratch, 0, 0)
+      ctx.restore()
+    } else if (effect.type === 'directionalBlur') {
+      const amount = Math.max(0, Number(animated.settings?.amount) || 0)
+      if (amount <= 0) continue
+      const samples = Math.max(3, Math.min(15, Math.round(Number(animated.settings?.samples) || 7)))
+      const oddSamples = samples % 2 === 0 ? samples + 1 : samples
+      const angleRad = ((Number(animated.settings?.angle) || 0) * Math.PI) / 180
+      const dx = Math.cos(angleRad) * amount
+      const dy = Math.sin(angleRad) * amount
+      ensureScratch()
+      ctx.save()
+      ctx.filter = 'none'
+      ctx.globalCompositeOperation = 'copy'
+      ctx.globalAlpha = 0
+      ctx.drawImage(scratch, 0, 0)
+      ctx.globalCompositeOperation = 'source-over'
+      ctx.globalAlpha = 1 / oddSamples
+      const half = (oddSamples - 1) / 2
+      for (let i = 0; i < oddSamples; i++) {
+        const t = half === 0 ? 0 : (i - half) / half
+        ctx.drawImage(scratch, dx * t, dy * t)
+      }
+      ctx.restore()
+    }
+  }
 }
 
 /**
@@ -646,6 +853,19 @@ export function applyGlowPassesToCanvas(canvas, ctx, width, height, effects, cli
         data[i + 1] = g * gain
         data[i + 2] = b * gain
         // Keep alpha so blur respects silhouette.
+      }
+      scratchCtx.putImageData(imageData, 0, 0)
+    }
+
+    if (effect.type === 'halation') {
+      const imageData = scratchCtx.getImageData(0, 0, width, height)
+      const data = imageData.data
+      const warmth = Math.max(0, Math.min(1, (Number(animated.settings?.warmth) || 0) / 100))
+      for (let i = 0; i < data.length; i += 4) {
+        const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
+        data[i] = Math.min(255, luma * (1.05 + warmth * 0.65))
+        data[i + 1] = Math.min(255, luma * (0.55 + warmth * 0.22))
+        data[i + 2] = Math.min(255, luma * (0.22 + warmth * 0.08))
       }
       scratchCtx.putImageData(imageData, 0, 0)
     }

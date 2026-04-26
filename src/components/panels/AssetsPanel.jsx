@@ -802,17 +802,35 @@ function AssetsPanel() {
   }
 
   const handleDeleteFolder = useCallback(async (folderId, folderName) => {
+    const descendants = folderDescendantIdsByFolderId.get(folderId) || new Set([folderId])
+    const assetCount = getFolderItemCount(folderId)
+    const subfolderCount = Math.max(0, descendants.size - 1)
+    const assetLabel = `${assetCount} asset${assetCount === 1 ? '' : 's'}`
+    const subfolderLabel = `${subfolderCount} subfolder${subfolderCount === 1 ? '' : 's'}`
+    const contentsSummary = assetCount > 0 || subfolderCount > 0
+      ? `This will permanently remove ${subfolderCount > 0 ? `${assetLabel} and ${subfolderLabel}` : assetLabel} from the project.`
+      : 'This folder is empty.'
     const confirmed = await requestConfirm({
       title: 'Delete folder?',
-      message: `Delete folder "${folderName}"?`,
+      message: `Delete folder "${folderName}" and everything inside it?\n\n${contentsSummary}`,
       confirmLabel: 'Delete folder',
-      cancelLabel: 'Keep',
+      cancelLabel: 'Cancel',
       tone: 'danger',
     })
     if (!confirmed) return false
+    const deletedFolder = folders?.find((folder) => folder.id === folderId)
+    if (descendants.has(currentFolderId)) {
+      setCurrentFolderId(deletedFolder?.parentId || null)
+    }
+    setExpandedFolders((prev) => {
+      const next = new Set(prev)
+      for (const descendantId of descendants) next.delete(descendantId)
+      return next
+    })
     removeFolder(folderId)
+    setSelectedAssetIds([])
     return true
-  }, [removeFolder, requestConfirm])
+  }, [currentFolderId, folderDescendantIdsByFolderId, folders, getFolderItemCount, removeFolder, requestConfirm])
 
   // Toggle audio on a video asset
   const handleToggleVideoAudio = (assetId) => {

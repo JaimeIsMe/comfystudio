@@ -6,7 +6,7 @@
     <title>ComfyStudio Pro</title>
     <meta
       name="description"
-      content="AI-powered editing for ComfyUI creators. Download the Windows app directly, then explore releases, demos, and updates."
+      content="AI-powered editing for ComfyUI creators. Download the Windows or Mac app directly, then explore releases, demos, and updates."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -335,10 +335,15 @@
           <div class="cta-stack">
             <div class="cta-row">
               <a
-                id="download-button"
+                id="download-windows-button"
                 class="button primary"
                 href="https://github.com/JaimeIsMe/comfystudio/releases"
               >Download for Windows</a>
+              <a
+                id="download-mac-button"
+                class="button"
+                href="https://github.com/JaimeIsMe/comfystudio/releases"
+              >Download for Mac</a>
               <a
                 id="releases-button"
                 class="button"
@@ -350,8 +355,8 @@
               <a class="button" href="https://x.com/comfystudiopro" target="_blank" rel="noreferrer">Follow on X</a>
             </div>
             <p id="download-note" class="cta-note">
-              Windows x64 installer. Need the portable build instead?
-              Grab it from <a href="https://github.com/JaimeIsMe/comfystudio/releases" target="_blank" rel="noreferrer">All releases</a>.
+              Windows and macOS downloads are available now.
+              Grab alternate builds from <a href="https://github.com/JaimeIsMe/comfystudio/releases" target="_blank" rel="noreferrer">All releases</a>.
             </p>
           </div>
 
@@ -447,10 +452,11 @@
         const latestReleaseApiUrl = 'https://api.github.com/repos/JaimeIsMe/comfystudio/releases/latest'
         const releasesUrl = 'https://github.com/JaimeIsMe/comfystudio/releases'
 
-        const downloadButton = document.getElementById('download-button')
+        const windowsDownloadButton = document.getElementById('download-windows-button')
+        const macDownloadButton = document.getElementById('download-mac-button')
         const downloadNote = document.getElementById('download-note')
 
-        if (!downloadButton || !downloadNote) return
+        if (!windowsDownloadButton || !macDownloadButton || !downloadNote) return
 
         const platformSource = [
           navigator.userAgentData?.platform,
@@ -462,41 +468,75 @@
         const isMac = /mac|darwin/i.test(platformSource)
         const isLinux = /linux|x11/i.test(platformSource)
 
-        function setDownloadCopy({ version = '', installerUrl = releasesUrl, portableUrl = releasesUrl, directAvailable = false }) {
+        function setDownloadCopy({
+          version = '',
+          installerUrl = releasesUrl,
+          portableUrl = releasesUrl,
+          directAvailable = false,
+          macArmUrl = releasesUrl,
+          macIntelUrl = releasesUrl,
+          macArmAvailable = false,
+          macIntelAvailable = false,
+        }) {
           const versionHtml = version ? ` <strong>v${version}</strong>` : ''
-          downloadButton.href = installerUrl
+          const allReleasesLink = `<a href="${releasesUrl}" target="_blank" rel="noreferrer">All releases</a>`
+          const hasMacBuild = macArmAvailable || macIntelAvailable
 
-          if (isWindows) {
-            downloadButton.textContent = 'Download for Windows'
-            downloadButton.setAttribute(
-              'aria-label',
-              version ? `Download ComfyStudio ${version} for Windows` : 'Download ComfyStudio for Windows'
-            )
-            if (directAvailable) {
-              downloadNote.innerHTML = `Windows x64 installer for${versionHtml}. Need the portable build instead? Grab it from <a href="${portableUrl}" target="_blank" rel="noreferrer">All releases</a>.`
-            } else {
-              downloadNote.innerHTML = `Windows x64 installer available now. If direct download lookup fails, browse <a href="${releasesUrl}" target="_blank" rel="noreferrer">All releases</a>.`
-            }
-            return
-          }
-
-          downloadButton.textContent = 'Download Windows app'
-          downloadButton.setAttribute(
+          windowsDownloadButton.href = installerUrl
+          windowsDownloadButton.textContent = 'Download for Windows'
+          windowsDownloadButton.setAttribute(
             'aria-label',
             version ? `Download ComfyStudio ${version} for Windows` : 'Download ComfyStudio for Windows'
           )
 
+          let macButtonUrl = macArmAvailable ? macArmUrl : releasesUrl
+          let macButtonText = macArmAvailable ? 'Download for Mac (M-series)' : 'Mac releases'
+          let macAriaLabel = version
+            ? `Download ComfyStudio ${version} for Mac Apple Silicon`
+            : 'Download ComfyStudio for Mac Apple Silicon'
+
+          if (!macArmAvailable && macIntelAvailable) {
+            macButtonUrl = macIntelUrl
+            macButtonText = 'Download for Mac (Intel)'
+            macAriaLabel = version
+              ? `Download ComfyStudio ${version} for Mac Intel`
+              : 'Download ComfyStudio for Mac Intel'
+          }
+
+          macDownloadButton.href = macButtonUrl
+          macDownloadButton.textContent = macButtonText
+          macDownloadButton.setAttribute('aria-label', macAriaLabel)
+
+          if (isWindows) {
+            if (directAvailable) {
+              downloadNote.innerHTML = `Windows x64 installer for${versionHtml}. Need the portable build or a Mac download? Grab it from ${allReleasesLink}.`
+            } else {
+              downloadNote.innerHTML = `Windows x64 installer available now. If direct download lookup fails, browse ${allReleasesLink}.`
+            }
+            return
+          }
+
           if (isMac) {
-            downloadNote.innerHTML = `Windows x64 is available now${version ? ` as <strong>v${version}</strong>` : ''}. macOS builds are not published yet, but you can still download the current Windows installer or browse <a href="${releasesUrl}" target="_blank" rel="noreferrer">All releases</a>.`
+            if (macArmAvailable) {
+              downloadNote.innerHTML = `macOS Apple Silicon download for${versionHtml}. Using an older Intel Mac? Grab that build from ${allReleasesLink}.`
+              return
+            }
+
+            if (hasMacBuild) {
+              downloadNote.innerHTML = `macOS builds are available now${version ? ` as <strong>v${version}</strong>` : ''}. Apple Silicon is the default. Need Intel instead? Use ${allReleasesLink}.`
+              return
+            }
+
+            downloadNote.innerHTML = `Windows x64 is available now${version ? ` as <strong>v${version}</strong>` : ''}. macOS builds are not published yet, but you can still browse ${allReleasesLink}.`
             return
           }
 
           if (isLinux) {
-            downloadNote.innerHTML = `Windows x64 is available now${version ? ` as <strong>v${version}</strong>` : ''}. Linux builds are not published yet, but you can still download the current Windows installer or browse <a href="${releasesUrl}" target="_blank" rel="noreferrer">All releases</a>.`
+            downloadNote.innerHTML = `Windows x64 and macOS builds are available now${version ? ` as <strong>v${version}</strong>` : ''}. Linux builds are not published yet, but you can still browse ${allReleasesLink}.`
             return
           }
 
-          downloadNote.innerHTML = `Windows x64 is available now${version ? ` as <strong>v${version}</strong>` : ''}. Need another platform later? Keep an eye on <a href="${releasesUrl}" target="_blank" rel="noreferrer">All releases</a>.`
+          downloadNote.innerHTML = `Windows x64 and macOS builds are available now${version ? ` as <strong>v${version}</strong>` : ''}. Need another build? Keep an eye on ${allReleasesLink}.`
         }
 
         function deriveVersion(tagName = '', assetName = '') {
@@ -509,16 +549,25 @@
         function applyReleaseMetadata(release) {
           const assets = Array.isArray(release?.assets) ? release.assets : []
           const installerAsset = assets.find((asset) => (
-            /setup-x64\.exe$/i.test(asset?.name || '') && !/blockmap$/i.test(asset?.name || '')
+            /(?:windows-installer|setup)-x64\.exe$/i.test(asset?.name || '') && !/blockmap$/i.test(asset?.name || '')
           ))
-          const portableAsset = assets.find((asset) => /portable-x64\.exe$/i.test(asset?.name || ''))
-          const version = deriveVersion(release?.tag_name, installerAsset?.name || portableAsset?.name)
+          const portableAsset = assets.find((asset) => /(?:windows-portable|portable)-x64\.exe$/i.test(asset?.name || ''))
+          const macArmAsset = assets.find((asset) => /(?:-mac-)?arm64\.dmg$/i.test(asset?.name || ''))
+          const macIntelAsset = assets.find((asset) => /(?:-mac-)?x64\.dmg$/i.test(asset?.name || ''))
+          const version = deriveVersion(
+            release?.tag_name,
+            installerAsset?.name || portableAsset?.name || macArmAsset?.name || macIntelAsset?.name
+          )
 
           setDownloadCopy({
             version,
             installerUrl: installerAsset?.browser_download_url || releasesUrl,
             portableUrl: portableAsset?.browser_download_url || releasesUrl,
             directAvailable: Boolean(installerAsset?.browser_download_url),
+            macArmUrl: macArmAsset?.browser_download_url || releasesUrl,
+            macIntelUrl: macIntelAsset?.browser_download_url || releasesUrl,
+            macArmAvailable: Boolean(macArmAsset?.browser_download_url),
+            macIntelAvailable: Boolean(macIntelAsset?.browser_download_url),
           })
         }
 

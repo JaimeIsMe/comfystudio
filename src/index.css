@@ -197,6 +197,41 @@ input[type="number"] {
   appearance: textfield;
 }
 
+/* Range sliders are often adjusted with the mouse and then followed by Space
+   for playback. Suppress Chromium/Windows' large native focus rectangle in
+   that pointer-driven flow, while keeping a small app-styled ring for users
+   who tab to sliders with the keyboard. */
+input[type="range"]:focus {
+  outline: none;
+}
+
+html[data-input-modality="keyboard"] input[type="range"]:focus {
+  box-shadow: 0 0 0 2px rgba(var(--sf-accent), 0.45);
+}
+
+html[data-input-modality="pointer"] input[type="range"]:focus {
+  box-shadow: none;
+}
+
+/* Transport and inspector buttons often remain focused after a click, then
+   Space is used for playback. Hide Chromium/Windows' native focus rectangle in
+   that pointer-driven flow, but keep an app-styled ring for Tab navigation. */
+button:focus,
+[role="button"]:focus {
+  outline: none;
+}
+
+html[data-input-modality="keyboard"] button:focus-visible,
+html[data-input-modality="keyboard"] [role="button"]:focus-visible {
+  box-shadow: 0 0 0 2px rgba(var(--sf-accent), 0.45);
+}
+
+html[data-input-modality="pointer"] button:focus,
+html[data-input-modality="pointer"] [role="button"]:focus {
+  --tw-ring-offset-shadow: 0 0 #0000;
+  --tw-ring-shadow: 0 0 #0000;
+}
+
 /* Hide scrollbar on synced track content (right side) — scrollbar lives on the left headers only */
 .hide-scrollbar::-webkit-scrollbar {
   display: none;

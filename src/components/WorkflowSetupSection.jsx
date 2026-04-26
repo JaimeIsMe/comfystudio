@@ -191,7 +191,7 @@ function getStatusMeta(result) {
  */
 function StatusChipOnMedia({ statusMeta }) {
   return (
-    <div className="inline-flex max-w-full items-center gap-1.5 truncate rounded-full bg-black/75 px-2 py-0.5 text-[10px] font-semibold text-white shadow-md ring-1 ring-white/15 backdrop-blur-sm">
+    <div className="inline-flex max-w-full items-center gap-1.5 truncate rounded-full bg-black/80 px-2 py-0.5 text-[10px] font-semibold text-white shadow-md ring-1 ring-white/15">
       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusMeta.dot || 'bg-white'}`} />
       <span className="truncate">{statusMeta.label}</span>
     </div>
@@ -1425,7 +1425,7 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
                     aria-expanded={isExpanded}
                     onClick={handleCardActivate}
                     onKeyDown={handleCardKeyDown}
-                    className={`group flex cursor-pointer flex-col overflow-hidden rounded-xl border bg-sf-dark-900/65 text-left shadow-sm transition hover:border-sf-dark-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-sf-accent ${
+                    className={`group flex cursor-pointer flex-col overflow-hidden rounded-xl border bg-sf-dark-900/65 text-left shadow-sm transition-colors hover:border-sf-dark-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-sf-accent ${
                       isExpanded ? 'border-sf-accent/60 ring-1 ring-sf-accent/30' : 'border-sf-dark-700'
                     }`}
                     title={isExpanded ? 'Hide details' : 'Open details'}
@@ -1460,7 +1460,7 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
                               event.currentTarget.style.display = 'none'
                             }}
                             style={galleryMeta.invertColors ? { filter: 'invert(1)' } : undefined}
-                            className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
+                            className="absolute inset-0 h-full w-full object-cover"
                           />
                           <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-14 bg-gradient-to-b from-black/55 to-transparent" />
                           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-16 bg-gradient-to-t from-black/65 to-transparent" />
@@ -1474,7 +1474,7 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
                         {galleryMeta.badges.slice(0, 5).map((badge) => (
                           <span
                             key={badge}
-                            className="rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-medium text-white/95 ring-1 ring-white/10 backdrop-blur-sm"
+                            className="rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-medium text-white/95 ring-1 ring-white/10"
                           >
                             {badge}
                           </span>

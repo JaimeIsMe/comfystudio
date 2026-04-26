@@ -19,6 +19,7 @@ import { getAllKeyframeTimes } from '../utils/keyframes'
 import { TRANSITION_TYPES, TRANSITION_DURATIONS, FRAME_RATE } from '../constants/transitions'
 import { getAudioClipFadeValues } from '../utils/audioClipFades'
 import { getEffectTypeDefinition } from '../utils/effects'
+import { isTextEditingElement } from '../utils/keyboardFocus'
 import {
   DEFAULT_EDITOR_HOTKEYS,
   EDITOR_HOTKEYS_CHANGED_EVENT,
@@ -36,6 +37,7 @@ const MARQUEE_AUTO_SCROLL_EDGE_PX = 32
 const MARQUEE_AUTO_SCROLL_STEP_PX = 24
 const PLAYHEAD_SCRUB_AUTO_SCROLL_EDGE_PX = 40
 const PLAYHEAD_SCRUB_AUTO_SCROLL_MAX_STEP_PX = 28
+const MIN_INTERACTIVE_CLIP_WIDTH_PX = 24
 
 // Resolve-style audio track/waveform colors
 const AUDIO_TRACK_BG = '#2d4038'
@@ -47,6 +49,19 @@ const ROLL_EDIT_MAX_GAP_SECONDS = 1 / FRAME_RATE
 const AUDIO_WAVEFORM_CACHE = new Map()
 const AUDIO_WAVEFORM_PENDING = new Map()
 let audioWaveformContext = null
+const TIMELINE_TOOL_STORAGE_KEY = 'comfystudio-timeline-active-tool-v1'
+const TIMELINE_TOOLS = Object.freeze({
+  SELECT: 'select',
+  TRIM: 'trim',
+  RAZOR: 'razor',
+  SLIP: 'slip',
+})
+const TIMELINE_TOOL_LABELS = Object.freeze({
+  [TIMELINE_TOOLS.SELECT]: 'Move tool',
+  [TIMELINE_TOOLS.TRIM]: 'Trim tool',
+  [TIMELINE_TOOLS.RAZOR]: 'Razor tool',
+  [TIMELINE_TOOLS.SLIP]: 'Slip tool',
+})
 const padTimecode2 = (value) => String(value).padStart(2, '0')
 
 const formatTimecodeWithFps = (seconds, fps) => {
@@ -426,7 +441,7 @@ function AudioWaveformBars({ clip, clipWidth, clipUrl, waveformInput = null }) {
   )
 }
 
-function Timeline({ onOpenAudioGenerate }) {
+function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
   const timelineRef = useRef(null)
   const trackHeadersRef = useRef(null)
   const trackContentRef = useRef(null)
@@ -479,6 +494,13 @@ function Timeline({ onOpenAudioGenerate }) {
       return {}
     }
   })
+  const [activeTimelineTool, setActiveTimelineTool] = useState(() => {
+    try {
+      const saved = localStorage.getItem(TIMELINE_TOOL_STORAGE_KEY)
+      if (Object.values(TIMELINE_TOOLS).includes(saved)) return saved
+    } catch (_) {}
+    return TIMELINE_TOOLS.SELECT
+  })
 
   const getDefaultTrackHeight = (track) => {
     if (!track) return VIDEO_TRACK_HEIGHT_DEFAULT
@@ -503,6 +525,22 @@ function Timeline({ onOpenAudioGenerate }) {
   const [trimState, setTrimState] = useState(null) // { clipId, edge: 'left' | 'right', startX, startValue }
   const [slipState, setSlipState] = useState(null) // { clipId, startX, startTrimStart, startTrimEnd, timeScale, minSourceDelta, maxSourceDelta }
   const [fadeDragState, setFadeDragState] = useState(null) // { clipId, edge: 'in' | 'out', startX, startFade }
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TIMELINE_TOOL_STORAGE_KEY, activeTimelineTool)
+    } catch (_) {}
+  }, [activeTimelineTool])
+
+  useEffect(() => {
+    if (onActiveToolChange) {
+      onActiveToolChange(TIMELINE_TOOL_LABELS[activeTimelineTool] || TIMELINE_TOOL_LABELS[TIMELINE_TOOLS.SELECT])
+    }
+  }, [activeTimelineTool, onActiveToolChange])
+
+  const isTrimToolActive = activeTimelineTool === TIMELINE_TOOLS.TRIM
+  const isRazorToolActive = activeTimelineTool === TIMELINE_TOOLS.RAZOR
+  const isSlipToolActive = activeTimelineTool === TIMELINE_TOOLS.SLIP
 
   const getTimeScale = (clip) => {
     if (!clip) return 1
@@ -941,8 +979,44 @@ function Timeline({ onOpenAudioGenerate }) {
     return true
   }, [copySelectedClips, selectedClipIds])
 
-  const toolbarButtonClass = 'flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-sf-dark-700'
-  const toolbarDangerButtonClass = 'flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-error/20 rounded text-[10px] text-sf-error transition-colors disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-sf-dark-700'
+  const toolbarSectionClass = 'inline-flex h-6 items-center gap-0.5 rounded-md border border-sf-dark-700/80 bg-sf-dark-900/55 px-0.5'
+  const toolbarButtonClass = 'inline-flex h-6 items-center gap-1 rounded px-1.5 text-[10px] text-sf-text-secondary transition-colors hover:bg-sf-dark-700 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-sf-text-secondary'
+  const toolbarDangerButtonClass = 'inline-flex h-6 items-center gap-1 rounded px-1.5 text-[10px] text-sf-error transition-colors hover:bg-sf-error/15 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent'
+  const toolbarToggleClass = (active) => `inline-flex h-6 items-center gap-1 rounded px-1.5 text-[10px] transition-colors ${
+    active
+      ? 'border border-sf-accent/55 bg-sf-accent/18 text-sf-accent'
+      : 'border border-transparent text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary'
+  }`
+  const timelineToolOptions = useMemo(() => ([
+    {
+      id: TIMELINE_TOOLS.SELECT,
+      label: 'Move',
+      shortcut: 'V',
+      icon: ArrowRightLeft,
+      title: 'Move/select clips. Clip edges stay draggable for moving, not trimming.',
+    },
+    {
+      id: TIMELINE_TOOLS.TRIM,
+      label: 'Trim',
+      shortcut: 'T',
+      icon: Square,
+      title: 'Trim clip heads/tails from their edges.',
+    },
+    {
+      id: TIMELINE_TOOLS.RAZOR,
+      label: 'Razor',
+      shortcut: 'B',
+      icon: Scissors,
+      title: 'Click any clip to split it at the cursor.',
+    },
+    {
+      id: TIMELINE_TOOLS.SLIP,
+      label: 'Slip',
+      shortcut: 'Y',
+      icon: ArrowRightLeft,
+      title: 'Drag inside a video/audio clip to slip source timing without moving it.',
+    },
+  ]), [])
   
   const edgeTransitionsByClipId = useMemo(() => {
     const map = new Map()
@@ -2084,11 +2158,33 @@ function Timeline({ onOpenAudioGenerate }) {
         return
       }
 
-      // Don't trigger when typing in inputs (use activeElement so prompt/search fields work)
+      // Don't trigger when typing text. Sliders can keep focus while editor
+      // shortcuts like Space, V/T/B/Y, and zoom still feel global.
       const active = document.activeElement
-      if (active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable)) return
+      if (isTextEditingElement(active)) return
 
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (key === 'v') {
+          e.preventDefault()
+          setActiveTimelineTool(TIMELINE_TOOLS.SELECT)
+          return
+        }
+        if (key === 't') {
+          e.preventDefault()
+          setActiveTimelineTool(TIMELINE_TOOLS.TRIM)
+          return
+        }
+        if (key === 'b') {
+          e.preventDefault()
+          setActiveTimelineTool(TIMELINE_TOOLS.RAZOR)
+          return
+        }
+        if (key === 'y') {
+          e.preventDefault()
+          setActiveTimelineTool(TIMELINE_TOOLS.SLIP)
+          return
+        }
+
         const isZoomInKey = e.code === 'Equal' || e.code === 'NumpadAdd' || e.key === '+'
         const isZoomOutKey = e.code === 'Minus' || e.code === 'NumpadSubtract' || e.key === '-'
 
@@ -2282,7 +2378,7 @@ function Timeline({ onOpenAudioGenerate }) {
     const handleSpaceKeyDown = (e) => {
       if (e.code !== 'Space' || e.repeat) return
       const active = document.activeElement
-      if (active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable)) return
+      if (isTextEditingElement(active)) return
       spacePanningKeyDownRef.current = true
       setIsSpaceHeld(true)
     }
@@ -3291,8 +3387,25 @@ function Timeline({ onOpenAudioGenerate }) {
     const isCtrlHeld = e.ctrlKey || e.metaKey // metaKey for Mac Cmd
     const hasSelectionModifier = isShiftHeld || isCtrlHeld
 
+    if (isRazorToolActive) {
+      const splitTime = getTimeFromClientX(e.clientX)
+      const newClip = splitClipAtTime(clip, splitTime, { saveHistory: true })
+      if (newClip) {
+        selectClip(newClip.id)
+        setPlayheadPosition(splitTime)
+      }
+      return
+    }
+
+    if (isTrimToolActive) {
+      if (!selectedClipIds.includes(clip.id) && !hasSelectionModifier) {
+        selectClip(clip.id)
+      }
+      return
+    }
+
     const sourceDuration = getSourceDuration(clip)
-    const canSlip = e.altKey
+    const canSlip = (isSlipToolActive || e.altKey)
       && (clip.type === 'video' || clip.type === 'audio')
       && Number.isFinite(sourceDuration)
     if (canSlip) {
@@ -4010,239 +4123,251 @@ function Timeline({ onOpenAudioGenerate }) {
 
   return (
     <div className="h-full bg-sf-dark-900 border-t border-sf-dark-700 flex flex-col">
-      {/* Timeline Header - Track controls and zoom only (transport controls are above) */}
-      <div className="h-7 bg-sf-dark-800 border-b border-sf-dark-700 flex items-center px-2 gap-3">
-        {/* Add Track Buttons */}
-        <div className="flex items-center gap-1">
-          <button 
-            onClick={() => addTrack('video')}
-            className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
-          >
-            <Plus className="w-3 h-3" />
-            Video
-          </button>
-          <button 
-            onClick={() => addTrack('audio', { channels: 'mono' })}
-            className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
-            title="Add mono audio track"
-          >
-            <Plus className="w-3 h-3" />
-            Mono
-          </button>
-          <button 
-            onClick={() => addTrack('audio', { channels: 'stereo' })}
-            className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
-            title="Add stereo audio track"
-          >
-            <Plus className="w-3 h-3" />
-            Stereo
-          </button>
-          <button
-            onClick={() => addMarker(playheadPosition)}
-            className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
-            title={`Add timeline marker at playhead (${markerHotkeyLabel})`}
-          >
-            <Flag className="w-3 h-3 text-yellow-400" />
-            Marker
-          </button>
-          <button
-            onClick={splitAllTracksAtPlayhead}
-            className={toolbarButtonClass}
-            title={`Split all clips at the playhead across every track (${splitAllHotkeyLabel})`}
-          >
-            <Scissors className="w-3 h-3" />
-            Cut All
-          </button>
-          <button
-            onClick={handleAddAdjustmentLayer}
-            className={toolbarButtonClass}
-            title="Add adjustment layer on active video track"
-          >
-            <Square className="w-3 h-3 text-purple-400" />
-            Adj
-          </button>
-          <button
-            onClick={handleOpenTimelineCaptions}
-            className={toolbarButtonClass}
-            title="Transcribe the timeline's audio and add animated captions on a new top track"
-          >
-            <Type className="w-3 h-3 text-cyan-300" />
-            Captions
-          </button>
-          {selectedMarkerId && (
+      {/* Timeline Header - compact editor toolbar and zoom controls */}
+      <div className="h-8 bg-sf-dark-800 border-b border-sf-dark-700 flex items-center px-2 gap-2 overflow-hidden">
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none]">
+          <div className={toolbarSectionClass} aria-label="Add tracks">
             <button
-              onClick={() => removeMarker(selectedMarkerId)}
-              className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-error/30 rounded text-[10px] text-sf-text-secondary transition-colors"
-              title="Remove selected marker"
+              onClick={() => addTrack('video')}
+              className={toolbarButtonClass}
+              title="Add video track"
             >
-              <X className="w-3 h-3 text-sf-error" />
+              <Plus className="w-3 h-3" />
+              Video
             </button>
-          )}
+            <button
+              onClick={() => addTrack('audio', { channels: 'mono' })}
+              className={toolbarButtonClass}
+              title="Add mono audio track"
+            >
+              <Plus className="w-3 h-3" />
+              Mono
+            </button>
+            <button
+              onClick={() => addTrack('audio', { channels: 'stereo' })}
+              className={toolbarButtonClass}
+              title="Add stereo audio track"
+            >
+              <Plus className="w-3 h-3" />
+              Stereo
+            </button>
+          </div>
+
+          <div className={toolbarSectionClass} aria-label="Insert timeline items">
+            <button
+              onClick={() => addMarker(playheadPosition)}
+              className={toolbarButtonClass}
+              title={`Add timeline marker at playhead (${markerHotkeyLabel})`}
+            >
+              <Flag className="w-3 h-3 text-yellow-400" />
+              Marker
+            </button>
+            <button
+              onClick={handleAddAdjustmentLayer}
+              className={toolbarButtonClass}
+              title="Add adjustment layer on active video track"
+            >
+              <Square className="w-3 h-3 text-purple-400" />
+              Adj
+            </button>
+            <button
+              onClick={() => addTextClipAtPlayhead()}
+              disabled={!preferredVideoTrack}
+              className={toolbarButtonClass}
+              title={preferredVideoTrack
+                ? `Add a text clip on ${preferredVideoTrack.name} at the playhead (${addTextClipHotkeyLabel})`
+                : `Add a video track to create text at the playhead (${addTextClipHotkeyLabel})`}
+            >
+              <Type className="w-3 h-3" />
+              Text
+            </button>
+            <button
+              onClick={handleOpenTimelineCaptions}
+              className={toolbarButtonClass}
+              title="Transcribe the timeline's audio and add animated captions on a new top track"
+            >
+              <Type className="w-3 h-3 text-cyan-300" />
+              Captions
+            </button>
+            {selectedMarkerId && (
+              <button
+                onClick={() => removeMarker(selectedMarkerId)}
+                className={toolbarDangerButtonClass}
+                title="Remove selected marker"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+
+          <div className={toolbarSectionClass} aria-label="Edit selection">
+            <button
+              onClick={splitAllTracksAtPlayhead}
+              className={toolbarButtonClass}
+              title={`Split all clips at the playhead across every track (${splitAllHotkeyLabel})`}
+            >
+              <Scissors className="w-3 h-3" />
+              Cut All
+            </button>
+            <button
+              onClick={handleSplitActiveTrackAtPlayhead}
+              disabled={!activeTrackClipAtPlayhead}
+              className={toolbarButtonClass}
+              title={activeTrackClipAtPlayhead
+                ? `Split the clip under the playhead on the active track (${splitActiveHotkeyLabel})`
+                : `Set an active track and park the playhead over a clip to split it (${splitActiveHotkeyLabel})`}
+            >
+              <Scissors className="w-3 h-3" />
+              Split
+            </button>
+            <button
+              onClick={handleCopySelection}
+              disabled={selectedClipIds.length === 0}
+              className={toolbarButtonClass}
+              title={`Copy the selected clips (${copyHotkeyLabel})`}
+            >
+              <Copy className="w-3 h-3" />
+              Copy
+            </button>
+            <button
+              onClick={handlePasteAtPlayhead}
+              disabled={!activeTrackId || copiedClips.length === 0}
+              className={toolbarButtonClass}
+              title={activeTrackId && copiedClips.length > 0
+                ? `Paste copied clips at the playhead on the active track (${pasteHotkeyLabel})`
+                : `Copy clips first, then choose an active track to paste at the playhead (${pasteHotkeyLabel})`}
+            >
+              <ClipboardPaste className="w-3 h-3" />
+              Paste
+            </button>
+            <button
+              onClick={() => toggleClipSelectionEnabled()}
+              disabled={selectedClipIds.length === 0}
+              className={toolbarButtonClass}
+              title={selectedClipIds.length > 0
+                ? `${selectedClipsShouldEnable ? 'Enable' : 'Disable'} the selected clips (${toggleClipEnabledHotkeyLabel})`
+                : `Select clips to enable or disable them (${toggleClipEnabledHotkeyLabel})`}
+            >
+              {selectedClipsShouldEnable ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+              {selectedClipsShouldEnable ? 'Enable' : 'Disable'}
+            </button>
+            <button
+              onClick={handleDeleteCurrentSelection}
+              disabled={!canDeleteCurrentSelection}
+              className={toolbarDangerButtonClass}
+              title={
+                selectedClipIds.length > 0
+                  ? `${rippleEditMode ? 'Ripple delete' : 'Delete'} the selected clips (Delete or Backspace)`
+                  : selectedGap
+                    ? 'Delete the selected gap and close it (Delete or Backspace)'
+                    : selectedTransitionId
+                      ? 'Delete the selected transition (Delete or Backspace)'
+                      : selectedMarkerId
+                        ? 'Delete the selected marker (Delete or Backspace)'
+                        : 'Select clips, a gap, a transition, or a marker to delete'
+              }
+            >
+              <Trash2 className="w-3 h-3" />
+              Delete
+            </button>
+          </div>
+
+          <div className="inline-flex h-7 items-center gap-0.5 rounded-md border border-sf-dark-600 bg-sf-dark-950/80 p-0.5 shadow-inner" aria-label="Timeline edit tools">
+            {timelineToolOptions.map((tool) => {
+              const Icon = tool.icon
+              const active = activeTimelineTool === tool.id
+              return (
+                <button
+                  key={tool.id}
+                  type="button"
+                  onClick={() => setActiveTimelineTool(tool.id)}
+                  className={toolbarToggleClass(active)}
+                  title={`${tool.title} (${tool.shortcut})`}
+                  aria-pressed={active}
+                >
+                  <Icon className="w-3 h-3" />
+                  {tool.label}
+                </button>
+              )
+            })}
+          </div>
+
+          <div className={toolbarSectionClass} aria-label="Timeline options">
+            <button
+              onClick={toggleSnapping}
+              className={toolbarToggleClass(snappingEnabled)}
+              title={`Snapping ${snappingEnabled ? 'ON' : 'OFF'} (${snappingHotkeyLabel} to toggle)`}
+            >
+              <Magnet className="w-3 h-3" />
+              Snap
+            </button>
+            <button
+              onClick={toggleRippleEdit}
+              className={toolbarToggleClass(rippleEditMode)}
+              title={`Ripple Edit ${rippleEditMode ? 'ON' : 'OFF'} (${rippleHotkeyLabel} to toggle) - Moving clips shifts subsequent clips`}
+            >
+              <ArrowRightLeft className="w-3 h-3" />
+              Ripple
+            </button>
+          </div>
+
+          <div className={toolbarSectionClass} aria-label="Select timeline ranges">
+            <button
+              onClick={selectClipsFromTimelineStartToPlayhead}
+              className={toolbarButtonClass}
+              title={`Select clips from the start of the timeline to the playhead (${selectFromStartHotkeyLabel})`}
+            >
+              <ChevronLeft className="w-3 h-3" />
+              From Start
+            </button>
+            <button
+              onClick={selectClipsFromPlayheadToEnd}
+              className={toolbarButtonClass}
+              title={`Select clips from the playhead to the end of the timeline (${selectToEndHotkeyLabel})`}
+            >
+              <ChevronRight className="w-3 h-3" />
+              To End
+            </button>
+            {selectedClipIds.length > 0 && (
+              <button
+                onClick={openMoveOffsetDialog}
+                className={toolbarButtonClass}
+                title={`Move selected clips by an exact signed timecode offset (${moveByHotkeyLabel})`}
+              >
+                <ArrowRightLeft className="w-3 h-3" />
+                Move By
+              </button>
+            )}
+            {selectedClipIds.length > 0 && (
+              <button
+                onClick={openDurationDeltaDialog}
+                className={toolbarButtonClass}
+                title={`Change selected clip duration by an exact signed amount${durationByHotkeyHint ? ` (${durationByHotkeyHint})` : ''}`}
+              >
+                <Clock className="w-3 h-3" />
+                Duration By
+              </button>
+            )}
+          </div>
+
+          <div className="inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md border border-sf-dark-700/70 bg-sf-dark-900/45 px-1.5">
+            {selectedClipIds.length > 1 && (
+              <span className="text-[10px] text-sf-accent">{selectedClipIds.length} selected</span>
+            )}
+            {selectedGap && (
+              <span
+                className="text-[10px] text-sf-accent"
+                title={`Selected gap from ${formatTimelineTimecode(selectedGap.startTime)} to ${formatTimelineTimecode(selectedGap.endTime)}`}
+              >
+                Gap {Math.max(0, selectedGap.endTime - selectedGap.startTime).toFixed(2)}s
+              </span>
+            )}
+            <span className="text-[10px] text-sf-text-muted">{clips.length} clips</span>
+          </div>
         </div>
 
-        <div className="h-4 w-px bg-sf-dark-600" aria-hidden="true" />
-
-        <div className="flex items-center gap-1">
-          <button
-            onClick={handleSplitActiveTrackAtPlayhead}
-            disabled={!activeTrackClipAtPlayhead}
-            className={toolbarButtonClass}
-            title={activeTrackClipAtPlayhead
-              ? `Split the clip under the playhead on the active track (${splitActiveHotkeyLabel})`
-              : `Set an active track and park the playhead over a clip to split it (${splitActiveHotkeyLabel})`}
-          >
-            <Scissors className="w-3 h-3" />
-            Split
-          </button>
-          <button
-            onClick={handleCopySelection}
-            disabled={selectedClipIds.length === 0}
-            className={toolbarButtonClass}
-            title={`Copy the selected clips (${copyHotkeyLabel})`}
-          >
-            <Copy className="w-3 h-3" />
-            Copy
-          </button>
-          <button
-            onClick={handlePasteAtPlayhead}
-            disabled={!activeTrackId || copiedClips.length === 0}
-            className={toolbarButtonClass}
-            title={activeTrackId && copiedClips.length > 0
-              ? `Paste copied clips at the playhead on the active track (${pasteHotkeyLabel})`
-              : `Copy clips first, then choose an active track to paste at the playhead (${pasteHotkeyLabel})`}
-          >
-            <ClipboardPaste className="w-3 h-3" />
-            Paste
-          </button>
-          <button
-            onClick={() => toggleClipSelectionEnabled()}
-            disabled={selectedClipIds.length === 0}
-            className={toolbarButtonClass}
-            title={selectedClipIds.length > 0
-              ? `${selectedClipsShouldEnable ? 'Enable' : 'Disable'} the selected clips (${toggleClipEnabledHotkeyLabel})`
-              : `Select clips to enable or disable them (${toggleClipEnabledHotkeyLabel})`}
-          >
-            {selectedClipsShouldEnable ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-            {selectedClipsShouldEnable ? 'Enable' : 'Disable'}
-          </button>
-          <button
-            onClick={handleDeleteCurrentSelection}
-            disabled={!canDeleteCurrentSelection}
-            className={toolbarDangerButtonClass}
-            title={
-              selectedClipIds.length > 0
-                ? `${rippleEditMode ? 'Ripple delete' : 'Delete'} the selected clips (Delete or Backspace)`
-                : selectedGap
-                  ? 'Delete the selected gap and close it (Delete or Backspace)'
-                  : selectedTransitionId
-                    ? 'Delete the selected transition (Delete or Backspace)'
-                    : selectedMarkerId
-                      ? 'Delete the selected marker (Delete or Backspace)'
-                      : 'Select clips, a gap, a transition, or a marker to delete'
-            }
-          >
-            <Trash2 className="w-3 h-3" />
-            Delete
-          </button>
-          <button
-            onClick={() => addTextClipAtPlayhead()}
-            disabled={!preferredVideoTrack}
-            className={toolbarButtonClass}
-            title={preferredVideoTrack
-              ? `Add a text clip on ${preferredVideoTrack.name} at the playhead (${addTextClipHotkeyLabel})`
-              : `Add a video track to create text at the playhead (${addTextClipHotkeyLabel})`}
-          >
-            <Type className="w-3 h-3" />
-            Text
-          </button>
-        </div>
-        
-        {/* Snapping Toggle */}
-        <button
-          onClick={toggleSnapping}
-          className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
-            snappingEnabled 
-              ? 'bg-sf-accent/20 text-sf-accent border border-sf-accent/50' 
-              : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
-          }`}
-          title={`Snapping ${snappingEnabled ? 'ON' : 'OFF'} (${snappingHotkeyLabel} to toggle)`}
-        >
-          <Magnet className={`w-3 h-3 ${snappingEnabled ? 'text-sf-accent' : ''}`} />
-          Snap
-        </button>
-        
-        {/* Ripple Edit Toggle */}
-        <button
-          onClick={toggleRippleEdit}
-          className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
-            rippleEditMode 
-              ? 'bg-sf-accent/20 text-sf-accent border border-sf-accent/50' 
-              : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
-          }`}
-          title={`Ripple Edit ${rippleEditMode ? 'ON' : 'OFF'} (${rippleHotkeyLabel} to toggle) - Moving clips shifts subsequent clips`}
-        >
-          <ArrowRightLeft className={`w-3 h-3 ${rippleEditMode ? 'text-sf-accent' : ''}`} />
-          Ripple
-        </button>
-        
-        {/* Selection count */}
-        {selectedClipIds.length > 1 && (
-          <span className="text-[10px] text-sf-accent">{selectedClipIds.length} selected</span>
-        )}
-        {selectedGap && (
-          <span
-            className="text-[10px] text-sf-accent"
-            title={`Selected gap from ${formatTimelineTimecode(selectedGap.startTime)} to ${formatTimelineTimecode(selectedGap.endTime)}`}
-          >
-            Gap {Math.max(0, selectedGap.endTime - selectedGap.startTime).toFixed(2)}s
-          </span>
-        )}
-
-        <button
-          onClick={selectClipsFromTimelineStartToPlayhead}
-          className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
-          title={`Select clips from the start of the timeline to the playhead (${selectFromStartHotkeyLabel})`}
-        >
-          <ChevronLeft className="w-3 h-3" />
-          From Start
-        </button>
-
-        <button
-          onClick={selectClipsFromPlayheadToEnd}
-          className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
-          title={`Select clips from the playhead to the end of the timeline (${selectToEndHotkeyLabel})`}
-        >
-          <ChevronRight className="w-3 h-3" />
-          To End
-        </button>
-
-        {selectedClipIds.length > 0 && (
-          <button
-            onClick={openMoveOffsetDialog}
-            className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
-            title={`Move selected clips by an exact signed timecode offset (${moveByHotkeyLabel})`}
-          >
-            <ArrowRightLeft className="w-3 h-3" />
-            Move By
-          </button>
-        )}
-
-        {selectedClipIds.length > 0 && (
-          <button
-            onClick={openDurationDeltaDialog}
-            className="flex items-center gap-1 px-1.5 py-0.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
-            title={`Change selected clip duration by an exact signed amount${durationByHotkeyHint ? ` (${durationByHotkeyHint})` : ''}`}
-          >
-            <Clock className="w-3 h-3" />
-            Duration By
-          </button>
-        )}
-        
-        {/* Clip count */}
-        <span className="text-[10px] text-sf-text-muted">{clips.length} clips</span>
-        
         {/* Info & Zoom */}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <button
             onClick={handleFrameAll}
             className="p-1.5 hover:bg-sf-dark-600 rounded text-sf-text-muted"
@@ -4738,8 +4863,11 @@ function Timeline({ onOpenAudioGenerate }) {
                 )}
                 {trackClips.map((clip) => {
                   const clipWidth = clip.duration * pixelsPerSecond
+                  const renderedClipWidth = Math.max(1, clipWidth)
+                  const interactiveClipWidth = Math.max(MIN_INTERACTIVE_CLIP_WIDTH_PX, renderedClipWidth)
+                  const interactiveClipOffset = Math.max(0, (interactiveClipWidth - renderedClipWidth) / 2)
                   // Calculate how many thumbnail frames to show (roughly one per 60px)
-                  const thumbCount = Math.max(1, Math.floor(clipWidth / 60))
+                  const thumbCount = Math.max(1, Math.floor(renderedClipWidth / 60))
                   const isTextClip = clip.type === 'text'
                   const isAdjustmentClip = clip.type === 'adjustment'
                   const clipEnabled = isClipEnabled(clip)
@@ -4774,22 +4902,38 @@ function Timeline({ onOpenAudioGenerate }) {
                         : { ...def.defaults }
                       addEffect(clip.id, { type: payload.effectType, settings })
                     }}
-                    className={`absolute top-0.5 bottom-0.5 rounded-sm cursor-grab group overflow-hidden ${
-                      selectedClipIds.includes(clip.id) ? 'ring-2 ring-white ring-offset-1 ring-offset-sf-dark-900' : ''
-                    } ${trimState?.clipId === clip.id ? 'ring-2 ring-sf-accent' : ''} ${
-                      slipState?.clipId === clip.id ? 'ring-2 ring-yellow-400 cursor-ew-resize z-30' : ''
+                    className={`absolute top-0.5 bottom-0.5 rounded-sm group ${
+                      isRazorToolActive
+                        ? 'cursor-crosshair'
+                        : isSlipToolActive
+                          ? 'cursor-ew-resize'
+                          : isTrimToolActive
+                            ? 'cursor-default'
+                            : 'cursor-grab'
                     } ${
-                      clipDragState?.movingClipIds?.includes(clip.id)
-                        ? 'ring-2 ring-sf-accent cursor-grabbing z-30' : ''
-                    } ${
-                      clipEnabled ? '' : 'opacity-60 saturate-0'
+                      slipState?.clipId === clip.id || clipDragState?.movingClipIds?.includes(clip.id) ? 'z-30' : ''
                     }`}
                     style={{ 
-                      left: `${clip.startTime * pixelsPerSecond}px`, 
-                      width: `${clipWidth}px`,
-                      minWidth: '24px',
+                      left: `${(clip.startTime * pixelsPerSecond) - interactiveClipOffset}px`, 
+                      width: `${interactiveClipWidth}px`,
                     }}
                   >
+                    <div
+                      className={`absolute top-0 bottom-0 rounded-sm overflow-hidden ${
+                        selectedClipIds.includes(clip.id) ? 'ring-2 ring-white ring-offset-1 ring-offset-sf-dark-900' : ''
+                      } ${trimState?.clipId === clip.id ? 'ring-2 ring-sf-accent' : ''} ${
+                        slipState?.clipId === clip.id ? 'ring-2 ring-yellow-400 cursor-ew-resize z-30' : ''
+                      } ${
+                        clipDragState?.movingClipIds?.includes(clip.id)
+                          ? 'ring-2 ring-sf-accent cursor-grabbing z-30' : ''
+                      } ${
+                        clipEnabled ? '' : 'opacity-60 saturate-0'
+                      }`}
+                      style={{
+                        left: `${interactiveClipOffset}px`,
+                        width: `${renderedClipWidth}px`,
+                      }}
+                    >
                     {(() => {
                       const edgeTransitions = edgeTransitionsByClipId.get(clip.id) || []
                       const hasIn = edgeTransitions.some(t => t.edge === 'in')
@@ -5009,7 +5153,7 @@ function Timeline({ onOpenAudioGenerate }) {
                               <div 
                                 key={i} 
                                 className="flex-shrink-0 h-full relative overflow-hidden"
-                                style={{ width: `${clipWidth / thumbCount}px` }}
+                                style={{ width: `${renderedClipWidth / thumbCount}px` }}
                               >
                                 <video
                                   src={getClipUrl(clip)}
@@ -5112,27 +5256,32 @@ function Timeline({ onOpenAudioGenerate }) {
                     {/* Hover overlay */}
                     <div className="absolute inset-0 bg-white/0 group-hover:bg-white/5 transition-colors pointer-events-none" />
                     
-                    {/* Left trim handle - wider hit area for easier grabbing */}
-                    <div 
-                      data-trim-handle="true"
-                      onMouseDown={(e) => handleTrimStart(e, clip.id, 'left')}
-                      className="absolute left-0 top-0 bottom-0 w-4 bg-white/0 group-hover:bg-white/20 cursor-ew-resize transition-colors flex items-center justify-start z-20"
-                    >
-                      <div className="w-1 h-8 bg-white/0 group-hover:bg-white/90 rounded-r transition-colors ml-0" />
-                    </div>
-                    
-                    {/* Right trim handle - wider hit area for easier grabbing */}
-                    <div 
-                      data-trim-handle="true"
-                      onMouseDown={(e) => handleTrimStart(e, clip.id, 'right')}
-                      className="absolute right-0 top-0 bottom-0 w-4 bg-white/0 group-hover:bg-white/20 cursor-ew-resize transition-colors flex items-center justify-end z-20"
-                    >
-                      <div className="w-1 h-8 bg-white/0 group-hover:bg-white/90 rounded-l transition-colors mr-0" />
-                    </div>
+                    {isTrimToolActive && (
+                      <>
+                        {/* Left trim handle - wider hit area for easier grabbing */}
+                        <div
+                          data-trim-handle="true"
+                          onMouseDown={(e) => handleTrimStart(e, clip.id, 'left')}
+                          className="absolute left-0 top-0 bottom-0 w-4 bg-white/0 group-hover:bg-white/20 cursor-ew-resize transition-colors flex items-center justify-start z-20"
+                        >
+                          <div className="w-1 h-8 bg-white/0 group-hover:bg-white/90 rounded-r transition-colors ml-0" />
+                        </div>
+
+                        {/* Right trim handle - wider hit area for easier grabbing */}
+                        <div
+                          data-trim-handle="true"
+                          onMouseDown={(e) => handleTrimStart(e, clip.id, 'right')}
+                          className="absolute right-0 top-0 bottom-0 w-4 bg-white/0 group-hover:bg-white/20 cursor-ew-resize transition-colors flex items-center justify-end z-20"
+                        >
+                          <div className="w-1 h-8 bg-white/0 group-hover:bg-white/90 rounded-l transition-colors mr-0" />
+                        </div>
+                      </>
+                    )}
                     
                     {/* Left/Right edge borders */}
                     <div className="absolute left-0 top-0 bottom-0 w-px bg-black/40 pointer-events-none" />
                     <div className="absolute right-0 top-0 bottom-0 w-px bg-black/40 pointer-events-none" />
+                    </div>
                   </div>
                   )
                 })}
@@ -5141,7 +5290,7 @@ function Timeline({ onOpenAudioGenerate }) {
                 {/* Roll edit zones and transition buttons/overlays between adjacent clips */}
                 {getAdjacentClips(track.id).map(({ clipA, clipB, transition, isOverlapping, gap }) => {
                   const clipAEnd = clipA.startTime + clipA.duration
-                  const canRollEdit = isOverlapping || Math.abs(gap) <= ROLL_EDIT_MAX_GAP_SECONDS
+                  const canRollEdit = isTrimToolActive && (isOverlapping || Math.abs(gap) <= ROLL_EDIT_MAX_GAP_SECONDS)
                   
                   if (transition && isOverlapping) {
                     // Resolve-like transition tile over the overlap area.
@@ -5415,7 +5564,9 @@ function Timeline({ onOpenAudioGenerate }) {
                 )}
                 {trackClips.map((clip) => {
                   const clipWidth = clip.duration * pixelsPerSecond
-                  const renderedClipWidth = Math.max(24, clipWidth)
+                  const renderedClipWidth = Math.max(1, clipWidth)
+                  const interactiveClipWidth = Math.max(MIN_INTERACTIVE_CLIP_WIDTH_PX, renderedClipWidth)
+                  const interactiveClipOffset = Math.max(0, (interactiveClipWidth - renderedClipWidth) / 2)
                   const clipUrl = getClipUrl(clip)
                   const clipEnabled = isClipEnabled(clip)
                   const { fadeIn, fadeOut } = getAudioClipFadeValues(clip)
@@ -5450,16 +5601,32 @@ function Timeline({ onOpenAudioGenerate }) {
                     onMouseDown={(e) => handleClipDragStart(e, clip)}
                     onClick={(e) => handleClipClick(e, clip)}
                     onContextMenu={(e) => handleClipContextMenu(e, clip)}
-                    className={`absolute top-0.5 bottom-0.5 rounded-sm cursor-grab group overflow-hidden ${
-                      selectedClipIds.includes(clip.id) ? 'ring-2 ring-white ring-offset-1 ring-offset-sf-dark-900' : ''
-                    } ${slipState?.clipId === clip.id ? 'ring-2 ring-yellow-400 cursor-ew-resize z-30' : ''} ${clipDragState?.movingClipIds?.includes(clip.id)
-                        ? 'ring-2 ring-sf-accent cursor-grabbing z-30' : ''} ${clipEnabled ? '' : 'opacity-60 saturate-0'}`}
+                    className={`absolute top-0.5 bottom-0.5 rounded-sm group ${
+                      isRazorToolActive
+                        ? 'cursor-crosshair'
+                        : isSlipToolActive
+                          ? 'cursor-ew-resize'
+                          : isTrimToolActive
+                            ? 'cursor-default'
+                            : 'cursor-grab'
+                    } ${
+                      slipState?.clipId === clip.id || clipDragState?.movingClipIds?.includes(clip.id) ? 'z-30' : ''
+                    }`}
                     style={{ 
-                      left: `${clip.startTime * pixelsPerSecond}px`, 
-                      width: `${clipWidth}px`,
-                      minWidth: '24px',
+                      left: `${(clip.startTime * pixelsPerSecond) - interactiveClipOffset}px`, 
+                      width: `${interactiveClipWidth}px`,
                     }}
                   >
+                    <div
+                      className={`absolute top-0 bottom-0 rounded-sm overflow-hidden ${
+                        selectedClipIds.includes(clip.id) ? 'ring-2 ring-white ring-offset-1 ring-offset-sf-dark-900' : ''
+                      } ${slipState?.clipId === clip.id ? 'ring-2 ring-yellow-400 cursor-ew-resize z-30' : ''} ${clipDragState?.movingClipIds?.includes(clip.id)
+                          ? 'ring-2 ring-sf-accent cursor-grabbing z-30' : ''} ${clipEnabled ? '' : 'opacity-60 saturate-0'}`}
+                      style={{
+                        left: `${interactiveClipOffset}px`,
+                        width: `${renderedClipWidth}px`,
+                      }}
+                    >
                     {/* Clip background + top accent (Resolve-style teal) */}
                     <div 
                       className="absolute inset-0"
@@ -5486,8 +5653,8 @@ function Timeline({ onOpenAudioGenerate }) {
                         }}
                       >
                         <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
-                          <polygon points="0,100 100,0 100,100" fill="rgba(255,255,255,0.18)" />
-                          <line x1="0" y1="100" x2="100" y2="0" stroke="rgba(210,255,246,0.92)" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
+                          <polygon points="0,100 100,0 100,100" fill="rgba(255,255,255,0.10)" />
+                          <line x1="0" y1="100" x2="100" y2="0" stroke="rgba(210,255,246,0.72)" strokeWidth="1.25" vectorEffect="non-scaling-stroke" />
                         </svg>
                       </div>
                     )}
@@ -5499,8 +5666,8 @@ function Timeline({ onOpenAudioGenerate }) {
                         }}
                       >
                         <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
-                          <polygon points="0,0 100,100 0,100" fill="rgba(255,255,255,0.18)" />
-                          <line x1="0" y1="0" x2="100" y2="100" stroke="rgba(210,255,246,0.92)" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
+                          <polygon points="0,0 100,100 0,100" fill="rgba(255,255,255,0.10)" />
+                          <line x1="0" y1="0" x2="100" y2="100" stroke="rgba(210,255,246,0.72)" strokeWidth="1.25" vectorEffect="non-scaling-stroke" />
                         </svg>
                       </div>
                     )}
@@ -5543,47 +5710,72 @@ function Timeline({ onOpenAudioGenerate }) {
                     <div className="absolute left-0 top-0 bottom-0 w-px bg-black/40 pointer-events-none" />
                     <div className="absolute right-0 top-0 bottom-0 w-px bg-black/40 pointer-events-none" />
                     
-                    {/* Trim handles on hover - wider hit area for easier grabbing */}
-                    <div 
-                      data-trim-handle="true"
-                      onMouseDown={(e) => handleTrimStart(e, clip.id, 'left')}
-                      className="absolute left-0 top-0 bottom-0 w-4 bg-white/0 group-hover:bg-white/20 cursor-ew-resize transition-colors z-20 flex items-center justify-start"
-                    >
-                      <div className="w-1 h-6 bg-white/0 group-hover:bg-white/90 rounded-r transition-colors" />
-                    </div>
-                    <div 
-                      data-trim-handle="true"
-                      onMouseDown={(e) => handleTrimStart(e, clip.id, 'right')}
-                      className="absolute right-0 top-0 bottom-0 w-4 bg-white/0 group-hover:bg-white/20 cursor-ew-resize transition-colors z-20 flex items-center justify-end"
-                    >
-                      <div className="w-1 h-6 bg-white/0 group-hover:bg-white/90 rounded-l transition-colors" />
-                    </div>
+                    {isTrimToolActive && (
+                      <>
+                        {/* Trim handles on hover - wider hit area for easier grabbing */}
+                        <div
+                          data-trim-handle="true"
+                          onMouseDown={(e) => handleTrimStart(e, clip.id, 'left')}
+                          className="absolute left-0 top-0 bottom-0 w-4 bg-white/0 group-hover:bg-white/20 cursor-ew-resize transition-colors z-20 flex items-center justify-start"
+                        >
+                          <div className="w-1 h-6 bg-white/0 group-hover:bg-white/90 rounded-r transition-colors" />
+                        </div>
+                        <div
+                          data-trim-handle="true"
+                          onMouseDown={(e) => handleTrimStart(e, clip.id, 'right')}
+                          className="absolute right-0 top-0 bottom-0 w-4 bg-white/0 group-hover:bg-white/20 cursor-ew-resize transition-colors z-20 flex items-center justify-end"
+                        >
+                          <div className="w-1 h-6 bg-white/0 group-hover:bg-white/90 rounded-l transition-colors" />
+                        </div>
+                      </>
+                    )}
 
+                    {/* Fade handles live only in the top strip so the clip edge
+                        remains a trim target everywhere else. */}
                     <div
                       data-fade-handle="true"
                       onMouseDown={(e) => handleFadeDragStart(e, clip, 'in')}
-                      className="absolute top-[3px] bottom-0 z-20 w-4 -translate-x-1/2 cursor-ew-resize flex items-center justify-center"
+                      className="absolute top-[3px] z-30 h-5 w-5 -translate-x-1/2 cursor-ew-resize flex items-start justify-center group/fade"
                       style={{ left: `${fadeInHandleX}px` }}
                       title={`Drag fade in (${formatSecondsFrames(fadeIn, timecodeFps)})`}
                     >
-                      <div className={`h-full w-1.5 rounded-full shadow-[0_0_8px_rgba(0,0,0,0.35)] transition-colors ${
-                        fadeDragState?.clipId === clip.id && fadeDragState?.edge === 'in'
-                          ? 'bg-sf-accent'
-                          : 'bg-cyan-200/70 group-hover:bg-cyan-100'
-                      }`} />
+                      <div className="relative h-5 w-5">
+                        <div className={`absolute left-1/2 top-0 h-2 w-2 -translate-x-1/2 rounded-[2px] border shadow-[0_1px_3px_rgba(0,0,0,0.55)] transition-colors ${
+                          fadeDragState?.clipId === clip.id && fadeDragState?.edge === 'in'
+                            ? 'border-[#ffd8d2] bg-[#ff7a68]'
+                            : 'border-white/80 bg-[#d8e1dc] group-hover/fade:bg-white'
+                        }`} />
+                        <div className="absolute left-1/2 top-[7px] h-2.5 w-px -translate-x-1/2 bg-[#ff6f61]/95 shadow-[0_0_4px_rgba(255,111,97,0.45)]" />
+                        <svg className="absolute left-1/2 top-[12px] h-2.5 w-3.5 -translate-x-1/2 text-[#ff6f61]/95" viewBox="0 0 14 10" fill="none" aria-hidden="true">
+                          <path d="M2 8C5.5 8 5.5 2 12 2" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+                        </svg>
+                      </div>
+                      <div className="absolute top-4 left-1/2 -translate-x-1/2 rounded bg-black/80 border border-white/10 px-1 py-0.5 text-[8px] text-white/90 opacity-0 group-hover/fade:opacity-100 pointer-events-none transition-opacity whitespace-nowrap">
+                        Fade
+                      </div>
                     </div>
                     <div
                       data-fade-handle="true"
                       onMouseDown={(e) => handleFadeDragStart(e, clip, 'out')}
-                      className="absolute top-[3px] bottom-0 z-20 w-4 -translate-x-1/2 cursor-ew-resize flex items-center justify-center"
+                      className="absolute top-[3px] z-30 h-5 w-5 -translate-x-1/2 cursor-ew-resize flex items-start justify-center group/fade"
                       style={{ left: `${fadeOutHandleX}px` }}
                       title={`Drag fade out (${formatSecondsFrames(fadeOut, timecodeFps)})`}
                     >
-                      <div className={`h-full w-1.5 rounded-full shadow-[0_0_8px_rgba(0,0,0,0.35)] transition-colors ${
-                        fadeDragState?.clipId === clip.id && fadeDragState?.edge === 'out'
-                          ? 'bg-sf-accent'
-                          : 'bg-cyan-200/70 group-hover:bg-cyan-100'
-                      }`} />
+                      <div className="relative h-5 w-5">
+                        <div className={`absolute left-1/2 top-0 h-2 w-2 -translate-x-1/2 rounded-[2px] border shadow-[0_1px_3px_rgba(0,0,0,0.55)] transition-colors ${
+                          fadeDragState?.clipId === clip.id && fadeDragState?.edge === 'out'
+                            ? 'border-[#ffd8d2] bg-[#ff7a68]'
+                            : 'border-white/80 bg-[#d8e1dc] group-hover/fade:bg-white'
+                        }`} />
+                        <div className="absolute left-1/2 top-[7px] h-2.5 w-px -translate-x-1/2 bg-[#ff6f61]/95 shadow-[0_0_4px_rgba(255,111,97,0.45)]" />
+                        <svg className="absolute left-1/2 top-[12px] h-2.5 w-3.5 -translate-x-1/2 scale-x-[-1] text-[#ff6f61]/95" viewBox="0 0 14 10" fill="none" aria-hidden="true">
+                          <path d="M2 8C5.5 8 5.5 2 12 2" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+                        </svg>
+                      </div>
+                      <div className="absolute top-4 left-1/2 -translate-x-1/2 rounded bg-black/80 border border-white/10 px-1 py-0.5 text-[8px] text-white/90 opacity-0 group-hover/fade:opacity-100 pointer-events-none transition-opacity whitespace-nowrap">
+                        Fade
+                      </div>
+                    </div>
                     </div>
                   </div>
                   )
@@ -5592,7 +5784,7 @@ function Timeline({ onOpenAudioGenerate }) {
                 
                 {/* Roll edit zones between adjacent audio clips */}
                 {getAdjacentClips(track.id).map(({ clipA, clipB, isOverlapping, gap }) => {
-                  const canRollEdit = isOverlapping || Math.abs(gap) <= ROLL_EDIT_MAX_GAP_SECONDS
+                  const canRollEdit = isTrimToolActive && (isOverlapping || Math.abs(gap) <= ROLL_EDIT_MAX_GAP_SECONDS)
                   if (!canRollEdit) return null
                   const editPointX = (clipA.startTime + clipA.duration) * pixelsPerSecond
                   

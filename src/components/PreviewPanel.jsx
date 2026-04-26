@@ -20,6 +20,7 @@ import {
 } from '../services/previewCache'
 import { generateMissingProxiesForAllVideos, hasUsableProxy, isProxyableVideoAsset } from '../services/proxyCache'
 import { importAsset } from '../services/fileSystem'
+import { isTextEditingElement } from '../utils/keyboardFocus'
 
 /**
  * MaskPreview - Component for previewing mask assets with frame-by-frame playback
@@ -1195,9 +1196,10 @@ function PreviewPanel() {
   // Handle keyboard events for spacebar and ctrl
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Don't capture when typing in inputs (use activeElement so prompt/search work)
+      // Don't capture when typing text. Sliders can keep focus while Space still
+      // works for playback and Space+drag navigation.
       const active = document.activeElement
-      if (active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable)) return
+      if (isTextEditingElement(active)) return
       
       if (e.code === 'Space' && !e.repeat) {
         e.preventDefault()

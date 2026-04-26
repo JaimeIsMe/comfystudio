@@ -340,23 +340,6 @@ export async function openBundledWorkflowInComfyUi(workflowId) {
     }
   }
 
-  const comfyTabVisible = (() => {
-    try {
-      const stored = localStorage.getItem('comfystudio-show-comfyui-tab')
-      if (stored === null) return false
-      return stored === 'true'
-    } catch (_) {
-      return false
-    }
-  })()
-
-  if (!comfyTabVisible) {
-    return {
-      success: false,
-      error: 'ComfyUI tab is hidden. Enable "Show ComfyUI tab" in Settings first.',
-    }
-  }
-
   try {
     window.dispatchEvent(new CustomEvent(OPEN_COMFY_TAB_EVENT, {
       detail: { workflowId: normalizedWorkflowId, workflowPath },

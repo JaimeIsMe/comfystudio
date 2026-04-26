@@ -9,7 +9,6 @@ const TOP_TABS = [
   { id: 'mog', label: 'MoGraph' },
   { id: 'stock', label: 'Stock' },
   { id: 'comfyui', label: 'ComfyUI' },
-  { id: 'llm-assistant', label: 'LLM' },
   { id: 'export', label: 'Export' },
 ]
 
@@ -19,9 +18,8 @@ function TitleBar({
   onTabChange,
   centerInsetLeft = 0,
   centerInsetRight = 0,
-  showComfyUiTab = false,
 }) {
-  const tabs = showComfyUiTab ? TOP_TABS : TOP_TABS.filter(t => t.id !== 'comfyui')
+  const tabs = TOP_TABS
   const [windowState, setWindowState] = useState({
     isMaximized: false,
     isFullScreen: false,

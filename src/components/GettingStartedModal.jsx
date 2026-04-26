@@ -7,7 +7,6 @@ import {
   AlertCircle,
   Settings,
   Sparkles,
-  Bot,
   Download,
   Server,
   KeyRound,
@@ -443,20 +442,6 @@ export default function GettingStartedModal({
                   ]}
                 />
 
-                <ChecklistCard
-                  icon={Bot}
-                  title="Prompt help with LM Studio"
-                  description="The LLM tab is for local prompt refinement. It is separate from ComfyUI and only matters if you want a local assistant inside the app."
-                  statusTone="neutral"
-                  statusLabel="Optional"
-                  helperLines={[
-                    'Run LM Studio, enable its local server, then load a model in the LLM tab.',
-                    'Unload the model before heavy image/video generation if you need that VRAM back for ComfyUI.',
-                  ]}
-                  actions={[
-                    { label: 'Open LLM Tab', onClick: () => handleNavigate('llm-assistant') },
-                  ]}
-                />
               </div>
             </div>
           ) : (
@@ -503,18 +488,6 @@ export default function GettingStartedModal({
                   ]}
                   actionLabel="Open Stock"
                   onAction={() => handleNavigate('stock')}
-                />
-
-                <TourCard
-                  icon={Bot}
-                  title="LLM"
-                  description="Use LM Studio to refine prompts locally before you generate."
-                  helperLines={[
-                    'Enable LM Studio local server, load a model, then chat for prompt help.',
-                    'This is useful when you want prompt iteration without leaving the app.',
-                  ]}
-                  actionLabel="Open LLM"
-                  onAction={() => handleNavigate('llm-assistant')}
                 />
 
                 <TourCard

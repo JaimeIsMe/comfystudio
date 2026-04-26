@@ -68,6 +68,11 @@ const VISUAL_BY_WORKFLOW_ID = {
     icon: 'music',
     extraBadges: ['Preprocess', 'Vocal stem'],
   },
+  'caption-qwen-asr': {
+    gradient: 'from-blue-500/25 via-indigo-900/25 to-sf-dark-950',
+    icon: 'music',
+    extraBadges: ['ASR', 'SRT', 'Captions'],
+  },
   'multi-angles': {
     gradient: 'from-fuchsia-500/25 via-purple-900/25 to-sf-dark-950',
     icon: 'users',
@@ -149,6 +154,7 @@ const LONG_DESCRIPTIONS = {
   [TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID]: 'Cloud video upscaling with Topaz Video Enhance. Feed it an existing video clip and upscale it with Starlight Precise 2.5 or the Astra variants. Requires a Comfy Partner API key.',
   [MUSIC_VIDEO_SHOT_WORKFLOW_ID]: 'Per-shot music video generator built on LTX 2.3 22B. Takes a reference still and an audio segment and produces a lip-synced shot. Used by Director Mode to render an entire music video one shot at a time. Heavy local workflow — needs a 24GB+ GPU and the LTX 2.3 model stack.',
   [VOCAL_EXTRACT_WORKFLOW_ID]: 'One-time preprocessing workflow that isolates vocals from a mixed song using Mel-Band RoFormer. Runs once when you import a song into a music-video project, so every shot afterward can be conditioned on clean vocals without re-running separation each time.',
+  'caption-qwen-asr': 'Local caption and timed-lyrics transcription using Qwen ASR through TTS-Audio-Suite. Used by the timeline caption tool and by Music Video\'s "Transcribe to SRT" button to generate timestamped lyrics before building the director script.',
   'multi-angles': 'One-click character turnaround. Give it one character image and it generates 8 matching camera angles so you can build consistent shot sheets or look-dev reference sets.',
   'multi-angles-scene': 'Same idea as the character turnaround, but for environments and scenes. Produces 8 camera angles of a single scene image for coverage, storyboards, or establishing shots.',
   'image-edit': 'Local image editing with Qwen Image Edit 2509. Paint a mask (or describe the change) and apply targeted text-prompted edits to a still image while keeping the rest intact.',
