@@ -11,6 +11,11 @@ import {
   saveLocalComfyConnectionPort,
 } from '../../services/localComfyConnection'
 
+const OUTPUT_DIRECTORY_SETTING_KEY = 'outputDirectory'
+const WORKFLOWS_DIRECTORY_SETTING_KEY = 'workflowsDirectory'
+const OUTPUT_DIRECTORY_PLACEHOLDER = 'C:\\Users\\...\\ComfyStudio\\outputs'
+const WORKFLOWS_DIRECTORY_PLACEHOLDER = 'C:\\Users\\...\\ComfyUI\\workflow_API'
+
 function SettingsPanel() {
   const initialComfyConnection = getLocalComfyConnectionSync()
   const [comfyPortInput, setComfyPortInput] = useState(String(initialComfyConnection.port || DEFAULT_COMFY_PORT))
@@ -18,8 +23,8 @@ function SettingsPanel() {
     status: 'idle',
     message: `Local endpoint: ${initialComfyConnection.httpBase}`,
   })
-  const [outputPath, setOutputPath] = useState('C:\\Users\\...\\ComfyStudio\\outputs')
-  const [workflowPath, setWorkflowPath] = useState('C:\\Users\\...\\ComfyUI\\workflow_API')
+  const [outputPath, setOutputPath] = useState('')
+  const [workflowPath, setWorkflowPath] = useState('')
   const [theme, setTheme] = useState('dark')
   const [pexelsApiKey, setPexelsApiKeyLocal] = useState('')
   const [settingsSaved, setSettingsSaved] = useState(false)
@@ -36,6 +41,19 @@ function SettingsPanel() {
 
   useEffect(() => {
     getPexelsApiKey().then(key => setPexelsApiKeyLocal(key || ''))
+    ;(async () => {
+      try {
+        const [storedOutputPath, storedWorkflowPath] = await Promise.all([
+          window.electronAPI?.getSetting?.(OUTPUT_DIRECTORY_SETTING_KEY),
+          window.electronAPI?.getSetting?.(WORKFLOWS_DIRECTORY_SETTING_KEY),
+        ])
+        setOutputPath(String(storedOutputPath || ''))
+        setWorkflowPath(String(storedWorkflowPath || ''))
+      } catch {
+        setOutputPath('')
+        setWorkflowPath('')
+      }
+    })()
     hydrateLocalComfyConnection().then((connection) => {
       setComfyPortInput(String(connection.port || DEFAULT_COMFY_PORT))
       setComfyConnectionState({
@@ -120,10 +138,44 @@ function SettingsPanel() {
     })
   }
 
+  const handleChooseDirectory = async ({ title, currentPath, onSelect }) => {
+    if (!window.electronAPI?.selectDirectory) {
+      console.warn('Directory picker is not available in this environment.')
+      return
+    }
+
+    try {
+      const selectedPath = await window.electronAPI.selectDirectory({
+        title,
+        defaultPath: currentPath || undefined,
+      })
+      if (selectedPath) onSelect(selectedPath)
+    } catch (error) {
+      console.error('Could not open directory picker:', error)
+    }
+  }
+
+  const handleSaveFilePathSettings = async () => {
+    try {
+      const [outputResult, workflowResult] = await Promise.all([
+        window.electronAPI?.setSetting?.(OUTPUT_DIRECTORY_SETTING_KEY, outputPath.trim()),
+        window.electronAPI?.setSetting?.(WORKFLOWS_DIRECTORY_SETTING_KEY, workflowPath.trim()),
+      ])
+
+      return outputResult?.success !== false && workflowResult?.success !== false
+    } catch (error) {
+      console.error('Could not save file path settings:', error)
+      return false
+    }
+  }
+
   const handleSaveAllSettings = async () => {
     await setPexelsApiKey(pexelsApiKey.trim())
-    const connectionSaved = await handleSaveComfyConnection()
-    if (connectionSaved) {
+    const [connectionSaved, filePathsSaved] = await Promise.all([
+      handleSaveComfyConnection(),
+      handleSaveFilePathSettings(),
+    ])
+    if (connectionSaved && filePathsSaved) {
       setSettingsSaved(true)
       setTimeout(() => setSettingsSaved(false), 2000)
     } else {
@@ -302,9 +354,20 @@ function SettingsPanel() {
                   type="text"
                   value={outputPath}
                   onChange={(e) => setOutputPath(e.target.value)}
+                  placeholder={OUTPUT_DIRECTORY_PLACEHOLDER}
                   className="flex-1 min-w-0 bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-[10px] text-sf-text-primary focus:outline-none focus:border-sf-accent truncate"
                 />
-                <button className="px-2 py-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleChooseDirectory({
+                      title: 'Select Output Directory',
+                      currentPath: outputPath,
+                      onSelect: setOutputPath,
+                    })
+                  }}
+                  className="px-2 py-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors flex-shrink-0"
+                >
                   ...
                 </button>
               </div>
@@ -316,9 +379,20 @@ function SettingsPanel() {
                   type="text"
                   value={workflowPath}
                   onChange={(e) => setWorkflowPath(e.target.value)}
+                  placeholder={WORKFLOWS_DIRECTORY_PLACEHOLDER}
                   className="flex-1 min-w-0 bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-[10px] text-sf-text-primary focus:outline-none focus:border-sf-accent truncate"
                 />
-                <button className="px-2 py-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleChooseDirectory({
+                      title: 'Select Workflows Directory',
+                      currentPath: workflowPath,
+                      onSelect: setWorkflowPath,
+                    })
+                  }}
+                  className="px-2 py-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors flex-shrink-0"
+                >
                   ...
                 </button>
               </div>

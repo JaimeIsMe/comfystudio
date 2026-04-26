@@ -163,14 +163,16 @@ function randomizedShotDurationSeconds(baseSeed, sceneIndex, shotIndex) {
   return Number(duration.toFixed(2))
 }
 
-function parseOptionalShotDurationSeconds(value, fallback) {
+function parseOptionalShotDurationSeconds(value, fallback, options = {}) {
   const text = String(value || '').trim()
   if (!text) return fallback
   const match = text.match(/(\d+(?:\.\d+)?)/)
   if (!match) return fallback
   const parsed = Number(match[1])
   if (!Number.isFinite(parsed)) return fallback
-  return Number(Math.min(5, Math.max(2, parsed)).toFixed(2))
+  const min = Math.max(0.1, Number(options.minShotDurationSeconds) || 2)
+  const max = Math.max(min, Number(options.maxShotDurationSeconds) || 5)
+  return Number(Math.min(max, Math.max(min, parsed)).toFixed(2))
 }
 
 function parseOptionalShotTakes(value, fallback) {
@@ -198,6 +200,8 @@ export function parseStructuredDirectorScript(script = '', options = {}) {
 
   const takesPerAngle = Math.max(1, Number(options.takesPerAngle) || 1)
   const targetDurationSeconds = Math.max(5, Number(options.targetDurationSeconds) || 30)
+  const minShotDurationSeconds = Math.max(0.1, Number(options.minShotDurationSeconds) || 2)
+  const maxShotDurationSeconds = Math.max(minShotDurationSeconds, Number(options.maxShotDurationSeconds) || 5)
   const variationSeed = Math.max(0, Number(options.variationSeed) || 0)
   const styleNotes = sanitizeSnippet(options.styleNotes || '', 220)
   const anglePresets = Array.isArray(options.anglePresets) && options.anglePresets.length > 0
@@ -260,7 +264,10 @@ export function parseStructuredDirectorScript(script = '', options = {}) {
       beat: videoBeat,
       imageBeat,
       videoBeat,
-      durationSeconds: parseOptionalShotDurationSeconds(currentShot.duration, fallbackDuration),
+      durationSeconds: parseOptionalShotDurationSeconds(currentShot.duration, fallbackDuration, {
+        minShotDurationSeconds,
+        maxShotDurationSeconds,
+      }),
       takesPerAngle: parseOptionalShotTakes(currentShot.takes, takesPerAngle),
       angles: [shotType || fallbackAngle],
       cameraPresetId: 'auto',

@@ -482,9 +482,9 @@ export const MODEL_INSTALL_RECIPES = Object.freeze({
     licenseUrl: 'https://huggingface.co/Lightricks/LTX-2.3',
     notes: 'Downloaded from the official Lightricks repo and saved under the workflow-expected filename.',
   }),
-  [modelKey('upscale_models', 'ltx-2.3-spatial-upscaler-x2-1.1.safetensors')]: createModelRecipe({
+  [modelKey('latent_upscale_models', 'ltx-2.3-spatial-upscaler-x2-1.1.safetensors')]: createModelRecipe({
     filename: 'ltx-2.3-spatial-upscaler-x2-1.1.safetensors',
-    targetSubdir: 'upscale_models',
+    targetSubdir: 'latent_upscale_models',
     displayName: 'LTX 2.3 spatial upscaler x2',
     downloadUrl: hfResolve('Lightricks/LTX-2.3', 'ltx-2.3-spatial-upscaler-x2-1.1.safetensors'),
     sourceUrl: hfBlob('Lightricks/LTX-2.3', 'ltx-2.3-spatial-upscaler-x2-1.1.safetensors'),

@@ -161,7 +161,7 @@ export const WORKFLOW_DEPENDENCY_PACKS = Object.freeze({
         classType: 'LatentUpscaleModelLoader',
         inputKey: 'model_name',
         filename: 'ltx-2.3-spatial-upscaler-x2-1.1.safetensors',
-        targetSubdir: 'upscale_models',
+        targetSubdir: 'latent_upscale_models',
       },
     ]),
     docsUrl: COMFY_REGISTRY_URL,
@@ -300,7 +300,7 @@ export const WORKFLOW_DEPENDENCY_PACKS = Object.freeze({
         classType: 'LatentUpscaleModelLoader',
         inputKey: 'model_name',
         filename: 'ltx-2.3-spatial-upscaler-x2-1.1.safetensors',
-        targetSubdir: 'upscale_models',
+        targetSubdir: 'latent_upscale_models',
       },
       {
         classType: 'MelBandRoFormerModelLoader',

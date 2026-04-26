@@ -59,6 +59,7 @@ import {
   MUSIC_VIDEO_AUDIO_KIND_OPTIONS,
   MUSIC_VIDEO_CAST_ROLE_OPTIONS,
   MUSIC_VIDEO_SCRIPT_TEMPLATE,
+  MUSIC_VIDEO_SHOT_DEFAULTS,
   MUSIC_VIDEO_SHOT_WORKFLOW_ID,
   VOCAL_EXTRACT_WORKFLOW_ID,
   clampMusicVideoShotLength,
@@ -436,7 +437,9 @@ function formatReferenceConsistencyLabel(consistency = 'medium') {
   return 'Medium'
 }
 
-function normalizeShotForScene(sceneId, shot, shotIndex, fallback = {}) {
+function normalizeShotForScene(sceneId, shot, shotIndex, fallback = {}, options = {}) {
+  const minDurationSeconds = Math.max(0.1, Number(options.minDurationSeconds) || 2)
+  const maxDurationSeconds = Math.max(minDurationSeconds, Number(options.maxDurationSeconds) || 5)
   const fallbackAngles = parseAnglesInput(fallback?.angles || ['Medium shot'])
   const parsedAngles = parseAnglesInput(shot?.angles)
   const fallbackBeat = String(fallback?.videoBeat || fallback?.imageBeat || fallback?.beat || '').trim()
@@ -446,9 +449,9 @@ function normalizeShotForScene(sceneId, shot, shotIndex, fallback = {}) {
   const cameraDirection = String(shot?.cameraDirection || fallback?.cameraDirection || '').trim()
   const duration = clampNumberValue(
     shot?.durationSeconds,
-    2,
-    5,
-    clampNumberValue(fallback?.durationSeconds, 2, 5, 3)
+    minDurationSeconds,
+    maxDurationSeconds,
+    clampNumberValue(fallback?.durationSeconds, minDurationSeconds, maxDurationSeconds, 3)
   )
   const takes = clampNumberValue(
     shot?.takesPerAngle,
@@ -621,6 +624,8 @@ function buildMusicVideoPlanFromScript(options = {}) {
     targetDurationSeconds: targetDuration,
     variationSeed: 0,
     styleNotes: '',
+    minShotDurationSeconds: MUSIC_VIDEO_SHOT_DEFAULTS.minShotLengthSeconds,
+    maxShotDurationSeconds: MUSIC_VIDEO_SHOT_DEFAULTS.maxShotLengthSeconds,
   })
   if (!Array.isArray(parsed) || parsed.length === 0) {
     return { scenes: [], warnings }
@@ -3698,7 +3703,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     workflowId,
   ])
 
-  const normalizeGeneratedYoloPlan = useCallback((rawPlan = []) => (
+  const normalizeGeneratedYoloPlan = useCallback((rawPlan = [], options = {}) => (
     rawPlan.map((scene, sceneIndex) => {
       const sceneId = `S${sceneIndex + 1}`
       return {
@@ -3706,7 +3711,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         id: sceneId,
         index: sceneIndex + 1,
         shots: (scene.shots || []).map((shot, shotIndex) => (
-          normalizeShotForScene(sceneId, shot, shotIndex, shot)
+          normalizeShotForScene(sceneId, shot, shotIndex, shot, options)
         )),
       }
     })
@@ -3831,7 +3836,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         altLabel: String(targetSlot.label || ''),
       }
       : { type: 'master', altSlotId: null, altLabel: 'Master Performance' }
-    const normalizedPlan = normalizeGeneratedYoloPlan(nextPlan).map((scene) => ({
+    const normalizedPlan = normalizeGeneratedYoloPlan(nextPlan, {
+      minDurationSeconds: MUSIC_VIDEO_SHOT_DEFAULTS.minShotLengthSeconds,
+      maxDurationSeconds: MUSIC_VIDEO_SHOT_DEFAULTS.maxShotLengthSeconds,
+    }).map((scene) => ({
       ...scene,
       pass: passMeta,
     }))

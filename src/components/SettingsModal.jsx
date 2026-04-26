@@ -38,6 +38,10 @@ import {
 } from '../services/localComfyConnection'
 
 const AUTO_IMPORT_KEY = 'comfystudio-auto-import-comfy-outputs'
+const OUTPUT_DIRECTORY_SETTING_KEY = 'outputDirectory'
+const WORKFLOWS_DIRECTORY_SETTING_KEY = 'workflowsDirectory'
+const OUTPUT_DIRECTORY_PLACEHOLDER = 'C:\\Users\\...\\ComfyStudio\\outputs'
+const WORKFLOWS_DIRECTORY_PLACEHOLDER = 'C:\\Users\\...\\ComfyUI\\workflow_API'
 
 const SETTINGS_SECTIONS = [
   {
@@ -139,8 +143,8 @@ function GeneralTab({ initialSection = null }) {
     status: 'idle',
     message: `Local endpoint: ${initialComfyConnection.httpBase}`,
   })
-  const [outputPath, setOutputPath] = useState('C:\\Users\\...\\ComfyStudio\\outputs')
-  const [workflowPath, setWorkflowPath] = useState('C:\\Users\\...\\ComfyUI\\workflow_API')
+  const [outputPath, setOutputPath] = useState('')
+  const [workflowPath, setWorkflowPath] = useState('')
   const [activeThemeId, setActiveThemeId] = useState(() => getStoredThemeId())
   const [pexelsApiKey, setPexelsApiKeyLocal] = useState('')
   const [comfyOrgApiKey, setComfyOrgApiKey] = useState('')
@@ -185,6 +189,18 @@ function GeneralTab({ initialSection = null }) {
   useEffect(() => {
     getPexelsApiKey().then((key) => setPexelsApiKeyLocal(key || ''))
     ;(async () => {
+      try {
+        const [storedOutputPath, storedWorkflowPath] = await Promise.all([
+          window.electronAPI?.getSetting?.(OUTPUT_DIRECTORY_SETTING_KEY),
+          window.electronAPI?.getSetting?.(WORKFLOWS_DIRECTORY_SETTING_KEY),
+        ])
+        setOutputPath(String(storedOutputPath || ''))
+        setWorkflowPath(String(storedWorkflowPath || ''))
+      } catch {
+        setOutputPath('')
+        setWorkflowPath('')
+      }
+
       try {
         setEditorHotkeysState(await getEditorHotkeys())
       } catch {
@@ -353,11 +369,45 @@ function GeneralTab({ initialSection = null }) {
     })
   }
 
+  const handleChooseDirectory = async ({ title, currentPath, onSelect }) => {
+    if (!window.electronAPI?.selectDirectory) {
+      console.warn('Directory picker is not available in this environment.')
+      return
+    }
+
+    try {
+      const selectedPath = await window.electronAPI.selectDirectory({
+        title,
+        defaultPath: currentPath || undefined,
+      })
+      if (selectedPath) onSelect(selectedPath)
+    } catch (error) {
+      console.error('Could not open directory picker:', error)
+    }
+  }
+
+  const handleSaveFilePathSettings = async () => {
+    try {
+      const [outputResult, workflowResult] = await Promise.all([
+        window.electronAPI?.setSetting?.(OUTPUT_DIRECTORY_SETTING_KEY, outputPath.trim()),
+        window.electronAPI?.setSetting?.(WORKFLOWS_DIRECTORY_SETTING_KEY, workflowPath.trim()),
+      ])
+
+      return outputResult?.success !== false && workflowResult?.success !== false
+    } catch (error) {
+      console.error('Could not save file path settings:', error)
+      return false
+    }
+  }
+
   const handleSaveAllSettings = async () => {
     await setPexelsApiKey(pexelsApiKey.trim())
     await setEditorHotkeys(editorHotkeys)
-    const connectionSaved = await handleSaveComfyConnection()
-    if (connectionSaved) {
+    const [connectionSaved, filePathsSaved] = await Promise.all([
+      handleSaveComfyConnection(),
+      handleSaveFilePathSettings(),
+    ])
+    if (connectionSaved && filePathsSaved) {
       setSettingsSaved(true)
       setTimeout(() => setSettingsSaved(false), 2000)
     } else {
@@ -605,9 +655,20 @@ function GeneralTab({ initialSection = null }) {
                 type="text"
                 value={outputPath}
                 onChange={(e) => setOutputPath(e.target.value)}
+                placeholder={OUTPUT_DIRECTORY_PLACEHOLDER}
                 className="flex-1 min-w-0 bg-sf-dark-800 border border-sf-dark-600 rounded px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent truncate"
               />
-              <button className="px-3 py-2 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-xs text-sf-text-secondary transition-colors flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  void handleChooseDirectory({
+                    title: 'Select Output Directory',
+                    currentPath: outputPath,
+                    onSelect: setOutputPath,
+                  })
+                }}
+                className="px-3 py-2 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-xs text-sf-text-secondary transition-colors flex-shrink-0"
+              >
                 ...
               </button>
             </div>
@@ -619,9 +680,20 @@ function GeneralTab({ initialSection = null }) {
                 type="text"
                 value={workflowPath}
                 onChange={(e) => setWorkflowPath(e.target.value)}
+                placeholder={WORKFLOWS_DIRECTORY_PLACEHOLDER}
                 className="flex-1 min-w-0 bg-sf-dark-800 border border-sf-dark-600 rounded px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent truncate"
               />
-              <button className="px-3 py-2 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-xs text-sf-text-secondary transition-colors flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  void handleChooseDirectory({
+                    title: 'Select Workflows Directory',
+                    currentPath: workflowPath,
+                    onSelect: setWorkflowPath,
+                  })
+                }}
+                className="px-3 py-2 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-xs text-sf-text-secondary transition-colors flex-shrink-0"
+              >
                 ...
               </button>
             </div>
