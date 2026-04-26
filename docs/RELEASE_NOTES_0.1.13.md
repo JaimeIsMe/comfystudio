@@ -20,6 +20,13 @@
 - Updated LTX 2.3 Image-to-Video and Music Video Shot dependency metadata for the spatial upscaler
 - Kept ad-style Director Mode duration defaults short while allowing music-video plans to use longer shot durations
 
+## Before You Run A Workflow
+
+- Make sure ComfyUI itself is updated to the latest version
+- Make sure all custom nodes are updated to the latest version (use the ComfyUI Manager and update all)
+- Restart ComfyUI after updating
+- If a workflow fails with a Python or node error, the most common cause is a ComfyUI core update that requires a matching custom node update
+
 ## Known Notes
 
 - ComfyStudio still depends on a separate local ComfyUI installation
