@@ -6,6 +6,8 @@ Normal development stays on Windows.
 GitHub builds Windows and macOS for release tags.
 macOS signing and notarization happen in GitHub Actions.
 
+Future AI agents should also read `docs/AI_RELEASE_HANDOFF.md` before release work.
+
 ## One-Time Setup
 
 - Keep the release workflow on `main`: `.github/workflows/release.yml`

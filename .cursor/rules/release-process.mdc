@@ -7,6 +7,7 @@ alwaysApply: true
 
 Before doing release, packaging, tagging, publishing, or release-cleanup work:
 
+- Read `docs/AI_RELEASE_HANDOFF.md`
 - Read `docs/RELEASE_PROCESS.md`
 - Follow `.github/workflows/release.yml` for Windows and macOS release builds
 - Keep secrets only in GitHub Actions repository secrets
