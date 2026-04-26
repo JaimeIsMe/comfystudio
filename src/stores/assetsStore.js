@@ -312,7 +312,7 @@ export const useAssetsStore = create(
   },
 
   /**
-   * Remove a folder and everything inside it.
+   * Remove a folder (moves contained assets to parent folder)
    * @param {string} folderId - The folder ID to remove
    */
   removeFolder: (folderId) => {
@@ -320,43 +320,19 @@ export const useAssetsStore = create(
     const folder = state.folders.find(f => f.id === folderId)
     if (!folder) return
 
-    const deletedFolderIds = new Set([folderId])
-    let changed = true
-    while (changed) {
-      changed = false
-      for (const candidate of state.folders) {
-        if (!deletedFolderIds.has(candidate.id) && deletedFolderIds.has(candidate.parentId)) {
-          deletedFolderIds.add(candidate.id)
-          changed = true
-        }
-      }
-    }
+    // Move all assets in this folder to the parent folder
+    const updatedAssets = state.assets.map(a =>
+      a.folderId === folderId ? { ...a, folderId: folder.parentId } : a
+    )
 
-    const deletedAssetIds = new Set()
-    const updatedAssets = state.assets.filter((asset) => {
-      const shouldDelete = deletedFolderIds.has(asset.folderId || null)
-      if (shouldDelete) {
-        deletedAssetIds.add(asset.id)
-        if (asset.url && asset.url.startsWith('blob:')) {
-          try { URL.revokeObjectURL(asset.url) } catch (_) {}
-        }
-        if (asset.playbackCacheUrl && asset.playbackCacheUrl.startsWith('blob:')) {
-          try { URL.revokeObjectURL(asset.playbackCacheUrl) } catch (_) {}
-        }
-        if (asset.proxyUrl && asset.proxyUrl.startsWith('blob:')) {
-          try { URL.revokeObjectURL(asset.proxyUrl) } catch (_) {}
-        }
-      }
-      return !shouldDelete
-    })
-
-    const updatedFolders = state.folders.filter(f => !deletedFolderIds.has(f.id))
+    // Move all subfolders to the parent folder
+    const updatedFolders = state.folders
+      .filter(f => f.id !== folderId)
+      .map(f => f.parentId === folderId ? { ...f, parentId: folder.parentId } : f)
 
     set({
       assets: updatedAssets,
-      folders: updatedFolders,
-      currentPreview: state.currentPreview && deletedAssetIds.has(state.currentPreview.id) ? null : state.currentPreview,
-      isPlaying: state.currentPreview && deletedAssetIds.has(state.currentPreview.id) ? false : state.isPlaying,
+      folders: updatedFolders
     })
   },
 

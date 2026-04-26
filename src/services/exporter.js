@@ -12,7 +12,6 @@ import {
 import { getAudioClipFadeGain, getAudioClipFadeValues } from '../utils/audioClipFades'
 import { getAudioClipLinearGain, normalizeAudioClipGainDb } from '../utils/audioClipGain'
 import {
-  applyBlurPassesToCanvas,
   applyEffectsToTransform,
   applyGlowPassesToCanvas,
   applyPixelEffectsToImageData,
@@ -512,12 +511,10 @@ const hasManagedPixelOrVignetteEffect = (clip, clipTime) => {
 const applyClipManagedEffectsToOffCanvas = (offCanvas, offCtx, width, height, clip, clipTime, frameIndex) => {
   if (!clip) return
   const effects = clip.effects || []
-  // Blur effects run as canvas passes before per-pixel damage/glow overlays.
-  applyBlurPassesToCanvas(offCanvas, offCtx, width, height, effects, clipTime)
-  // CA + film grain + VHS damage: ImageData pass. applyPixelEffectsToImageData silently
-  // skips glow/blur, so this stays fast when only canvas-pass effects are enabled.
+  // CA + film grain: ImageData pass. applyPixelEffectsToImageData silently
+  // skips glow, so this stays fast when only glow is enabled.
   const hasCAorGrain = effects.some((e) => (
-    e && e.enabled !== false && (e.type === 'chromaticAberration' || e.type === 'filmGrain' || e.type === 'vhsDamage')
+    e && e.enabled !== false && (e.type === 'chromaticAberration' || e.type === 'filmGrain')
   ))
   if (hasCAorGrain) {
     const imageData = offCtx.getImageData(0, 0, width, height)

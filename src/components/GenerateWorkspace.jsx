@@ -16,7 +16,6 @@ import useProjectStore from '../stores/projectStore'
 import { useFrameForAIStore } from '../stores/frameForAIStore'
 import { BUILTIN_WORKFLOW_PATHS } from '../config/workflowRegistry'
 import { comfyui } from '../services/comfyui'
-import { formatCaptionCuesAsSrt, transcribeWithComfyUI } from '../services/captionComfyTranscription'
 import { markPromptHandledByApp } from '../services/comfyPromptGuard'
 import { getProjectFileUrl, importAsset, isElectron } from '../services/fileSystem'
 import { enqueuePlaybackTranscode } from '../services/playbackCache'
@@ -539,7 +538,7 @@ function composeMusicShotVideoPrompt({
  * the per-shot keyframe still. Built from the script's Keyframe prompt plus
  * shot-type-specific framing cues (close / wide / b-roll).
  *
- * This is the prompt the stills workflow (nano-banana-2 / Qwen Image Edit)
+ * This is the prompt the stills workflow (nano-banana-2 / z-image-turbo)
  * renders against; the artist reference image (if set) anchors identity.
  */
 function composeMusicShotReferencePrompt({
@@ -1776,8 +1775,6 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   // Planner warnings surfaced next to the build button: unresolved Artist: /
   // [Name] tags, too-many-artists overflow, etc. Advisory — does not block.
   const [yoloMusicPlanWarnings, setYoloMusicPlanWarnings] = useState([])
-  const [yoloMusicTranscribingLyrics, setYoloMusicTranscribingLyrics] = useState(false)
-  const [yoloMusicTranscriptionStatus, setYoloMusicTranscriptionStatus] = useState('')
 
   // Generation queue state
   const [generationQueue, setGenerationQueue] = useState([])
@@ -2683,7 +2680,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
               case 'ok':       return `Parses cleanly · ${parse.shotCount} shots`
               case 'warning':  return `Parses with ${parse.warnings.length} warning${parse.warnings.length === 1 ? '' : 's'}`
               case 'unparsed': return 'Script pasted but could not be parsed — check the shot grammar.'
-              case 'empty':    return 'Empty — paste the chat AI script output into the textarea to parse.'
+              case 'empty':    return 'Empty — paste the LLM output into the textarea to parse.'
               default:         return ''
             }
           })()
@@ -2818,7 +2815,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       : yoloAdVideoProfile?.videoWorkflowId
   ).trim()
   const yoloStoryboardSupportsReferenceAnchors = useMemo(() => (
-    ['nano-banana-2', 'nano-banana-pro', 'image-edit', 'image-edit-model-product', 'seedream-5-lite-image-edit'].includes(String(yoloStoryboardWorkflowId || '').trim())
+    ['nano-banana-2', 'nano-banana-pro', 'image-edit-model-product', 'seedream-5-lite-image-edit'].includes(String(yoloStoryboardWorkflowId || '').trim())
   ), [yoloStoryboardWorkflowId])
   const yoloSelectedVideoWorkflowIds = useMemo(
     () => (yoloDefaultVideoWorkflowId ? [yoloDefaultVideoWorkflowId] : []),
@@ -3796,7 +3793,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     }
     if (!String(scriptContent || '').trim()) {
       setFormError(isAltTarget
-        ? 'This alt pass has no script yet — paste the chat AI script output into it first.'
+        ? 'This alt pass has no script yet — paste the LLM output into it first.'
         : 'Write a director script first (tip: click "Start from template")')
       return null
     }
@@ -4023,59 +4020,6 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     )))
   }, [])
 
-  const handleTranscribeMusicLyrics = useCallback(async () => {
-    if (yoloMusicTranscribingLyrics) return
-    if (!yoloMusicAudioAsset) {
-      setFormError('Select the song or vocal stem audio asset before transcribing timed lyrics.')
-      return
-    }
-    if (yoloMusicAudioAsset.type !== 'audio') {
-      setFormError('Timed lyrics transcription needs an audio asset. Pick the song or vocal stem in the Music Video setup.')
-      return
-    }
-    const existingLyrics = String(yoloMusicLyrics || '').trim()
-    if (existingLyrics && typeof window !== 'undefined') {
-      const shouldReplace = window.confirm('Replace the current Lyrics field with a freshly transcribed SRT?')
-      if (!shouldReplace) return
-    }
-    const depsOk = await validateDependenciesForQueue(
-      ['caption-qwen-asr'],
-      'music video timed-lyrics transcription'
-    )
-    if (!depsOk) return
-
-    setYoloMusicTranscribingLyrics(true)
-    setYoloMusicTranscriptionStatus('Starting Qwen ASR transcription…')
-    setFormError(null)
-    try {
-      const transcription = await transcribeWithComfyUI(yoloMusicAudioAsset, {
-        onProgress: (progress = {}) => {
-          if (progress?.message) setYoloMusicTranscriptionStatus(progress.message)
-        },
-      })
-      const srt = formatCaptionCuesAsSrt(transcription?.cues || [])
-      if (!srt.trim()) {
-        throw new Error('Qwen ASR finished, but no timed lyric cues were returned.')
-      }
-      setYoloMusicLyrics(srt)
-      setYoloMusicTranscriptionStatus(`Timed lyrics ready: ${transcription.cues.length} SRT cue${transcription.cues.length === 1 ? '' : 's'}.`)
-      addComfyLog('info', `Music Video timed lyrics transcribed with Qwen ASR (${transcription.cues.length} cues).`)
-    } catch (error) {
-      const message = error?.message || 'Could not transcribe timed lyrics.'
-      setYoloMusicTranscriptionStatus('')
-      setFormError(message)
-      addComfyLog('error', message)
-    } finally {
-      setYoloMusicTranscribingLyrics(false)
-    }
-  }, [
-    addComfyLog,
-    validateDependenciesForQueue,
-    yoloMusicAudioAsset,
-    yoloMusicLyrics,
-    yoloMusicTranscribingLyrics,
-  ])
-
   /**
    * Build the LLM prompt for a given pass configuration using the current
    * song/cast/concept context plus the current master script. Shared by
@@ -4217,36 +4161,14 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       return Number.isFinite(parsed) ? parsed : fallback
     }
     const usesModelProductStoryboardWorkflow = yoloStoryboardWorkflowId === 'image-edit-model-product'
-    const usesSingleInputQwenStoryboardWorkflow = yoloStoryboardWorkflowId === 'image-edit'
-    if (isYoloMusicMode && usesSingleInputQwenStoryboardWorkflow) {
-      const hasAnyMusicReference = variantsToQueue.some((variant) => {
-        const resolvedIds = Array.isArray(variant?.resolvedArtistAssetIds) ? variant.resolvedArtistAssetIds : []
-        return Boolean(resolvedIds[0] || yoloMusicArtistAsset?.id || yoloMusicResolvedCast?.[0]?.assetId)
-      })
-      if (!hasAnyMusicReference) {
-        setFormError('Draft music storyboards use Qwen Image Edit and need a cast/artist reference image. Add a cast member in the Script tab, then build the plan again.')
-        return 0
-      }
-    }
+    const storyboardInputAsset = usesModelProductStoryboardWorkflow
+      ? (yoloAdModelAsset || yoloAdProductAsset || null)
+      : null
     const jobs = variantsToQueue.map((variant, index) => {
       const sceneNum = extractNumericId(variant.sceneId, index + 1)
       const shotNum = extractNumericId(variant.shotId, 1)
       const angleNum = extractNumericId(variant.angle, 1)
       const takeNum = extractNumericId(variant.take, 1)
-      const resolvedArtistAssetIds = Array.isArray(variant.resolvedArtistAssetIds) ? variant.resolvedArtistAssetIds : []
-      const musicPrimaryArtistAssetId = isYoloMusicMode
-        ? (resolvedArtistAssetIds[0] || yoloMusicArtistAsset?.id || yoloMusicResolvedCast?.[0]?.assetId || null)
-        : null
-      const musicSecondaryArtistAssetId = isYoloMusicMode
-        ? (resolvedArtistAssetIds[1] || null)
-        : null
-      const storyboardInputAsset = usesModelProductStoryboardWorkflow
-        ? (isYoloMusicMode
-            ? (assets.find((asset) => asset.id === musicPrimaryArtistAssetId) || null)
-            : (yoloAdModelAsset || yoloAdProductAsset || null))
-        : (isYoloMusicMode && usesSingleInputQwenStoryboardWorkflow
-            ? (assets.find((asset) => asset.id === musicPrimaryArtistAssetId) || null)
-            : null)
       // Keep consistency behavior, but ensure each take gets a distinct seed.
       const strictSeed = Number(seed) + (sceneNum * 1000) + (shotNum * 10) + takeNum
       const mediumSeed = Number(seed) + (sceneNum * 100000) + (shotNum * 1000) + (angleNum * 100) + (takeNum * 10)
@@ -4262,7 +4184,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         category: 'image',
         workflowId: yoloStoryboardWorkflowId,
         workflowLabel: `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel} Keyframe (${yoloStoryboardWorkflowId})`,
-        needsImage: Boolean(storyboardInputAsset) && (usesModelProductStoryboardWorkflow || usesSingleInputQwenStoryboardWorkflow),
+        needsImage: usesModelProductStoryboardWorkflow,
         prompt: variant.storyboardPrompt || variant.prompt,
         seed: storyboardSeed,
         inputAssetId: storyboardInputAsset?.id || null,
@@ -4275,18 +4197,13 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         // unresolved), we fall back to the legacy single-artist asset. If
         // that's unset too, the storyboard runs reference-free.
         //
-        // Music draft uses Qwen Image Edit, which needs the primary artist as
-        // the main input image. Additional resolved singers are still passed as
-        // reference slots.
+        // z-image-turbo ignores references silently — a warning is surfaced
+        // in the Script tab when an artist is picked with that workflow.
         referenceAssetId1: isYoloMusicMode
-          ? (usesSingleInputQwenStoryboardWorkflow
-              ? musicSecondaryArtistAssetId
-              : musicPrimaryArtistAssetId)
+          ? (variant.resolvedArtistAssetIds?.[0] || yoloMusicArtistAsset?.id || null)
           : (yoloAdProductAsset?.id || null),
         referenceAssetId2: isYoloMusicMode
-          ? (usesSingleInputQwenStoryboardWorkflow
-              ? null
-              : musicSecondaryArtistAssetId)
+          ? (variant.resolvedArtistAssetIds?.[1] || null)
           : (yoloAdModelAsset?.id || null),
         directorLabel: yoloQueueNameLabel,
         yolo: {
@@ -4315,7 +4232,6 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     return jobs.length
   }, [
     addComfyLog,
-    assets,
     confirmLargeQueueBatch,
     createQueuedJob,
     generationQueue,
@@ -4328,7 +4244,6 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicArtistAsset,
     yoloMusicArtistAsset?.id,
     yoloMusicQualityProfile,
-    yoloMusicResolvedCast,
     yoloNormalizedAdStoryboardTier,
     yoloAdProductAsset,
     yoloAdProductAsset?.id,
@@ -6611,43 +6526,22 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                             <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">
                               Lyrics (plain text, SRT, or LRC)
                             </label>
-                            <div className="flex items-center gap-2">
-                              {yoloMusicParsedLyrics.isTimed && yoloMusicParsedLyrics.lines.length > 0 && (
-                                <span className="text-[10px] text-emerald-400">
-                                  {yoloMusicParsedLyrics.format.toUpperCase()} · {yoloMusicParsedLyrics.lines.length} timed lines
-                                </span>
-                              )}
-                              {yoloMusicParsedLyrics.format === 'unknown' && yoloMusicLyrics.trim() && (
-                                <span className="text-[10px] text-sf-text-muted">Plain text · {parseLyricLines(yoloMusicLyrics).length} lines</span>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => { void handleTranscribeMusicLyrics() }}
-                                disabled={yoloMusicTranscribingLyrics || !yoloMusicAudioAsset}
-                                title={yoloMusicAudioAsset ? 'Run the existing Qwen ASR caption workflow and paste the result as SRT timed lyrics.' : 'Pick a song audio asset first.'}
-                                className={`inline-flex items-center gap-1 px-2 py-1 rounded border text-[10px] transition-colors ${
-                                  yoloMusicTranscribingLyrics || !yoloMusicAudioAsset
-                                    ? 'border-sf-dark-700 text-sf-text-muted cursor-not-allowed opacity-60'
-                                    : 'border-sf-accent/50 bg-sf-accent/10 text-sf-accent hover:bg-sf-accent/20'
-                                }`}
-                              >
-                                {yoloMusicTranscribingLyrics ? <Loader2 className="w-3 h-3 animate-spin" /> : <Mic className="w-3 h-3" />}
-                                {yoloMusicTranscribingLyrics ? 'Transcribing…' : 'Transcribe to SRT'}
-                              </button>
-                            </div>
+                            {yoloMusicParsedLyrics.isTimed && yoloMusicParsedLyrics.lines.length > 0 && (
+                              <span className="text-[10px] text-emerald-400">
+                                {yoloMusicParsedLyrics.format.toUpperCase()} · {yoloMusicParsedLyrics.lines.length} timed lines
+                              </span>
+                            )}
+                            {yoloMusicParsedLyrics.format === 'unknown' && yoloMusicLyrics.trim() && (
+                              <span className="text-[10px] text-sf-text-muted">Plain text · {parseLyricLines(yoloMusicLyrics).length} lines</span>
+                            )}
                           </div>
                           <textarea
                             value={yoloMusicLyrics}
                             onChange={e => setYoloMusicLyrics(e.target.value)}
                             rows={10}
                             className={`mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y ${yoloMusicParsedLyrics.isTimed ? 'font-mono' : ''}`}
-                            placeholder={'Paste the song lyrics here — plain text, SRT, or LRC (auto-detected).\n\nPlain text (no timings — estimated evenly):\n[Rose]\nYou paint your eyelids with correction fluid moons\nChewed up saints on the floor\n\n[Jake]\nSwollen sound inside my head\n\nSRT (recommended — real timings):\n1\n00:00:08,500 --> 00:00:12,300\nYou paint your eyelids with correction fluid moons\n\n2\n00:00:12,400 --> 00:00:16,800\nChewed up saints on the floor\n\nLRC:\n[00:08.50]You paint your eyelids with correction fluid moons\n[00:12.40]Chewed up saints on the floor\n\nTip: pick a Song Audio asset above, then click Transcribe to SRT to generate timed lyrics with the same Qwen ASR workflow used by timeline captions.'}
+                            placeholder={'Paste the song lyrics here — plain text, SRT, or LRC (auto-detected).\n\nPlain text (no timings — estimated evenly):\n[Rose]\nYou paint your eyelids with correction fluid moons\nChewed up saints on the floor\n\n[Jake]\nSwollen sound inside my head\n\nSRT (recommended — real timings):\n1\n00:00:08,500 --> 00:00:12,300\nYou paint your eyelids with correction fluid moons\n\n2\n00:00:12,400 --> 00:00:16,800\nChewed up saints on the floor\n\nLRC:\n[00:08.50]You paint your eyelids with correction fluid moons\n[00:12.40]Chewed up saints on the floor\n\nTip: generate an SRT automatically with Whisper, Subtitle Edit, or ElevenLabs STT for perfect lip-sync timing.'}
                           />
-                          {yoloMusicTranscriptionStatus && (
-                            <div className="mt-1 text-[10px] text-sky-300">
-                              {yoloMusicTranscriptionStatus}
-                            </div>
-                          )}
                           {yoloMusicParsedLyrics.error && (
                             <div className="mt-1 text-[10px] text-amber-400">
                               {yoloMusicParsedLyrics.error}
@@ -6774,12 +6668,12 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                               Reference cast in your script with <span className="font-mono text-sf-text-secondary">Artist: rose</span>, <span className="font-mono text-sf-text-secondary">Artist: jake</span>, or <span className="font-mono text-sf-text-secondary">Artist: both</span> (also <span className="font-mono">all</span> / <span className="font-mono">band</span>). In lyrics, drop a tag line above the verse: <span className="font-mono text-sf-text-secondary">[Rose]</span>, <span className="font-mono text-sf-text-secondary">[Jake]</span>, <span className="font-mono text-sf-text-secondary">[Rose, Jake]</span>. Section markers like <span className="font-mono">[Chorus]</span> and <span className="font-mono">[Verse 1]</span> are ignored.
                             </div>
                             <div className="mt-1">
-                              Works best with storyboard workflows that accept references. Draft uses local Qwen Image Edit 2509; balanced and premium use nano-banana-2.
+                              Works best with storyboard workflows that accept references (e.g. nano-banana-2). z-image-turbo ignores references — switch in the Setup tab if you need identity lock.
                             </div>
                           </div>
                           {yoloMusicResolvedCast.length > 0 && yoloStoryboardWorkflowId === 'z-image-turbo' && (
                             <div className="mt-1 text-[10px] text-yellow-400">
-                              Heads up: z-image-turbo does not accept reference images, so cast references will be ignored during the keyframe pass.
+                              Heads up: z-image-turbo does not accept reference images, so cast references will be ignored during the keyframe pass. Pick nano-banana-2 or image-edit-model-product in the Setup tab to lock identity.
                             </div>
                           )}
                         </div>
@@ -6836,15 +6730,12 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                                       })
                                       void copyTextToClipboard(llmPrompt)
                                     }}
-                                    title="Copy a ready-to-paste prompt for ChatGPT, Claude, Gemini, or another chat AI. Paste its script back into this Director Script box."
+                                    title="Copy a ready-to-paste prompt (cast + concept + lyrics/SRT + strict format spec) you can hand to Claude/GPT/Gemini to generate a timing-correct script."
                                     className="px-2 py-1 rounded border border-sf-accent/50 bg-sf-accent/10 text-[10px] text-sf-accent hover:bg-sf-accent/20 transition-colors"
                                   >
-                                    Copy Prompt for ChatGPT / Claude / Gemini
+                                    Copy LLM Prompt
                                   </button>
                                 </div>
-                              </div>
-                              <div className="mt-1 text-[10px] text-sf-text-muted">
-                                Paste the copied prompt into ChatGPT, Claude, Gemini, or another chat AI. Then copy the AI&apos;s Director script response back into this box.
                               </div>
                               <div className="mt-2 flex flex-wrap items-center gap-2">
                                 <span className="text-[10px] uppercase tracking-wider text-sf-text-muted">
@@ -6865,7 +6756,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                                     if (!variant || !variant.trim()) return
                                     handleCreateMusicAltScript({ passType: 'alt_performance', variantDescriptor: variant.trim() })
                                   }}
-                                  title="Second performance pass in a different setting (car, rooftop, etc.) that intercuts with the master. Creates a new tab and copies a chat AI prompt."
+                                  title="Second performance pass in a different setting (car, rooftop, etc.) that intercuts with the master. Creates a new tab and copies the LLM prompt."
                                   className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
                                 >
                                   + Alt Performance
@@ -6875,7 +6766,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                                   onClick={() => {
                                     handleCreateMusicAltScript({ passType: 'environmental_broll' })
                                   }}
-                                  title="No-performer b-roll of the world: empty rooms, exteriors, weather, landscapes. Creates a new tab and copies a chat AI prompt."
+                                  title="No-performer b-roll of the world: empty rooms, exteriors, weather, landscapes. Creates a new tab and copies the LLM prompt."
                                   className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
                                 >
                                   + Environmental B-roll
@@ -6885,7 +6776,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                                   onClick={() => {
                                     handleCreateMusicAltScript({ passType: 'detail_broll' })
                                   }}
-                                  title="Tight macro/insert b-roll: gear, objects, hands, textures. Creates a new tab and copies a chat AI prompt."
+                                  title="Tight macro/insert b-roll: gear, objects, hands, textures. Creates a new tab and copies the LLM prompt."
                                   className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
                                 >
                                   + Detail B-roll
@@ -6928,10 +6819,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                                     })
                                     void copyTextToClipboard(prompt)
                                   }}
-                                  title="Copy this pass prompt for ChatGPT, Claude, Gemini, or another chat AI using the current master script."
+                                  title="Re-copy this pass's LLM prompt using the CURRENT master script. Useful when the master changed after the pass was first created."
                                   className="px-2 py-1 rounded border border-sf-accent/50 bg-sf-accent/10 text-[10px] text-sf-accent hover:bg-sf-accent/20 transition-colors"
                                 >
-                                  Copy Prompt for Chat AI
+                                  Re-copy LLM Prompt
                                 </button>
                                 <button
                                   type="button"
@@ -6958,7 +6849,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                             className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y font-mono"
                             placeholder={yoloMusicIsMasterActive
                               ? 'Shot 1: ...\nStart at: 0:00\nLyric moment: "..."\nShot type: performance | performance_wide | b_roll\nArtist: rose | jake | both\nKeyframe prompt: ...\nMotion prompt: ...\nCamera: ...\nLength: 3\n\nShot 2: ...\n'
-                              : 'Paste the alt pass script from ChatGPT, Claude, Gemini, or another chat AI here.\n\nShot 1: ...\nStart at: 0:00\nShot type: b_roll\nKeyframe prompt: ...\nMotion prompt: ...\nCamera: ...\nLength: 4\n\nShot 2: ...\n'
+                              : 'Paste the alt pass output from your LLM here.\n\nShot 1: ...\nStart at: 0:00\nShot type: b_roll\nKeyframe prompt: ...\nMotion prompt: ...\nCamera: ...\nLength: 4\n\nShot 2: ...\n'
                             }
                           />
                           <div className="mt-1 text-[10px] text-sf-text-muted">
@@ -6973,7 +6864,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                             if (parse.state === 'empty') {
                               return (
                                 <div className="mt-2 rounded-lg border border-sf-dark-700 bg-sf-dark-800/40 px-3 py-2 text-[10px] text-sf-text-muted">
-                                  Paste the chat AI script above to see a parse preview (shot count, coverage, warnings).
+                                  Paste the LLM output above to see a parse preview (shot count, coverage, warnings).
                                 </div>
                               )
                             }
@@ -7089,7 +6980,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                                     ))}
                                   </div>
                                   <div className="mt-1 text-[10px] text-sf-text-muted">
-                                    Each bar is one parsed shot placed at its <span className="font-mono">Start at:</span> on the song timeline. Dark gaps are uncovered seconds — ask your chat AI to fill them if the pass needs full coverage.
+                                    Each bar is one parsed shot placed at its <span className="font-mono">Start at:</span> on the song timeline. Dark gaps are uncovered seconds — fill them in the LLM prompt if the pass needs full coverage.
                                   </div>
                                 </div>
                               )
@@ -7204,7 +7095,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                             {directorFormatExpanded && (
                               <>
                                 <div className="mt-1 text-[10px] text-sf-text-muted">
-                                  Ask your chat AI to return this exact structure. Each Shot block becomes one generated video clip. <span className="font-mono text-sf-text-secondary">Start at:</span>, Lyric moment, Artist, and Shot type are music-video-only fields; everything else mirrors the ad format. The "Copy Prompt for ChatGPT / Claude / Gemini" button assembles this plus your cast, lyrics, and SRT — paste it into ChatGPT, Claude, Gemini, or another chat AI, then paste the result back.
+                                  Ask your AI to return this exact structure. Each Shot block becomes one generated video clip. <span className="font-mono text-sf-text-secondary">Start at:</span>, Lyric moment, Artist, and Shot type are music-video-only fields; everything else mirrors the ad format. The "Copy LLM Prompt" button assembles this plus your cast, lyrics, and SRT — hand it to Claude/GPT/Gemini and paste the result back.
                                 </div>
                                 <textarea
                                   readOnly

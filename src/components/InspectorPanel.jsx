@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { 
   Move, RotateCw, Maximize2, Clock, Layers,
   ChevronDown, ChevronRight, ChevronLeft, Sparkles,
-  Zap, Eye, SlidersHorizontal,
+  Zap, Eye, SlidersHorizontal, CircleDot,
   FlipHorizontal, FlipVertical, Link, Unlink, Crop,
   Anchor, RotateCcw, Type, AlignLeft, AlignCenter, AlignRight,
   AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd,
@@ -65,7 +65,7 @@ const INSPECTOR_SETTINGS_SCOPE_LABELS = {
   [INSPECTOR_SETTINGS_SCOPE.ADJUSTMENTS]: 'color settings',
   [INSPECTOR_SETTINGS_SCOPE.TIMING]: 'timing settings',
 }
-const TRANSFORM_SETTINGS_KEYS = ['positionX', 'positionY', 'scaleX', 'scaleY', 'scaleLinked', 'rotation', 'anchorX', 'anchorY', 'opacity', 'flipH', 'flipV', 'blendMode']
+const TRANSFORM_SETTINGS_KEYS = ['positionX', 'positionY', 'scaleX', 'scaleY', 'scaleLinked', 'rotation', 'anchorX', 'anchorY', 'opacity', 'flipH', 'flipV', 'blendMode', 'blur']
 const CROP_SETTINGS_KEYS = ['cropTop', 'cropBottom', 'cropLeft', 'cropRight']
 const TONAL_ADJUSTMENT_GROUP_LABELS = {
   shadows: 'Shadows',
@@ -564,15 +564,6 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     }
     return orderedSelectedClips[0] || null
   }, [orderedSelectedClips, inspectorClipId])
-  const selectedClipSpeed = Number.isFinite(Number(selectedClip?.speed)) && Number(selectedClip?.speed) > 0
-    ? Number(selectedClip.speed)
-    : 1
-  const selectedClipSpeedPercent = Math.round(selectedClipSpeed * 1000) / 10
-  const percentToSpeedMultiplier = useCallback((percent) => {
-    const parsed = Number(percent)
-    if (!Number.isFinite(parsed)) return 1
-    return Math.max(10, Math.min(800, parsed)) / 100
-  }, [])
   const transformHistorySessionClipRef = useRef(null)
   const adjustmentHistorySessionClipRef = useRef(null)
 
@@ -1246,6 +1237,46 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
       }))}
     </div>
   )
+
+  const renderAdjustmentBlurControl = (description = null) => {
+    const currentValue = animatedAdjustments?.blur ?? baseAdjustments?.blur ?? 0
+
+    return (
+      <div className="rounded-md border border-sf-dark-700 bg-sf-dark-800/50 p-3 space-y-3">
+        {description && (
+          <p className="text-[10px] text-sf-text-muted">
+            {description}
+          </p>
+        )}
+        <div>
+          <div className="flex justify-between items-center mb-1">
+            <label className="text-[10px] text-sf-text-muted">{ADJUSTMENT_BLUR_CONTROL.label}</label>
+            <div className="flex items-center gap-1">
+              <KeyframeButton
+                clipId={selectedClip?.id}
+                property={ADJUSTMENT_BLUR_CONTROL.key}
+                clip={selectedClip}
+                playheadPosition={playheadPosition}
+              />
+              <span className="text-[10px] text-sf-text-secondary">{ADJUSTMENT_BLUR_CONTROL.formatValue(currentValue)}</span>
+            </div>
+          </div>
+          <input
+            type="range"
+            min={ADJUSTMENT_BLUR_CONTROL.min}
+            max={ADJUSTMENT_BLUR_CONTROL.max}
+            step={ADJUSTMENT_BLUR_CONTROL.step}
+            value={currentValue}
+            onChange={(e) => handleClipAdjustmentChange(ADJUSTMENT_BLUR_CONTROL.key, Number(e.target.value))}
+            onMouseUp={(e) => handleClipAdjustmentCommit(ADJUSTMENT_BLUR_CONTROL.key, Number(e.target.value))}
+            onDoubleClick={() => handleClipAdjustmentCommit(ADJUSTMENT_BLUR_CONTROL.key, DEFAULT_ADJUSTMENT_SETTINGS.blur)}
+            title={ADJUSTMENT_BLUR_CONTROL.resetTitle}
+            className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+          />
+        </div>
+      </div>
+    )
+  }
 
   const handleCopyInspectorSettings = useCallback((scope = INSPECTOR_SETTINGS_SCOPE.ALL) => {
     const nextClipboard = buildInspectorClipboardPayload(scope)
@@ -1965,6 +1996,38 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
               />
             </div>
 
+            {/* Blur (video / image / text only) */}
+            {(selectedClip?.type === 'video' || selectedClip?.type === 'image' || selectedClip?.type === 'text') && (
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-[10px] text-sf-text-muted flex items-center gap-1">
+                    <CircleDot className="w-3 h-3" /> Blur
+                  </label>
+                  <div className="flex items-center gap-1">
+                    <KeyframeButton 
+                      clipId={selectedClip?.id} 
+                      property="blur" 
+                      clip={selectedClip}
+                      playheadPosition={playheadPosition}
+                    />
+                    <span className="text-[10px] text-sf-text-secondary">{(animatedTransform?.blur ?? transform.blur ?? 0).toFixed(1)}px</span>
+                  </div>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="50"
+                  step="0.25"
+                  value={animatedTransform?.blur ?? transform.blur ?? 0}
+                  onChange={(e) => handleTransformChange('blur', parseFloat(e.target.value))}
+                  onMouseUp={(e) => handleTransformCommit('blur', parseFloat(e.target.value))}
+                  onDoubleClick={() => handleSliderReset('blur', 0)}
+                  title="Double-click to reset to 0px"
+                  className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+                />
+              </div>
+            )}
+
             {/* Blend Mode (video / image / text only) */}
             {(selectedClip?.type === 'video' || selectedClip?.type === 'image' || selectedClip?.type === 'text') && (
               <div>
@@ -2161,7 +2224,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
               label: 'Reset Timing',
               onClick: handleResetTiming,
               disabled: !hasTimingResetChanges,
-              title: 'Reset speed to 100% and clear reverse',
+              title: 'Reset speed to 1x and clear reverse',
             }) : null,
           }),
         })}
@@ -2204,31 +2267,29 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
             {(selectedClip.type === 'video' || selectedClip.type === 'audio') && (
               <div className="space-y-2">
                 <div>
-                  <label className="text-[9px] text-sf-text-muted block mb-1">
-                    Speed <span className="text-sf-text-secondary">{selectedClipSpeedPercent.toFixed(selectedClipSpeedPercent % 1 === 0 ? 0 : 1)}%</span>
-                  </label>
+                  <label className="text-[9px] text-sf-text-muted block mb-1">Speed</label>
                   <div className="flex items-center gap-2">
                     <input
                       type="range"
-                      min="10"
-                      max="800"
-                      step="1"
-                      value={selectedClipSpeedPercent}
-                      onChange={(e) => updateClipSpeed(selectedClip.id, percentToSpeedMultiplier(e.target.value), false)}
-                      onMouseUp={(e) => updateClipSpeed(selectedClip.id, percentToSpeedMultiplier(e.target.value), true)}
+                      min="0.25"
+                      max="4"
+                      step="0.25"
+                      value={Number.isFinite(Number(selectedClip.speed)) ? Number(selectedClip.speed) : 1}
+                      onChange={(e) => updateClipSpeed(selectedClip.id, parseFloat(e.target.value) || 1, false)}
+                      onMouseUp={(e) => updateClipSpeed(selectedClip.id, parseFloat(e.target.value) || 1, true)}
                       className="flex-1"
                     />
                     <input
                       type="number"
-                      min="10"
-                      max="800"
-                      step="1"
-                      value={selectedClipSpeedPercent.toFixed(selectedClipSpeedPercent % 1 === 0 ? 0 : 1)}
-                      onChange={(e) => updateClipSpeed(selectedClip.id, percentToSpeedMultiplier(e.target.value), false)}
-                      onBlur={(e) => updateClipSpeed(selectedClip.id, percentToSpeedMultiplier(e.target.value), true)}
-                      className="w-20 bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                      min="0.25"
+                      max="4"
+                      step="0.25"
+                      value={(Number.isFinite(Number(selectedClip.speed)) ? Number(selectedClip.speed) : 1).toFixed(2)}
+                      onChange={(e) => updateClipSpeed(selectedClip.id, parseFloat(e.target.value) || 1, false)}
+                      onBlur={(e) => updateClipSpeed(selectedClip.id, parseFloat(e.target.value) || 1, true)}
+                      className="w-16 bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
                     />
-                    <span className="text-[9px] text-sf-text-muted">%</span>
+                    <span className="text-[9px] text-sf-text-muted">x</span>
                   </div>
                 </div>
 
@@ -2290,7 +2351,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
         {renderSectionHeader('effects', 'Effects', Zap)}
         {expandedSections.includes('effects') && (
           <div className="p-3 space-y-2 border-b border-sf-dark-700">
-            {/* Stylistic effects (blur, camera shake, chromatic aberration, film grain, vignette) */}
+            {renderAdjustmentBlurControl('Applies blur as an effect on this clip.')}
+
+            {/* Stylistic effects (camera shake, chromatic aberration, film grain, vignette) */}
             <EffectsStack
               clip={selectedClip}
               playheadPosition={playheadPosition}
@@ -3018,6 +3081,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
         {renderSectionHeader('effects', 'Effects', Zap)}
         {expandedSections.includes('effects') && (
           <div className="p-3 space-y-2 border-b border-sf-dark-700">
+            {renderAdjustmentBlurControl('Applies blur as an effect on the clips below this layer.')}
+
             {/* Stylistic effects applied to all layers beneath this adjustment */}
             <EffectsStack
               clip={selectedClip}
@@ -3058,7 +3123,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
               label: 'Reset Timing',
               onClick: handleResetTiming,
               disabled: !hasTimingResetChanges,
-              title: 'Reset speed to 100% and clear reverse',
+              title: 'Reset speed to 1x and clear reverse',
             }) : null,
           }),
         })}
@@ -3601,6 +3666,28 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 onMouseUp={(e) => handleTransformCommit('opacity', parseInt(e.target.value))}
                 onDoubleClick={() => handleSliderReset('opacity', 100)}
                 title="Double-click to reset to 100%"
+                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+              />
+            </div>
+
+            {/* Blur */}
+            <div>
+              <div className="flex justify-between mb-1">
+                <label className="text-[10px] text-sf-text-muted flex items-center gap-1">
+                  <CircleDot className="w-3 h-3" /> Blur
+                </label>
+                <span className="text-[10px] text-sf-text-secondary">{(animatedTransform?.blur ?? transform.blur ?? 0).toFixed(1)}px</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="50"
+                step="0.25"
+                value={animatedTransform?.blur ?? transform.blur ?? 0}
+                onChange={(e) => handleTransformChange('blur', parseFloat(e.target.value))}
+                onMouseUp={(e) => handleTransformCommit('blur', parseFloat(e.target.value))}
+                onDoubleClick={() => handleSliderReset('blur', 0)}
+                title="Double-click to reset to 0px"
                 className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
               />
             </div>
