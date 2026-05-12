@@ -1082,12 +1082,14 @@ function composeMusicShotReferencePrompt({
  * extended with `Lyric moment:`, `Length:`, `Artist:`, and `Start at:`).
  *
  * audioStart resolution (Phase 8 — SRT-first):
- *   1. `Start at:` on the shot — parsed via parseTimeSpecToSeconds.
- *   2. `Lyric moment:` fuzzy-matched against the parsed SRT/LRC (if the
+ *   1. Performance lip-sync shots with a timed `Lyric moment:` use SRT/LRC
+ *      timing, even if the LLM also wrote a conflicting `Start at:`.
+ *   2. `Start at:` on the shot — parsed via parseTimeSpecToSeconds.
+ *   3. `Lyric moment:` fuzzy-matched against the parsed SRT/LRC (if the
  *      single `lyrics` field happens to be in a timed format).
- *   3. `Lyric moment:` fuzzy-matched against plain lyrics + linear estimate
+ *   4. `Lyric moment:` fuzzy-matched against plain lyrics + linear estimate
  *      (path when the `lyrics` field is plain text).
- *   4. Cumulative sum of prior shot lengths (the old behavior).
+ *   5. Cumulative sum of prior shot lengths (the old behavior).
  *
  * The chosen path is recorded on the shot as `audioStartSource` so the
  * inspector / validation layer can surface it and coverage checks can tell
@@ -1229,10 +1231,29 @@ function buildMusicVideoPlanFromScript(options = {}) {
 
       let audioStart
       let audioStartSource
-      if (explicitStart !== null) {
+      const hasTimedMatch = timedMatch && typeof timedMatch.startSec === 'number'
+      const isVocalAlignedShot = Boolean(shotTypeOption?.needsVocalAlignment)
+      if (isVocalAlignedShot && hasTimedMatch) {
+        audioStart = timedMatch.startSec
+        audioStartSource = 'srt-fuzzy'
+        if (explicitStart !== null) {
+          const drift = Math.abs(explicitStart - timedMatch.startSec)
+          if (drift >= 0.5) {
+            audioStartSource = 'srt-fuzzy-overrode-start-at'
+            warnings.push({
+              shotIndex: flatShotIndex,
+              shotLabel: scriptShot.label || `Shot ${flatShotIndex}`,
+              kind: 'performance-start-at-overridden',
+              raw: startAtRaw,
+              message: `Shot ${flatShotIndex}${scriptShot.label ? ` (${scriptShot.label})` : ''}: performance lip-sync uses SRT timing (${formatSecondsAsMMSS(timedMatch.startSec)}) instead of Start at (${formatSecondsAsMMSS(explicitStart)}) for "${lyricMomentHint}".`,
+              severity: 'info',
+            })
+          }
+        }
+      } else if (explicitStart !== null) {
         audioStart = explicitStart
         audioStartSource = 'start-at'
-      } else if (timedMatch && typeof timedMatch.startSec === 'number') {
+      } else if (hasTimedMatch) {
         audioStart = timedMatch.startSec
         audioStartSource = 'srt-fuzzy'
       } else if (lineIdx >= 0) {
