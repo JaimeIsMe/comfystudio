@@ -1974,9 +1974,25 @@ function buildSrtFromProvidedLyricsAndAsrTiming(rawLyrics = '', asrCues = []) {
 
   return {
     srt: formatCaptionCuesAsSrt(timedCues),
+    cues: timedCues,
+    firstStart: timedCues.length > 0 ? timedCues[0].start : null,
     lyricLineCount: lyricLines.length,
     cueCount,
   }
+}
+
+function shiftCaptionCues(cues = [], offsetSeconds = 0) {
+  const offset = Number(offsetSeconds)
+  if (!Array.isArray(cues) || !Number.isFinite(offset) || Math.abs(offset) < 0.001) return cues
+  return cues.map((cue) => {
+    const start = Math.max(0, (Number(cue?.start) || 0) + offset)
+    const rawEnd = (Number(cue?.end) || 0) + offset
+    return {
+      ...cue,
+      start,
+      end: Math.max(start + 0.4, rawEnd),
+    }
+  })
 }
 
 function buildMusicVideoPassIntro(pass, variantDescriptor) {
@@ -2756,6 +2772,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   // the streams when editing either side.
   const [yoloMusicAudioAssetId, setYoloMusicAudioAssetId] = useState(persistedState?.yoloMusicAudioAssetId || null)
   const [yoloMusicAudioKind, setYoloMusicAudioKind] = useState(persistedState?.yoloMusicAudioKind || 'mixed_track')
+  const [yoloMusicAsrLanguage, setYoloMusicAsrLanguage] = useState(persistedState?.yoloMusicAsrLanguage || 'English')
+  const [yoloMusicTimingAnchorSeconds, setYoloMusicTimingAnchorSeconds] = useState(
+    persistedState?.yoloMusicTimingAnchorSeconds ?? ''
+  )
   // Lyrics field accepts plain text, SRT, or LRC — auto-detected by
   // detectTimedLyricsFormat. When the paste is SRT/LRC the planner uses real
   // per-line timings (tier 2 of audioStart resolution); when it's plain
@@ -3093,6 +3113,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         yoloPlan,
         yoloMusicAudioAssetId,
         yoloMusicAudioKind,
+        yoloMusicAsrLanguage,
+        yoloMusicTimingAnchorSeconds,
         yoloMusicLyrics,
         yoloMusicConcept,
         yoloMusicStyleNotes,
@@ -3170,6 +3192,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloPlan,
     yoloMusicAudioAssetId,
     yoloMusicAudioKind,
+    yoloMusicAsrLanguage,
+    yoloMusicTimingAnchorSeconds,
     yoloMusicLyrics,
     yoloMusicConcept,
     yoloMusicStyleNotes,
@@ -3785,15 +3809,32 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
     try {
       const result = await transcribeWithComfyUI(yoloMusicAudioAsset, {
+        language: yoloMusicAsrLanguage,
         onProgress: (progress) => {
           setYoloMusicTranscriptionStatus(progress?.message || (shouldAlignProvidedLyrics
             ? 'Detecting vocal timing from song audio...'
             : 'Transcribing song audio...'))
         },
       })
-      const timingResult = shouldAlignProvidedLyrics
+      let timingResult = shouldAlignProvidedLyrics
         ? buildSrtFromProvidedLyricsAndAsrTiming(existingLyricsText, result?.cues || [])
-        : { srt: formatCaptionCuesAsSrt(result?.cues || []), cueCount: result?.cues?.length || 0 }
+        : {
+            cues: result?.cues || [],
+            firstStart: Array.isArray(result?.cues) && result.cues.length > 0 ? Number(result.cues[0]?.start) || 0 : null,
+            srt: formatCaptionCuesAsSrt(result?.cues || []),
+            cueCount: result?.cues?.length || 0,
+          }
+      const anchorSeconds = Number(yoloMusicTimingAnchorSeconds)
+      if (Number.isFinite(anchorSeconds) && anchorSeconds > 0 && Number.isFinite(Number(timingResult.firstStart))) {
+        const shiftSeconds = anchorSeconds - Number(timingResult.firstStart)
+        const shiftedCues = shiftCaptionCues(timingResult.cues || [], shiftSeconds)
+        timingResult = {
+          ...timingResult,
+          cues: shiftedCues,
+          srt: formatCaptionCuesAsSrt(shiftedCues),
+          timingShiftSeconds: shiftSeconds,
+        }
+      }
       const srt = timingResult.srt
       if (!srt.trim()) {
         throw new Error('The transcription completed, but no SRT cues were produced.')
@@ -3801,10 +3842,16 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
       setYoloMusicLyrics(srt)
       if (shouldAlignProvidedLyrics) {
-        setYoloMusicTranscriptionStatus(`Aligned ${timingResult.lyricLineCount} provided lyric line${timingResult.lyricLineCount === 1 ? '' : 's'} to ${timingResult.cueCount} ASR timing cue${timingResult.cueCount === 1 ? '' : 's'}.`)
+        const shiftNote = Number.isFinite(Number(timingResult.timingShiftSeconds)) && Math.abs(Number(timingResult.timingShiftSeconds)) >= 0.01
+          ? ` Shifted timings by ${Number(timingResult.timingShiftSeconds).toFixed(2)}s to match the first-lyric anchor.`
+          : ''
+        setYoloMusicTranscriptionStatus(`Aligned ${timingResult.lyricLineCount} provided lyric line${timingResult.lyricLineCount === 1 ? '' : 's'} to ${timingResult.cueCount} ASR timing cue${timingResult.cueCount === 1 ? '' : 's'}.${shiftNote}`)
         addComfyLog('status', `Music video lyric timing generated from ${yoloMusicAudioAsset.name || 'song audio'} without replacing provided lyrics`)
       } else {
-        setYoloMusicTranscriptionStatus(`Transcribed ${result.cues.length} timed lyric line${result.cues.length === 1 ? '' : 's'} into SRT.`)
+        const shiftNote = Number.isFinite(Number(timingResult.timingShiftSeconds)) && Math.abs(Number(timingResult.timingShiftSeconds)) >= 0.01
+          ? ` Shifted timings by ${Number(timingResult.timingShiftSeconds).toFixed(2)}s to match the first-lyric anchor.`
+          : ''
+        setYoloMusicTranscriptionStatus(`Transcribed ${result.cues.length} timed lyric line${result.cues.length === 1 ? '' : 's'} into SRT.${shiftNote}`)
         addComfyLog('status', `Music video SRT generated from ${yoloMusicAudioAsset.name || 'song audio'}`)
       }
     } catch (error) {
@@ -3816,8 +3863,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     }
   }, [
     addComfyLog,
+    yoloMusicAsrLanguage,
     yoloMusicAudioAsset,
     yoloMusicLyrics,
+    yoloMusicTimingAnchorSeconds,
     yoloMusicTranscribingSrt,
   ])
   // Resolved cast: hydrate each entry's assetId to a real image asset so the
@@ -10110,6 +10159,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     setYoloMusicAudioAssetId={setYoloMusicAudioAssetId}
                     yoloMusicAudioKind={yoloMusicAudioKind}
                     setYoloMusicAudioKind={setYoloMusicAudioKind}
+                    yoloMusicAsrLanguage={yoloMusicAsrLanguage}
+                    setYoloMusicAsrLanguage={setYoloMusicAsrLanguage}
+                    yoloMusicTimingAnchorSeconds={yoloMusicTimingAnchorSeconds}
+                    setYoloMusicTimingAnchorSeconds={setYoloMusicTimingAnchorSeconds}
                     yoloMusicAudioAsset={yoloMusicAudioAsset}
                     yoloMusicTranscribingSrt={yoloMusicTranscribingSrt}
                     yoloMusicTranscriptionStatus={yoloMusicTranscriptionStatus}

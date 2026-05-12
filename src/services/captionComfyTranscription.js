@@ -154,7 +154,10 @@ function isAudioFilename(name) {
   return AUDIO_FILE_EXTS.has(lower.slice(dot + 1))
 }
 
-function buildCaptionWorkflow(baseWorkflow, uploadedFilename) {
+function buildCaptionWorkflow(baseWorkflow, uploadedFilename, options = {}) {
+  const {
+    language = 'Auto',
+  } = options
   const workflow = JSON.parse(JSON.stringify(baseWorkflow))
   const loadNode = workflow[VIDEO_INPUT_NODE_ID]
   if (!loadNode) return workflow
@@ -212,6 +215,7 @@ function buildCaptionWorkflow(baseWorkflow, uploadedFilename) {
     if (!node || typeof node !== 'object') continue
     if (String(node.class_type || '') !== 'UnifiedASRTranscribeNode') continue
     if (!node.inputs || typeof node.inputs !== 'object') node.inputs = {}
+    if ('language' in node.inputs) node.inputs.language = String(language || 'Auto')
     node.inputs.enable_asr_cache = false
   }
 
@@ -404,7 +408,7 @@ async function pollForCompletion(promptId, onProgress) {
   throw new Error('Caption transcription timed out waiting for ComfyUI.')
 }
 
-export async function transcribeWithComfyUI(asset, { onProgress } = {}) {
+export async function transcribeWithComfyUI(asset, { onProgress, language = 'Auto' } = {}) {
   if (!asset) {
     throw new Error('A source audio or video asset is required to generate captions.')
   }
@@ -425,7 +429,7 @@ export async function transcribeWithComfyUI(asset, { onProgress } = {}) {
   }
 
   const baseWorkflow = await loadCaptionWorkflow()
-  const workflow = buildCaptionWorkflow(baseWorkflow, uploadedFilename)
+  const workflow = buildCaptionWorkflow(baseWorkflow, uploadedFilename, { language })
 
   if (typeof onProgress === 'function') {
     onProgress({ stage: 'queue', message: 'Queuing transcription on ComfyUI...' })

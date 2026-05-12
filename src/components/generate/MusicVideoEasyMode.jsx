@@ -314,6 +314,39 @@ function FieldLabel({ children }) {
   return <label className="text-[10px] uppercase text-sf-text-muted">{children}</label>
 }
 
+const ASR_LANGUAGE_OPTIONS = Object.freeze([
+  'English',
+  'Auto',
+  'Portuguese',
+  'Chinese',
+  'Cantonese',
+  'Spanish',
+  'French',
+  'German',
+  'Italian',
+  'Japanese',
+  'Korean',
+  'Arabic',
+  'Hindi',
+  'Russian',
+  'Turkish',
+  'Vietnamese',
+  'Indonesian',
+  'Malay',
+  'Dutch',
+  'Swedish',
+  'Danish',
+  'Finnish',
+  'Polish',
+  'Czech',
+  'Filipino',
+  'Persian',
+  'Greek',
+  'Romanian',
+  'Hungarian',
+  'Macedonian',
+])
+
 function Stat({ label, value }) {
   return (
     <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-950/60 px-3 py-2">
@@ -331,6 +364,10 @@ export default function MusicVideoEasyMode({
   setYoloMusicAudioAssetId,
   yoloMusicAudioKind,
   setYoloMusicAudioKind,
+  yoloMusicAsrLanguage = 'English',
+  setYoloMusicAsrLanguage,
+  yoloMusicTimingAnchorSeconds = '',
+  setYoloMusicTimingAnchorSeconds,
   yoloMusicAudioAsset,
   yoloMusicTranscribingSrt,
   yoloMusicTranscriptionStatus,
@@ -1035,6 +1072,35 @@ export default function MusicVideoEasyMode({
                 {plural(timedLineCount, 'timed line')}
               </span>
             )}
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="text-[10px] uppercase text-sf-text-muted">ASR Language</span>
+              <select
+                value={yoloMusicAsrLanguage || 'English'}
+                onChange={(event) => setYoloMusicAsrLanguage?.(event.target.value || 'English')}
+                className="mt-1 w-full rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 text-xs text-sf-text-primary outline-none focus:border-sf-accent"
+              >
+                {ASR_LANGUAGE_OPTIONS.map((language) => (
+                  <option key={language} value={language}>{language}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-[10px] uppercase text-sf-text-muted">First Lyric Starts</span>
+              <div className="mt-1 flex items-center gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={yoloMusicTimingAnchorSeconds ?? ''}
+                  onChange={(event) => setYoloMusicTimingAnchorSeconds?.(event.target.value)}
+                  placeholder="Auto"
+                  className="min-w-0 flex-1 rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 text-xs text-sf-text-primary outline-none focus:border-sf-accent"
+                />
+                <span className="text-xs text-sf-text-muted">sec</span>
+              </div>
+            </label>
           </div>
           {(yoloMusicTranscribingSrt || yoloMusicTranscriptionStatus) && (
             <div className="mt-2 text-xs text-sf-text-secondary">
