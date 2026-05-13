@@ -1,111 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-const Z_IMAGE_TURBO_PREFIX = 'z_image_turbo_'
-const SPRITE_GENERATION_CONCURRENCY = 2
-let activeSpriteGenerationCount = 0
-const pendingSpriteGenerationQueue = []
-const pendingAssetUrlLoads = new Map()
-
-const runWithSpriteGenerationSlot = async (task) => {
-  if (activeSpriteGenerationCount >= SPRITE_GENERATION_CONCURRENCY) {
-    await new Promise((resolve) => pendingSpriteGenerationQueue.push(resolve))
-  }
-  activeSpriteGenerationCount += 1
-  try {
-    return await task()
-  } finally {
-    activeSpriteGenerationCount = Math.max(0, activeSpriteGenerationCount - 1)
-    const next = pendingSpriteGenerationQueue.shift()
-    if (next) next()
-  }
-}
-
-const isLegacyDirectorZImageAsset = (asset) => {
-  if (!asset || asset.type !== 'image') return false
-  if (asset?.yolo?.stage !== 'storyboard') return false
-  const pathValue = asset.path || asset.absolutePath || ''
-  const fileName = pathValue.replace(/\\/g, '/').split('/').pop() || ''
-  return fileName.startsWith(Z_IMAGE_TURBO_PREFIX)
-}
-
-const sanitizeAssetFileName = (name) => {
-  const safeName = String(name || '')
-    .trim()
-    .replace(/[\\/:*?"<>|]+/g, '_')
-    .replace(/\s+/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_+|_+$/g, '')
-
-  return safeName || `keyframe_${Date.now()}`
-}
-
-const replacePathBasename = (pathValue, nextBaseName) => {
-  if (!pathValue) return pathValue
-  const normalized = String(pathValue).replace(/\\/g, '/')
-  const index = normalized.lastIndexOf('/')
-  return index >= 0 ? `${normalized.slice(0, index + 1)}${nextBaseName}` : nextBaseName
-}
-
-const buildLegacyDirectorZImageRepair = async (asset, projectHandle, resolvedAbsolutePath = null) => {
-  if (!isLegacyDirectorZImageAsset(asset)) return null
-  if (!window.electronAPI?.pathJoin || !window.electronAPI?.exists) return null
-
-  const sourceAbsolutePath = resolvedAbsolutePath || asset.absolutePath || (
-    asset.path ? await window.electronAPI.pathJoin(projectHandle, asset.path) : null
-  )
-  if (!sourceAbsolutePath) return null
-
-  const originalBaseName = asset.path || asset.absolutePath || sourceAbsolutePath
-  const originalFileName = originalBaseName.replace(/\\/g, '/').split('/').pop() || ''
-  const originalExtMatch = originalFileName.match(/\.[^.]+$/)
-  const extension = originalExtMatch?.[0] || '.png'
-  const targetFileName = `${sanitizeAssetFileName(asset.name)}${extension}`
-  const nextRelativePath = asset.path
-    ? replacePathBasename(asset.path, targetFileName)
-    : `assets/images/${targetFileName}`
-  const nextAbsolutePath = await window.electronAPI.pathJoin(projectHandle, nextRelativePath)
-
-  const sourceExists = await window.electronAPI.exists(sourceAbsolutePath)
-  const targetExists = await window.electronAPI.exists(nextAbsolutePath)
-
-  if (!sourceExists && targetExists) {
-    return {
-      asset: {
-        ...asset,
-        path: nextRelativePath,
-        absolutePath: nextAbsolutePath,
-      },
-      absolutePath: nextAbsolutePath,
-      renamed: false,
-      recoveredExisting: true,
-    }
-  }
-
-  if (!sourceExists || targetExists || sourceAbsolutePath === nextAbsolutePath) {
-    return null
-  }
-
-  if (!window.electronAPI?.moveFile) return null
-
-  const result = await window.electronAPI.moveFile(sourceAbsolutePath, nextAbsolutePath)
-  if (!result?.success) {
-    console.warn(`[Assets] Could not rename legacy Director keyframe ${originalFileName}:`, result?.error)
-    return null
-  }
-
-  return {
-    asset: {
-      ...asset,
-      path: nextRelativePath,
-      absolutePath: nextAbsolutePath,
-    },
-    absolutePath: nextAbsolutePath,
-    renamed: true,
-    recoveredExisting: false,
-  }
-}
-
 /**
  * Store for managing generated and imported assets
  * Persisted to localStorage for data survival across refreshes
@@ -147,9 +42,6 @@ export const useAssetsStore = create(
   // Counter for auto-naming
   assetCounter: 1,
   folderCounter: 1,
-  
-  // Current project handle/path for lazy file URL resolution.
-  projectHandle: null,
 
   // Transient project/media preparation progress for heavy project opens.
   mediaPreparation: {
@@ -510,7 +402,6 @@ export const useAssetsStore = create(
       currentPreview: null,
       assetCounter: 1,
       folderCounter: 1,
-      projectHandle: null,
       mediaPreparation: {
         active: false,
         phase: 'idle',
@@ -536,15 +427,143 @@ export const useAssetsStore = create(
     // Clear existing assets first
     get().clearProject()
 
-    const sourceAssets = Array.isArray(projectAssets) ? projectAssets : []
-    const assetsWithUrls = sourceAssets.map((asset) => ({
-      ...asset,
-      url: typeof asset?.url === 'string' && asset.url.startsWith('blob:') ? null : asset?.url ?? null,
-    }))
+    const sourceAssets = projectAssets || []
+    const totalAssets = sourceAssets.length
+    set({
+      mediaPreparation: {
+        active: totalAssets > 0,
+        phase: 'assets',
+        label: 'Loading project assets...',
+        completed: 0,
+        total: totalAssets,
+        critical: true,
+      },
+    })
 
+    // Load assets - URLs need to be regenerated for imported assets
+    const assetsWithUrls = []
+    let loadedAssetCount = 0
+    
+    for (const asset of sourceAssets) {
+      const needsUrlRefresh = asset?.url?.startsWith?.('blob:')
+      const hasPath = !!asset?.path
+      const hasAbsolutePath = !!asset?.absolutePath
+
+      if ((asset.isImported || needsUrlRefresh || hasPath || hasAbsolutePath) && projectHandle) {
+        // For imported assets (or stale blob URLs), regenerate URL from file
+        try {
+          const { getProjectFileUrl, getAbsoluteFileUrl, isElectron } = await import('../services/fileSystem')
+          let url = null
+          if (isElectron() && hasAbsolutePath) {
+            url = await getAbsoluteFileUrl(asset.absolutePath)
+          } else if (hasPath) {
+            url = await getProjectFileUrl(projectHandle, asset.path)
+          }
+          // Regenerate playback cache URL if we have a cached transcode
+          let playbackCacheUrl = null
+          let playbackCachePath = asset.playbackCachePath
+          let playbackCacheStatus = asset.playbackCacheStatus
+          if (asset.playbackCachePath) {
+            try {
+              // Validate playback cache exists before generating a file:// URL.
+              // Missing cache files lead to networkState=3 and black flicker during playback.
+              let canUsePlaybackCache = true
+              if (
+                isElectron() &&
+                typeof projectHandle === 'string' &&
+                window.electronAPI?.pathJoin &&
+                window.electronAPI?.exists
+              ) {
+                const absolutePlaybackCachePath = await window.electronAPI.pathJoin(projectHandle, asset.playbackCachePath)
+                canUsePlaybackCache = await window.electronAPI.exists(absolutePlaybackCachePath)
+              }
+
+              if (canUsePlaybackCache) {
+                playbackCacheUrl = await getProjectFileUrl(projectHandle, asset.playbackCachePath)
+              } else {
+                playbackCachePath = null
+                playbackCacheStatus = 'failed'
+                console.warn(`[PlaybackCache] Missing cache file for ${asset.name}; falling back to source`, {
+                  assetId: asset.id,
+                  playbackCachePath: asset.playbackCachePath,
+                })
+              }
+            } catch (e) {
+              playbackCachePath = null
+              playbackCacheStatus = 'failed'
+              console.warn(`Could not load playback cache for ${asset.name}:`, e)
+            }
+          }
+          // Regenerate proxy URL (low-res NLE-style proxy) the same way.
+          // Kept separate from playbackCache so both tiers can coexist:
+          // proxy is strongly preferred for multi-layer preview, playback
+          // cache is used when proxy is missing/disabled.
+          let proxyUrl = null
+          let proxyPath = asset.proxyPath
+          let proxyStatus = asset.proxyStatus
+          if (asset.proxyPath) {
+            try {
+              let canUseProxy = true
+              if (
+                isElectron() &&
+                typeof projectHandle === 'string' &&
+                window.electronAPI?.pathJoin &&
+                window.electronAPI?.exists
+              ) {
+                const absoluteProxyPath = await window.electronAPI.pathJoin(projectHandle, asset.proxyPath)
+                canUseProxy = await window.electronAPI.exists(absoluteProxyPath)
+              }
+
+              if (canUseProxy) {
+                proxyUrl = await getProjectFileUrl(projectHandle, asset.proxyPath)
+              } else {
+                proxyPath = null
+                proxyStatus = 'failed'
+                console.warn(`[ProxyCache] Missing proxy file for ${asset.name}; falling back to source`, {
+                  assetId: asset.id,
+                  proxyPath: asset.proxyPath,
+                })
+              }
+            } catch (e) {
+              proxyPath = null
+              proxyStatus = 'failed'
+              console.warn(`Could not load proxy for ${asset.name}:`, e)
+            }
+          }
+          assetsWithUrls.push({
+            ...asset,
+            url,
+            playbackCachePath: playbackCachePath ?? undefined,
+            playbackCacheStatus,
+            playbackCacheUrl: playbackCacheUrl ?? undefined,
+            proxyPath: proxyPath ?? undefined,
+            proxyStatus,
+            proxyUrl: proxyUrl ?? undefined,
+          })
+        } catch (err) {
+          console.warn(`Could not load asset ${asset.name}:`, err)
+          // Keep asset but mark URL as null
+          assetsWithUrls.push({ ...asset, url: null })
+        }
+      } else {
+        // For AI/external assets, keep the URL as-is (may need ComfyUI to be running)
+        assetsWithUrls.push(asset)
+      }
+      loadedAssetCount += 1
+      set({
+        mediaPreparation: {
+          active: true,
+          phase: 'assets',
+          label: 'Loading project assets...',
+          completed: loadedAssetCount,
+          total: totalAssets,
+          critical: true,
+        },
+      })
+    }
+    
     const nextState = {
       assets: assetsWithUrls,
-      projectHandle: projectHandle || null,
       assetCounter: (projectAssets?.length || 0) + 1,
       mediaPreparation: {
         active: false,
@@ -563,11 +582,6 @@ export const useAssetsStore = create(
       nextState.folderCounter = projectFolderCounter
     }
     set(nextState)
-    return {
-      assets: assetsWithUrls,
-      prunedMissingAssets: [],
-      repairedAssets: [],
-    }
   },
 
   /**
@@ -647,9 +661,8 @@ export const useAssetsStore = create(
     try {
       const { generateThumbnailSprite, saveSpriteToProject } = await import('../services/thumbnailSprites')
       
-      // Generate sprite. This uses a hidden video element and canvas seeks,
-      // so keep generation bounded across imports/manual actions.
-      const result = await runWithSpriteGenerationSlot(() => generateThumbnailSprite(asset.url, asset.duration || 5))
+      // Generate sprite
+      const result = await generateThumbnailSprite(asset.url, asset.duration || 5)
       if (!result) {
         throw new Error('Failed to generate sprite')
       }
@@ -693,32 +706,55 @@ export const useAssetsStore = create(
   },
 
   /**
-   * Load a single saved thumbnail sprite on demand.
-   * This keeps asset previews lazy instead of warming every sprite on project open.
+   * Load sprites for all video assets from project
    * @param {string} projectPath - Project directory path
-   * @param {string} assetId - Asset ID
-   * @returns {Promise<object|null>}
    */
-  loadSpriteForAsset: async (projectPath, assetId) => {
-    if (!projectPath || !assetId) return null
+  loadSpritesFromProject: async (projectPath) => {
+    if (!projectPath) return
 
-    const asset = get().assets.find((entry) => entry?.id === assetId)
-    if (!asset || asset.type !== 'video' || asset.sprite?.url) {
-      return asset?.sprite || null
+    const { loadSpriteFromProject } = await import('../services/thumbnailSprites')
+    const state = get()
+    
+    const videoAssets = state.assets.filter(a => a.type === 'video')
+    if (videoAssets.length === 0) {
+      get().clearMediaPreparation()
+      return
     }
 
-    try {
-      const { loadSpriteFromProject } = await import('../services/thumbnailSprites')
-      const sprite = await loadSpriteFromProject(projectPath, assetId)
-      if (sprite) {
-        get().updateAssetSprite(assetId, sprite.spriteData)
-        return sprite.spriteData
+    set({
+      mediaPreparation: {
+        active: true,
+        phase: 'sprites',
+        label: 'Loading video thumbnails...',
+        completed: 0,
+        total: videoAssets.length,
+        critical: false,
+      },
+    })
+    
+    for (const [index, asset] of videoAssets.entries()) {
+      try {
+        const sprite = await loadSpriteFromProject(projectPath, asset.id)
+        if (sprite) {
+          get().updateAssetSprite(asset.id, sprite.spriteData)
+          console.log(`Loaded sprite for ${asset.name}`)
+        }
+      } catch (err) {
+        // Sprite might not exist yet, that's OK
+      } finally {
+        set({
+          mediaPreparation: {
+            active: true,
+            phase: 'sprites',
+            label: 'Loading video thumbnails...',
+            completed: index + 1,
+            total: videoAssets.length,
+            critical: false,
+          },
+        })
       }
-    } catch (err) {
-      console.warn('Failed to load sprite on demand:', err)
     }
-
-    return null
+    get().clearMediaPreparation()
   },
 
   /**
@@ -741,58 +777,10 @@ export const useAssetsStore = create(
     // Use playback cache URL when available (Flame-style: optimized for playback)
     const useCache = !!asset.playbackCacheUrl && asset.playbackCacheStatus !== 'failed'
     const url = useCache ? asset.playbackCacheUrl : (asset.url || null)
-    if (!url && (asset.path || asset.absolutePath)) {
-      get().ensureAssetUrl(assetId).catch(() => {})
-    }
     if (typeof localStorage !== 'undefined' && localStorage.getItem('comfystudio-debug-playback') === '1' && asset.type === 'video') {
       console.log('[PlaybackCache] getAssetUrl:', { assetId, useCache, urlHint: url ? (url.startsWith('file:') ? 'file:// (cache or original)' : url.slice(0, 50) + '...') : 'null' })
     }
     return url
-  },
-
-  /**
-   * Lazily resolve an asset URL from project disk when the asset is first used.
-   * This keeps project-open light and only hydrates the media that a visible clip
-   * or panel actually asks for.
-   */
-  ensureAssetUrl: async (assetId) => {
-    if (!assetId) return null
-    const state = get()
-    const asset = state.assets.find((entry) => entry?.id === assetId)
-    if (!asset) return null
-    const currentUrl = asset.url && !String(asset.url).startsWith('blob:') ? asset.url : null
-    if (currentUrl) return currentUrl
-    if (!state.projectHandle || (!asset.path && !asset.absolutePath)) return null
-
-    const pendingKey = `${String(state.projectHandle || '')}|${assetId}`
-    if (pendingAssetUrlLoads.has(pendingKey)) {
-      return pendingAssetUrlLoads.get(pendingKey)
-    }
-
-    const loadPromise = (async () => {
-      try {
-        const { getProjectFileUrl, getAbsoluteFileUrl, isElectron } = await import('../services/fileSystem')
-        let nextUrl = null
-        if (asset.absolutePath && isElectron()) {
-          nextUrl = await getAbsoluteFileUrl(asset.absolutePath)
-        } else if (asset.path) {
-          nextUrl = await getProjectFileUrl(state.projectHandle, asset.path)
-        }
-        if (nextUrl) {
-          get().updateAssetUrl(assetId, nextUrl)
-          return nextUrl
-        }
-        return null
-      } catch (error) {
-        console.warn(`[Assets] Failed to lazily resolve URL for ${asset.name || assetId}:`, error)
-        return null
-      } finally {
-        pendingAssetUrlLoads.delete(pendingKey)
-      }
-    })()
-
-    pendingAssetUrlLoads.set(pendingKey, loadPromise)
-    return loadPromise
   },
 
   /**

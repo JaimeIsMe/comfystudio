@@ -57,6 +57,7 @@ const createDefaultTimeline = (name = 'Timeline 1', id = null, settings = null) 
   id: id || `timeline-${Date.now()}`,
   name,
   color: settings?.color || null,
+  folderId: settings?.folderId || null,
   created: new Date().toISOString(),
   modified: new Date().toISOString(),
   // Timeline-specific resolution and frame rate (optional - falls back to project settings if null)
@@ -91,17 +92,6 @@ const createTimelineStructureSnapshot = (state) => {
       ? { ...timeline, ...liveTimelineData }
       : timeline
   ))
-
-  if (typeof window !== 'undefined') {
-    const currentTimeline = timelines.find((timeline) => timeline.id === state.currentTimelineId) || null
-    const c187 = currentTimeline?.clips?.find((clip) => clip.id === 'clip-187') || null
-    console.log('[ProjectStore] createTimelineStructureSnapshot', {
-      currentTimelineId: state.currentTimelineId,
-      currentTimelineName: currentTimeline?.name || null,
-      clip187Enabled: c187?.enabled,
-      liveClipCount: liveTimelineData?.clips?.length || 0,
-    })
-  }
 
   return {
     timelines: cloneProjectHistoryValue(timelines),
@@ -172,6 +162,12 @@ const hydrateOpenedProjectSession = async (projectHandleOrPath, rawProjectData, 
     projectData.folders,
     projectData.folderCounter
   )
+
+  // Do not eagerly load every saved video thumbnail sprite on project open.
+  // Large projects can contain hundreds of videos; walking all thumbnail
+  // metadata here blocks startup and can make Electron appear as a black
+  // screen. Thumbnails are loaded/generated on demand from the asset browser
+  // and timeline paths instead.
 
   const recentProject = {
     name: projectData.name,
@@ -325,6 +321,13 @@ export const useProjectStore = create(
                     projectData.folders,
                     projectData.folderCounter
                   )
+                }
+                
+                // Load thumbnail sprites in background (Electron only)
+                if (typeof storedProject === 'string') {
+                  useAssetsStore.getState().loadSpritesFromProject(storedProject).catch(err => {
+                    console.warn('Failed to load sprites:', err)
+                  })
                 }
                 
                 set({
@@ -571,14 +574,6 @@ export const useProjectStore = create(
           // Gather current state from timeline and assets stores
           const currentTimelineData = useTimelineStore.getState().getProjectData()
           const assetsData = useAssetsStore.getState().getProjectData()
-          if (typeof window !== 'undefined') {
-            const c187 = currentTimelineData?.clips?.find((clip) => clip.id === 'clip-187') || null
-            console.log('[ProjectStore] saveProject begin', {
-              currentTimelineId: state.currentTimelineId,
-              clip187Enabled: c187?.enabled,
-              clipCount: currentTimelineData?.clips?.length || 0,
-            })
-          }
           
           // Update the current timeline in the timelines array
           const updatedTimelines = (state.currentProject.timelines || []).map(t => 
@@ -611,16 +606,6 @@ export const useProjectStore = create(
             folderCounter: assetsState.folderCounter ?? 1,
             thumbnail: thumbnailPointer,
             modified: new Date().toISOString(),
-          }
-
-          if (typeof window !== 'undefined') {
-            const currentTimeline = updatedProject.timelines?.find((timeline) => timeline.id === state.currentTimelineId) || null
-            const c187 = currentTimeline?.clips?.find((clip) => clip.id === 'clip-187') || null
-            console.log('[ProjectStore] saveProject write', {
-              currentTimelineId: state.currentTimelineId,
-              clip187Enabled: c187?.enabled,
-              updatedTimelineClipCount: currentTimeline?.clips?.length || 0,
-            })
           }
           
           await saveProjectToFile(state.currentProjectHandle, updatedProject)
@@ -887,6 +872,7 @@ export const useProjectStore = create(
           height: options?.height || null,
           fps: options?.fps || null,
           color: options?.color || null,
+          folderId: options?.folderId || null,
         }
         
         const existingTimelines = state.currentProject.timelines || []
@@ -997,6 +983,35 @@ export const useProjectStore = create(
             timelines: currentState.currentProject.timelines.map((timeline) =>
               timeline.id === timelineId
                 ? { ...timeline, color: color ?? null, modified: new Date().toISOString() }
+                : timeline
+            ),
+          },
+        }))
+
+        return true
+      },
+
+      /**
+       * Move a timeline to a folder (or root when null)
+       * @param {string} timelineId - ID of the timeline to move
+       * @param {string|null} folderId - Destination folder ID (null = root)
+       */
+      moveTimelineToFolder: (timelineId, folderId = null) => {
+        const state = get()
+        if (!state.currentProject?.timelines) return false
+        const normalizedFolderId = folderId || null
+        const existingTimeline = state.currentProject.timelines.find((timeline) => timeline.id === timelineId)
+        if (!existingTimeline) return false
+        if ((existingTimeline.folderId || null) === normalizedFolderId) return true
+
+        get().saveTimelineStructureToHistory()
+
+        set((currentState) => ({
+          currentProject: {
+            ...currentState.currentProject,
+            timelines: currentState.currentProject.timelines.map((timeline) =>
+              timeline.id === timelineId
+                ? { ...timeline, folderId: normalizedFolderId, modified: new Date().toISOString() }
                 : timeline
             ),
           },
