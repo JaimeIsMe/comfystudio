@@ -2617,10 +2617,11 @@ ipcMain.handle('workflowSetup:install', async (event, payload = {}) => {
 // Export Operations
 // ============================================
 
-ipcMain.handle('export:runInWorker', async (event, payload) => {
+ipcMain.handle('export:runInWorker', async (event, payload = {}) => {
   if (exportWorkerWindow && !exportWorkerWindow.isDestroyed()) {
     return { success: false, error: 'Export already in progress' }
   }
+  const requestId = String(payload?.requestId || `export-${Date.now()}`)
   const workerUrl = isDev
     ? `http://127.0.0.1:5173?export=worker`
     : `file://${path.join(__dirname, '../dist/index.html')}?export=worker`
@@ -2641,9 +2642,12 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
   })
   const workerContents = exportWorkerWindow.webContents
   const forwardToMain = (channel, data) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(channel, data)
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      mainWindow.webContents.send(channel, { ...data, requestId })
+      return
     }
+    mainWindow.webContents.send(channel, { requestId, error: data })
   }
   const onProgress = (event, data) => {
     if (event.sender === workerContents) forwardToMain('export:progress', data)
@@ -2667,6 +2671,15 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
       }
     }
   }
+  const onWorkerReady = (event) => {
+    if (event.sender === workerContents) sendJob()
+  }
+  const cleanupExportWorkerListeners = () => {
+    ipcMain.removeListener('export:progress', onProgress)
+    ipcMain.removeListener('export:complete', onComplete)
+    ipcMain.removeListener('export:error', onError)
+    ipcMain.removeListener('export:workerReady', onWorkerReady)
+  }
   ipcMain.on('export:progress', onProgress)
   ipcMain.on('export:complete', onComplete)
   ipcMain.on('export:error', onError)
@@ -2675,15 +2688,9 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
       exportWorkerWindow.webContents.send('export:job', payload)
     }
   }
-  ipcMain.once('export:workerReady', (event) => {
-    if (event.sender === workerContents) sendJob()
-  })
+  ipcMain.on('export:workerReady', onWorkerReady)
   exportWorkerWindow.on('closed', () => {
-    ipcMain.removeListener('export:progress', onProgress)
-    ipcMain.removeListener('export:complete', onComplete)
-    ipcMain.removeListener('export:error', onError)
-  })
-  exportWorkerWindow.on('closed', () => {
+    cleanupExportWorkerListeners()
     exportWorkerWindow = null
   })
   await exportWorkerWindow.loadURL(workerUrl)

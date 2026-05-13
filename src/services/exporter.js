@@ -777,7 +777,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     useCachedRenders = true,
     useProxyMedia = false,
     fastSeek = true,
-    useDirectFramePipe = true,
+    useDirectFramePipe = false,
     glslQualityScale = 1,
     signal = null,
   } = options
