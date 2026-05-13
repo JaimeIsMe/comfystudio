@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { RefreshCw, ExternalLink } from 'lucide-react'
+import { RefreshCw, ExternalLink, Loader2 } from 'lucide-react'
 import TitleBar from './components/TitleBar'
 import ExportPanel from './components/ExportPanel'
 import GenerateWorkspace from './components/GenerateWorkspace'
@@ -42,7 +42,6 @@ function App() {
   const [selectedItem, setSelectedItem] = useState({ type: 'shot', id: '2.1' })
   const [mainTab, setMainTab] = useState('editor')
   const [hasMountedFlowAi, setHasMountedFlowAi] = useState(false)
-  const [hasMountedExport, setHasMountedExport] = useState(false)
   const [bottomEditorView, setBottomEditorView] = useState('timeline')
   const [activeTimelineToolLabel, setActiveTimelineToolLabel] = useState('Move tool')
   const mainTabRef = useRef(mainTab)
@@ -172,12 +171,6 @@ function App() {
     }
   }, [mainTab])
 
-  useEffect(() => {
-    if (mainTab === "export") {
-      setHasMountedExport(true)
-    }
-  }, [mainTab])
-
   // When user sends timeline frame to Generate (right-click preview → Extend with AI / Starting keyframe for AI)
   useEffect(() => {
     const handler = () => setMainTab('generate')
@@ -244,6 +237,14 @@ function App() {
     autoSaveEnabled,
     autoSaveInterval,
   } = useProjectStore()
+  const mediaPreparation = useAssetsStore((state) => state.mediaPreparation)
+  const mediaPreparationTotal = Math.max(0, Number(mediaPreparation?.total) || 0)
+  const mediaPreparationCompleted = Math.max(0, Math.min(mediaPreparationTotal, Number(mediaPreparation?.completed) || 0))
+  const mediaPreparationPercent = mediaPreparationTotal > 0
+    ? Math.round((mediaPreparationCompleted / mediaPreparationTotal) * 100)
+    : 0
+  const showMediaPreparation = Boolean(mediaPreparation?.active && mediaPreparationTotal > 0)
+  
   // Initialize project store on mount
   useEffect(() => {
     initialize()
@@ -363,50 +364,73 @@ function App() {
         centerInsetRight={editorRightInset}
       />
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* ComfyUI tab: mount only while active so hidden ComfyUI media previews
-            cannot keep Chromium video decoders/shared-memory buffers alive in
-            Generate or Editor. Queue/progress uses the API/websocket, not this iframe. */}
-        {mainTab === 'comfyui' && (
-          <div className="flex-1 flex flex-col min-h-0 bg-sf-dark-950">
-            {/* Thin toolbar: the embedded ComfyUI iframe has no browser chrome,
-                so when it gets into a stuck state (blank/black canvas from a
-                failed WS handshake, a crashed extension, or ComfyUI restarting
-                under it) the user has no way to recover from inside the app.
-                Reload remounts the iframe; Open-external pops it in the system
-                browser as a fallback diagnostic. */}
-            <div className="flex items-center gap-2 px-3 py-1.5 border-b border-sf-dark-700 bg-sf-dark-900 text-xs text-sf-text-muted flex-shrink-0">
-              <span className="font-mono truncate">{comfyIframeUrl || '—'}</span>
-              <div className="flex-1" />
-              <button
-                type="button"
-                onClick={reloadComfyIframe}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-sf-dark-700 hover:text-sf-text-primary transition-colors"
-                title="Reload the ComfyUI iframe (useful if it's stuck on a black screen)"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                Reload
-              </button>
-              <button
-                type="button"
-                onClick={openComfyExternal}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-sf-dark-700 hover:text-sf-text-primary transition-colors"
-                title="Open ComfyUI in your default browser"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                Open in browser
-              </button>
-            </div>
-            <iframe
-              key={`comfy-iframe-${comfyIframeUrl}-${comfyIframeNonce}`}
-              src={comfyIframeUrl}
-              title="ComfyUI"
-              className="flex-1 w-full min-h-0 border-0"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+      {showMediaPreparation && (
+        <div className="pointer-events-none fixed left-1/2 top-1/2 z-50 w-[min(420px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-sf-dark-600 bg-sf-dark-900/95 px-3 py-2 shadow-2xl shadow-black/40 backdrop-blur">
+          <div className="mb-1.5 flex items-center gap-2 text-xs">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-sf-accent" />
+            <span className="font-medium text-sf-text-primary">
+              {mediaPreparation?.critical ? 'Opening project media' : 'Preparing project media'}
+            </span>
+            <span className="ml-auto font-mono text-[10px] text-sf-text-muted">
+              {mediaPreparationCompleted}/{mediaPreparationTotal}
+            </span>
+          </div>
+          <div className="mb-1 h-1.5 overflow-hidden rounded-full bg-sf-dark-700">
+            <div
+              className="h-full rounded-full bg-sf-accent transition-[width] duration-200"
+              style={{ width: `${mediaPreparationPercent}%` }}
             />
           </div>
-        )}
+          <div className="flex items-center justify-between gap-3 text-[10px] text-sf-text-muted">
+            <span>{mediaPreparation?.label || 'Preparing media...'}</span>
+            <span>{mediaPreparationPercent}%</span>
+          </div>
+        </div>
+      )}
+      
+      {/* Main Content Area */}
+      <div className="flex-1 flex overflow-hidden min-h-0">
+        {/* ComfyUI tab – kept mounted when visible so iframe does not reload */}
+        <div
+          className="flex-1 flex flex-col min-h-0 bg-sf-dark-950"
+          style={{ display: mainTab === 'comfyui' ? 'flex' : 'none' }}
+        >
+          {/* Thin toolbar: the embedded ComfyUI iframe has no browser chrome,
+              so when it gets into a stuck state (blank/black canvas from a
+              failed WS handshake, a crashed extension, or ComfyUI restarting
+              under it) the user has no way to recover from inside the app.
+              Reload remounts the iframe; Open-external pops it in the system
+              browser as a fallback diagnostic. */}
+          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-sf-dark-700 bg-sf-dark-900 text-xs text-sf-text-muted flex-shrink-0">
+            <span className="font-mono truncate">{comfyIframeUrl || '—'}</span>
+            <div className="flex-1" />
+            <button
+              type="button"
+              onClick={reloadComfyIframe}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-sf-dark-700 hover:text-sf-text-primary transition-colors"
+              title="Reload the ComfyUI iframe (useful if it's stuck on a black screen)"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Reload
+            </button>
+            <button
+              type="button"
+              onClick={openComfyExternal}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-sf-dark-700 hover:text-sf-text-primary transition-colors"
+              title="Open ComfyUI in your default browser"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              Open in browser
+            </button>
+          </div>
+          <iframe
+            key={`comfy-iframe-${comfyIframeUrl}-${comfyIframeNonce}`}
+            src={comfyIframeUrl}
+            title="ComfyUI"
+            className="flex-1 w-full min-h-0 border-0"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+          />
+        </div>
         {/* Generate tab – keep mounted so queue/progress survives tab switches */}
         <div
           className="flex-1 flex flex-col min-h-0 overflow-hidden bg-sf-dark-950"
@@ -431,15 +455,13 @@ function App() {
             </WorkspaceErrorBoundary>
           </div>
         )}
-        {/* Export tab - lazy-mount after first visit so hidden exports cannot start before Export is opened. */}
-        {hasMountedExport && (
-          <div
-            className="flex-1 flex flex-col min-h-0 overflow-hidden bg-sf-dark-950"
-            style={{ display: mainTab === "export" ? "flex" : "none" }}
-          >
-            <ExportPanel isActive={mainTab === "export"} />
-          </div>
-        )}
+        {/* Export tab - keep mounted so settings, queue, and progress survive tab switches */}
+        <div
+          className="flex-1 flex flex-col min-h-0 overflow-hidden bg-sf-dark-950"
+          style={{ display: mainTab === 'export' ? 'flex' : 'none' }}
+        >
+          <ExportPanel />
+        </div>
         {mainTab === "stock" && (
           <StockPanel />
         )}

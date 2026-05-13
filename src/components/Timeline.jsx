@@ -18,6 +18,7 @@ import useViewportClampedPosition from '../hooks/useViewportClampedPosition'
 import { getAllKeyframeTimes } from '../utils/keyframes'
 import { TRANSITION_TYPES, TRANSITION_DURATIONS, FRAME_RATE } from '../constants/transitions'
 import { getAudioClipFadeValues } from '../utils/audioClipFades'
+import { getSpriteFramePosition } from '../services/thumbnailSprites'
 import { getEffectTypeDefinition } from '../utils/effects'
 import { isTextEditingElement } from '../utils/keyboardFocus'
 import {
@@ -46,6 +47,8 @@ const MARQUEE_AUTO_SCROLL_STEP_PX = 24
 const PLAYHEAD_SCRUB_AUTO_SCROLL_EDGE_PX = 40
 const PLAYHEAD_SCRUB_AUTO_SCROLL_MAX_STEP_PX = 28
 const MIN_INTERACTIVE_CLIP_WIDTH_PX = 24
+const TIMELINE_VIDEO_THUMB_WIDTH_PX = 90
+const MAX_TIMELINE_VIDEO_THUMBNAILS = 12
 
 // Resolve-style audio track/waveform colors
 const AUDIO_TRACK_BG = '#2d4038'
@@ -1158,6 +1161,63 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     }
     // Fallback to clip's stored URL
     return clip.url
+  }
+
+  const renderTimelineVideoFilmstrip = (clip, renderedClipWidth, thumbCount, contentHeight) => {
+    const asset = clip?.assetId ? assetsById.get(clip.assetId) : null
+    const sprite = asset?.sprite
+    const tileWidth = renderedClipWidth / Math.max(1, thumbCount)
+    const tileHeight = Math.max(1, contentHeight - 3)
+
+    if (sprite?.url && Array.isArray(sprite.frames) && sprite.frames.length > 0) {
+      const duration = Math.max(0, Number(clip?.duration) || 0)
+      const trimStart = Number(clip?.trimStart) || 0
+      const timeScale = clip?.sourceTimeScale || (clip?.timelineFps && clip?.sourceFps
+        ? clip.timelineFps / clip.sourceFps
+        : 1)
+      const spriteDuration = Math.max(0, Number(sprite.duration) || 0)
+
+      return Array.from({ length: thumbCount }).map((_, i) => {
+        const sampleRatio = thumbCount <= 1 ? 0.5 : i / Math.max(1, thumbCount - 1)
+        const clipTime = duration * sampleRatio
+        const sourceTime = Math.max(0, Math.min(spriteDuration || Infinity, trimStart + clipTime * timeScale))
+        const frame = getSpriteFramePosition(sprite, sourceTime) || sprite.frames[0]
+        if (!frame) return null
+
+        const scale = Math.max(tileWidth / Math.max(1, frame.width), tileHeight / Math.max(1, frame.height))
+        const scaledFrameWidth = frame.width * scale
+        const scaledFrameHeight = frame.height * scale
+        const x = -frame.x * scale + (tileWidth - scaledFrameWidth) / 2
+        const y = -frame.y * scale + (tileHeight - scaledFrameHeight) / 2
+
+        return (
+          <div
+            key={i}
+            className="flex-shrink-0 h-full relative overflow-hidden"
+            style={{ width: `${tileWidth}px` }}
+          >
+            <div
+              className="absolute inset-0 opacity-80 pointer-events-none"
+              style={{
+                backgroundImage: `url(${sprite.url})`,
+                backgroundRepeat: 'no-repeat',
+                backgroundSize: `${sprite.width * scale}px ${sprite.height * scale}px`,
+                backgroundPosition: `${x}px ${y}px`,
+              }}
+            />
+          </div>
+        )
+      })
+    }
+
+    return (
+      <div className="absolute inset-0 top-[3px] flex items-center overflow-hidden bg-[#162226]">
+        <div className="flex h-full w-full items-center gap-2 px-2 text-[9px] uppercase tracking-[0.16em] text-white/35">
+          <Video className="h-3 w-3 flex-shrink-0" />
+          <span className="truncate">Video</span>
+        </div>
+      </div>
+    )
   }
 
   const handleAddAdjustmentLayer = () => {
@@ -5019,7 +5079,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                   const interactiveClipWidth = Math.max(MIN_INTERACTIVE_CLIP_WIDTH_PX, renderedClipWidth)
                   const interactiveClipOffset = Math.max(0, (interactiveClipWidth - renderedClipWidth) / 2)
                   // Calculate how many thumbnail frames to show (roughly one per 60px)
-                  const thumbCount = Math.max(1, Math.floor(renderedClipWidth / 60))
+                  const thumbCount = Math.max(1, Math.min(MAX_TIMELINE_VIDEO_THUMBNAILS, Math.ceil(renderedClipWidth / TIMELINE_VIDEO_THUMB_WIDTH_PX)))
                   const isTextClip = clip.type === 'text'
                   const isAdjustmentClip = clip.type === 'adjustment'
                   const clipEnabled = isClipEnabled(clip)
@@ -5302,27 +5362,10 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                           }}
                         />
                         
-                        {/* Filmstrip thumbnails */}
-                        {clipMediaUrl && (
+                        {/* Filmstrip thumbnails: render cached sprite frames, never live video elements. */}
+                        {shouldRenderClipThumbnails && (
                           <div className="absolute inset-0 top-[3px] flex overflow-hidden">
-                            {Array.from({ length: thumbCount }).map((_, i) => (
-                              <div 
-                                key={i} 
-                                className="flex-shrink-0 h-full relative overflow-hidden"
-                                style={{ width: `${renderedClipWidth / thumbCount}px` }}
-                              >
-                                <video
-                                  src={clipMediaUrl}
-                                  className="absolute inset-0 w-full h-full object-cover opacity-80 pointer-events-none"
-                                  muted
-                                  style={{
-                                    // Offset each thumbnail to show different part of video
-                                    objectPosition: `${(i / Math.max(1, thumbCount - 1)) * 100}% center`
-                                  }}
-                                  onContextMenu={(e) => e.preventDefault()}
-                                />
-                              </div>
-                            ))}
+                            {renderTimelineVideoFilmstrip(clip, renderedClipWidth, thumbCount, contentHeight)}
                           </div>
                         )}
                         
