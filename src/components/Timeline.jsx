@@ -20,7 +20,7 @@ import { TRANSITION_TYPES, TRANSITION_DURATIONS, FRAME_RATE } from '../constants
 import { getAudioClipFadeValues } from '../utils/audioClipFades'
 import { getSpriteFramePosition } from '../services/thumbnailSprites'
 import { getEffectTypeDefinition } from '../utils/effects'
-import { getOrCreateImageThumbnail } from '../services/imageThumbnailCache'
+import { getExistingImageThumbnail } from '../services/imageThumbnailCache'
 import { isTextEditingElement } from '../utils/keyboardFocus'
 import {
   formatSecondsFrames,
@@ -295,29 +295,31 @@ function getWaveformPixelCount(clipWidthPx) {
   return Math.min(2048, Math.max(64, Math.round(clipWidthPx)))
 }
 
-function CachedTimelineImage({ asset, src, projectHandle, alt, className, style, draggable = false }) {
+function CachedTimelineImage({ asset, src, projectHandle, alt, className, style, draggable = false, suspend = false }) {
   const sourceUrl = src || asset?.url || asset?.thumbnailUrl || ''
   const [thumbnailUrl, setThumbnailUrl] = useState(null)
 
   useEffect(() => {
     let cancelled = false
-    setThumbnailUrl(null)
-    if (!sourceUrl) return () => { cancelled = true }
-    getOrCreateImageThumbnail(projectHandle, asset || { url: sourceUrl }, { width: 360, height: 204, quality: 78 })
-      .then((url) => {
-        if (!cancelled) setThumbnailUrl(url || sourceUrl)
-      })
-      .catch(() => {
-        if (!cancelled) setThumbnailUrl(sourceUrl)
-      })
-    return () => { cancelled = true }
-  }, [asset, projectHandle, sourceUrl])
+    if (!sourceUrl) {
+      setThumbnailUrl(null)
+      return () => { cancelled = true }
+    }
+    if (suspend) return () => { cancelled = true }
 
-  if (!sourceUrl) return null
+    getExistingImageThumbnail(projectHandle, asset || { url: sourceUrl }, { width: 360, height: 204, quality: 78 })
+      .then((url) => {
+        if (!cancelled && url) setThumbnailUrl(url)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [asset, projectHandle, sourceUrl, suspend])
+
+  if (!sourceUrl || !thumbnailUrl) return null
 
   return (
     <img
-      src={thumbnailUrl || sourceUrl}
+      src={thumbnailUrl}
       alt={alt || ''}
       className={className}
       style={style}
@@ -1221,6 +1223,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
             alt={asset?.name || clip?.name || 'Video keyframe'}
             className="absolute inset-0 h-full w-full object-cover opacity-80 pointer-events-none"
             draggable={false}
+            suspend={timelineIsPlaying}
           />
         </div>
       )
@@ -1357,6 +1360,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
           className="absolute inset-0 w-full h-full object-cover opacity-80 pointer-events-none"
           style={{ objectPosition }}
           draggable={false}
+          suspend={timelineIsPlaying}
         />
       )
     }
@@ -5058,6 +5062,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                   const clipAsset = clip.assetId ? assetsById.get(clip.assetId) : null
                   const clipEnabled = isClipEnabled(clip)
                   const shouldRenderClipThumbnails = showTimelineClipThumbnails !== false
+                  const suspendTimelineThumbs = timelineIsPlaying || Boolean(clipDragState || trimState || slipState || fadeDragState || transitionDragState || rollEditState || isPanning)
                   const clipMediaUrl = shouldRenderClipThumbnails && (clip.type === 'image' || clip.type === 'video')
                     ? getClipUrl(clip)
                     : null
@@ -5273,6 +5278,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                                 objectFit: 'cover',
                               }}
                               draggable={false}
+                              suspend={suspendTimelineThumbs}
                             />
                           </div>
                         )}

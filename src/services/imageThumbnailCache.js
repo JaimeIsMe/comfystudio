@@ -49,6 +49,30 @@ function getThumbnailKey(asset, options) {
   return `${safeName(asset?.id || asset?.name || 'image')}_${hashString(`${sourceRef}|${versionRef}|${sizeRef}`)}.jpg`
 }
 
+export async function getExistingImageThumbnail(projectHandle, asset, options = {}) {
+  const sourceUrl = asset?.url || asset?.thumbnailUrl || ''
+  if (!sourceUrl) return null
+  if (!isElectron() || !projectHandle || !window.electronAPI?.createImageThumbnail) {
+    return null
+  }
+
+  try {
+    const width = Math.max(1, Math.round(Number(options.width) || DEFAULT_WIDTH))
+    const height = Math.max(1, Math.round(Number(options.height) || DEFAULT_HEIGHT))
+    const quality = Math.max(1, Math.min(100, Math.round(Number(options.quality) || DEFAULT_QUALITY)))
+    const key = getThumbnailKey(asset, { width, height, quality })
+    const thumbDir = await window.electronAPI.pathJoin(projectHandle, IMAGE_THUMB_DIR)
+    const outputPath = await window.electronAPI.pathJoin(thumbDir, key)
+    if (await window.electronAPI.exists(outputPath)) {
+      return await window.electronAPI.getFileUrlDirect(outputPath)
+    }
+  } catch (error) {
+    console.warn('Image thumbnail cache lookup failed:', error)
+  }
+
+  return null
+}
+
 export async function getOrCreateImageThumbnail(projectHandle, asset, options = {}) {
   const sourceUrl = asset?.url || asset?.thumbnailUrl || ''
   if (!sourceUrl) return null

@@ -230,11 +230,15 @@ function getAssetUrl(asset) {
 
 const LAZY_SHOT_PREVIEW_ROOT_MARGIN = '700px 0px'
 
-function LazyShotPreview({ children, placeholderLabel = 'Preview' }) {
+function LazyShotPreview({ children, placeholderLabel = 'Preview', enabled = true }) {
   const ref = useRef(null)
   const [shouldLoad, setShouldLoad] = useState(false)
 
   useEffect(() => {
+    if (!enabled) {
+      setShouldLoad(false)
+      return undefined
+    }
     if (shouldLoad) return undefined
     const el = ref.current
     if (!el) return undefined
@@ -252,7 +256,7 @@ function LazyShotPreview({ children, placeholderLabel = 'Preview' }) {
 
     observer.observe(el)
     return () => observer.disconnect()
-  }, [shouldLoad])
+  }, [enabled, shouldLoad])
 
   return (
     <div ref={ref} className="h-full w-full">
@@ -289,10 +293,10 @@ function CachedShotImage({ asset, className, alt = '' }) {
   return <img src={thumbnailUrl} alt={alt} className={className} loading="lazy" decoding="async" />
 }
 
-function ShotVideoPreview({ hasVideo, keyframeAsset, placeholderLabel = "Needs keyframe" }) {
+function ShotVideoPreview({ hasVideo, keyframeAsset, placeholderLabel = "Needs keyframe", loadPreview = true }) {
   if (getAssetUrl(keyframeAsset)) {
     return (
-      <LazyShotPreview placeholderLabel="Keyframe preview">
+      <LazyShotPreview placeholderLabel="Keyframe preview" enabled={loadPreview}>
         <CachedShotImage asset={keyframeAsset} className="h-full w-full object-cover opacity-70" />
       </LazyShotPreview>
     )
@@ -477,6 +481,7 @@ export default function MusicVideoEasyMode({
   const [isQueuingKeyframes, setIsQueuingKeyframes] = useState(false)
   const [isQueuingVideos, setIsQueuingVideos] = useState(false)
   const [isAssemblingTimeline, setIsAssemblingTimeline] = useState(false)
+  const shouldLoadShotGridPreview = (index) => index < 24 || Math.abs(index - selectedShotIndex) <= 24
 
   useEffect(() => {
     if (typeof localStorage === 'undefined') return
@@ -1510,7 +1515,7 @@ export default function MusicVideoEasyMode({
                         : 'bg-sf-dark-800'
                   }`}>
                     {url ? (
-                      <LazyShotPreview placeholderLabel="Keyframe preview">
+                      <LazyShotPreview placeholderLabel="Keyframe preview" enabled={shouldLoadShotGridPreview(index)}>
                         <CachedShotImage asset={asset} className="h-full w-full object-cover" />
                       </LazyShotPreview>
                     ) : (
@@ -1787,7 +1792,7 @@ export default function MusicVideoEasyMode({
                         ? 'bg-red-950/30'
                         : 'bg-sf-dark-800'
                   }`}>
-                    <ShotVideoPreview hasVideo={Boolean(videoUrl)} keyframeAsset={keyframeAsset} />
+                    <ShotVideoPreview hasVideo={Boolean(videoUrl)} keyframeAsset={keyframeAsset} loadPreview={shouldLoadShotGridPreview(index)} />
                     {cardState.state === 'generating' && (
                       <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-transparent via-white/10 to-transparent" />
                     )}
