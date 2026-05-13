@@ -8268,7 +8268,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             duration: jobDuration,
             fps: jobFps,
             resolution: jobResolution ? `${jobResolution.width}x${jobResolution.height}` : undefined,
-            seed: jobSeed
+            seed: jobSeed,
+            inputAssetId: job?.inputAssetId || undefined,
+            keyframeAssetId: job?.inputAssetId || shortFilmMeta?.keyframeAssetId || undefined,
           }
         }, generatedVideoFolderPath)
         if (newAsset) importedAssets.push(newAsset)
@@ -8292,7 +8294,13 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           yolo: directorMeta || undefined,
           shortFilm: shortFilmMeta || undefined,
           folderId: generatedVideoFolderId,
-          settings: { duration: jobDuration, fps: jobFps, seed: jobSeed }
+          settings: {
+            duration: jobDuration,
+            fps: jobFps,
+            seed: jobSeed,
+            inputAssetId: job?.inputAssetId || undefined,
+            keyframeAssetId: job?.inputAssetId || shortFilmMeta?.keyframeAssetId || undefined,
+          }
         })
         if (fallbackAsset) importedAssets.push(fallbackAsset)
         didImportAny = true
