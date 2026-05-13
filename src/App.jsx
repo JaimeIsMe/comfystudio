@@ -40,6 +40,7 @@ function App() {
   const [selectedItem, setSelectedItem] = useState({ type: 'shot', id: '2.1' })
   const [mainTab, setMainTab] = useState('editor')
   const [hasMountedFlowAi, setHasMountedFlowAi] = useState(false)
+  const [hasMountedExport, setHasMountedExport] = useState(false)
   const [bottomEditorView, setBottomEditorView] = useState('timeline')
   const [activeTimelineToolLabel, setActiveTimelineToolLabel] = useState('Move tool')
   const mainTabRef = useRef(mainTab)
@@ -157,6 +158,12 @@ function App() {
   useEffect(() => {
     if (mainTab === 'flow-ai') {
       setHasMountedFlowAi(true)
+    }
+  }, [mainTab])
+
+  useEffect(() => {
+    if (mainTab === "export") {
+      setHasMountedExport(true)
     }
   }, [mainTab])
 
@@ -444,13 +451,15 @@ function App() {
             </WorkspaceErrorBoundary>
           </div>
         )}
-        {/* Export tab - keep mounted so settings, queue, and progress survive tab switches */}
-        <div
-          className="flex-1 flex flex-col min-h-0 overflow-hidden bg-sf-dark-950"
-          style={{ display: mainTab === 'export' ? 'flex' : 'none' }}
-        >
-          <ExportPanel />
-        </div>
+        {/* Export tab - lazy-mount after first visit so hidden exports cannot start before Export is opened. */}
+        {hasMountedExport && (
+          <div
+            className="flex-1 flex flex-col min-h-0 overflow-hidden bg-sf-dark-950"
+            style={{ display: mainTab === "export" ? "flex" : "none" }}
+          >
+            <ExportPanel isActive={mainTab === "export"} />
+          </div>
+        )}
         {mainTab === 'stock' ? (
           <StockPanel />
         ) : mainTab === 'llm-assistant' ? (
