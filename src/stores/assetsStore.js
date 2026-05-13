@@ -562,28 +562,17 @@ export const useAssetsStore = create(
       })
     }
     
-    const videoAssetCount = assetsWithUrls.filter((asset) => asset?.type === 'video').length
-    const willLoadSprites = typeof projectHandle === 'string' && videoAssetCount > 0
     const nextState = {
       assets: assetsWithUrls,
       assetCounter: (projectAssets?.length || 0) + 1,
-      mediaPreparation: willLoadSprites
-        ? {
-            active: true,
-            phase: 'sprites',
-            label: 'Loading video thumbnails...',
-            completed: 0,
-            total: videoAssetCount,
-            critical: false,
-          }
-        : {
-            active: false,
-            phase: 'idle',
-            label: '',
-            completed: 0,
-            total: 0,
-            critical: false,
-          },
+      mediaPreparation: {
+        active: false,
+        phase: 'idle',
+        label: '',
+        completed: 0,
+        total: 0,
+        critical: false,
+      },
     }
     // Restore folder structure from project file so folders persist across sessions
     if (Array.isArray(projectFolders)) {
