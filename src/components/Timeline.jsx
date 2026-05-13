@@ -1163,9 +1163,59 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     return clip.url
   }
 
+  const getTimelineClipPosterUrl = (clip, asset) => {
+    const directPoster = asset?.posterUrl
+      || asset?.thumbnailUrl
+      || asset?.coverUrl
+      || asset?.settings?.posterUrl
+      || asset?.settings?.thumbnailUrl
+      || asset?.settings?.keyframeUrl
+    if (directPoster) return directPoster
+
+    const keyframeAssetId = asset?.settings?.keyframeAssetId
+      || asset?.settings?.inputAssetId
+      || asset?.yolo?.keyframeAssetId
+      || asset?.shortFilm?.keyframeAssetId
+      || clip?.metadata?.keyframeAssetId
+    if (keyframeAssetId) {
+      const posterAsset = assetsById.get(keyframeAssetId)
+      if (posterAsset?.type === 'image' && posterAsset?.url) return posterAsset.url
+    }
+
+    const variantKeys = new Set([
+      asset?.yolo?.variantKey,
+      asset?.yolo?.key,
+      clip?.metadata?.musicVideoAssembly?.variantKey,
+    ].filter(Boolean).map(String))
+    if (variantKeys.size > 0) {
+      const posterAsset = assets.find((candidate) => {
+        if (candidate?.type !== 'image' || !candidate?.url) return false
+        if (candidate?.yolo?.stage !== 'storyboard') return false
+        return [candidate?.yolo?.variantKey, candidate?.yolo?.key]
+          .filter(Boolean)
+          .some((key) => variantKeys.has(String(key)))
+      })
+      if (posterAsset?.url) return posterAsset.url
+    }
+
+    const shotId = asset?.shortFilm?.shotId || clip?.metadata?.shortFilm?.shotId
+    if (shotId) {
+      const posterAsset = assets.find((candidate) => (
+        candidate?.type === 'image'
+        && candidate?.url
+        && candidate?.shortFilm?.kind === 'shot-keyframe'
+        && String(candidate.shortFilm.shotId || '') === String(shotId)
+      ))
+      if (posterAsset?.url) return posterAsset.url
+    }
+
+    return null
+  }
+
   const renderTimelineVideoFilmstrip = (clip, renderedClipWidth, thumbCount, contentHeight) => {
     const asset = clip?.assetId ? assetsById.get(clip.assetId) : null
     const sprite = asset?.sprite
+    const posterUrl = getTimelineClipPosterUrl(clip, asset)
     const tileWidth = renderedClipWidth / Math.max(1, thumbCount)
     const tileHeight = Math.max(1, contentHeight - 3)
 
@@ -1208,6 +1258,21 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
           </div>
         )
       })
+    }
+
+    if (posterUrl) {
+      return (
+        <div className="absolute inset-0 top-[3px] overflow-hidden bg-[#162226]">
+          <img
+            src={posterUrl}
+            alt={asset?.name || clip?.name || 'Video keyframe'}
+            className="absolute inset-0 h-full w-full object-cover opacity-80 pointer-events-none"
+            draggable={false}
+            loading="lazy"
+            onContextMenu={(e) => e.preventDefault()}
+          />
+        </div>
+      )
     }
 
     return (
