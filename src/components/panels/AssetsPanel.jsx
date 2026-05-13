@@ -6,7 +6,6 @@ import useTimelineStore from '../../stores/timelineStore'
 import { importAsset, isElectron, writeGeneratedOverlayToProject, deleteProjectFile } from '../../services/fileSystem'
 import { enqueuePlaybackTranscode } from '../../services/playbackCache'
 import { enqueueProxyTranscode, isProxyPlaybackEnabled } from '../../services/proxyCache'
-import { getOrCreateImageThumbnail } from '../../services/imageThumbnailCache'
 import { unstitchSequenceAsset } from '../../services/comfyAutoImport'
 import { deleteSpriteFromProject } from '../../services/thumbnailSprites'
 import MaskGenerationDialog from '../MaskGenerationDialog'
@@ -55,7 +54,6 @@ const assetMatchesSearch = (asset, normalizedQuery) => {
 function LazyAssetThumbnail({
   asset,
   Icon,
-  projectHandle = null,
   isActive = true,
   iconClassName = 'w-3.5 h-3.5 text-sf-text-muted',
   imageAlt = '',
@@ -65,7 +63,6 @@ function LazyAssetThumbnail({
 }) {
   const containerRef = useRef(null)
   const [shouldLoad, setShouldLoad] = useState(false)
-  const [thumbnailUrl, setThumbnailUrl] = useState(null)
 
   useEffect(() => {
     if (!isActive) {
@@ -89,48 +86,14 @@ function LazyAssetThumbnail({
     return () => observer.disconnect()
   }, [isActive])
 
-  useEffect(() => {
-    let cancelled = false
-    if (!shouldLoad) {
-      setThumbnailUrl(null)
-      return () => { cancelled = true }
-    }
-    if (!asset || asset.type !== 'image') {
-      setThumbnailUrl(asset?.thumbnailUrl || asset?.posterUrl || asset?.settings?.posterUrl || asset?.settings?.thumbnailUrl || null)
-      return () => { cancelled = true }
-    }
-
-    const sourceReady = asset.url || asset.path || asset.absolutePath || asset.thumbnailUrl
-    if (!sourceReady) {
-      setThumbnailUrl(null)
-      return () => { cancelled = true }
-    }
-
-    getOrCreateImageThumbnail(projectHandle, asset, { width: 128, height: 128, quality: 78 })
-      .then((url) => {
-        if (!cancelled) setThumbnailUrl(url || null)
-      })
-      .catch(() => {
-        if (!cancelled) setThumbnailUrl(asset.url || asset.thumbnailUrl || null)
-      })
-
-    return () => { cancelled = true }
-  }, [asset, projectHandle, shouldLoad])
-
   const fallback = Icon ? <Icon className={iconClassName} /> : null
 
-  const sourceUrl = asset?.type === 'image'
-    ? thumbnailUrl || asset?.url || asset?.path || asset?.absolutePath || ''
-    : (
-        asset?.thumbnailUrl
-        || asset?.posterUrl
-        || asset?.settings?.posterUrl
-        || asset?.settings?.thumbnailUrl
-      )
   return (
     <div ref={containerRef} className="w-full h-full flex items-center justify-center">
-      {shouldLoad && sourceUrl ? (
-        <img src={sourceUrl} alt={imageAlt} className={imageClassName} loading="lazy" decoding="async" />
+      {shouldLoad && asset?.type === 'video' && asset?.url ? (
+        <video src={asset.url} className={videoClassName} muted preload="none" {...videoProps} />
+      ) : shouldLoad && asset?.type === 'image' && asset?.url ? (
+        <img src={asset.url} alt={imageAlt} className={imageClassName} loading="lazy" decoding="async" />
       ) : fallback}
     </div>
   )
@@ -420,9 +383,14 @@ function AssetsPanel({ isActive = true }) {
           }
         }
         
-        // Thumbnails/sprites are now strictly on-demand.
-        // We keep the imported asset metadata only and let the
-        // visible timeline/asset card request optimized media when needed.
+        // Auto-generate thumbnail sprites for videos in background
+        if (category === 'video' && assetInfo.duration > 0.5 && newAsset) {
+          const projectPath = typeof currentProjectHandle === 'string' ? currentProjectHandle : null
+          // Generate sprites asynchronously (don't await)
+          generateAssetSprite(newAsset.id, projectPath).catch(err => {
+            console.warn('Auto-sprite generation failed:', err)
+          })
+        }
       } catch (err) {
         console.error(`Error importing ${file.name}:`, err)
       }
@@ -1602,7 +1570,6 @@ function AssetsPanel({ isActive = true }) {
                       <LazyAssetThumbnail
                         asset={asset}
                         Icon={Icon}
-                        projectHandle={currentProjectHandle}
                         isActive={isActive}
                         iconClassName="w-3.5 h-3.5 text-sf-text-muted"
                         imageAlt=""
@@ -1980,7 +1947,6 @@ function AssetsPanel({ isActive = true }) {
                     <LazyAssetThumbnail
                       asset={asset}
                       Icon={Icon}
-                      projectHandle={currentProjectHandle}
                       isActive={isActive}
                       iconClassName={`${sizeConfig.iconSize} text-sf-text-muted`}
                       imageAlt={asset.name}
@@ -2224,7 +2190,6 @@ function AssetsPanel({ isActive = true }) {
                 <LazyAssetThumbnail
                   asset={dragPreviewAsset}
                   Icon={DragPreviewIcon}
-                  projectHandle={currentProjectHandle}
                   isActive={isActive}
                   iconClassName="w-4 h-4 text-sf-text-muted"
                   imageAlt=""
