@@ -6,7 +6,7 @@ import {
   Diamond, Zap, AlertTriangle, Loader2, ChevronLeft, ChevronRight, Maximize2, Flag, Scissors, Clock,
   Copy, ClipboardPaste, Trash2,
 } from 'lucide-react'
-import useTimelineStore from '../stores/timelineStore'
+import useTimelineStore, { isSyncLockedClip } from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
 import renderCacheService from '../services/renderCache'
 import { deleteRenderCache } from '../services/fileSystem'
@@ -1982,7 +1982,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
   }, [])
 
   const splitClipAtTime = useCallback((clip, splitPosition, { saveHistory = false } = {}) => {
-    if (!clip || splitPosition <= clip.startTime || splitPosition >= clip.startTime + clip.duration) return null
+    if (!clip || isSyncLockedClip(clip) || splitPosition <= clip.startTime || splitPosition >= clip.startTime + clip.duration) return null
 
     const splitTime = splitPosition - clip.startTime
     const remainder = clip.duration - splitTime
@@ -2620,12 +2620,29 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     return { startTime: rawStartTime, snapTime: null }
   }
 
+  const getMusicVideoAssetSyncTiming = (asset) => {
+    const yolo = asset?.yolo || asset?.settings?.yolo || null
+    const shotType = String(yolo?.shotType || '').trim().toLowerCase()
+    if (yolo?.mode !== 'music' || yolo?.stage !== 'video') return null
+    if (shotType !== 'performance' && shotType !== 'performance_wide') return null
+    const audioStart = Number(yolo.audioStart)
+    const length = Number(yolo.length ?? yolo.durationSeconds ?? asset?.settings?.duration ?? asset?.duration)
+    return {
+      startTime: Number.isFinite(audioStart) ? Math.max(0, audioStart) : 0,
+      duration: Number.isFinite(length) && length > 0 ? length : null,
+    }
+  }
+
   const getDropPreviewDuration = (asset, startTime) => {
     if (!asset) return 5
     const fps = Number.isFinite(Number(timelineFps)) && Number(timelineFps) > 0
       ? Number(timelineFps)
       : FRAME_RATE
     const minDuration = 1 / fps
+    const syncTiming = getMusicVideoAssetSyncTiming(asset)
+    if (syncTiming?.duration) {
+      return Math.max(minDuration, Math.round(syncTiming.duration * fps) / fps)
+    }
     const isImage = asset.type === 'image'
     const assetDuration = Number(asset.duration ?? asset.settings?.duration)
     const sourceDuration = Number.isFinite(assetDuration) && assetDuration > 0 ? assetDuration : 5
@@ -2778,8 +2795,11 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
         return
       }
 
-      const duration = getDropPreviewDuration(asset, rawStartTime)
-      const { startTime, snapTime } = getSnappedDropStartTime(rawStartTime, duration)
+      const syncTiming = getMusicVideoAssetSyncTiming(asset)
+      const duration = getDropPreviewDuration(asset, syncTiming?.startTime ?? rawStartTime)
+      const { startTime, snapTime } = syncTiming
+        ? { startTime: syncTiming.startTime, snapTime: syncTiming.startTime }
+        : getSnappedDropStartTime(rawStartTime, duration)
       setDropTarget(targetTrackId)
       if (snapTime !== null) {
         setActiveSnapTime(snapTime)
@@ -3120,6 +3140,10 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     
     const clip = clips.find(c => c.id === clipId)
     if (!clip) return
+    if (isSyncLockedClip(clip)) {
+      selectClip(clipId)
+      return
+    }
 
     // Trimming must be exclusive: cancel any in-flight drag/edit gesture to avoid
     // multiple mousemove handlers fighting and moving neighboring clips.
@@ -3412,7 +3436,8 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     }
 
     const sourceDuration = getSourceDuration(clip)
-    const canSlip = (isSlipToolActive || e.altKey)
+    const canSlip = !isSyncLockedClip(clip)
+      && (isSlipToolActive || e.altKey)
       && (clip.type === 'video' || clip.type === 'audio')
       && Number.isFinite(sourceDuration)
     if (canSlip) {
@@ -5211,6 +5236,12 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                               </div>
                             )
                           })()}
+                          {isSyncLockedClip(clip) && (
+                            <div className="rounded bg-emerald-500/85 px-1 py-0.5 text-[8px] text-white font-medium flex items-center gap-0.5 flex-shrink-0" title="Locked to song timing">
+                              <Lock className="w-2.5 h-2.5" />
+                              <span>SYNC</span>
+                            </div>
+                          )}
                         </div>
                         
                         {/* Effects/Cache indicator - top right area */}
@@ -5283,7 +5314,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                     {/* Hover overlay */}
                     <div className="absolute inset-0 bg-white/0 group-hover:bg-white/5 transition-colors pointer-events-none" />
                     
-                    {trimHandlesEnabled && (
+                    {trimHandlesEnabled && !isSyncLockedClip(clip) && (
                       <>
                         {/* Left trim handle - wider hit area for easier grabbing */}
                         <div
@@ -5745,7 +5776,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                     <div className="absolute left-0 top-0 bottom-0 w-px bg-black/40 pointer-events-none" />
                     <div className="absolute right-0 top-0 bottom-0 w-px bg-black/40 pointer-events-none" />
                     
-                    {trimHandlesEnabled && (
+                    {trimHandlesEnabled && !isSyncLockedClip(clip) && (
                       <>
                         {/* Trim handles on hover - wider hit area for easier grabbing */}
                         <div

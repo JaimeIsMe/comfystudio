@@ -6714,11 +6714,26 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       const track = getOrCreateTrack('video', group.trackName)
       if (!track) continue
       for (const row of group.rows) {
+        const shotType = row.shot?.musicShotType || row.variant?.musicShotType || row.asset?.yolo?.shotType || ''
+        const shotTypeOption = getMusicVideoShotTypeOption(shotType)
+        const syncLock = shotTypeOption?.needsVocalAlignment ? {
+          source: 'music-video',
+          reason: 'song-sync',
+          startTime: row.startTime,
+          audioStart: row.startTime,
+          duration: row.duration,
+          length: row.duration,
+          shotType,
+          sceneId: row.scene?.id || '',
+          shotId: row.shot?.id || '',
+          variantKey: row.variant?.key || row.asset?.yolo?.variantKey || '',
+        } : null
         const clip = timelineAddClip(track.id, row.asset, row.startTime, fps, {
           duration: row.duration,
           saveHistory: false,
           selectAfterAdd: false,
           resolveOverlaps: false,
+          ...(syncLock ? { syncLock } : {}),
           metadata: {
             musicVideoAssembly: {
               mode: MUSIC_VIDEO_TIMELINE_ASSEMBLY_MODE,
