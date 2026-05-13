@@ -260,25 +260,42 @@ export async function loadSpriteFromProject(projectPath, assetId, spriteIndex = 
   
   try {
     const thumbDir = await getThumbnailDirectory(projectPath)
-    const indexedSprite = spriteIndex?.[assetId] || (spriteIndex ? null : (await loadSpriteIndex(projectPath))[assetId])
-    const spritePath = indexedSprite?.spritePath || await api.pathJoin(thumbDir, `${assetId}_sprite.jpg`)
-    const metaPath = indexedSprite?.metaPath || await api.pathJoin(thumbDir, `${assetId}_sprite.json`)
-    
-    // Check if files exist
-    if (!await api.exists(spritePath)) {
-      return null
+    const loadedIndex = spriteIndex || await loadSpriteIndex(projectPath)
+    const indexedSprite = loadedIndex?.[assetId] || null
+    const legacySpritePath = await api.pathJoin(thumbDir, `${assetId}_sprite.jpg`)
+    const legacyMetaPath = await api.pathJoin(thumbDir, `${assetId}_sprite.json`)
+    const indexedSpritePath = indexedSprite?.spritePath || null
+    const indexedMetaPath = indexedSprite?.metaPath || null
+    const spriteCandidates = [indexedSpritePath, legacySpritePath].filter(Boolean)
+    let resolvedSpritePath = null
+    for (const candidate of spriteCandidates) {
+      if (await api.exists(candidate)) {
+        resolvedSpritePath = candidate
+        break
+      }
     }
+    if (!resolvedSpritePath) return null
 
-    let spriteData = indexedSprite || null
-    if (!spriteData) {
-      if (!await api.exists(metaPath)) return null
-      const metaResult = await api.readFile(metaPath, { encoding: 'utf8' })
-      if (!metaResult.success) return null
-      spriteData = JSON.parse(metaResult.data)
+    let spriteData = null
+    if (indexedSprite && indexedSpritePath === resolvedSpritePath) {
+      spriteData = indexedSprite
+    } else {
+      const metaCandidates = [
+        resolvedSpritePath === indexedSpritePath ? indexedMetaPath : null,
+        legacyMetaPath,
+      ].filter(Boolean)
+      for (const candidate of metaCandidates) {
+        if (!await api.exists(candidate)) continue
+        const metaResult = await api.readFile(candidate, { encoding: 'utf8' })
+        if (!metaResult.success) continue
+        spriteData = JSON.parse(metaResult.data)
+        break
+      }
     }
+    if (!spriteData) return null
     
     // Get URL for sprite image
-    const spriteUrl = await api.getFileUrlDirect(spritePath)
+    const spriteUrl = await api.getFileUrlDirect(resolvedSpritePath)
     
     return { spriteUrl, spriteData: { ...spriteData, url: spriteUrl } }
   } catch (err) {
