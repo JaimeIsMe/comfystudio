@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import useProjectStore from '../../stores/projectStore'
-import { getOrCreateImageThumbnail } from '../../services/imageThumbnailCache'
 import {
   CheckCircle2,
   Clipboard,
@@ -252,75 +250,9 @@ function getAssetUrl(asset) {
   return asset?.url || asset?.thumbnailUrl || asset?.proxyUrl || asset?.path || ''
 }
 
-const LAZY_SHOT_PREVIEW_ROOT_MARGIN = '700px 0px'
-
-function LazyShotPreview({ children, placeholderLabel = 'Preview' }) {
-  const ref = useRef(null)
-  const [shouldLoad, setShouldLoad] = useState(false)
-
-  useEffect(() => {
-    if (shouldLoad) return undefined
-    const el = ref.current
-    if (!el) return undefined
-    if (typeof IntersectionObserver === 'undefined') {
-      setShouldLoad(true)
-      return undefined
-    }
-
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        setShouldLoad(true)
-        observer.disconnect()
-      }
-    }, { root: null, rootMargin: LAZY_SHOT_PREVIEW_ROOT_MARGIN, threshold: 0.01 })
-
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [shouldLoad])
-
-  return (
-    <div ref={ref} className="h-full w-full">
-      {shouldLoad ? children : (
-        <span className="flex h-full w-full items-center justify-center text-[10px] text-sf-text-muted">{placeholderLabel}</span>
-      )}
-    </div>
-  )
-}
-
-function CachedShotImage({ asset, fallbackUrl, className, alt = '' }) {
-  const currentProjectHandle = useProjectStore((state) => state.currentProjectHandle)
-  const sourceUrl = getAssetUrl(asset) || fallbackUrl || ''
-  const [thumbnailUrl, setThumbnailUrl] = useState(null)
-
-  useEffect(() => {
-    let cancelled = false
-    setThumbnailUrl(null)
-    if (!sourceUrl) return () => { cancelled = true }
-    getOrCreateImageThumbnail(currentProjectHandle, asset || { url: sourceUrl }, { width: 360, height: 204, quality: 78 })
-      .then((url) => {
-        if (!cancelled) setThumbnailUrl(url || sourceUrl)
-      })
-      .catch(() => {
-        if (!cancelled) setThumbnailUrl(sourceUrl)
-      })
-    return () => { cancelled = true }
-  }, [asset, currentProjectHandle, sourceUrl])
-
-  if (!sourceUrl) return null
-  if (!thumbnailUrl) {
-    return <span className="flex h-full w-full items-center justify-center text-[10px] text-sf-text-muted">Loading preview</span>
-  }
-  return <img src={thumbnailUrl} alt={alt} className={className} loading="lazy" decoding="async" />
-}
-
-function ShotVideoPreview({ hasVideo, keyframeAsset = null, keyframeUrl = '', placeholderLabel = "Needs keyframe" }) {
-  const resolvedKeyframeUrl = getAssetUrl(keyframeAsset) || keyframeUrl
-  if (resolvedKeyframeUrl) {
-    return (
-      <LazyShotPreview placeholderLabel="Keyframe preview">
-        <CachedShotImage asset={keyframeAsset} fallbackUrl={resolvedKeyframeUrl} className="h-full w-full object-cover opacity-70" />
-      </LazyShotPreview>
-    )
+function ShotVideoPreview({ hasVideo, keyframeUrl, placeholderLabel = "Needs keyframe" }) {
+  if (keyframeUrl) {
+    return <img src={keyframeUrl} alt="" className="h-full w-full object-cover opacity-70" loading="lazy" decoding="async" />
   }
 
   if (hasVideo) {
@@ -1897,7 +1829,7 @@ export default function MusicVideoEasyMode({
                         ? 'bg-red-950/30'
                         : 'bg-sf-dark-800'
                   }`}>
-                    <ShotVideoPreview hasVideo={Boolean(videoUrl)} keyframeAsset={keyframeAsset} keyframeUrl={keyframeUrl} />
+                    <ShotVideoPreview hasVideo={Boolean(videoUrl)} keyframeUrl={keyframeUrl} />
                     {cardState.state === 'generating' && (
                       <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-transparent via-white/10 to-transparent" />
                     )}
