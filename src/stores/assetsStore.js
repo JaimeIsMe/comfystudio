@@ -1,6 +1,24 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
+const SPRITE_GENERATION_CONCURRENCY = 2
+let activeSpriteGenerationCount = 0
+const pendingSpriteGenerationQueue = []
+
+const runWithSpriteGenerationSlot = async (task) => {
+  if (activeSpriteGenerationCount >= SPRITE_GENERATION_CONCURRENCY) {
+    await new Promise((resolve) => pendingSpriteGenerationQueue.push(resolve))
+  }
+  activeSpriteGenerationCount += 1
+  try {
+    return await task()
+  } finally {
+    activeSpriteGenerationCount = Math.max(0, activeSpriteGenerationCount - 1)
+    const next = pendingSpriteGenerationQueue.shift()
+    if (next) next()
+  }
+}
+
 /**
  * Store for managing generated and imported assets
  * Persisted to localStorage for data survival across refreshes
@@ -562,28 +580,17 @@ export const useAssetsStore = create(
       })
     }
     
-    const videoAssetCount = assetsWithUrls.filter((asset) => asset?.type === 'video').length
-    const willLoadSprites = typeof projectHandle === 'string' && videoAssetCount > 0
     const nextState = {
       assets: assetsWithUrls,
       assetCounter: (projectAssets?.length || 0) + 1,
-      mediaPreparation: willLoadSprites
-        ? {
-            active: true,
-            phase: 'sprites',
-            label: 'Loading video thumbnails...',
-            completed: 0,
-            total: videoAssetCount,
-            critical: false,
-          }
-        : {
-            active: false,
-            phase: 'idle',
-            label: '',
-            completed: 0,
-            total: 0,
-            critical: false,
-          },
+      mediaPreparation: {
+        active: false,
+        phase: 'idle',
+        label: '',
+        completed: 0,
+        total: 0,
+        critical: false,
+      },
     }
     // Restore folder structure from project file so folders persist across sessions
     if (Array.isArray(projectFolders)) {
@@ -672,8 +679,9 @@ export const useAssetsStore = create(
     try {
       const { generateThumbnailSprite, saveSpriteToProject } = await import('../services/thumbnailSprites')
       
-      // Generate sprite
-      const result = await generateThumbnailSprite(asset.url, asset.duration || 5)
+      // Generate sprite. This uses a hidden video element and canvas seeks,
+      // so keep generation bounded across imports/manual actions.
+      const result = await runWithSpriteGenerationSlot(() => generateThumbnailSprite(asset.url, asset.duration || 5))
       if (!result) {
         throw new Error('Failed to generate sprite')
       }

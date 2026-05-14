@@ -163,11 +163,11 @@ const hydrateOpenedProjectSession = async (projectHandleOrPath, rawProjectData, 
     projectData.folderCounter
   )
 
-  if (typeof projectHandleOrPath === 'string') {
-    useAssetsStore.getState().loadSpritesFromProject(projectHandleOrPath).catch((err) => {
-      console.warn('Failed to load sprites:', err)
-    })
-  }
+  // Do not eagerly load every saved video thumbnail sprite on project open.
+  // Large projects can contain hundreds of videos; walking all thumbnail
+  // metadata here blocks startup and can make Electron appear as a black
+  // screen. Thumbnails are loaded/generated on demand from the asset browser
+  // and timeline paths instead.
 
   const recentProject = {
     name: projectData.name,

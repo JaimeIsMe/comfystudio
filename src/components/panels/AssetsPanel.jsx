@@ -7,7 +7,7 @@ import { importAsset, isElectron, writeGeneratedOverlayToProject, deleteProjectF
 import { enqueuePlaybackTranscode } from '../../services/playbackCache'
 import { enqueueProxyTranscode, isProxyPlaybackEnabled } from '../../services/proxyCache'
 import { unstitchSequenceAsset } from '../../services/comfyAutoImport'
-import { deleteSpriteFromProject } from '../../services/thumbnailSprites'
+import { deleteSpriteFromProject, getSpriteFramePosition } from '../../services/thumbnailSprites'
 import MaskGenerationDialog from '../MaskGenerationDialog'
 import OverlayGeneratorModal from '../OverlayGeneratorModal'
 import TopazVideoUpscaleDialog from '../TopazVideoUpscaleDialog'
@@ -51,7 +51,70 @@ const assetMatchesSearch = (asset, normalizedQuery) => {
     || normalizeSearchText(asset?.prompt).includes(normalizedQuery)
 }
 
-function AssetsPanel() {
+function LazyAssetThumbnail({
+  asset,
+  Icon,
+  isActive = true,
+  iconClassName = 'w-3.5 h-3.5 text-sf-text-muted',
+  imageAlt = '',
+  videoClassName = 'w-full h-full object-cover',
+  imageClassName = 'w-full h-full object-cover',
+  videoProps = {},
+}) {
+  const containerRef = useRef(null)
+  const [shouldLoad, setShouldLoad] = useState(false)
+
+  useEffect(() => {
+    if (!isActive) {
+      setShouldLoad(false)
+      return undefined
+    }
+
+    const element = containerRef.current
+    if (!element) return undefined
+    if (typeof IntersectionObserver === 'undefined') {
+      setShouldLoad(true)
+      return undefined
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries.some((entry) => entry.isIntersecting || entry.intersectionRatio > 0)
+      setShouldLoad(visible)
+    }, { root: null, rootMargin: '600px 0px', threshold: 0.01 })
+
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [isActive])
+
+  const fallback = Icon ? <Icon className={iconClassName} /> : null
+
+  const sprite = asset?.type === 'video' ? asset.sprite : null
+  const frame = sprite?.url && Array.isArray(sprite.frames) && sprite.frames.length > 0
+    ? (getSpriteFramePosition(sprite, 0) || sprite.frames[0])
+    : null
+  const videoPreviewClassName = String(videoClassName || '').includes('object-contain')
+    ? 'w-full h-full bg-sf-dark-950 bg-center bg-no-repeat'
+    : 'w-full h-full bg-sf-dark-950 bg-center bg-cover bg-no-repeat'
+
+  return (
+    <div ref={containerRef} className="w-full h-full flex items-center justify-center">
+      {shouldLoad && asset?.type === 'video' && frame ? (
+        <div
+          className={videoPreviewClassName}
+          style={{
+            backgroundImage: `url(${sprite.url})`,
+            backgroundSize: `${sprite.width}px ${sprite.height}px`,
+            backgroundPosition: `${-(frame.x || 0)}px ${-(frame.y || 0)}px`,
+          }}
+        />
+      ) : shouldLoad && asset?.type === 'image' && asset?.url ? (
+        <img src={asset.url} alt={imageAlt} className={imageClassName} loading="lazy" decoding="async" />
+      ) : fallback}
+    </div>
+  )
+}
+
+function AssetsPanel({ isActive = true }) {
   const [viewMode, setViewMode] = useState('grid')
   const [thumbnailSize, setThumbnailSize] = useState('medium')
   const [assetDeleteMode, setAssetDeleteMode] = useState(() => {
@@ -1519,13 +1582,13 @@ function AssetsPanel() {
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="w-6 h-6 rounded overflow-hidden bg-sf-dark-700 flex-shrink-0 flex items-center justify-center">
-                      {asset.type === 'video' && asset.url ? (
-                        <video src={asset.url} className="w-full h-full object-cover" muted preload="metadata" />
-                      ) : asset.type === 'image' && asset.url ? (
-                        <img src={asset.url} alt="" className="w-full h-full object-cover" />
-                      ) : (
-                        <Icon className="w-3.5 h-3.5 text-sf-text-muted" />
-                      )}
+                      <LazyAssetThumbnail
+                        asset={asset}
+                        Icon={Icon}
+                        isActive={isActive}
+                        iconClassName="w-3.5 h-3.5 text-sf-text-muted"
+                        imageAlt=""
+                      />
                     </div>
                     {isEditingAsset ? (
                       <form onSubmit={saveEdit} className="min-w-0 flex-1" onClick={(e) => e.stopPropagation()}>
@@ -1896,26 +1959,20 @@ function AssetsPanel() {
                 >
                   {/* Thumbnail */}
                   <div className="aspect-video bg-sf-dark-700 flex items-center justify-center relative overflow-hidden">
-                    {asset.type === 'video' && asset.url ? (
-                      <video
-                        src={asset.url}
-                        className="w-full h-full object-cover"
-                        muted
-                        onMouseEnter={(e) => e.target.play()}
-                        onMouseLeave={(e) => {
+                    <LazyAssetThumbnail
+                      asset={asset}
+                      Icon={Icon}
+                      isActive={isActive}
+                      iconClassName={`${sizeConfig.iconSize} text-sf-text-muted`}
+                      imageAlt={asset.name}
+                      videoProps={{
+                        onMouseEnter: (e) => e.target.play(),
+                        onMouseLeave: (e) => {
                           e.target.pause()
                           e.target.currentTime = 0
-                        }}
-                      />
-                    ) : asset.type === 'image' && asset.url ? (
-                      <img
-                        src={asset.url}
-                        alt={asset.name}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <Icon className={`${sizeConfig.iconSize} text-sf-text-muted`} />
-                    )}
+                        },
+                      }}
+                    />
                     
                     {/* Badge - AI, Imported, or Mask */}
                     <div className={`absolute top-0.5 left-0.5 px-1 py-0.5 rounded ${sizeConfig.badgeSize} text-white font-medium ${
@@ -2089,13 +2146,13 @@ function AssetsPanel() {
                   {/* Name + thumbnail */}
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="w-7 h-7 rounded overflow-hidden bg-sf-dark-700 flex-shrink-0 flex items-center justify-center">
-                      {asset.type === 'video' && asset.url ? (
-                        <video src={asset.url} className="w-full h-full object-cover" muted preload="metadata" />
-                      ) : asset.type === 'image' && asset.url ? (
-                        <img src={asset.url} alt="" className="w-full h-full object-cover" />
-                      ) : (
-                        <Icon className="w-3.5 h-3.5 text-sf-text-muted" />
-                      )}
+                      <LazyAssetThumbnail
+                        asset={asset}
+                        Icon={Icon}
+                        isActive={isActive}
+                        iconClassName="w-3.5 h-3.5 text-sf-text-muted"
+                        imageAlt=""
+                      />
                     </div>
                     {isEditingAsset ? (
                       <form onSubmit={saveEdit} className="min-w-0 flex-1" onClick={(e) => e.stopPropagation()}>
@@ -2144,12 +2201,14 @@ function AssetsPanel() {
         >
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-10 h-7 rounded overflow-hidden bg-sf-dark-700 flex-shrink-0 flex items-center justify-center">
-              {dragPreviewAsset.type === 'video' && dragPreviewAsset.url ? (
-                <video src={dragPreviewAsset.url} className="w-full h-full object-cover" muted preload="metadata" />
-              ) : dragPreviewAsset.type === 'image' && dragPreviewAsset.url ? (
-                <img src={dragPreviewAsset.url} alt="" className="w-full h-full object-cover" />
-              ) : (
-                DragPreviewIcon && <DragPreviewIcon className="w-4 h-4 text-sf-text-muted" />
+              {DragPreviewIcon && (
+                <LazyAssetThumbnail
+                  asset={dragPreviewAsset}
+                  Icon={DragPreviewIcon}
+                  isActive={isActive}
+                  iconClassName="w-4 h-4 text-sf-text-muted"
+                  imageAlt=""
+                />
               )}
             </div>
             <div className="min-w-0">

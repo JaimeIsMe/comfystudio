@@ -281,7 +281,7 @@ function saveExportSettings(storageKey, settings) {
   }
 }
 
-function ExportPanel() {
+function ExportPanel({ isActive = true }) {
   const { currentProject, currentProjectHandle, getCurrentTimelineSettings } = useProjectStore()
   const { duration, inPoint, outPoint, getTimelineEndTime, selectedClipIds, clips, transitions, tracks } = useTimelineStore()
   const { assets } = useAssetsStore()
@@ -587,6 +587,7 @@ function ExportPanel() {
   }
 
   const runQueue = async () => {
+    if (!isActive) return
     if (queueControllerRef.current.running) return
     queueControllerRef.current.running = true
     queueControllerRef.current.paused = false
@@ -618,7 +619,7 @@ function ExportPanel() {
   }
 
   const handleStartQueue = () => {
-    if (queueRunning || queueRef.current.length === 0) return
+    if (!isActive || queueRunning || queueRef.current.length === 0) return
     runQueue()
   }
 
@@ -629,7 +630,7 @@ function ExportPanel() {
   }
 
   const handleResumeQueue = () => {
-    if (queueRunning) return
+    if (!isActive || queueRunning) return
     queueControllerRef.current.paused = false
     setQueuePaused(false)
     setQueuePauseRequested(false)
@@ -910,7 +911,7 @@ function ExportPanel() {
   }
 
   const handleStartExport = async () => {
-    if (isExporting || queueRunning) return
+    if (!isActive || isExporting || queueRunning) return
     try {
       await runExportJob(settings)
     } catch (err) {
