@@ -114,6 +114,7 @@ const getNormalizedLinkGroupId = (value) => {
 const buildLinkGroupId = (seed) => `link-${seed}`
 const isClipEnabled = (clip) => clip?.enabled !== false
 const MUSIC_VIDEO_SYNC_SHOT_TYPES = new Set(['performance', 'performance_wide'])
+const MUSIC_VIDEO_TIMELINE_ASSEMBLY_MODE = 'music-video-easy-mode'
 
 export const isSyncLockedClip = (clip) => clip?.lockMode === 'sync' && clip?.syncLock?.mode === 'sync'
 
@@ -125,8 +126,21 @@ const isMusicVideoSyncAsset = (asset = null) => {
   return MUSIC_VIDEO_SYNC_SHOT_TYPES.has(normalizeMusicVideoShotType(yolo.shotType))
 }
 
-const resolveClipSyncLock = ({ asset = null, options = null, startTime = 0, duration = 0, fps = FRAME_RATE } = {}) => {
+const isMusicVideoAssemblyVideoClip = (clip = null) => (
+  clip?.metadata?.musicVideoAssembly?.mode === MUSIC_VIDEO_TIMELINE_ASSEMBLY_MODE
+  && clip?.metadata?.musicVideoAssembly?.kind === 'video'
+)
+
+export const isMusicVideoSyncCapableClip = (clip = null, asset = null) => (
+  isSyncLockedClip(clip)
+  || clip?.syncLock?.mode === 'manual'
+  || isMusicVideoAssemblyVideoClip(clip)
+  || isMusicVideoSyncAsset(asset)
+)
+
+export const resolveClipSyncLock = ({ asset = null, options = null, startTime = 0, duration = 0, fps = FRAME_RATE } = {}) => {
   if (options?.syncLock === false) return null
+  if (options?.syncLock?.mode === 'manual') return null
   const explicit = options?.syncLock && typeof options.syncLock === 'object' ? options.syncLock : null
   const yolo = asset?.yolo || asset?.settings?.yolo || null
   const shouldInferFromAsset = !explicit && isMusicVideoSyncAsset(asset)
@@ -151,6 +165,43 @@ const resolveClipSyncLock = ({ asset = null, options = null, startTime = 0, dura
     sceneId: explicit?.sceneId || yolo?.sceneId || '',
     shotId: explicit?.shotId || yolo?.shotId || '',
     variantKey: explicit?.variantKey || yolo?.variantKey || yolo?.key || '',
+  }
+}
+
+export const buildClipSyncLock = ({ clip = null, asset = null, fps = FRAME_RATE } = {}) => {
+  const safeFps = Number.isFinite(Number(fps)) && Number(fps) > 0 ? Number(fps) : FRAME_RATE
+
+  const resolved = resolveClipSyncLock({
+    asset,
+    options: {
+      syncLock: clip?.syncLock,
+    },
+    startTime: clip?.startTime || 0,
+    duration: clip?.duration || 0,
+    fps: safeFps,
+  })
+  if (resolved) return resolved
+
+  const assembly = clip?.metadata?.musicVideoAssembly || null
+  if (assembly?.mode !== MUSIC_VIDEO_TIMELINE_ASSEMBLY_MODE || assembly?.kind !== 'video') return null
+
+  const yolo = asset?.yolo || asset?.settings?.yolo || null
+  const startTime = roundToFrame(Math.max(0, Number(assembly.audioStart ?? clip?.startTime) || 0), safeFps)
+  const duration = roundDurationToFrame(Math.max(1 / safeFps, Number(assembly.length ?? clip?.duration) || 1 / safeFps), safeFps)
+  const shotType = normalizeMusicVideoShotType(clip?.syncLock?.shotType || yolo?.shotType || '')
+
+  return {
+    mode: 'sync',
+    source: 'music-video',
+    reason: 'song-sync',
+    startTime,
+    audioStart: startTime,
+    duration,
+    length: duration,
+    shotType,
+    sceneId: assembly.sceneId || yolo?.sceneId || '',
+    shotId: assembly.shotId || yolo?.shotId || '',
+    variantKey: assembly.variantKey || yolo?.variantKey || yolo?.key || '',
   }
 }
 
@@ -186,10 +237,23 @@ const buildAssetByIdMap = (assets = []) => new Map(
 
 const applyInferredSyncLockToClip = (clip, assetsById, fps = FRAME_RATE) => {
   if (!clip) return clip
+  if (clip.syncLock === false) {
+    return {
+      ...clip,
+      syncLock: {
+        mode: 'manual',
+        source: 'manual',
+        reason: 'manual-unlock',
+      },
+    }
+  }
   if (isSyncLockedClip(clip)) return applySyncLockToClip(clip, fps)
   const asset = assetsById?.get?.(clip.assetId) || null
   const syncLock = resolveClipSyncLock({
     asset,
+    options: {
+      syncLock: clip.syncLock,
+    },
     startTime: clip.startTime,
     duration: clip.duration,
     fps,
@@ -1277,10 +1341,52 @@ export const useTimelineStore = create(
         const { lockMode, syncLock, ...rest } = clip
         return {
           ...rest,
+          syncLock: {
+            mode: 'manual',
+            source: syncLock?.source || 'manual',
+            reason: syncLock?.reason || 'manual-unlock',
+          },
         }
       }),
     }))
 
+    return true
+  },
+
+  /**
+   * Lock sync-capable clips to their anchored song timing.
+   * @param {Array<string>|string} clipIds - Clip id(s) to lock. Defaults to current selection.
+   */
+  lockSyncClips: (clipIds = null, syncLockByClipId = null) => {
+    const state = get()
+    const targetIds = dedupeClipIds(
+      Array.isArray(clipIds)
+        ? clipIds
+        : (typeof clipIds === 'string' ? [clipIds] : state.selectedClipIds)
+    )
+    if (targetIds.length === 0) return false
+
+    const fps = state.timelineFps || FRAME_RATE
+
+    const nextClips = state.clips.map((clip) => {
+      if (!targetIds.includes(clip.id)) return clip
+
+      const inferredSyncLock = clip.syncLock && clip.syncLock.mode === 'sync'
+        ? clip.syncLock
+        : (syncLockByClipId && syncLockByClipId[clip.id]) || null
+      if (!inferredSyncLock) return clip
+      return applySyncLockToClip({
+        ...clip,
+        lockMode: 'sync',
+        syncLock: inferredSyncLock,
+      }, fps)
+    })
+
+    const changed = nextClips.some((clip, index) => clip !== state.clips[index])
+    if (!changed) return false
+
+    get().saveToHistory()
+    set({ clips: nextClips })
     return true
   },
 
