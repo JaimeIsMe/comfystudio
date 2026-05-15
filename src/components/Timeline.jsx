@@ -704,6 +704,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     getLinkedClipIds,
     linkSelectedClips,
     unlinkSelectedClips,
+    unlockSyncLockedClips,
     addMarker,
     removeMarker,
     selectMarker,
@@ -3101,6 +3102,11 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
       case 'unlink-selection':
         unlinkSelectedClips()
         break
+      case 'unlock-sync': {
+        const targetIds = clipContextSelectionIds.length > 0 ? clipContextSelectionIds : [clip.id]
+        unlockSyncLockedClips(targetIds)
+        break
+      }
       case 'split':
         handleSplitClipAtPlayhead(clip)
         break
@@ -6321,6 +6327,16 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
             <span>Unlink Selected</span>
             <span className="ml-auto text-sf-text-muted text-[10px]">{unlinkHotkeyLabel}</span>
           </button>
+          {clipContextSelectionIds.some((clipId) => isSyncLockedClip(clips.find((candidate) => candidate.id === clipId))) && (
+            <button
+              onClick={() => handleContextMenuAction('unlock-sync')}
+              className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
+              title="Convert synced performance clips back into normal timeline clips"
+            >
+              <Unlock className="w-3 h-3" />
+              <span>Unlock Sync</span>
+            </button>
+          )}
           <button
             onClick={() => { copySelectedClips(); setClipContextMenu(null) }}
             className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"

@@ -8,7 +8,7 @@ import {
   AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd,
   Diamond, ChevronFirst, ChevronLast,
   FileVideo, FileImage, FileAudio, HardDrive, Calendar, Info,
-  Wand2, Trash2, EyeOff, Plus, Play, Loader2, Check, AlertTriangle, X,
+  Wand2, Trash2, EyeOff, Plus, Play, Loader2, Check, AlertTriangle, X, Unlock,
   Copy, ClipboardPaste
 } from 'lucide-react'
 import useTimelineStore from '../stores/timelineStore'
@@ -504,6 +504,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     removeTransition,
     getMaxTransitionDurationForAlignment,
     getMaxEdgeTransitionDuration,
+    unlockSyncLockedClips,
     // Cache
     setCacheStatus,
     setCacheUrl,
@@ -557,6 +558,10 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   }, [orderedSelectedClips, tracks])
   const selectionSignature = useMemo(
     () => orderedSelectedClips.map((clip) => clip.id).join('|'),
+    [orderedSelectedClips]
+  )
+  const selectedSyncLockedClipIds = useMemo(
+    () => orderedSelectedClips.filter((clip) => clip && clip.lockMode === 'sync' && clip.syncLock?.mode === 'sync').map((clip) => clip.id),
     [orderedSelectedClips]
   )
   const [inspectorClipId, setInspectorClipId] = useState(null)
@@ -1752,6 +1757,16 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   const renderInspectorSettingsHeaderActions = () => {
     return renderInspectorClipboardButtons({
       scope: INSPECTOR_SETTINGS_SCOPE.ALL,
+      extraActions: selectedSyncLockedClipIds.length > 0
+        ? renderHeaderActionButton({
+            icon: Unlock,
+            label: 'Unlock Sync',
+            onClick: () => unlockSyncLockedClips(selectedSyncLockedClipIds),
+            title: selectedSyncLockedClipIds.length > 1
+              ? `Unlock sync on ${selectedSyncLockedClipIds.length} selected clips`
+              : 'Unlock sync on this clip',
+          })
+        : null,
     })
   }
 

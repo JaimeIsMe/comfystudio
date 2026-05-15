@@ -1251,6 +1251,39 @@ export const useTimelineStore = create(
     })
   },
 
+  /**
+   * Unlock sync-locked clips so they behave like normal timeline clips again.
+   * @param {Array<string>|string} clipIds - Clip id(s) to unlock. Defaults to current selection.
+   */
+  unlockSyncLockedClips: (clipIds = null) => {
+    const state = get()
+    const targetIds = dedupeClipIds(
+      Array.isArray(clipIds)
+        ? clipIds
+        : (typeof clipIds === 'string' ? [clipIds] : state.selectedClipIds)
+    )
+    if (targetIds.length === 0) return false
+
+    const hasSyncLockedClip = targetIds.some((clipId) => isSyncLockedClip(state.clips.find((clip) => clip.id === clipId)))
+    if (!hasSyncLockedClip) return false
+
+    get().saveToHistory()
+
+    set((nextState) => ({
+      clips: nextState.clips.map((clip) => {
+        if (!targetIds.includes(clip.id)) return clip
+        if (!isSyncLockedClip(clip)) return clip
+
+        const { lockMode, syncLock, ...rest } = clip
+        return {
+          ...rest,
+        }
+      }),
+    }))
+
+    return true
+  },
+
   rippleDeleteClipIds: (clipIds = []) => {
     const state = get()
     const targetIds = expandClipIdsWithLinked(state.clips, clipIds)
