@@ -49,10 +49,11 @@ function getThumbnailKey(asset, options) {
   return `${safeName(asset?.id || asset?.name || 'image')}_${hashString(`${sourceRef}|${versionRef}|${sizeRef}`)}.jpg`
 }
 
+
 export async function getExistingImageThumbnail(projectHandle, asset, options = {}) {
   const sourceUrl = asset?.url || asset?.thumbnailUrl || ''
   if (!sourceUrl) return null
-  if (!isElectron() || !projectHandle || !window.electronAPI?.createImageThumbnail) {
+  if (!isElectron() || !projectHandle || !window.electronAPI?.pathJoin) {
     return null
   }
 
@@ -63,14 +64,11 @@ export async function getExistingImageThumbnail(projectHandle, asset, options = 
     const key = getThumbnailKey(asset, { width, height, quality })
     const thumbDir = await window.electronAPI.pathJoin(projectHandle, IMAGE_THUMB_DIR)
     const outputPath = await window.electronAPI.pathJoin(thumbDir, key)
-    if (await window.electronAPI.exists(outputPath)) {
-      return await window.electronAPI.getFileUrlDirect(outputPath)
-    }
-  } catch (error) {
-    console.warn('Image thumbnail cache lookup failed:', error)
+    if (!(await window.electronAPI.exists(outputPath))) return null
+    return await window.electronAPI.getFileUrlDirect(outputPath)
+  } catch {
+    return null
   }
-
-  return null
 }
 
 export async function getOrCreateImageThumbnail(projectHandle, asset, options = {}) {

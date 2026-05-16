@@ -7,7 +7,7 @@ import { importAsset, isElectron, writeGeneratedOverlayToProject, deleteProjectF
 import { enqueuePlaybackTranscode } from '../../services/playbackCache'
 import { enqueueProxyTranscode, isProxyPlaybackEnabled } from '../../services/proxyCache'
 import { unstitchSequenceAsset } from '../../services/comfyAutoImport'
-import { deleteSpriteFromProject } from '../../services/thumbnailSprites'
+import { deleteSpriteFromProject, getSpriteFramePosition } from '../../services/thumbnailSprites'
 import MaskGenerationDialog from '../MaskGenerationDialog'
 import OverlayGeneratorModal from '../OverlayGeneratorModal'
 import TopazVideoUpscaleDialog from '../TopazVideoUpscaleDialog'
@@ -88,10 +88,25 @@ function LazyAssetThumbnail({
 
   const fallback = Icon ? <Icon className={iconClassName} /> : null
 
+  const sprite = asset?.type === 'video' ? asset.sprite : null
+  const frame = sprite?.url && Array.isArray(sprite.frames) && sprite.frames.length > 0
+    ? (getSpriteFramePosition(sprite, 0) || sprite.frames[0])
+    : null
+  const videoPreviewClassName = String(videoClassName || '').includes('object-contain')
+    ? 'w-full h-full bg-sf-dark-950 bg-center bg-no-repeat'
+    : 'w-full h-full bg-sf-dark-950 bg-center bg-cover bg-no-repeat'
+
   return (
     <div ref={containerRef} className="w-full h-full flex items-center justify-center">
-      {shouldLoad && asset?.type === 'video' && asset?.url ? (
-        <video src={asset.url} className={videoClassName} muted preload="none" {...videoProps} />
+      {shouldLoad && asset?.type === 'video' && frame ? (
+        <div
+          className={videoPreviewClassName}
+          style={{
+            backgroundImage: `url(${sprite.url})`,
+            backgroundSize: `${sprite.width}px ${sprite.height}px`,
+            backgroundPosition: `${-(frame.x || 0)}px ${-(frame.y || 0)}px`,
+          }}
+        />
       ) : shouldLoad && asset?.type === 'image' && asset?.url ? (
         <img src={asset.url} alt={imageAlt} className={imageClassName} loading="lazy" decoding="async" />
       ) : fallback}

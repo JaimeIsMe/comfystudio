@@ -28,6 +28,17 @@ const SPRITE_CONFIG = {
 
 const SPRITE_INDEX_FILE = 'sprite_index.json'
 
+function releaseVideoElement(video) {
+  if (!video) return
+  try { video.pause() } catch (_) {}
+  video.onloadedmetadata = null
+  video.onseeked = null
+  video.onerror = null
+  try { video.removeAttribute('src') } catch (_) {}
+  try { video.srcObject = null } catch (_) {}
+  try { video.load() } catch (_) {}
+}
+
 async function getThumbnailDirectory(projectPath) {
   const api = window.electronAPI
   return await api.pathJoin(projectPath, 'thumbnails')
@@ -88,7 +99,7 @@ export async function generateThumbnailSprite(videoUrl, duration, options = {}) 
   const video = document.createElement('video')
   video.crossOrigin = 'anonymous'
   video.muted = true
-  video.preload = 'auto'
+  video.preload = 'metadata'
   
   return new Promise((resolve, reject) => {
     video.onloadedmetadata = async () => {
@@ -156,17 +167,17 @@ export async function generateThumbnailSprite(videoUrl, duration, options = {}) 
           frames,
         }
         
-        // Clean up video element
-        video.src = ''
-        video.load()
+        releaseVideoElement(video)
         
         resolve({ spriteUrl, spriteData, blob })
       } catch (err) {
+        releaseVideoElement(video)
         reject(err)
       }
     }
     
     video.onerror = () => {
+      releaseVideoElement(video)
       reject(new Error('Failed to load video for sprite generation'))
     }
     
@@ -260,42 +271,25 @@ export async function loadSpriteFromProject(projectPath, assetId, spriteIndex = 
   
   try {
     const thumbDir = await getThumbnailDirectory(projectPath)
-    const loadedIndex = spriteIndex || await loadSpriteIndex(projectPath)
-    const indexedSprite = loadedIndex?.[assetId] || null
-    const legacySpritePath = await api.pathJoin(thumbDir, `${assetId}_sprite.jpg`)
-    const legacyMetaPath = await api.pathJoin(thumbDir, `${assetId}_sprite.json`)
-    const indexedSpritePath = indexedSprite?.spritePath || null
-    const indexedMetaPath = indexedSprite?.metaPath || null
-    const spriteCandidates = [indexedSpritePath, legacySpritePath].filter(Boolean)
-    let resolvedSpritePath = null
-    for (const candidate of spriteCandidates) {
-      if (await api.exists(candidate)) {
-        resolvedSpritePath = candidate
-        break
-      }
+    const indexedSprite = spriteIndex?.[assetId] || (spriteIndex ? null : (await loadSpriteIndex(projectPath))[assetId])
+    const spritePath = indexedSprite?.spritePath || await api.pathJoin(thumbDir, `${assetId}_sprite.jpg`)
+    const metaPath = indexedSprite?.metaPath || await api.pathJoin(thumbDir, `${assetId}_sprite.json`)
+    
+    // Check if files exist
+    if (!await api.exists(spritePath)) {
+      return null
     }
-    if (!resolvedSpritePath) return null
 
-    let spriteData = null
-    if (indexedSprite && indexedSpritePath === resolvedSpritePath) {
-      spriteData = indexedSprite
-    } else {
-      const metaCandidates = [
-        resolvedSpritePath === indexedSpritePath ? indexedMetaPath : null,
-        legacyMetaPath,
-      ].filter(Boolean)
-      for (const candidate of metaCandidates) {
-        if (!await api.exists(candidate)) continue
-        const metaResult = await api.readFile(candidate, { encoding: 'utf8' })
-        if (!metaResult.success) continue
-        spriteData = JSON.parse(metaResult.data)
-        break
-      }
+    let spriteData = indexedSprite || null
+    if (!spriteData) {
+      if (!await api.exists(metaPath)) return null
+      const metaResult = await api.readFile(metaPath, { encoding: 'utf8' })
+      if (!metaResult.success) return null
+      spriteData = JSON.parse(metaResult.data)
     }
-    if (!spriteData) return null
     
     // Get URL for sprite image
-    const spriteUrl = await api.getFileUrlDirect(resolvedSpritePath)
+    const spriteUrl = await api.getFileUrlDirect(spritePath)
     
     return { spriteUrl, spriteData: { ...spriteData, url: spriteUrl } }
   } catch (err) {

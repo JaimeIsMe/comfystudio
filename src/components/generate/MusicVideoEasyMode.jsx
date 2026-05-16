@@ -7,10 +7,12 @@ import {
   FileText,
   Film,
   Loader2,
+  Maximize2,
   Music,
   Play,
   UserPlus,
   Wand2,
+  X,
 } from 'lucide-react'
 import {
   MUSIC_VIDEO_AUDIO_KIND_OPTIONS,
@@ -181,6 +183,28 @@ function plural(count, singular, pluralLabel = `${singular}s`) {
   return `${value} ${value === 1 ? singular : pluralLabel}`
 }
 
+async function copyTextToClipboard(text) {
+  const value = String(text || '')
+  if (!value) return false
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return true
+  }
+  if (typeof document === 'undefined') return false
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    return document.execCommand('copy')
+  } finally {
+    document.body.removeChild(textarea)
+  }
+}
+
 function flattenPlanShots(plan) {
   const shots = []
   if (!Array.isArray(plan)) return shots
@@ -230,15 +254,11 @@ function getAssetUrl(asset) {
 
 const LAZY_SHOT_PREVIEW_ROOT_MARGIN = '700px 0px'
 
-function LazyShotPreview({ children, placeholderLabel = 'Preview', enabled = true }) {
+function LazyShotPreview({ children, placeholderLabel = 'Preview' }) {
   const ref = useRef(null)
   const [shouldLoad, setShouldLoad] = useState(false)
 
   useEffect(() => {
-    if (!enabled) {
-      setShouldLoad(false)
-      return undefined
-    }
     if (shouldLoad) return undefined
     const el = ref.current
     if (!el) return undefined
@@ -256,7 +276,7 @@ function LazyShotPreview({ children, placeholderLabel = 'Preview', enabled = tru
 
     observer.observe(el)
     return () => observer.disconnect()
-  }, [enabled, shouldLoad])
+  }, [shouldLoad])
 
   return (
     <div ref={ref} className="h-full w-full">
@@ -267,16 +287,16 @@ function LazyShotPreview({ children, placeholderLabel = 'Preview', enabled = tru
   )
 }
 
-function CachedShotImage({ asset, className, alt = '' }) {
+function CachedShotImage({ asset, fallbackUrl, className, alt = '' }) {
   const currentProjectHandle = useProjectStore((state) => state.currentProjectHandle)
-  const sourceUrl = getAssetUrl(asset)
+  const sourceUrl = getAssetUrl(asset) || fallbackUrl || ''
   const [thumbnailUrl, setThumbnailUrl] = useState(null)
 
   useEffect(() => {
     let cancelled = false
     setThumbnailUrl(null)
     if (!sourceUrl) return () => { cancelled = true }
-    getOrCreateImageThumbnail(currentProjectHandle, asset, { width: 360, height: 204, quality: 78 })
+    getOrCreateImageThumbnail(currentProjectHandle, asset || { url: sourceUrl }, { width: 360, height: 204, quality: 78 })
       .then((url) => {
         if (!cancelled) setThumbnailUrl(url || sourceUrl)
       })
@@ -293,11 +313,12 @@ function CachedShotImage({ asset, className, alt = '' }) {
   return <img src={thumbnailUrl} alt={alt} className={className} loading="lazy" decoding="async" />
 }
 
-function ShotVideoPreview({ hasVideo, keyframeAsset, placeholderLabel = "Needs keyframe", loadPreview = true }) {
-  if (getAssetUrl(keyframeAsset)) {
+function ShotVideoPreview({ hasVideo, keyframeAsset = null, keyframeUrl = '', placeholderLabel = "Needs keyframe" }) {
+  const resolvedKeyframeUrl = getAssetUrl(keyframeAsset) || keyframeUrl
+  if (resolvedKeyframeUrl) {
     return (
-      <LazyShotPreview placeholderLabel="Keyframe preview" enabled={loadPreview}>
-        <CachedShotImage asset={keyframeAsset} className="h-full w-full object-cover opacity-70" />
+      <LazyShotPreview placeholderLabel="Keyframe preview">
+        <CachedShotImage asset={keyframeAsset} fallbackUrl={resolvedKeyframeUrl} className="h-full w-full object-cover opacity-70" />
       </LazyShotPreview>
     )
   }
@@ -353,21 +374,21 @@ function buildCoveragePlan({ performancePassCount, includeStoryBroll, includeEnv
     sections.push({
       type: 'story_broll',
       label: 'Story b-roll pass',
-      intent: 'Non-lip-sync story and cutaway coverage that can be edited over the main timeline.',
+      intent: 'Non-lip-sync cast/person coverage that carries a start-middle-end b-roll story over the main timeline.',
     })
   }
   if (includeEnvironmentalBroll) {
     sections.push({
       type: 'environmental_broll',
       label: 'Environmental b-roll pass',
-      intent: 'Places, atmosphere, empty spaces, exteriors, mood, and world-building coverage across the full timeline.',
+      intent: 'Places, atmosphere, empty spaces, exteriors, mood, and world-building coverage from the same b-roll story arc.',
     })
   }
   if (includeDetailBroll) {
     sections.push({
       type: 'detail_broll',
       label: 'Detail insert pass',
-      intent: 'Short macro, texture, prop, instrument, hand, and atmosphere inserts for editorial cutaways.',
+      intent: 'Short macro, texture, prop, instrument, hand, and atmosphere inserts that reveal clues from the same b-roll story arc.',
     })
   }
   return {
@@ -481,7 +502,7 @@ export default function MusicVideoEasyMode({
   const [isQueuingKeyframes, setIsQueuingKeyframes] = useState(false)
   const [isQueuingVideos, setIsQueuingVideos] = useState(false)
   const [isAssemblingTimeline, setIsAssemblingTimeline] = useState(false)
-  const shouldLoadShotGridPreview = (index) => index < 24 || Math.abs(index - selectedShotIndex) <= 24
+  const [mediaPreview, setMediaPreview] = useState(null)
 
   useEffect(() => {
     if (typeof localStorage === 'undefined') return
@@ -507,6 +528,15 @@ export default function MusicVideoEasyMode({
     step,
     videoFps,
   ])
+
+  useEffect(() => {
+    if (!mediaPreview) return
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setMediaPreview(null)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [mediaPreview])
 
   useEffect(() => {
     if (audioDefaultMigratedRef.current) return
@@ -784,6 +814,61 @@ export default function MusicVideoEasyMode({
     if (asset) return { state: 'ready', label: 'Video ready', job: null }
     if (!variant) return { state: 'missing', label: 'No video variant', job: null }
     return { state: 'missing', label: 'Needs video', job: null }
+  }
+
+  const handleShotCardKeyDown = (event, index) => {
+    if (event.target?.closest?.('button, input, textarea, select, a')) return
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      setSelectedShotIndex(index)
+    }
+  }
+
+  const renderPreviewButton = (onPreview) => (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation()
+        onPreview()
+      }}
+      className="absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-md border border-white/20 bg-sf-dark-950/85 px-2 py-1 text-[10px] font-semibold text-white shadow-sm backdrop-blur transition-colors hover:bg-sf-dark-800 focus:outline-none focus:ring-2 focus:ring-sf-accent"
+      title="Preview"
+    >
+      <Maximize2 className="h-3 w-3" />
+      Preview
+    </button>
+  )
+
+  const handleCopyShotPrompt = async (prompt, successMessage, statusSetter) => {
+    const text = String(prompt || '').trim()
+    if (!text) {
+      statusSetter?.('No prompt found to copy for this shot.')
+      return
+    }
+    try {
+      const copied = await copyTextToClipboard(text)
+      statusSetter?.(copied ? successMessage : 'Could not copy prompt. Select the text and copy it manually.')
+    } catch (_) {
+      statusSetter?.('Could not copy prompt. Select the text and copy it manually.')
+    }
+  }
+
+  const renderCopyPromptButton = (prompt, successMessage, statusSetter) => {
+    if (!String(prompt || '').trim()) return null
+    return (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation()
+          void handleCopyShotPrompt(prompt, successMessage, statusSetter)
+        }}
+        className="inline-flex shrink-0 items-center gap-1 rounded-md border border-sf-dark-600 bg-sf-dark-900/85 px-2 py-1 text-[10px] font-semibold text-sf-text-secondary transition-colors hover:border-sf-dark-500 hover:text-sf-text-primary focus:outline-none focus:ring-2 focus:ring-sf-accent"
+        title="Copy prompt"
+      >
+        <Clipboard className="h-3 w-3" />
+        Copy
+      </button>
+    )
   }
 
   const handleCopyBrief = async () => {
@@ -1245,7 +1330,7 @@ export default function MusicVideoEasyMode({
               {plural(coveragePlan.sections.length, 'section')}: {coverageSummary}
             </div>
             <p className="mt-1 max-w-3xl text-xs leading-5 text-sf-text-secondary">
-              The LLM brief will return one combined director script with labeled coverage sections. Every generated clip still stays in the 2-8 second range.
+              The LLM brief will return one combined director script with labeled coverage sections. B-roll sections are guided to share one start-middle-end story, with environment and detail shots supporting the same arc.
             </p>
           </div>
           {coveragePreset === 'custom' && (
@@ -1321,7 +1406,7 @@ export default function MusicVideoEasyMode({
                 Copy LLM brief
               </div>
               <p className="mt-1 text-xs leading-5 text-sf-text-secondary">
-                The brief includes song timing, cast slugs, and the required script format. Story, look, and continuity should be written into the shot prompts.
+                The brief includes song timing, cast slugs, required script format, b-roll story guidance, camera motion, character movement, and emotion cues.
               </p>
             </div>
             <button
@@ -1496,16 +1581,19 @@ export default function MusicVideoEasyMode({
               const url = getAssetUrl(asset)
               const cardState = getKeyframeCardState(variant, asset)
               const coverageLabel = getCoverageLabel(scene, shot)
+              const keyframePrompt = String(shot.imageBeat || shot.beat || shot.referenceImagePrompt || '').trim()
               return (
-                <button
+                <div
                   key={`music-keyframe-${scene.id}-${shot.id}`}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setSelectedShotIndex(index)}
+                  onKeyDown={(event) => handleShotCardKeyDown(event, index)}
                   className={`overflow-hidden rounded-lg border text-left transition-colors ${
                     selectedShotIndex === index
                       ? 'border-sf-accent bg-sf-accent/10'
                       : 'border-sf-dark-700 bg-sf-dark-950/70 hover:border-sf-dark-500'
-                  }`}
+                  } focus:outline-none focus:ring-2 focus:ring-sf-accent/70`}
                 >
                   <div className={`relative flex h-28 items-center justify-center overflow-hidden ${
                     cardState.state === 'generating'
@@ -1515,9 +1603,7 @@ export default function MusicVideoEasyMode({
                         : 'bg-sf-dark-800'
                   }`}>
                     {url ? (
-                      <LazyShotPreview placeholderLabel="Keyframe preview" enabled={shouldLoadShotGridPreview(index)}>
-                        <CachedShotImage asset={asset} className="h-full w-full object-cover" />
-                      </LazyShotPreview>
+                      <img src={url} alt="" className="h-full w-full object-cover" />
                     ) : (
                       <>
                         {cardState.state === 'generating' && (
@@ -1530,22 +1616,32 @@ export default function MusicVideoEasyMode({
                         </span>
                       </>
                     )}
+                    {url && renderPreviewButton(() => setMediaPreview({
+                      kind: 'image',
+                      url,
+                      title: `Shot ${index + 1}: ${shot.scriptShotLabel || scene.label || shot.id}`,
+                      subtitle: [coverageLabel, selectedKeyframeWorkflowLabel, outputResolutionLabel, `${videoFps} fps`].filter(Boolean).join(' / '),
+                      prompt: keyframePrompt,
+                    }))}
                   </div>
                   <div className="p-2">
-                    <div className="text-xs font-semibold text-sf-text-primary">Shot {index + 1}: {shot.scriptShotLabel || scene.label || shot.id}</div>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 text-xs font-semibold text-sf-text-primary">Shot {index + 1}: {shot.scriptShotLabel || scene.label || shot.id}</div>
+                      {renderCopyPromptButton(keyframePrompt, `Shot ${index + 1} keyframe prompt copied.`, setKeyframeStatus)}
+                    </div>
                     {coverageLabel && (
                       <div className="mt-1 inline-flex rounded-full border border-sf-dark-600 px-2 py-0.5 text-[10px] text-sf-text-muted">
                         {coverageLabel}
                       </div>
                     )}
-                    <div className="mt-1 line-clamp-2 text-[10px] text-sf-text-muted">{shot.imageBeat || shot.beat || shot.referenceImagePrompt}</div>
+                    <div className="mt-1 line-clamp-2 text-[10px] text-sf-text-muted">{keyframePrompt}</div>
                     {cardState.job?.progress > 0 && (
                       <div className="mt-1 h-1 overflow-hidden rounded-full bg-sf-dark-700">
                         <div className="h-full rounded-full bg-sf-accent" style={{ width: `${Math.min(100, Math.max(0, cardState.job.progress || 0))}%` }} />
                       </div>
                     )}
                   </div>
-                </button>
+                </div>
               )
             })}
           </div>
@@ -1569,15 +1665,22 @@ export default function MusicVideoEasyMode({
                   Regenerate Selected Shot
                 </button>
               </div>
-              <label className="mt-3 block text-xs text-sf-text-secondary">
-                <span className="text-[10px] uppercase tracking-wider text-sf-text-muted">Keyframe prompt</span>
+              <div className="mt-3 text-xs text-sf-text-secondary">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] uppercase tracking-wider text-sf-text-muted">Keyframe prompt</span>
+                  {renderCopyPromptButton(
+                    selectedShotRow.shot.imageBeat || selectedShotRow.shot.beat || '',
+                    `Shot ${selectedShotIndex + 1} keyframe prompt copied.`,
+                    setKeyframeStatus
+                  )}
+                </div>
                 <textarea
                   value={selectedShotRow.shot.imageBeat || selectedShotRow.shot.beat || ''}
                   onChange={(event) => handleYoloShotImageBeatChange?.(selectedShotRow.scene.id, selectedShotRow.shot.id, event.target.value)}
                   rows={4}
                   className="mt-1 w-full resize-y rounded-lg border border-sf-dark-600 bg-sf-dark-900 px-3 py-2 text-xs text-sf-text-primary outline-none focus:border-sf-accent"
                 />
-              </label>
+              </div>
             </div>
           )}
         </div>
@@ -1775,15 +1878,17 @@ export default function MusicVideoEasyMode({
               const length = Number(shot?.length ?? shot?.durationSeconds ?? 0) || 0
               const coverageLabel = getCoverageLabel(scene, shot)
               return (
-                <button
+                <div
                   key={`music-video-${scene.id}-${shot.id}`}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setSelectedShotIndex(index)}
+                  onKeyDown={(event) => handleShotCardKeyDown(event, index)}
                   className={`overflow-hidden rounded-lg border text-left transition-colors ${
                     selectedShotIndex === index
                       ? 'border-sf-accent bg-sf-accent/10'
                       : 'border-sf-dark-700 bg-sf-dark-950/70 hover:border-sf-dark-500'
-                  }`}
+                  } focus:outline-none focus:ring-2 focus:ring-sf-accent/70`}
                 >
                   <div className={`relative flex h-28 items-center justify-center overflow-hidden ${
                     cardState.state === 'generating'
@@ -1792,10 +1897,17 @@ export default function MusicVideoEasyMode({
                         ? 'bg-red-950/30'
                         : 'bg-sf-dark-800'
                   }`}>
-                    <ShotVideoPreview hasVideo={Boolean(videoUrl)} keyframeAsset={keyframeAsset} loadPreview={shouldLoadShotGridPreview(index)} />
+                    <ShotVideoPreview hasVideo={Boolean(videoUrl)} keyframeAsset={keyframeAsset} keyframeUrl={keyframeUrl} />
                     {cardState.state === 'generating' && (
                       <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-transparent via-white/10 to-transparent" />
                     )}
+                    {videoUrl && renderPreviewButton(() => setMediaPreview({
+                      kind: 'video',
+                      url: videoUrl,
+                      title: `Shot ${index + 1}: ${shot.scriptShotLabel || scene.label || shot.id}`,
+                      subtitle: [coverageLabel, shotTypeOption?.label || shotTypeId || 'Script shot', `${start.toFixed(2)}s`, length > 0 ? `${length.toFixed(1)}s` : '', selectedVideoWorkflowLabel].filter(Boolean).join(' / '),
+                      prompt: shot.videoBeat || shot.beat || shot.shotPrompt || '',
+                    }))}
                     <div className={`absolute left-2 top-2 rounded-full px-2 py-1 text-[10px] ${
                       cardState.state === 'ready'
                         ? 'bg-emerald-500/80 text-white'
@@ -1823,7 +1935,7 @@ export default function MusicVideoEasyMode({
                       </div>
                     )}
                   </div>
-                </button>
+                </div>
               )
             })}
           </div>
@@ -1888,6 +2000,68 @@ export default function MusicVideoEasyMode({
     </div>
   )
 
+  const renderMediaPreviewModal = () => {
+    if (!mediaPreview) return null
+
+    return (
+      <div
+        className="fixed inset-0 z-50 overflow-y-auto bg-black/80 px-4 py-6 backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-label={mediaPreview.title || 'Media preview'}
+        onClick={() => setMediaPreview(null)}
+      >
+        <div className="flex min-h-full items-center justify-center">
+          <div
+            className="w-[96vw] max-w-6xl overflow-hidden rounded-lg border border-sf-dark-600 bg-sf-dark-950 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-sf-dark-700 px-4 py-3">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-sf-text-primary">{mediaPreview.title}</div>
+                {mediaPreview.subtitle && (
+                  <div className="mt-1 truncate text-[10px] text-sf-text-muted">{mediaPreview.subtitle}</div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setMediaPreview(null)}
+                className="rounded-md p-1.5 text-sf-text-muted transition-colors hover:bg-sf-dark-800 hover:text-sf-text-primary focus:outline-none focus:ring-2 focus:ring-sf-accent"
+                title="Close preview"
+                aria-label="Close preview"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="flex max-h-[72vh] items-center justify-center bg-black">
+              {mediaPreview.kind === 'video' ? (
+                <video
+                  key={mediaPreview.url}
+                  src={mediaPreview.url}
+                  className="max-h-[72vh] max-w-full object-contain"
+                  controls
+                  autoPlay
+                  playsInline
+                />
+              ) : (
+                <img
+                  src={mediaPreview.url}
+                  alt={mediaPreview.title || 'Preview'}
+                  className="max-h-[72vh] max-w-full object-contain"
+                />
+              )}
+            </div>
+            {mediaPreview.prompt && (
+              <div className="border-t border-sf-dark-700 px-4 py-3 text-xs leading-5 text-sf-text-secondary">
+                {mediaPreview.prompt}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const stepRenderer = {
     song: renderSongStep,
     people: renderPeopleStep,
@@ -1897,37 +2071,40 @@ export default function MusicVideoEasyMode({
   }[step] || renderSongStep
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/40 p-2">
-        <div className="grid gap-2 md:grid-cols-5">
-          {STEPS.map((entry) => {
-            const selected = step === entry.id
-            const disabled = isStepDisabled(entry.id)
-            return (
-              <button
-                key={entry.id}
-                type="button"
-                onClick={() => setStep(entry.id)}
-                disabled={disabled}
-                className={`rounded-lg border px-3 py-2 text-left transition-colors ${
-                  selected
-                    ? 'border-sf-accent bg-sf-accent/20 text-sf-text-primary ring-1 ring-sf-accent/40'
-                    : disabled
-                      ? 'border-sf-dark-700 bg-sf-dark-950/40 text-sf-text-muted/50'
-                      : 'border-sf-dark-700 bg-sf-dark-950/70 text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary'
-                }`}
-              >
-                <div className="text-[10px] uppercase text-sf-text-muted">Step {entry.number}</div>
-                <div className="mt-1 text-xs font-semibold">{entry.label}</div>
-              </button>
-            )
-          })}
+    <>
+      <div className="space-y-4">
+        <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/40 p-2">
+          <div className="grid gap-2 md:grid-cols-5">
+            {STEPS.map((entry) => {
+              const selected = step === entry.id
+              const disabled = isStepDisabled(entry.id)
+              return (
+                <button
+                  key={entry.id}
+                  type="button"
+                  onClick={() => setStep(entry.id)}
+                  disabled={disabled}
+                  className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                    selected
+                      ? 'border-sf-accent bg-sf-accent/20 text-sf-text-primary ring-1 ring-sf-accent/40'
+                      : disabled
+                        ? 'border-sf-dark-700 bg-sf-dark-950/40 text-sf-text-muted/50'
+                        : 'border-sf-dark-700 bg-sf-dark-950/70 text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary'
+                  }`}
+                >
+                  <div className="text-[10px] uppercase text-sf-text-muted">Step {entry.number}</div>
+                  <div className="mt-1 text-xs font-semibold">{entry.label}</div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-950/60 p-4 md:p-5">
+          {stepRenderer()}
         </div>
       </div>
-
-      <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-950/60 p-4 md:p-5">
-        {stepRenderer()}
-      </div>
-    </div>
+      {renderMediaPreviewModal()}
+    </>
   )
 }
