@@ -113,6 +113,153 @@ const getNormalizedLinkGroupId = (value) => {
 
 const buildLinkGroupId = (seed) => `link-${seed}`
 const isClipEnabled = (clip) => clip?.enabled !== false
+const MUSIC_VIDEO_SYNC_SHOT_TYPES = new Set(['performance', 'performance_wide'])
+const MUSIC_VIDEO_TIMELINE_ASSEMBLY_MODE = 'music-video-easy-mode'
+
+export const isSyncLockedClip = (clip) => clip?.lockMode === 'sync' && clip?.syncLock?.mode === 'sync'
+
+const normalizeMusicVideoShotType = (value = '') => String(value || '').trim().toLowerCase()
+
+const isMusicVideoSyncAsset = (asset = null) => {
+  const yolo = asset?.yolo || asset?.settings?.yolo || null
+  if (!yolo || yolo.mode !== 'music' || yolo.stage !== 'video') return false
+  return MUSIC_VIDEO_SYNC_SHOT_TYPES.has(normalizeMusicVideoShotType(yolo.shotType))
+}
+
+const isMusicVideoAssemblyVideoClip = (clip = null) => (
+  clip?.metadata?.musicVideoAssembly?.mode === MUSIC_VIDEO_TIMELINE_ASSEMBLY_MODE
+  && clip?.metadata?.musicVideoAssembly?.kind === 'video'
+)
+
+export const isMusicVideoSyncCapableClip = (clip = null, asset = null) => (
+  isSyncLockedClip(clip)
+  || clip?.syncLock?.mode === 'manual'
+  || isMusicVideoAssemblyVideoClip(clip)
+  || isMusicVideoSyncAsset(asset)
+)
+
+export const resolveClipSyncLock = ({ asset = null, options = null, startTime = 0, duration = 0, fps = FRAME_RATE } = {}) => {
+  if (options?.syncLock === false) return null
+  if (options?.syncLock?.mode === 'manual') return null
+  const explicit = options?.syncLock && typeof options.syncLock === 'object' ? options.syncLock : null
+  const yolo = asset?.yolo || asset?.settings?.yolo || null
+  const shouldInferFromAsset = !explicit && isMusicVideoSyncAsset(asset)
+  if (!explicit && !shouldInferFromAsset) return null
+
+  const safeFps = Number.isFinite(Number(fps)) && Number(fps) > 0 ? Number(fps) : FRAME_RATE
+  const rawStart = explicit?.startTime ?? explicit?.audioStart ?? yolo?.audioStart ?? startTime
+  const rawDuration = explicit?.duration ?? explicit?.length ?? yolo?.length ?? yolo?.durationSeconds ?? duration
+  const anchoredStartTime = roundToFrame(Math.max(0, Number(rawStart) || 0), safeFps)
+  const anchoredDuration = roundDurationToFrame(Math.max(1 / safeFps, Number(rawDuration) || Number(duration) || 1 / safeFps), safeFps)
+  const shotType = normalizeMusicVideoShotType(explicit?.shotType || yolo?.shotType || '')
+
+  return {
+    mode: 'sync',
+    source: explicit?.source || 'music-video',
+    reason: explicit?.reason || 'song-sync',
+    startTime: anchoredStartTime,
+    audioStart: anchoredStartTime,
+    duration: anchoredDuration,
+    length: anchoredDuration,
+    shotType,
+    sceneId: explicit?.sceneId || yolo?.sceneId || '',
+    shotId: explicit?.shotId || yolo?.shotId || '',
+    variantKey: explicit?.variantKey || yolo?.variantKey || yolo?.key || '',
+  }
+}
+
+export const buildClipSyncLock = ({ clip = null, asset = null, fps = FRAME_RATE } = {}) => {
+  const safeFps = Number.isFinite(Number(fps)) && Number(fps) > 0 ? Number(fps) : FRAME_RATE
+
+  const resolved = resolveClipSyncLock({
+    asset,
+    options: {
+      syncLock: clip?.syncLock,
+    },
+    startTime: clip?.startTime || 0,
+    duration: clip?.duration || 0,
+    fps: safeFps,
+  })
+  if (resolved) return resolved
+
+  const assembly = clip?.metadata?.musicVideoAssembly || null
+  if (assembly?.mode !== MUSIC_VIDEO_TIMELINE_ASSEMBLY_MODE || assembly?.kind !== 'video') return null
+
+  const yolo = asset?.yolo || asset?.settings?.yolo || null
+  const startTime = roundToFrame(Math.max(0, Number(assembly.audioStart ?? clip?.startTime) || 0), safeFps)
+  const duration = roundDurationToFrame(Math.max(1 / safeFps, Number(assembly.length ?? clip?.duration) || 1 / safeFps), safeFps)
+  const shotType = normalizeMusicVideoShotType(clip?.syncLock?.shotType || yolo?.shotType || '')
+
+  return {
+    mode: 'sync',
+    source: 'music-video',
+    reason: 'song-sync',
+    startTime,
+    audioStart: startTime,
+    duration,
+    length: duration,
+    shotType,
+    sceneId: assembly.sceneId || yolo?.sceneId || '',
+    shotId: assembly.shotId || yolo?.shotId || '',
+    variantKey: assembly.variantKey || yolo?.variantKey || yolo?.key || '',
+  }
+}
+
+const applySyncLockToClip = (clip, fps = FRAME_RATE) => {
+  if (!isSyncLockedClip(clip)) return clip
+  const safeFps = Number.isFinite(Number(fps)) && Number(fps) > 0 ? Number(fps) : FRAME_RATE
+  const startTime = roundToFrame(Math.max(0, Number(clip.syncLock.startTime ?? clip.syncLock.audioStart) || 0), safeFps)
+  const duration = roundDurationToFrame(Math.max(1 / safeFps, Number(clip.syncLock.duration ?? clip.syncLock.length) || Number(clip.duration) || 1 / safeFps), safeFps)
+  const trimStart = Math.max(0, Number(clip.trimStart) || 0)
+  const trimEnd = trimStart + timelineToSourceTime(clip, duration)
+  return {
+    ...clip,
+    lockMode: 'sync',
+    syncLock: {
+      ...clip.syncLock,
+      startTime,
+      audioStart: startTime,
+      duration,
+      length: duration,
+    },
+    startTime,
+    duration,
+    trimStart,
+    trimEnd,
+  }
+}
+
+const buildAssetByIdMap = (assets = []) => new Map(
+  (Array.isArray(assets) ? assets : [])
+    .filter((asset) => asset?.id)
+    .map((asset) => [asset.id, asset])
+)
+
+const applyInferredSyncLockToClip = (clip, assetsById, fps = FRAME_RATE) => {
+  if (!clip) return clip
+  if (clip.syncLock === false) {
+    return {
+      ...clip,
+      syncLock: {
+        mode: 'manual',
+        source: 'manual',
+        reason: 'manual-unlock',
+      },
+    }
+  }
+  if (isSyncLockedClip(clip)) return applySyncLockToClip(clip, fps)
+  const asset = assetsById?.get?.(clip.assetId) || null
+  const syncLock = resolveClipSyncLock({
+    asset,
+    options: {
+      syncLock: clip.syncLock,
+    },
+    startTime: clip.startTime,
+    duration: clip.duration,
+    fps,
+  })
+  return syncLock ? applySyncLockToClip({ ...clip, lockMode: 'sync', syncLock }, fps) : clip
+}
 
 const dedupeClipIds = (clipIds = []) => [...new Set((clipIds || []).filter(Boolean))]
 const RIPPLE_TIME_EPSILON = 1e-6
@@ -698,6 +845,7 @@ export const useTimelineStore = create(
     const overlappingClips = clipsToResolve.filter(clip => 
       clip.trackId === trackId &&
       clip.id !== newClipId &&
+      !isSyncLockedClip(clip) &&
       clip.startTime < newEndTime &&
       clip.startTime + clip.duration > newStartTime
     )
@@ -847,22 +995,31 @@ export const useTimelineStore = create(
     const finalDuration = roundDurationToFrame(rawDuration, fps)
     const finalTrimStart = overrideTrimStart != null ? overrideTrimStart : 0
     const finalTrimEnd = overrideTrimEnd != null ? overrideTrimEnd : (isImage ? finalDuration : sourceDuration)
+    const syncLock = resolveClipSyncLock({
+      asset,
+      options,
+      startTime: calculatedStartTime,
+      duration: finalDuration,
+      fps,
+    })
+    const anchoredStartTime = syncLock ? syncLock.startTime : calculatedStartTime
+    const anchoredDuration = syncLock ? syncLock.duration : finalDuration
     
     // Log a warning if we couldn't get the actual duration
     if (!isImage && !assetDuration && overrideDuration == null) {
       console.warn(`Could not get duration for asset "${asset.name}", defaulting to 5 seconds`)
     }
     
-    const newClip = clampFiniteMediaClipToSource({
+    const newClip = applySyncLockToClip(clampFiniteMediaClipToSource({
       id: `clip-${safeClipCounter}`,
       trackId,
       assetId: asset.id,
       name: asset.name,
-      startTime: calculatedStartTime,
-      duration: finalDuration, // Visible duration on timeline
+      startTime: anchoredStartTime,
+      duration: anchoredDuration, // Visible duration on timeline
       sourceDuration: sourceDuration, // Original media duration (Infinity for images)
       trimStart: finalTrimStart, // In-point (seconds from source start)
-      trimEnd: finalTrimEnd, // Out-point (for images, this can grow)
+      trimEnd: syncLock ? finalTrimStart + anchoredDuration : finalTrimEnd, // Out-point (for images, this can grow)
       sourceFps: Number.isFinite(sourceFps) && sourceFps > 0 ? sourceFps : null,
       timelineFps: Number.isFinite(normalizedTimelineFps) && normalizedTimelineFps > 0 ? normalizedTimelineFps : null,
       sourceTimeScale: 1,
@@ -878,6 +1035,7 @@ export const useTimelineStore = create(
       url: asset.url,
       thumbnail: asset.url, // For video clips
       ...(clipMetadata ? { metadata: clipMetadata } : {}),
+      ...(syncLock ? { lockMode: 'sync', syncLock } : {}),
       ...(linkGroupId ? { linkGroupId } : {}),
       // 2D Transform properties (NLE-style)
       transform: {
@@ -885,7 +1043,7 @@ export const useTimelineStore = create(
         ...(assetDefaultTransform || {}),
         blendMode: assetDefaultTransform?.blendMode ?? 'normal',
       },
-    }, fps)
+    }, fps), fps)
     
     // Resolve overlaps with existing clips on the same track (NLE overwrite behavior)
     // Use finalDuration so split second-half doesn't push following clips (when options.duration set)
@@ -893,7 +1051,7 @@ export const useTimelineStore = create(
       ? get().resolveOverlaps(
         trackId,
         newClip.id,
-        calculatedStartTime,
+        anchoredStartTime,
         newClip.duration,
         undefined,
         safeClipCounter + 1
@@ -905,7 +1063,7 @@ export const useTimelineStore = create(
       clipCounter: Math.max(state.clipCounter, safeClipCounter + 1 + addedCount),
       selectedClipIds: selectAfterAdd ? [newClip.id] : state.selectedClipIds,
       // Extend timeline if needed
-      duration: Math.max(state.duration, calculatedStartTime + newClip.duration + 10)
+      duration: Math.max(state.duration, newClip.startTime + newClip.duration + 10)
     }))
     
     return newClip
@@ -1155,6 +1313,81 @@ export const useTimelineStore = create(
         selectedClipIds: []
       }
     })
+  },
+
+  /**
+   * Unlock sync-locked clips so they behave like normal timeline clips again.
+   * @param {Array<string>|string} clipIds - Clip id(s) to unlock. Defaults to current selection.
+   */
+  unlockSyncLockedClips: (clipIds = null) => {
+    const state = get()
+    const targetIds = dedupeClipIds(
+      Array.isArray(clipIds)
+        ? clipIds
+        : (typeof clipIds === 'string' ? [clipIds] : state.selectedClipIds)
+    )
+    if (targetIds.length === 0) return false
+
+    const hasSyncLockedClip = targetIds.some((clipId) => isSyncLockedClip(state.clips.find((clip) => clip.id === clipId)))
+    if (!hasSyncLockedClip) return false
+
+    get().saveToHistory()
+
+    set((nextState) => ({
+      clips: nextState.clips.map((clip) => {
+        if (!targetIds.includes(clip.id)) return clip
+        if (!isSyncLockedClip(clip)) return clip
+
+        const { lockMode, syncLock, ...rest } = clip
+        return {
+          ...rest,
+          syncLock: {
+            mode: 'manual',
+            source: syncLock?.source || 'manual',
+            reason: syncLock?.reason || 'manual-unlock',
+          },
+        }
+      }),
+    }))
+
+    return true
+  },
+
+  /**
+   * Lock sync-capable clips to their anchored song timing.
+   * @param {Array<string>|string} clipIds - Clip id(s) to lock. Defaults to current selection.
+   */
+  lockSyncClips: (clipIds = null, syncLockByClipId = null) => {
+    const state = get()
+    const targetIds = dedupeClipIds(
+      Array.isArray(clipIds)
+        ? clipIds
+        : (typeof clipIds === 'string' ? [clipIds] : state.selectedClipIds)
+    )
+    if (targetIds.length === 0) return false
+
+    const fps = state.timelineFps || FRAME_RATE
+
+    const nextClips = state.clips.map((clip) => {
+      if (!targetIds.includes(clip.id)) return clip
+
+      const inferredSyncLock = clip.syncLock && clip.syncLock.mode === 'sync'
+        ? clip.syncLock
+        : (syncLockByClipId && syncLockByClipId[clip.id]) || null
+      if (!inferredSyncLock) return clip
+      return applySyncLockToClip({
+        ...clip,
+        lockMode: 'sync',
+        syncLock: inferredSyncLock,
+      }, fps)
+    })
+
+    const changed = nextClips.some((clip, index) => clip !== state.clips[index])
+    if (!changed) return false
+
+    get().saveToHistory()
+    set({ clips: nextClips })
+    return true
   },
 
   rippleDeleteClipIds: (clipIds = []) => {
@@ -1538,14 +1771,17 @@ export const useTimelineStore = create(
     // Keep this mutation history-neutral to avoid no-op undo states.
     
     const fps = state.timelineFps || 24
-    const delta = newStartTime - clip.startTime
-    const finalStartTime = roundToFrame(Math.max(0, newStartTime), fps)
+    const requestedStartTime = roundToFrame(Math.max(0, newStartTime), fps)
+    const finalStartTime = isSyncLockedClip(clip)
+      ? applySyncLockToClip({ ...clip, startTime: requestedStartTime }, fps).startTime
+      : requestedStartTime
+    const delta = finalStartTime - clip.startTime
     
     set((state) => {
       // First, update the clip position
       let updatedClips = state.clips.map(c => 
         c.id === clipId 
-          ? { ...c, trackId: newTrackId, startTime: finalStartTime }
+          ? applySyncLockToClip({ ...c, trackId: newTrackId, startTime: finalStartTime }, fps)
           : c
       )
       
@@ -1571,6 +1807,7 @@ export const useTimelineStore = create(
           const overlappingClips = updatedClips.filter(c => 
             c.trackId === newTrackId &&
             c.id !== clipId &&
+            !isSyncLockedClip(c) &&
             c.startTime < newEndTime &&
             c.startTime + c.duration > finalStartTime
           )
@@ -1724,11 +1961,11 @@ export const useTimelineStore = create(
         if (!targetIds.has(clip.id)) return clip
         const nextPosition = map.get(clip.id)
         if (!nextPosition) return clip
-        return {
+        return applySyncLockToClip({
           ...clip,
           startTime: nextPosition.startTime,
           trackId: nextPosition.trackId ?? clip.trackId,
-        }
+        }, fps)
       })
     }))
   },
@@ -1757,11 +1994,11 @@ export const useTimelineStore = create(
       let updatedClips = state.clips.map(clip => {
         if (movingClipIdSet.has(clip.id)) {
           const rawStart = Math.max(0, clip.startTime + deltaTime)
-          return {
+          return applySyncLockToClip({
             ...clip,
             startTime: roundToFrame(rawStart, fps),
             trackId: newTrackId !== null ? newTrackId : clip.trackId
-          }
+          }, fps)
         }
         return clip
       })
@@ -1798,6 +2035,7 @@ export const useTimelineStore = create(
           c.trackId === trackId &&
           !movingClipIdSet.has(c.id) &&
           !clipsToRemove.includes(c.id) &&
+          !isSyncLockedClip(c) &&
           c.startTime < newEndTime &&
           c.startTime + c.duration > newStartTime
         )
@@ -1931,7 +2169,8 @@ export const useTimelineStore = create(
               const nextTrimEnd = isInfiniteSource
                 ? computedTrimEnd
                 : (Number.isFinite(parsedSourceDuration) ? Math.min(computedTrimEnd, parsedSourceDuration) : computedTrimEnd)
-              return clampFiniteMediaClipToSource({ ...clip, duration: nextDuration, trimEnd: nextTrimEnd }, fps)
+              const resized = clampFiniteMediaClipToSource({ ...clip, duration: nextDuration, trimEnd: nextTrimEnd }, fps)
+              return isSyncLockedClip(clip) ? applySyncLockToClip(resized, fps) : resized
             })()
           : clip
       )
@@ -2149,7 +2388,7 @@ export const useTimelineStore = create(
                 }
               }
 
-              return normalized
+              return isSyncLockedClip(clip) ? applySyncLockToClip(normalized, fps) : normalized
             })()
           : clip
       )
@@ -4389,6 +4628,7 @@ export const useTimelineStore = create(
   loadFromProject: (timelineData, assets = [], timelineFps = null) => {
     if (!timelineData) return
     const fps = Number(timelineFps) || 24
+    const assetsById = buildAssetByIdMap(assets)
     const normalizedClips = normalizeClipTimebases(timelineData.clips || [], assets, fps)
     // Align all clip start times and durations to frame boundaries (no sub-frame)
     const frameAlignedClips = normalizedClips.map((clip) => {
@@ -4408,7 +4648,7 @@ export const useTimelineStore = create(
       const normalizedAdjustments = supportsClipAdjustments(clip)
         ? normalizeAdjustmentSettings(clip.adjustments || {})
         : clip.adjustments
-      return clampFiniteMediaClipToSource({
+      const normalizedClip = clampFiniteMediaClipToSource({
         ...clip,
         startTime,
         duration,
@@ -4419,6 +4659,7 @@ export const useTimelineStore = create(
           ? { compositeLowerLayers: normalizeClipCompositeMode(clip.compositeLowerLayers) }
           : {}),
       }, fps)
+      return applyInferredSyncLockToClip(normalizedClip, assetsById, fps)
     })
     const restoredClipCounter = Number(timelineData.clipCounter) || 1
     const nextClipCounter = Math.max(restoredClipCounter, getNextClipCounter(frameAlignedClips, 1))
