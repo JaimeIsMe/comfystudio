@@ -17,7 +17,7 @@ import {
   getAdjustmentValue,
   normalizeAdjustmentSettings,
   setAdjustmentValue,
-} from './adjustments'
+} from './adjustments.js'
 
 // Easing functions (t is normalized 0-1)
 export const easingFunctions = {

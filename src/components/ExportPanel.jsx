@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Download, Plus, Trash2, Play, Settings, Film, Clock, RotateCcw } from 'lucide-react'
+import { Download, Plus, Trash2, Play, Settings, Film, Clock, RotateCcw, Square } from 'lucide-react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../stores/projectStore'
 import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import exportTimeline from '../services/exporter'
+import { resolveExportRange } from '../services/exportRange.mjs'
 
 const EXPORT_SETTINGS_STORAGE_PREFIX = 'comfystudio-export-settings-v1'
 
@@ -12,7 +13,6 @@ const EXPORT_FORMATS = [
   { id: 'webm', label: 'WebM (VP9)' },
   { id: 'prores', label: 'MOV (ProRes)' },
   { id: 'gif', label: 'GIF (Preview - Soon)', disabled: true },
-  { id: 'png-seq', label: 'PNG Sequence - Soon', disabled: true },
 ]
 
 const RANGE_PRESETS = [
@@ -125,7 +125,7 @@ const createDefaultExportSettings = (filename) => ({
   audioSampleRate: 44100,
   audioChannels: 2,
   useProxyMedia: false,
-  useDirectFramePipe: true,
+  postProcessUpscale: 'none',
 })
 
 const EXPORT_PRESETS = [
@@ -146,8 +146,7 @@ const EXPORT_PRESETS = [
       includeAudio: true,
       audioBitrateKbps: 192,
       useProxyMedia: false,
-      useDirectFramePipe: true,
-    },
+        },
   },
   {
     id: 'fast-nvenc',
@@ -167,8 +166,7 @@ const EXPORT_PRESETS = [
       includeAudio: true,
       audioBitrateKbps: 192,
       useProxyMedia: false,
-      useDirectFramePipe: true,
-    },
+        },
   },
   {
     id: 'proxy-review',
@@ -188,8 +186,7 @@ const EXPORT_PRESETS = [
       includeAudio: true,
       audioBitrateKbps: 160,
       useProxyMedia: true,
-      useDirectFramePipe: true,
-    },
+        },
   },
   {
     id: 'small-h265',
@@ -209,8 +206,7 @@ const EXPORT_PRESETS = [
       includeAudio: true,
       audioBitrateKbps: 192,
       useProxyMedia: false,
-      useDirectFramePipe: true,
-    },
+        },
   },
   {
     id: 'prores-hq',
@@ -227,8 +223,7 @@ const EXPORT_PRESETS = [
       includeAudio: true,
       audioBitrateKbps: 320,
       useProxyMedia: false,
-      useDirectFramePipe: true,
-    },
+        },
   },
 ]
 
@@ -266,7 +261,7 @@ function loadSavedExportSettings(storageKey, defaultSettings) {
       renderMode: 'single',
       useCachedRenders: false,
       fastSeek: false,
-    }
+        }
   } catch (_) {
     return defaultSettings
   }
@@ -281,7 +276,7 @@ function saveExportSettings(storageKey, settings) {
   }
 }
 
-function ExportPanel() {
+function ExportPanel({ isActive = true }) {
   const { currentProject, currentProjectHandle, getCurrentTimelineSettings } = useProjectStore()
   const { duration, inPoint, outPoint, getTimelineEndTime, selectedClipIds, clips, transitions, tracks } = useTimelineStore()
   const { assets } = useAssetsStore()
@@ -305,6 +300,9 @@ function ExportPanel() {
   const [renderFps, setRenderFps] = useState(null)
   const exportStartRef = useRef(null)
   const renderStartRef = useRef(null)
+  const activeExportRequestIdRef = useRef(null)
+  const activeExportAbortRef = useRef(null)
+  const exportCancelledRef = useRef(false)
   const [nvencStatus, setNvencStatus] = useState({
     checked: false,
     available: false,
@@ -374,8 +372,10 @@ function ExportPanel() {
   }, [])
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !window.electronAPI?.onExportProgress) return
+    if (typeof window === 'undefined' || !window.electronAPI?.onExportProgress) return undefined
+    const isCurrentExportEvent = (data) => Boolean(data?.requestId && data.requestId === activeExportRequestIdRef.current)
     const onProgress = (data) => {
+      if (!isCurrentExportEvent(data)) return
       setExportStatus(data.status || '')
       if (typeof data.progress === 'number') setExportProgress(data.progress)
       if (exportStartRef.current && data.frame != null && data.totalFrames != null) {
@@ -389,22 +389,33 @@ function ExportPanel() {
       }
     }
     const onComplete = (data) => {
+      if (!isCurrentExportEvent(data)) return
       console.log('[ExportPanel] Worker export complete', data)
+      activeExportRequestIdRef.current = null
       setExportResult(data)
       setExportStatus('Export complete')
       setExportProgress(100)
       setIsExporting(false)
     }
     const onError = (err) => {
-      const msg = typeof err === 'string' ? err : (err?.message ?? (err && typeof err === 'object' && err.constructor?.name === 'Event' ? `Export error (${err.type})` : String(err)))
+      if (!isCurrentExportEvent(err)) return
+      activeExportRequestIdRef.current = null
+      activeExportAbortRef.current = null
+      const rawError = err?.error ?? err
+      const msg = typeof rawError === 'string' ? rawError : (rawError?.message ?? (rawError && typeof rawError === 'object' && rawError.constructor?.name === 'Event' ? `Export error (${rawError.type})` : String(rawError)))
       console.error('[ExportPanel] Worker export error', err, '-> displayed:', msg)
       setExportError(msg || 'Export failed')
       setExportStatus('Export failed')
       setIsExporting(false)
     }
-    window.electronAPI.onExportProgress(onProgress)
-    window.electronAPI.onExportComplete(onComplete)
-    window.electronAPI.onExportError(onError)
+    const offProgress = window.electronAPI.onExportProgress(onProgress)
+    const offComplete = window.electronAPI.onExportComplete(onComplete)
+    const offError = window.electronAPI.onExportError(onError)
+    return () => {
+      offProgress?.()
+      offComplete?.()
+      offError?.()
+    }
   }, [])
 
   const timelineRangeLabel = useMemo(() => {
@@ -460,7 +471,7 @@ function ExportPanel() {
         const numeric = Math.max(2, Math.round(Number(value) || 2))
         next[key] = numeric
       }
-      
+
       return next
     })
   }
@@ -504,9 +515,11 @@ function ExportPanel() {
 
   const activeExportPresetId = useMemo(() => {
     const isEqual = (a, b) => String(a) === String(b)
-    return EXPORT_PRESETS.find((exportPreset) => (
+    const matchingPresets = EXPORT_PRESETS.filter((exportPreset) => (
       Object.entries(exportPreset.settings).every(([key, value]) => isEqual(settings[key], value))
-    ))?.id || null
+    ))
+    return matchingPresets
+      .sort((a, b) => Object.keys(b.settings).length - Object.keys(a.settings).length)[0]?.id || null
   }, [settings])
 
   const selectedNvencCodecSupported = settings.videoCodec === 'h265'
@@ -587,6 +600,7 @@ function ExportPanel() {
   }
 
   const runQueue = async () => {
+    if (!isActive) return
     if (queueControllerRef.current.running) return
     queueControllerRef.current.running = true
     queueControllerRef.current.paused = false
@@ -618,7 +632,7 @@ function ExportPanel() {
   }
 
   const handleStartQueue = () => {
-    if (queueRunning || queueRef.current.length === 0) return
+    if (!isActive || queueRunning || queueRef.current.length === 0) return
     runQueue()
   }
 
@@ -629,7 +643,7 @@ function ExportPanel() {
   }
 
   const handleResumeQueue = () => {
-    if (queueRunning) return
+    if (!isActive || queueRunning) return
     queueControllerRef.current.paused = false
     setQueuePaused(false)
     setQueuePauseRequested(false)
@@ -688,16 +702,14 @@ function ExportPanel() {
   }
 
   const resolveRange = () => {
-    if (settings.range === 'inout' && inPoint !== null && outPoint !== null) {
-      return { start: Math.min(inPoint, outPoint), end: Math.max(inPoint, outPoint) }
-    }
-    if (settings.range === 'selection' && selectedClipIds.length > 0) {
-      const selected = clips.filter(c => selectedClipIds.includes(c.id))
-      const start = Math.min(...selected.map(c => c.startTime))
-      const end = Math.max(...selected.map(c => c.startTime + c.duration))
-      return { start, end }
-    }
-    return { start: 0, end: getTimelineEndTime() }
+    return resolveExportRange({
+      rangeMode: settings.range,
+      inPoint,
+      outPoint,
+      selectedClipIds,
+      clips,
+      getTimelineEndTime,
+    })
   }
 
   const formatDuration = (seconds) => {
@@ -752,11 +764,6 @@ function ExportPanel() {
     if (settings.format === 'webm' || settings.videoCodec === 'vp9') {
       hints.push('VP9/WebM encodes slower than H.264/H.265.')
     }
-    if (settings.useDirectFramePipe) {
-      hints.push('Fast FFmpeg pipe skips writing PNG frames before encoding.')
-    } else {
-      hints.push('Enable Fast FFmpeg pipe to avoid PNG frame files.')
-    }
     
     const textClips = clips.filter(clip => clip.type === 'text')
     if (textClips.length > 0) {
@@ -776,8 +783,8 @@ function ExportPanel() {
   }, [clips, transitions, tracks, settings, getCurrentTimelineSettings, nvencStatus, proxyCoverage])
 
   const runExportJob = async (jobSettings, labelOverride = null) => {
-    if (jobSettings.format === 'gif' || jobSettings.format === 'png-seq') {
-      throw new Error('GIF and PNG sequence export are not wired yet.')
+    if (jobSettings.format === 'gif') {
+      throw new Error('GIF export is not wired yet.')
     }
     if (jobSettings.useHardwareEncoder && nvencStatus.checked) {
       const codecSupported = jobSettings.videoCodec === 'h265'
@@ -788,17 +795,30 @@ function ExportPanel() {
       }
     }
 
-    exportStartRef.current = Date.now()
+    const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null
+    activeExportAbortRef.current = abortController
+    exportCancelledRef.current = false
+    exportStartRef.current = null
     renderStartRef.current = null
     setEtaSeconds(null)
     setRenderFps(null)
     setExportError(null)
     setExportResult(null)
+    setExportProgress(0)
+    setExportStatus('Choose export destination...')
     setIsExporting(true)
 
     const { width, height } = resolveResolution()
     const fps = resolveFps()
     const range = resolveRange()
+    console.log('[ExportPanel] Resolved export range', {
+      rangeMode: settings.range,
+      rangeStart: range.start,
+      rangeEnd: range.end,
+      inPoint,
+      outPoint,
+      selectedClipCount: selectedClipIds.length,
+    })
     const timelineSettings = getCurrentTimelineSettings() || { width: 1920, height: 1080, fps: 24 }
     const options = {
       filename: jobSettings.filename?.trim() || defaultFilename,
@@ -820,6 +840,7 @@ function ExportPanel() {
       fps,
       rangeStart: range.start,
       rangeEnd: range.end,
+      rangeMode: range.mode,
       includeAudio: jobSettings.includeAudio,
       audioBitrateKbps: Number(jobSettings.audioBitrateKbps),
       audioSampleRate: Number(jobSettings.audioSampleRate),
@@ -827,8 +848,7 @@ function ExportPanel() {
       useCachedRenders: false,
       useProxyMedia: jobSettings.useProxyMedia,
       fastSeek: false,
-      useDirectFramePipe: jobSettings.useDirectFramePipe,
-    }
+        }
 
     if (window.electronAPI?.runExportInWorker && typeof currentProjectHandle === 'string') {
       try {
@@ -842,12 +862,35 @@ function ExportPanel() {
           filters: [{ name: outputExtension.toUpperCase(), extensions: [outputExtension] }],
         })
         if (!outputPath) {
+          setExportStatus('')
           setIsExporting(false)
-          throw new Error('Export cancelled')
+          return null
         }
+        exportStartRef.current = Date.now()
+        setExportStatus('Starting export worker...')
+        const visibleVideoTrackIds = new Set((tracks || [])
+          .filter((track) => track?.type === 'video' && track.visible !== false && !track.muted)
+          .map((track) => track.id))
+        const visibleAudioTrackIds = new Set((tracks || [])
+          .filter((track) => track?.type === 'audio' && track.visible !== false && !track.muted)
+          .map((track) => track.id))
+        const exportAssetIds = new Set()
+        const exportClips = (clips || []).filter((clip) => {
+          if (!clip || clip.enabled === false) return false
+          if (clip.type === 'audio') return visibleAudioTrackIds.has(clip.trackId)
+          return visibleVideoTrackIds.has(clip.trackId)
+        })
+        for (const clip of exportClips) {
+          if (clip?.assetId) exportAssetIds.add(clip.assetId)
+          for (const effect of clip?.effects || []) {
+            if (effect?.type === 'mask' && effect?.enabled !== false && effect?.maskAssetId) exportAssetIds.add(effect.maskAssetId)
+          }
+        }
+        const referencedAssets = assets.filter((asset) => asset?.id && exportAssetIds.has(asset.id))
+        console.log('[ExportPanel] Worker payload assets', referencedAssets.length, '/', assets.length, 'clips', exportClips.length, '/', clips.length)
         const state = {
-          timeline: { clips, tracks, transitions },
-          assets: assets.map((a) => ({
+          timeline: { clips, tracks, transitions, selectedClipIds },
+          assets: referencedAssets.map((a) => ({
             id: a.id,
             path: a.path,
             type: a.type,
@@ -860,14 +903,21 @@ function ExportPanel() {
             maskFrames: a.maskFrames?.map((f) => ({ ...f, url: undefined })),
           })),
         }
-        await window.electronAPI.runExportInWorker({
+        const requestId = `export-${Date.now()}-${Math.random().toString(36).slice(2)}`
+        activeExportRequestIdRef.current = requestId
+        const workerStart = await window.electronAPI.runExportInWorker({
+          requestId,
           projectPath: currentProjectHandle,
           outputPath,
           options: { ...options, outputPath },
           state,
         })
+        if (workerStart?.success === false) {
+          throw new Error(workerStart.error || 'Could not start export worker.')
+        }
         return
       } catch (err) {
+        activeExportRequestIdRef.current = null
         setExportError(err?.message || 'Export failed')
         setExportStatus('Export failed')
         setIsExporting(false)
@@ -901,6 +951,8 @@ function ExportPanel() {
       }
     })
     
+    activeExportAbortRef.current = null
+    if (!result) return null
     setExportResult(result)
     setExportStatus('Export complete')
     setExportProgress(100)
@@ -910,14 +962,46 @@ function ExportPanel() {
   }
 
   const handleStartExport = async () => {
-    if (isExporting || queueRunning) return
+    if (!isActive || isExporting || queueRunning) return
     try {
       await runExportJob(settings)
     } catch (err) {
-      setExportError(err.message || 'Export failed')
-      setExportStatus('Export failed')
+      if (exportCancelledRef.current || err?.message === 'Export cancelled') {
+        setExportError(null)
+        setExportStatus('Export cancelled')
+      } else {
+        setExportError(err.message || 'Export failed')
+        setExportStatus('Export failed')
+      }
+      activeExportAbortRef.current = null
       setIsExporting(false)
     }
+  }
+
+
+  const handleStopExport = async () => {
+    if (!isExporting && !queueRunning) return
+    exportCancelledRef.current = true
+    queueControllerRef.current.paused = true
+    setQueuePauseRequested(false)
+    setQueuePaused(true)
+    setExportStatus('Cancelling export...')
+    try {
+      activeExportAbortRef.current?.abort?.()
+    } catch {
+      // ignore abort errors
+    }
+    try {
+      await window.electronAPI?.cancelExportWorker?.()
+    } catch {
+      // ignore worker cancel errors
+    }
+    activeExportRequestIdRef.current = null
+    activeExportAbortRef.current = null
+    setQueueRunning(false)
+    setIsExporting(false)
+    setExportError(null)
+    setExportStatus('Export cancelled')
   }
   
   return (
@@ -1107,22 +1191,6 @@ function ExportPanel() {
                       Expected encoder: {nvencExpectedEncoder}
                     </div>
                   )}
-                  <div className="mt-3 flex items-center gap-2">
-                    <button
-                      onClick={() => handleSettingChange('useDirectFramePipe', !settings.useDirectFramePipe)}
-                      className={`px-2 py-1 text-xs rounded border transition-colors ${
-                        settings.useDirectFramePipe
-                          ? 'bg-sf-accent text-white border-sf-accent'
-                          : 'bg-sf-dark-800 text-sf-text-muted border-sf-dark-600'
-                      }`}
-                      title="Stream rendered frames directly into FFmpeg instead of writing PNG frames first"
-                    >
-                      Fast FFmpeg pipe
-                    </button>
-                    <span className="text-[10px] text-sf-text-muted">
-                      Skips PNG frame files during export
-                    </span>
-                  </div>
                 </div>
                 
                 <div>
@@ -1336,6 +1404,8 @@ function ExportPanel() {
                     )}
                   </div>
                 </div>
+
+                <div className="col-span-2" />
               </div>
             </div>
             
@@ -1427,25 +1497,31 @@ function ExportPanel() {
               <Plus className="w-3 h-3" />
               Add to Queue
             </button>
-            <button
-              onClick={handleStartExport}
-              disabled={isExporting || queueRunning}
-              className={`px-3 py-1.5 text-xs rounded border flex items-center gap-1.5 transition-colors ${
-                isExporting || queueRunning
-                  ? 'bg-sf-dark-800 text-sf-text-muted border-sf-dark-600 cursor-not-allowed'
-                  : 'bg-sf-accent text-white border-sf-accent hover:bg-sf-accent-hover'
-              }`}
-            >
-              <Play className="w-3 h-3" />
-              {isExporting ? 'Exporting...' : (queueRunning ? 'Queue Running' : 'Start Export')}
-            </button>
+            {isExporting || queueRunning ? (
+              <button
+                onClick={handleStopExport}
+                className="px-3 py-1.5 text-xs rounded border border-red-500/50 bg-red-500/15 text-red-200 hover:bg-red-500/25 transition-colors flex items-center gap-1.5"
+                title="Cancel the current export"
+              >
+                <Square className="w-3 h-3" />
+                Stop Export
+              </button>
+            ) : (
+              <button
+                onClick={handleStartExport}
+                className="px-3 py-1.5 text-xs rounded border flex items-center gap-1.5 transition-colors bg-sf-accent text-white border-sf-accent hover:bg-sf-accent-hover"
+              >
+                <Play className="w-3 h-3" />
+                Start Export
+              </button>
+            )}
           </div>
 
           {(isExporting || exportProgress > 0) && (
             <div className="mt-3 shrink-0">
               <div className="flex items-center justify-between text-[10px] text-sf-text-muted mb-1">
                 <span>{exportStatus || 'Exporting...'}</span>
-                <span>{Math.round(exportProgress)}% • ETA {formatDuration(etaSeconds)}</span>
+                <span>{exportStatus === 'Choose export destination...' ? 'Waiting for file path' : `${Math.round(exportProgress)}% • ETA ${formatDuration(etaSeconds)}`}</span>
               </div>
               <div className="h-1.5 bg-sf-dark-800 rounded-full overflow-hidden">
                 <div

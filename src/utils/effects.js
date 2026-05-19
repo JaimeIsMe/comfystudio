@@ -13,7 +13,7 @@
  * `effect.<effectId>.<paramKey>` on the clip's keyframe map.
  */
 
-import { getValueAtTime } from './keyframes'
+import { getValueAtTime } from './keyframes.js'
 
 const clampNumber = (value, min, max, fallback = 0) => {
   const parsed = Number(value)
@@ -903,6 +903,11 @@ export function hasPixelFilterEffect(effects) {
         || e.type === 'vhsDamage'
       )
     ))
+}
+
+export function hasBlurEffect(effects) {
+  return Array.isArray(effects)
+    && effects.some((e) => e && e.enabled !== false && (e.type === 'gaussianBlur' || e.type === 'directionalBlur'))
 }
 
 export function hasGlowEffect(effects) {

@@ -1,4 +1,4 @@
-import { getAnimatedEffectSettings } from './effects'
+import { getAnimatedEffectSettings } from './effects.js'
 
 const GLSL_EFFECT_IDS = new Set([
   'glslCameraShake',
