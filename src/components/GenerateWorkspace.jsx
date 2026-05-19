@@ -3,6 +3,7 @@ import {
   Sparkles, Video, Image as ImageIcon, Music, RefreshCw, Loader2,
   ChevronLeft, ChevronRight, Play, Pause, Upload, X, Film, Search,
   FolderOpen, Wand2, Volume2, Mic, Clock, Settings, Terminal, ChevronDown, ChevronUp, PenLine, KeyRound,
+  Copy,
 } from 'lucide-react'
 import { jsPDF } from 'jspdf'
 import ImageAnnotationModal from './ImageAnnotationModal'
@@ -267,6 +268,60 @@ async function copyTextToClipboard(text) {
   textarea.select()
   document.execCommand('copy')
   document.body.removeChild(textarea)
+}
+
+function buildGenerationErrorTroubleshootingHints(errorText = '') {
+  const text = String(errorText || '')
+  const lower = text.toLowerCase()
+  const hints = []
+
+  const looksLikeQwenAsr = (
+    lower.includes('unifiedasrtranscribenode')
+    || lower.includes('qwen3asr')
+    || lower.includes('tts-audio-suite')
+    || lower.includes('caption transcription')
+  )
+
+  if (looksLikeQwenAsr) {
+    hints.push('This reached the Caption Transcription (Qwen ASR) workflow and failed inside ComfyUI, not inside the Music Video planner.')
+    hints.push('Open the bundled caption_qwen_asr_transcription.json workflow in ComfyUI and run it there to debug the local Python/node/model environment.')
+  }
+
+  if (lower.includes('check_model_inputs') && lower.includes('missing 1 required positional argument')) {
+    hints.push('The check_model_inputs error points to a Qwen3-ASR / transformers compatibility problem in the ComfyUI Python environment.')
+  }
+
+  if (lower.includes('node') && lower.includes('not found')) {
+    hints.push('If this happened after installing nodes, restart ComfyUI and re-check Workflow Setup so ComfyUI reloads the new node classes.')
+  }
+
+  return hints
+}
+
+function buildGenerationErrorClipboardText({
+  errorText = '',
+  hints = [],
+  workflow = null,
+  generationMode = '',
+} = {}) {
+  const lines = [
+    'ComfyStudio error report',
+    `Timestamp: ${new Date().toISOString()}`,
+  ]
+
+  if (workflow?.id || workflow?.label) {
+    lines.push(`Workflow: ${workflow?.label || workflow?.id} (${workflow?.id || 'unknown'})`)
+  }
+  if (generationMode) lines.push(`Mode: ${generationMode}`)
+
+  lines.push('', 'Error:', String(errorText || '').trim() || '(empty)')
+
+  if (Array.isArray(hints) && hints.length > 0) {
+    lines.push('', 'Troubleshooting hints:')
+    for (const hint of hints) lines.push(`- ${hint}`)
+  }
+
+  return lines.join('\n')
 }
 
 function formatCountLabel(count, singular, plural = `${singular}s`) {
@@ -953,7 +1008,8 @@ function normalizePersistedYoloPlan(rawPlan = []) {
  * Compose the motion/video prompt that gets written into the LTX 2.3
  * audio-conditioned workflow (node 1624). Built from the script's Motion
  * prompt + shot-type suffix + concept/style continuity lines + an optional
- * lyric cue (so the encoder has the line the singer is mouthing).
+ * lyric cue for vocal-aligned shots (so the encoder has the line the singer
+ * is mouthing without making b-roll look like lip-sync coverage).
  */
 function composeMusicShotVideoPrompt({
   motionPromptRaw = '',
@@ -962,11 +1018,12 @@ function composeMusicShotVideoPrompt({
   concept = '',
   styleNotes = '',
 }) {
-  const lyricCue = String(lyricMoment || '')
+  const shouldUseLyricCue = Boolean(shotTypeOption?.needsVocalAlignment)
+  const lyricCue = shouldUseLyricCue ? String(lyricMoment || '')
     .replace(/["'\u2018\u2019\u201C\u201D]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 240)
+    .slice(0, 240) : ''
   const motion = String(motionPromptRaw || '').trim()
   const conceptLine = String(concept || '').trim()
   const styleLine = String(styleNotes || '').trim()
@@ -975,7 +1032,7 @@ function composeMusicShotVideoPrompt({
   const parts = [
     motion,
     shotSuffix,
-    lyricCue ? `Lyric moment: "${lyricCue}".` : '',
+    lyricCue ? `The artist visibly sings this exact lyric phrase: "${lyricCue}".` : '',
     conceptLine ? `Concept: ${conceptLine}.` : '',
     styleLine ? `Style: ${styleLine}.` : '',
   ].filter(Boolean)
@@ -1025,12 +1082,14 @@ function composeMusicShotReferencePrompt({
  * extended with `Lyric moment:`, `Length:`, `Artist:`, and `Start at:`).
  *
  * audioStart resolution (Phase 8 — SRT-first):
- *   1. `Start at:` on the shot — parsed via parseTimeSpecToSeconds.
- *   2. `Lyric moment:` fuzzy-matched against the parsed SRT/LRC (if the
+ *   1. Performance lip-sync shots with a timed `Lyric moment:` use SRT/LRC
+ *      timing, even if the LLM also wrote a conflicting `Start at:`.
+ *   2. `Start at:` on the shot — parsed via parseTimeSpecToSeconds.
+ *   3. `Lyric moment:` fuzzy-matched against the parsed SRT/LRC (if the
  *      single `lyrics` field happens to be in a timed format).
- *   3. `Lyric moment:` fuzzy-matched against plain lyrics + linear estimate
+ *   4. `Lyric moment:` fuzzy-matched against plain lyrics + linear estimate
  *      (path when the `lyrics` field is plain text).
- *   4. Cumulative sum of prior shot lengths (the old behavior).
+ *   5. Cumulative sum of prior shot lengths (the old behavior).
  *
  * The chosen path is recorded on the shot as `audioStartSource` so the
  * inspector / validation layer can surface it and coverage checks can tell
@@ -1134,6 +1193,19 @@ function buildMusicVideoPlanFromScript(options = {}) {
 
       const lyricMomentHint = String(scriptShot.lyricMoment || '').trim()
       const startAtRaw = String(scriptShot.startAtRaw || '').trim()
+      const isVocalAlignedShot = Boolean(shotTypeOption?.needsVocalAlignment)
+      const isEnvironmentOrDetailCoverage = coverageType === 'environmental_broll' || coverageType === 'detail_broll'
+      const effectiveLyricMomentHint = isVocalAlignedShot ? lyricMomentHint : ''
+      if (lyricMomentHint && !isVocalAlignedShot) {
+        warnings.push({
+          shotIndex: flatShotIndex,
+          shotLabel: scriptShot.label || `Shot ${flatShotIndex}`,
+          kind: 'broll-lyric-moment-ignored',
+          raw: lyricMomentHint,
+          message: `Shot ${flatShotIndex}${scriptShot.label ? ` (${scriptShot.label})` : ''}: Lyric moment was ignored because b-roll/cutaway shots must not lip-sync.`,
+          severity: 'info',
+        })
+      }
 
       // Tier 1 — explicit `Start at:` from the script (Phase 8).
       const explicitStart = startAtRaw ? parseTimeSpecToSeconds(startAtRaw) : null
@@ -1148,21 +1220,40 @@ function buildMusicVideoPlanFromScript(options = {}) {
       }
 
       // Tier 2 — fuzzy-match the Lyric moment against parsed SRT/LRC.
-      const timedMatch = lyricMomentHint && hasTimedLyrics
-        ? findTimedLyricLineByText(lyricMomentHint, timedLyricLines)
+      const timedMatch = effectiveLyricMomentHint && hasTimedLyrics
+        ? findTimedLyricLineByText(effectiveLyricMomentHint, timedLyricLines)
         : null
 
       // Tier 3 — legacy linear estimate based on plain lyric line index.
-      const lineIdx = lyricMomentHint && effectiveLyricLines.length > 0
-        ? findLyricLineIndex(lyricMomentHint, effectiveLyricLines)
+      const lineIdx = effectiveLyricMomentHint && effectiveLyricLines.length > 0
+        ? findLyricLineIndex(effectiveLyricMomentHint, effectiveLyricLines)
         : -1
 
       let audioStart
       let audioStartSource
-      if (explicitStart !== null) {
+      const hasTimedMatch = timedMatch && typeof timedMatch.startSec === 'number'
+      const isVocalAlignedShot = Boolean(shotTypeOption?.needsVocalAlignment)
+      if (isVocalAlignedShot && hasTimedMatch) {
+        audioStart = timedMatch.startSec
+        audioStartSource = 'srt-fuzzy'
+        if (explicitStart !== null) {
+          const drift = Math.abs(explicitStart - timedMatch.startSec)
+          if (drift >= 0.5) {
+            audioStartSource = 'srt-fuzzy-overrode-start-at'
+            warnings.push({
+              shotIndex: flatShotIndex,
+              shotLabel: scriptShot.label || `Shot ${flatShotIndex}`,
+              kind: 'performance-start-at-overridden',
+              raw: startAtRaw,
+              message: `Shot ${flatShotIndex}${scriptShot.label ? ` (${scriptShot.label})` : ''}: performance lip-sync uses SRT timing (${formatSecondsAsMMSS(timedMatch.startSec)}) instead of Start at (${formatSecondsAsMMSS(explicitStart)}) for "${lyricMomentHint}".`,
+              severity: 'info',
+            })
+          }
+        }
+      } else if (explicitStart !== null) {
         audioStart = explicitStart
         audioStartSource = 'start-at'
-      } else if (timedMatch && typeof timedMatch.startSec === 'number') {
+      } else if (hasTimedMatch) {
         audioStart = timedMatch.startSec
         audioStartSource = 'srt-fuzzy'
       } else if (lineIdx >= 0) {
@@ -1184,7 +1275,16 @@ function buildMusicVideoPlanFromScript(options = {}) {
       let resolvedMembers = []
       let resolvedSource = ''
       const artistOverrideRaw = String(scriptShot.artistRaw || '').trim()
-      if (artistOverrideRaw) {
+      if (artistOverrideRaw && isEnvironmentOrDetailCoverage) {
+        warnings.push({
+          shotIndex: flatShotIndex,
+          shotLabel: scriptShot.label || `Shot ${flatShotIndex}`,
+          kind: 'artist-ignored-for-non-character-broll',
+          raw: artistOverrideRaw,
+          message: `Shot ${flatShotIndex}${scriptShot.label ? ` (${scriptShot.label})` : ''}: Artist was ignored because environmental/detail b-roll should not attach a performer reference.`,
+          severity: 'info',
+        })
+      } else if (artistOverrideRaw) {
         const names = splitCastNameList(artistOverrideRaw)
         const { members, unresolved } = resolveCastMembersFromNameList(names, safeCast)
         if (members.length > 0) {
@@ -1201,7 +1301,7 @@ function buildMusicVideoPlanFromScript(options = {}) {
           })
         }
       }
-      if (resolvedMembers.length === 0 && lineIdx >= 0) {
+      if (resolvedMembers.length === 0 && !isEnvironmentOrDetailCoverage && lineIdx >= 0) {
         const tags = taggedLyricLines[lineIdx]?.tags || []
         if (tags.length > 0) {
           const { members, unresolved } = resolveCastMembersFromNameList(tags, safeCast)
@@ -1220,7 +1320,7 @@ function buildMusicVideoPlanFromScript(options = {}) {
           }
         }
       }
-      if (resolvedMembers.length === 0 && defaultCastMember) {
+      if (resolvedMembers.length === 0 && isVocalAlignedShot && defaultCastMember) {
         resolvedMembers = [defaultCastMember]
         resolvedSource = 'default-cast'
       }
@@ -1243,7 +1343,7 @@ function buildMusicVideoPlanFromScript(options = {}) {
       const videoPrompt = composeMusicShotVideoPrompt({
         motionPromptRaw: scriptShot.motionPromptRaw || scriptShot.videoBeat,
         shotTypeOption,
-        lyricMoment: lyricMomentHint,
+        lyricMoment: effectiveLyricMomentHint,
         concept,
         styleNotes,
       })
@@ -1661,6 +1761,7 @@ function normalizeMusicVideoCoveragePlan(coveragePlan) {
     sections,
     performancePassCount: Math.max(0, Number(coveragePlan.performancePassCount) || 0),
     includeStoryBroll: Boolean(coveragePlan.includeStoryBroll),
+    includeEnvironmentalBroll: Boolean(coveragePlan.includeEnvironmentalBroll),
     includeDetailBroll: Boolean(coveragePlan.includeDetailBroll),
   }
 }
@@ -1672,6 +1773,9 @@ function buildMusicVideoCoveragePlanPrompt(coveragePlan) {
     'Coverage plan:',
     'Return ONE combined script containing these coverage sections in this exact order. Do not return separate files.',
     'Each coverage section contains normal Shot blocks. Every shot still needs Start at, Shot type, Keyframe prompt, Motion prompt, Camera, and Length.',
+    'Every non-performance-only coverage section must cover the full audio duration, not only the span containing lyrics. If the final lyric ends before the music ends, continue with outro/instrumental b-roll until the song ends.',
+    'B-roll, environmental, and detail coverage must tile as adjacent video clips: each shot has a Start at, and its Length should end exactly at the next shot Start at. The final shot must end at the full audio duration.',
+    'B-roll shot starts must NOT be constrained to lyric/SRT offsets. Use lyric timings only as emotional/story landmarks, then create continuous b-roll coverage between and beyond those lyric moments.',
     'Do not write one long take for any pass. Break every pass into 2-8 second clips aligned to the song timing.',
     'Use the exact Coverage type and Coverage label fields shown below so ComfyStudio can group the shots later.',
   ]
@@ -1683,11 +1787,11 @@ function buildMusicVideoCoveragePlanPrompt(coveragePlan) {
     if (section.type === 'performance_pass') {
       lines.push('    Shot rule: use only performance or performance_wide shots for lyric/vocal moments. Keep Artist and Lyric moment fields on every shot. Use exact SRT lyric starts. It is OK and expected for this pass to have gaps during instrumental or non-vocal sections.')
     } else if (section.type === 'story_broll') {
-      lines.push('    Shot rule: use b_roll shots for story/cutaway coverage across the full song timeline; include Artist only when a cast member is visible but not lip-syncing.')
+      lines.push('    Shot rule: use b_roll shots for a coherent start-middle-end story across the full song timeline; include Artist only for visible non-singing cast narrative moments, and omit Artist for places, objects, or atmosphere.')
     } else if (section.type === 'environmental_broll') {
-      lines.push('    Shot rule: use b_roll shots only across the full song timeline. Show places, atmosphere, empty rooms, exterior locations, weather, signage, vehicles, landscapes, and environmental texture. Do not include lip-sync.')
+      lines.push('    Shot rule: use b_roll shots only across the full song timeline. Show places, atmosphere, empty rooms, exterior locations, weather, signage, vehicles, landscapes, and environmental texture. Do not include Artist, visible performers, or lip-sync.')
     } else if (section.type === 'detail_broll') {
-      lines.push('    Shot rule: use b_roll shots only across the full song timeline; focus on short macro/detail inserts, textures, props, instruments, hands, and atmosphere.')
+      lines.push('    Shot rule: use b_roll shots only across the full song timeline; focus on short macro/detail inserts, textures, props, instruments, hands, and atmosphere. Do not include Artist unless the shot is explicitly a story_broll cast moment.')
     } else {
       lines.push('    Shot rule: this is the primary sequence and may mix performance, performance_wide, and b_roll based on the song.')
     }
@@ -1797,17 +1901,30 @@ function buildMusicVideoLLMPrompt(options = {}) {
     : ''
   if (coveragePlanPrompt) sections.push(coveragePlanPrompt)
 
+  const fullTimelineDuration = Math.max(Number(songDurationSeconds) || 0, Number(targetDuration) || 0)
+  const timelineRules = fullTimelineDuration > 0 ? [
+    `  - The script timeline MUST cover the full audio duration through approximately ${formatSecondsAsMMSS(fullTimelineDuration)} (${fullTimelineDuration.toFixed(1)}s).`,
+    '  - Lyrics/SRT lines are timing anchors for vocal moments only; the last lyric is NOT the end of the music video unless it also reaches the full audio duration.',
+    '  - If the song continues after the final lyric, fill the outro/instrumental tail with b_roll or non-singing performance_wide shots. Omit Lyric moment during those sections.',
+    '  - For b-roll/environment/detail coverage, treat each Start at as a clip boundary: Length must equal the time until the next shot starts, so clips butt together cleanly in the timeline with no manual moving.',
+    '  - The final shot should end at, or slightly after, the full song duration. Do not stop the plan at the final lyric line.',
+  ].join('\n') : ''
+  if (timelineRules) sections.push(timelineRules)
+
   const rules = [
     'Rules:',
     '  0. The returned script must be self-contained. Put the story, setting, wardrobe, lighting, color, continuity, and camera language directly inside each shot block.',
     '  1. Every shot MUST include a "Start at:" field with a time like "0:15" or "15.5s". If you pasted SRT/LRC, use the exact start of the matching line.',
     '  2. Every shot MUST include "Length:" in seconds (between 2 and 8 — LTX 2.3 works best here).',
-    '  3. Main sequence and b-roll/detail/environment sections should tile the song with no big gaps. Performance passes may leave gaps during instrumental or non-vocal sections.',
+    '  3. Main sequence and b-roll/detail/environment sections MUST tile the full song/audio duration with no gaps, including intro, instrumental breaks, and any outro after the final lyric. Performance-only passes may leave gaps during instrumental or non-vocal sections.',
+    '  3a. For b-roll/detail/environment sections, every shot Length MUST be calculated from the next shot boundary: current Length = next Start at - current Start at. For the final shot, Length = full song duration - final Start at. Avoid overlaps and avoid uncovered dark gaps.',
     '  4. "Shot type:" must be one of: performance, performance_wide, b_roll. Use performance/performance_wide when the singer\'s face is visible and lip-syncing; use b_roll for everything else.',
+    '  4a. A b_roll shot may include Artist only as a visual/non-singing reference in story_broll or main_sequence coverage. If a band/performance cast member is singing or mouthing lyrics, the shot type MUST be performance or performance_wide, not b_roll.',
+    '  4b. Environmental_broll and detail_broll shots MUST omit Artist. They should be places, props, textures, hands, silhouettes, or atmosphere, not assigned performer portraits.',
     '  5. For vocal lines, add "Lyric moment:" quoting the specific lyric line. For instrumentals or b_roll, omit Lyric moment.',
-    '  6. Use "Artist:" to pick which cast member appears. Omit when the shot is b_roll with no performer visible.',
-    '  7. "Keyframe prompt:" describes the opening still and must include location, subject, wardrobe/props, lighting, color palette, and composition.',
-    '  8. "Motion prompt:" describes what moves in the clip: lip-sync/performance action, body movement, camera movement, atmosphere, and any story action.',
+    '  6. Use "Artist:" to pick which cast member appears only when that person is visibly present. Omit when the shot is b_roll with no performer visible.',
+    '  7. "Keyframe prompt:" describes the opening still and must include location, subject, wardrobe/props, lighting, color palette, composition, and the subject\'s readable emotional state when a person appears.',
+    '  8. "Motion prompt:" describes what moves in the clip: lip-sync/performance action, character movement, camera movement, atmosphere, and any story action. Include camera motion and character blocking/emotion, not just a static description.',
     '  9. Keep wardrobe, location, and lighting consistent across adjacent shots unless the script deliberately calls for a hard cut.',
     '  10. Do NOT invent lyrics. If the song is instrumental at a given moment, omit Lyric moment for that shot.',
   ]
@@ -1828,6 +1945,376 @@ function buildMusicVideoLLMPrompt(options = {}) {
   sections.push(buildMusicVideoPassFormatSpec(effectivePass, effectiveCoveragePlan))
 
   return sections.join('\n\n')
+}
+
+function getPlainMusicLyricLines(rawLyrics = '') {
+  const format = detectTimedLyricsFormat(rawLyrics)
+  if (format === 'srt' || format === 'lrc' || format === 'empty') return []
+  const taggedLines = parseLyricsWithTags(rawLyrics)
+    .map((entry) => String(entry?.text || '').trim())
+    .filter(Boolean)
+  const lines = taggedLines.length > 0 ? taggedLines : parseLyricLines(rawLyrics)
+  return lines
+    .map((line) => String(line || '').trim())
+    .filter((line) => line && !line.startsWith('#'))
+}
+
+function interpolateCueBoundary(cues = [], position = 0) {
+  if (!Array.isArray(cues) || cues.length === 0) return 0
+  const sorted = cues
+    .map((cue) => ({
+      start: Number(cue?.start) || 0,
+      end: Number(cue?.end) || 0,
+    }))
+    .filter((cue) => cue.end > cue.start)
+    .sort((a, b) => a.start - b.start)
+  if (sorted.length === 0) return 0
+
+  const clamped = Math.max(0, Math.min(sorted.length, Number(position) || 0))
+  const lower = Math.floor(clamped)
+  const fraction = clamped - lower
+  if (lower <= 0) {
+    return sorted[0].start + (sorted[0].end - sorted[0].start) * fraction
+  }
+  if (lower >= sorted.length) return sorted[sorted.length - 1].end
+  const prevEnd = sorted[lower - 1].end
+  const nextStart = sorted[lower].start
+  return prevEnd + (nextStart - prevEnd) * fraction
+}
+
+function tokenizeLyricsForTiming(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length > 1)
+}
+
+function levenshteinDistance(a = '', b = '') {
+  const left = String(a || '')
+  const right = String(b || '')
+  if (left === right) return 0
+  if (!left) return right.length
+  if (!right) return left.length
+
+  const prev = Array.from({ length: right.length + 1 }, (_, index) => index)
+  const curr = Array(right.length + 1).fill(0)
+  for (let i = 1; i <= left.length; i += 1) {
+    curr[0] = i
+    for (let j = 1; j <= right.length; j += 1) {
+      const cost = left[i - 1] === right[j - 1] ? 0 : 1
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + cost
+      )
+    }
+    for (let j = 0; j <= right.length; j += 1) prev[j] = curr[j]
+  }
+  return prev[right.length]
+}
+
+function tokenSimilarity(a = '', b = '') {
+  const left = String(a || '')
+  const right = String(b || '')
+  if (!left || !right) return 0
+  if (left === right) return 1
+  const maxLen = Math.max(left.length, right.length)
+  if (maxLen <= 2) return left === right ? 1 : 0
+  return 1 - (levenshteinDistance(left, right) / maxLen)
+}
+
+function tokensMatchForTiming(lyricToken = '', asrToken = '') {
+  const left = String(lyricToken || '')
+  const right = String(asrToken || '')
+  if (!left || !right) return false
+  if (left === right) return true
+  if (left.length <= 2 || right.length <= 2) return false
+  return tokenSimilarity(left, right) >= 0.78
+}
+
+function scoreCueTextMatch(lyricText = '', cueTexts = []) {
+  const lyricTokens = tokenizeLyricsForTiming(lyricText)
+  if (lyricTokens.length === 0) return 0
+  const cueTokenSet = new Set(tokenizeLyricsForTiming(cueTexts.join(' ')))
+  if (cueTokenSet.size === 0) return 0
+  let hits = 0
+  for (const token of lyricTokens) {
+    if (cueTokenSet.has(token)) hits += 1
+  }
+  return hits / lyricTokens.length
+}
+
+function findBestCueSpanForLyric(line = '', cues = [], cursor = 0, expectedPosition = 0, expectedSpan = 1) {
+  const cueCount = Array.isArray(cues) ? cues.length : 0
+  if (cueCount === 0) return null
+  const spanHint = Math.max(1, Math.round(expectedSpan) || 1)
+  const minStart = Math.max(cursor, Math.floor(expectedPosition) - 2)
+  const maxStart = Math.min(cueCount - 1, Math.ceil(expectedPosition) + 4)
+  let best = null
+  for (let start = minStart; start <= maxStart; start += 1) {
+    const minSpan = Math.max(1, spanHint - 1)
+    const maxSpan = Math.max(minSpan, spanHint + 2)
+    for (let span = minSpan; span <= maxSpan; span += 1) {
+      const end = Math.min(cueCount - 1, start + span - 1)
+      const cueTexts = cues.slice(start, end + 1).map((cue) => cue?.text || '')
+      const score = scoreCueTextMatch(line, cueTexts)
+      if (!best || score > best.score) {
+        best = { startIndex: start, endIndex: end, score }
+      }
+    }
+  }
+  return best && best.score >= 0.25 ? best : null
+}
+
+function normalizeAsrWordsForLyricTiming(asrWords = []) {
+  return (Array.isArray(asrWords) ? asrWords : [])
+    .map((word, index) => {
+      const text = String(word?.text || '').trim()
+      const tokens = tokenizeLyricsForTiming(text)
+      const start = Number(word?.start)
+      const end = Number(word?.end)
+      if (!text || tokens.length === 0 || !Number.isFinite(start) || !Number.isFinite(end)) return null
+      return {
+        index,
+        text,
+        tokens,
+        start,
+        end: end > start ? end : start + 0.08,
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.start - b.start)
+}
+
+function median(values = []) {
+  const nums = values
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b)
+  if (nums.length === 0) return null
+  const mid = Math.floor(nums.length / 2)
+  return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2
+}
+
+function estimatePrefixStartFromLookbehind(words = [], firstWordIndex = 0, lyricTokens = [], firstTokenIndex = 0, typicalWordDuration = 0.45, cursor = 0) {
+  const firstWord = words[firstWordIndex]
+  if (!firstWord || firstTokenIndex <= 0) return firstWord?.start ?? 0
+
+  const skippedLyricTokens = lyricTokens.slice(0, firstTokenIndex)
+  const prefixDuration = Math.max(0.7, skippedLyricTokens.length * Math.max(0.65, typicalWordDuration))
+  const baselineStart = Math.max(0, firstWord.start - prefixDuration)
+  const joinedSkippedLyrics = skippedLyricTokens.join('')
+  const lookbehindStart = Math.max(cursor, firstWordIndex - Math.max(5, skippedLyricTokens.length + 3))
+  let best = null
+
+  for (let i = lookbehindStart; i < firstWordIndex; i += 1) {
+    const word = words[i]
+    if (!word) continue
+    const gap = firstWord.start - word.end
+    if (gap < -0.05 || gap > 1.6) continue
+
+    const duration = Math.max(0, word.end - word.start)
+    const tokenSimilarityScore = Math.max(
+      0,
+      ...word.tokens.flatMap((asrToken) => (
+        skippedLyricTokens.map((lyricToken) => tokenSimilarity(lyricToken, asrToken))
+      )),
+      ...word.tokens.map((asrToken) => tokenSimilarity(joinedSkippedLyrics, asrToken))
+    )
+    const durationScore = duration >= 0.18
+      ? Math.min(1, duration / Math.max(0.5, prefixDuration))
+      : 0
+    const proximityScore = Math.max(0, 1 - (gap / 1.6))
+    const indexDistancePenalty = (firstWordIndex - i - 1) * 0.05
+    const score = tokenSimilarityScore * 0.55 + durationScore * 0.3 + proximityScore * 0.15 - indexDistancePenalty
+
+    if (!best || score > best.score) {
+      best = { word, duration, gap, tokenSimilarityScore, score }
+    }
+  }
+
+  if (!best || best.score < 0.4) return baselineStart
+
+  // Sung or hummed lead-ins are often collapsed into one long, wrong ASR token.
+  // Use the tail of that token for the missing lyric prefix instead of pulling
+  // the cue all the way back to the start of the vocalisation.
+  const fromPreviousTail = Math.max(best.word.start, best.word.end - prefixDuration)
+  if (best.tokenSimilarityScore >= 0.45 || best.duration >= 1.25) {
+    return Math.min(baselineStart, fromPreviousTail)
+  }
+
+  return baselineStart
+}
+
+function findBestWordSpanForLyric(line = '', asrWords = [], cursor = 0) {
+  const lyricTokens = tokenizeLyricsForTiming(line)
+  const words = normalizeAsrWordsForLyricTiming(asrWords)
+  if (lyricTokens.length === 0 || words.length === 0) return null
+
+  const startLimit = Math.min(words.length, Math.max(0, cursor) + 80)
+  let best = null
+
+  for (let skip = 0; skip <= Math.min(3, lyricTokens.length - 1); skip += 1) {
+    for (let startWordIndex = Math.max(0, cursor); startWordIndex < startLimit; startWordIndex += 1) {
+      let wordIndex = startWordIndex
+      const matches = []
+
+      for (let tokenIndex = skip; tokenIndex < lyricTokens.length; tokenIndex += 1) {
+        let foundIndex = -1
+        const searchLimit = Math.min(words.length, wordIndex + 28)
+        for (let i = wordIndex; i < searchLimit; i += 1) {
+          if (words[i].tokens.some((asrToken) => tokensMatchForTiming(lyricTokens[tokenIndex], asrToken))) {
+            foundIndex = i
+            break
+          }
+        }
+        if (foundIndex < 0) continue
+        matches.push({ tokenIndex, wordIndex: foundIndex })
+        wordIndex = foundIndex + 1
+      }
+
+      if (matches.length === 0) continue
+      const first = matches[0]
+      const last = matches[matches.length - 1]
+      const matchedRatio = matches.length / lyricTokens.length
+      const spanWordCount = Math.max(1, last.wordIndex - first.wordIndex + 1)
+      const density = matches.length / spanWordCount
+      const skippedPrefixPenalty = first.tokenIndex * 0.08
+      const distancePenalty = Math.max(0, first.wordIndex - cursor) * 0.003
+      const score = matchedRatio * 0.75 + density * 0.25 - skippedPrefixPenalty - distancePenalty
+
+      if (!best || score > best.score) {
+        best = { score, first, last, matches, words, lyricTokens }
+      }
+    }
+  }
+
+  if (!best || best.score < 0.38 || (best.matches.length < 2 && best.lyricTokens.length > 2)) return null
+
+  const firstWord = best.words[best.first.wordIndex]
+  const lastWord = best.words[best.last.wordIndex]
+  const matchedDurations = best.matches
+    .map(({ wordIndex }) => best.words[wordIndex].end - best.words[wordIndex].start)
+    .map((duration) => Math.min(0.75, Math.max(0.18, duration)))
+  const typicalWordDuration = median(matchedDurations) || 0.45
+  const missingPrefixTokens = best.first.tokenIndex
+  const missingSuffixTokens = Math.max(0, best.lyricTokens.length - best.last.tokenIndex - 1)
+
+  let start = firstWord.start
+  if (missingPrefixTokens > 0) {
+    start = estimatePrefixStartFromLookbehind(
+      best.words,
+      best.first.wordIndex,
+      best.lyricTokens,
+      best.first.tokenIndex,
+      typicalWordDuration,
+      cursor
+    )
+  }
+
+  let end = lastWord.end
+  if (missingSuffixTokens > 0) {
+    end += missingSuffixTokens * typicalWordDuration
+  }
+  if (end <= start) end = start + 0.4
+
+  return {
+    startIndex: best.first.wordIndex,
+    endIndex: best.last.wordIndex,
+    start,
+    end,
+    score: best.score,
+  }
+}
+
+function buildSrtFromProvidedLyricsAndAsrTiming(rawLyrics = '', asrCues = [], asrWords = []) {
+  const lyricLines = getPlainMusicLyricLines(rawLyrics)
+  const normalizedWords = normalizeAsrWordsForLyricTiming(asrWords)
+  if (lyricLines.length > 0 && normalizedWords.length > 0) {
+    let wordCursor = 0
+    const timedCues = lyricLines.map((line, index) => {
+      const matchedSpan = findBestWordSpanForLyric(line, normalizedWords, wordCursor)
+      if (matchedSpan) {
+        wordCursor = Math.min(normalizedWords.length, matchedSpan.endIndex + 1)
+        return {
+          id: `lyrics-timing-${index + 1}`,
+          start: matchedSpan.start,
+          end: matchedSpan.end,
+          text: line,
+          words: [],
+        }
+      }
+      const fallbackStart = wordCursor < normalizedWords.length ? normalizedWords[wordCursor].start : 0
+      return {
+        id: `lyrics-timing-${index + 1}`,
+        start: fallbackStart,
+        end: fallbackStart + 1.5,
+        text: line,
+        words: [],
+      }
+    })
+
+    return {
+      srt: formatCaptionCuesAsSrt(timedCues),
+      cues: timedCues,
+      firstStart: timedCues.length > 0 ? timedCues[0].start : null,
+      lyricLineCount: lyricLines.length,
+      cueCount: normalizedWords.length,
+      timingSource: 'asr-word-alignment',
+    }
+  }
+
+  const sortedCues = (Array.isArray(asrCues) ? asrCues : [])
+    .map((cue) => ({
+      ...cue,
+      start: Number(cue?.start) || 0,
+      end: Number(cue?.end) || 0,
+      text: String(cue?.text || '').trim(),
+    }))
+    .filter((cue) => cue.end > cue.start)
+    .sort((a, b) => a.start - b.start)
+  const cueCount = sortedCues.length
+  if (lyricLines.length === 0 || cueCount === 0) {
+    return { srt: '', lyricLineCount: lyricLines.length, cueCount }
+  }
+
+  const wordWeights = lyricLines.map((line) => Math.max(1, line.split(/\s+/).filter(Boolean).length))
+  const totalWeight = wordWeights.reduce((sum, weight) => sum + weight, 0) || lyricLines.length
+  let cumulativeWeight = 0
+  let cueCursor = 0
+  const timedCues = lyricLines.map((line, index) => {
+    const startPosition = (cumulativeWeight / totalWeight) * cueCount
+    cumulativeWeight += wordWeights[index]
+    const endPosition = (cumulativeWeight / totalWeight) * cueCount
+    const matchedSpan = findBestCueSpanForLyric(line, sortedCues, cueCursor, startPosition, endPosition - startPosition)
+    const start = matchedSpan
+      ? sortedCues[matchedSpan.startIndex].start
+      : interpolateCueBoundary(sortedCues, startPosition)
+    const endRaw = matchedSpan
+      ? sortedCues[matchedSpan.endIndex].end
+      : interpolateCueBoundary(sortedCues, endPosition)
+    const end = endRaw > start ? endRaw : start + 0.4
+    if (matchedSpan) cueCursor = Math.min(cueCount, matchedSpan.endIndex + 1)
+    return {
+      id: `lyrics-timing-${index + 1}`,
+      start,
+      end,
+      text: line,
+      words: [],
+    }
+  })
+
+  return {
+    srt: formatCaptionCuesAsSrt(timedCues),
+    cues: timedCues,
+    firstStart: timedCues.length > 0 ? timedCues[0].start : null,
+    lyricLineCount: lyricLines.length,
+    cueCount,
+    timingSource: 'asr-cue-alignment',
+  }
 }
 
 function buildMusicVideoPassIntro(pass, variantDescriptor) {
@@ -1881,8 +2368,11 @@ function buildMusicVideoPassRules(pass, variantDescriptor) {
         '  - Every shot MUST use Shot type: b_roll.',
         '  - Do NOT include Artist: or Lyric moment: fields on any shot — omit them entirely.',
         '  - Do NOT show any performer\'s face or body in frame. The cast is absent from this pass.',
-        '  - Imagery should establish PLACES and ATMOSPHERE: empty rooms, exterior locations, weather, landscapes, signage, vehicles without occupants, environmental textures.',
-        '  - REUSE the Start at: and Length: values from the master script below so this pass lines up frame-accurately in an NLE. If the master has no shot at a given moment, invent one that fills the gap.',
+        '  - Build a clear environmental story with start, middle, and end. Reuse the same locations, symbols, and public pressure as the main/story b-roll idea instead of inventing unrelated places.',
+        '  - Every environmental shot should reveal a story consequence: buildup, escalation, threat, aftermath, escape route, public reaction, or final quiet.',
+        '  - Do NOT reuse only the master performance shot timings. Create a continuous b-roll shot grid from 0:00 to the full song end, filling every instrumental, intro, outro, and non-vocal gap.',
+        '  - Each environmental shot must run until the next environmental shot starts. Calculate Length from the next Start at; the last shot runs until the full song end. This pass should drop into the timeline without moving clips.',
+        '  - Use the master script and SRT only as landmarks for where the emotional/story energy changes. B-roll Start at values may fall between lyric offsets and should not require Lyric moment.',
         '  - Favor medium-to-wide framings. Shot lengths should skew 4–7s. Let shots breathe.',
         '  - INVENT NEW IMAGERY. Do NOT copy the master script\'s Keyframe prompt or Motion prompt text.',
       ].join('\n')
@@ -1892,10 +2382,12 @@ function buildMusicVideoPassRules(pass, variantDescriptor) {
         '  - Every shot MUST use Shot type: b_roll.',
         '  - Do NOT include Artist: or Lyric moment: fields on any shot — omit them entirely.',
         '  - You MAY show hands, fingers, feet, backs of heads, silhouettes, or isolated body parts — but NEVER a recognizable face and NEVER a visible lip-sync.',
-        '  - Imagery should be TIGHT and TEXTURAL: macro shots of gear (frets, strings, picks, pedals, drums, amp grilles, cables, VU meters), small story objects, close-ups of textures, materials, and details.',
-        '  - You do NOT need to match the master script\'s shot boundaries. It is ENCOURAGED to subdivide longer master shots into multiple shorter detail shots.',
+        '  - Build a clear detail story with start, middle, and end using recurring symbols/props/materials from the same b-roll narrative. Details should feel like evidence from the larger story, not random inserts.',
+        '  - Every detail shot should reveal a story clue, emotional pressure point, transformation, damage, warning, decision, or aftermath.',
+        '  - You do NOT need to match the master script\'s shot boundaries or lyric offsets. It is ENCOURAGED to subdivide the full song timeline into multiple shorter detail shots.',
+        '  - Each detail shot must run until the next detail shot starts. Calculate Length from the next Start at; the last shot runs until the full song end. This pass should drop into the timeline without moving clips.',
         '  - Shot lengths should skew SHORTER: 2–4s is ideal, occasionally up to 5s.',
-        '  - Still cover the full song with no gaps >3s.',
+        '  - Still cover the full song with no gaps at all.',
         '  - INVENT NEW IMAGERY. Do NOT copy the master script\'s Keyframe prompt or Motion prompt text.',
       ].join('\n')
     case 'master':
@@ -2607,6 +3099,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   // the streams when editing either side.
   const [yoloMusicAudioAssetId, setYoloMusicAudioAssetId] = useState(persistedState?.yoloMusicAudioAssetId || null)
   const [yoloMusicAudioKind, setYoloMusicAudioKind] = useState(persistedState?.yoloMusicAudioKind || 'mixed_track')
+  const [yoloMusicAsrLanguage, setYoloMusicAsrLanguage] = useState(persistedState?.yoloMusicAsrLanguage || 'English')
   // Lyrics field accepts plain text, SRT, or LRC — auto-detected by
   // detectTimedLyricsFormat. When the paste is SRT/LRC the planner uses real
   // per-line timings (tier 2 of audioStart resolution); when it's plain
@@ -2737,6 +3230,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   const MAX_CONSECUTIVE_RAPID_FAILS = 3
   const MIN_JOB_INTERVAL_MS = 2000
   const [formError, setFormError] = useState(null)
+  const [formErrorCopyStatus, setFormErrorCopyStatus] = useState('')
   const [creatingStoryboardPdf, setCreatingStoryboardPdf] = useState(false)
   const [yoloMusicAudioImporting, setYoloMusicAudioImporting] = useState(false)
   const [yoloMusicTranscribingSrt, setYoloMusicTranscribingSrt] = useState(false)
@@ -2944,6 +3438,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         yoloPlan,
         yoloMusicAudioAssetId,
         yoloMusicAudioKind,
+        yoloMusicAsrLanguage,
         yoloMusicLyrics,
         yoloMusicConcept,
         yoloMusicStyleNotes,
@@ -3021,6 +3516,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloPlan,
     yoloMusicAudioAssetId,
     yoloMusicAudioKind,
+    yoloMusicAsrLanguage,
     yoloMusicLyrics,
     yoloMusicConcept,
     yoloMusicStyleNotes,
@@ -3125,6 +3621,30 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     () => currentCategoryWorkflows.find((workflow) => workflow.id === workflowId) || currentCategoryWorkflows[0],
     [currentCategoryWorkflows, workflowId]
   )
+  const formErrorTroubleshootingHints = useMemo(
+    () => buildGenerationErrorTroubleshootingHints(formError),
+    [formError]
+  )
+  useEffect(() => {
+    setFormErrorCopyStatus('')
+  }, [formError])
+  const handleCopyFormError = useCallback(async () => {
+    if (!formError) return
+    const text = buildGenerationErrorClipboardText({
+      errorText: formError,
+      hints: formErrorTroubleshootingHints,
+      workflow: currentWorkflow,
+      generationMode,
+    })
+    try {
+      await copyTextToClipboard(text)
+      setFormErrorCopyStatus('Copied')
+      setTimeout(() => setFormErrorCopyStatus(''), 1600)
+    } catch {
+      setFormErrorCopyStatus('Copy failed')
+      setTimeout(() => setFormErrorCopyStatus(''), 1600)
+    }
+  }, [currentWorkflow, formError, formErrorTroubleshootingHints, generationMode])
   const activeWorkflowBrowserMode = generationMode === 'yolo' ? 'create' : 'generate'
   const visibleWorkflowManifests = useMemo(() => (
     GENERATE_WORKFLOW_CATALOG.filter((workflow) => (
@@ -3616,7 +4136,12 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     }
     if (yoloMusicTranscribingSrt) return
 
-    if (yoloMusicLyrics.trim()) {
+    const existingLyricsText = String(yoloMusicLyrics || '').trim()
+    const existingLyricsFormat = detectTimedLyricsFormat(existingLyricsText)
+    const plainLyricLines = getPlainMusicLyricLines(existingLyricsText)
+    const shouldAlignProvidedLyrics = existingLyricsFormat === 'unknown' && plainLyricLines.length > 0
+
+    if (existingLyricsText && !shouldAlignProvidedLyrics) {
       const shouldReplace = window.confirm(
         'Replace the current Lyrics/SRT text with a fresh transcription from the selected song audio?'
       )
@@ -3625,22 +4150,43 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
     setFormError(null)
     setYoloMusicTranscribingSrt(true)
-    setYoloMusicTranscriptionStatus('Preparing Qwen ASR transcription...')
+    setYoloMusicTranscriptionStatus(shouldAlignProvidedLyrics
+      ? 'Preparing ASR timing pass for provided lyrics...'
+      : 'Preparing Qwen ASR transcription...')
 
     try {
       const result = await transcribeWithComfyUI(yoloMusicAudioAsset, {
+        language: yoloMusicAsrLanguage,
         onProgress: (progress) => {
-          setYoloMusicTranscriptionStatus(progress?.message || 'Transcribing song audio...')
+          setYoloMusicTranscriptionStatus(progress?.message || (shouldAlignProvidedLyrics
+            ? 'Detecting vocal timing from song audio...'
+            : 'Transcribing song audio...'))
         },
       })
-      const srt = formatCaptionCuesAsSrt(result?.cues || [])
+      let timingResult = shouldAlignProvidedLyrics
+        ? buildSrtFromProvidedLyricsAndAsrTiming(existingLyricsText, result?.cues || [], result?.words || [])
+        : {
+            cues: result?.cues || [],
+            firstStart: Array.isArray(result?.cues) && result.cues.length > 0 ? Number(result.cues[0]?.start) || 0 : null,
+            srt: formatCaptionCuesAsSrt(result?.cues || []),
+            cueCount: result?.cues?.length || 0,
+          }
+      const srt = timingResult.srt
       if (!srt.trim()) {
         throw new Error('The transcription completed, but no SRT cues were produced.')
       }
 
       setYoloMusicLyrics(srt)
-      setYoloMusicTranscriptionStatus(`Transcribed ${result.cues.length} timed lyric line${result.cues.length === 1 ? '' : 's'} into SRT.`)
-      addComfyLog('status', `Music video SRT generated from ${yoloMusicAudioAsset.name || 'song audio'}`)
+      if (shouldAlignProvidedLyrics) {
+        const sourceNote = timingResult.timingSource === 'asr-word-alignment'
+          ? ' using raw ASR word timings'
+          : ''
+        setYoloMusicTranscriptionStatus(`Aligned ${timingResult.lyricLineCount} provided lyric line${timingResult.lyricLineCount === 1 ? '' : 's'} to ${timingResult.cueCount} ASR timing cue${timingResult.cueCount === 1 ? '' : 's'}${sourceNote}.`)
+        addComfyLog('status', `Music video lyric timing generated from ${yoloMusicAudioAsset.name || 'song audio'} without replacing provided lyrics`)
+      } else {
+        setYoloMusicTranscriptionStatus(`Transcribed ${result.cues.length} timed lyric line${result.cues.length === 1 ? '' : 's'} into SRT.`)
+        addComfyLog('status', `Music video SRT generated from ${yoloMusicAudioAsset.name || 'song audio'}`)
+      }
     } catch (error) {
       const message = error?.message || 'Unknown transcription error'
       setFormError(`Could not transcribe song audio: ${message}`)
@@ -3650,6 +4196,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     }
   }, [
     addComfyLog,
+    yoloMusicAsrLanguage,
     yoloMusicAudioAsset,
     yoloMusicLyrics,
     yoloMusicTranscribingSrt,
@@ -5032,6 +5579,30 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       j.status === 'paused' ? { ...j, status: 'queued' } : j
     ))
     addComfyLog('status', 'Queue resumed')
+  }, [addComfyLog])
+
+  const handleRequeueFailedJob = useCallback((failedJob) => {
+    if (!failedJob || failedJob.status !== 'error') return
+    const retryCount = (Number(failedJob.retryCount) || 0) + 1
+    startedJobIdsRef.current.delete(failedJob.id)
+    setGenerationQueue(prev => prev.map((job) => {
+      if (job.id !== failedJob.id) return job
+      return {
+        ...job,
+        status: 'queued',
+        progress: 0,
+        error: undefined,
+        node: undefined,
+        promptId: undefined,
+        resultAssetIds: undefined,
+        restoredFromLedger: undefined,
+        isCombiningAngles: undefined,
+        combineError: undefined,
+        retryCount,
+        retryOfJobId: failedJob.retryOfJobId || failedJob.id,
+      }
+    }))
+    addComfyLog('status', `Retrying failed job: ${failedJob.workflowLabel || failedJob.workflowId || failedJob.id}`)
   }, [addComfyLog])
 
   const createQueuedJob = useCallback((overrides = {}) => {
@@ -6674,27 +7245,38 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     }
 
     const timelineState = useTimelineStore.getState()
-    const previousAssemblyClipIds = (timelineState.clips || [])
-      .filter((clip) => clip?.metadata?.musicVideoAssembly?.mode === MUSIC_VIDEO_TIMELINE_ASSEMBLY_MODE)
-      .map((clip) => clip.id)
-    const previousAssemblyClipIdSet = new Set(previousAssemblyClipIds)
-    timelineState.saveToHistory?.()
-    if (previousAssemblyClipIds.length > 0) {
-      useTimelineStore.setState((state) => {
-        const nextTransitions = (state.transitions || []).filter((transition) => (
-          !previousAssemblyClipIdSet.has(transition.clipId)
-          && !previousAssemblyClipIdSet.has(transition.clipAId)
-          && !previousAssemblyClipIdSet.has(transition.clipBId)
-        ))
-        const selectedTransitionStillExists = nextTransitions.some((transition) => transition.id === state.selectedTransitionId)
-        return {
-          clips: state.clips.filter((clip) => !previousAssemblyClipIdSet.has(clip.id)),
-          transitions: nextTransitions,
-          selectedClipIds: state.selectedClipIds.filter((clipId) => !previousAssemblyClipIdSet.has(clipId)),
-          selectedTransitionId: selectedTransitionStillExists ? state.selectedTransitionId : null,
-        }
-      })
+    const projectAssetById = new Map((assets || []).filter((asset) => asset?.id).map((asset) => [asset.id, asset]))
+    const getMusicVideoClipAssemblyKey = (clip) => {
+      const assembly = clip?.metadata?.musicVideoAssembly || null
+      const asset = clip?.assetId ? projectAssetById.get(clip.assetId) : null
+      const yolo = asset?.yolo || asset?.settings?.yolo || null
+      const variantKey = assembly?.variantKey || yolo?.variantKey || yolo?.key || ''
+      if (variantKey) return 'variant:' + variantKey
+      const sceneId = assembly?.sceneId || yolo?.sceneId || ''
+      const shotId = assembly?.shotId || yolo?.shotId || ''
+      if (sceneId || shotId) return 'shot:' + sceneId + '|' + shotId
+      const assetId = assembly?.assetId || clip?.assetId || ''
+      return assetId ? 'asset:' + assetId : ''
     }
+    const existingVideoAssemblyKeys = new Set(
+      (timelineState.clips || [])
+        .filter((clip) => {
+          if (clip?.type !== 'video') return false
+          const assembly = clip?.metadata?.musicVideoAssembly || null
+          if (assembly?.mode === MUSIC_VIDEO_TIMELINE_ASSEMBLY_MODE && assembly?.kind === 'video') return true
+          const asset = clip?.assetId ? projectAssetById.get(clip.assetId) : null
+          const yolo = asset?.yolo || asset?.settings?.yolo || null
+          return yolo?.mode === 'music' && yolo?.stage === 'video'
+        })
+        .map(getMusicVideoClipAssemblyKey)
+        .filter(Boolean)
+    )
+    const initialExistingVideoAssemblyCount = existingVideoAssemblyKeys.size
+    const existingSongAudio = (timelineState.clips || []).some((clip) => (
+      clip?.metadata?.musicVideoAssembly?.mode === MUSIC_VIDEO_TIMELINE_ASSEMBLY_MODE
+      && clip?.metadata?.musicVideoAssembly?.kind === 'song-audio'
+    ))
+    timelineState.saveToHistory?.()
 
     const assembledAt = new Date().toISOString()
     const createdTrackIds = new Set()
@@ -6714,11 +7296,32 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       const track = getOrCreateTrack('video', group.trackName)
       if (!track) continue
       for (const row of group.rows) {
+        const rowAssemblyKey = row.variant?.key
+          ? 'variant:' + row.variant.key
+          : (row.scene?.id || row.shot?.id
+            ? 'shot:' + (row.scene?.id || '') + '|' + (row.shot?.id || '')
+            : (row.asset?.id ? 'asset:' + row.asset.id : ''))
+        if (rowAssemblyKey && existingVideoAssemblyKeys.has(rowAssemblyKey)) continue
+        const shotType = row.shot?.musicShotType || row.variant?.musicShotType || row.asset?.yolo?.shotType || ''
+        const shotTypeOption = getMusicVideoShotTypeOption(shotType)
+        const syncLock = shotTypeOption?.needsVocalAlignment ? {
+          source: 'music-video',
+          reason: 'song-sync',
+          startTime: row.startTime,
+          audioStart: row.startTime,
+          duration: row.duration,
+          length: row.duration,
+          shotType,
+          sceneId: row.scene?.id || '',
+          shotId: row.shot?.id || '',
+          variantKey: row.variant?.key || row.asset?.yolo?.variantKey || '',
+        } : null
         const clip = timelineAddClip(track.id, row.asset, row.startTime, fps, {
           duration: row.duration,
           saveHistory: false,
           selectAfterAdd: false,
           resolveOverlaps: false,
+          ...(syncLock ? { syncLock } : {}),
           metadata: {
             musicVideoAssembly: {
               mode: MUSIC_VIDEO_TIMELINE_ASSEMBLY_MODE,
@@ -6735,12 +7338,15 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             },
           },
         })
-        if (clip) insertedVideoClips += 1
+        if (clip) {
+          insertedVideoClips += 1
+          if (rowAssemblyKey) existingVideoAssemblyKeys.add(rowAssemblyKey)
+        }
       }
     }
 
     let insertedAudioClips = 0
-    if (yoloMusicAudioAsset) {
+    if (yoloMusicAudioAsset && !existingSongAudio) {
       const audioTrack = getOrCreateTrack('audio', 'MV - Song', { channels: 'stereo' })
       const audioDuration = Number(yoloMusicSongDurationSeconds || yoloMusicAudioAsset?.settings?.duration || yoloMusicAudioAsset?.duration || 0) || undefined
       if (audioTrack) {
@@ -6769,6 +7375,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       insertedAudioClips > 0 ? 'song audio' : '',
       `in "${timelineResult.timelineName}"`,
       `on ${groups.size} coverage track${groups.size === 1 ? '' : 's'}`,
+      initialExistingVideoAssemblyCount > 0 ? `${initialExistingVideoAssemblyCount} existing clip${initialExistingVideoAssemblyCount === 1 ? '' : 's'} kept` : '',
       missingRows.length > 0 ? `${missingRows.length} missing/failed shot${missingRows.length === 1 ? '' : 's'} skipped` : '',
     ].filter(Boolean).join(' · ')
 
@@ -6783,7 +7390,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       insertedVideoClips,
       insertedAudioClips,
       missingCount: missingRows.length,
-      replacedCount: previousAssemblyClipIds.length,
+      replacedCount: 0,
+      keptExistingClipCount: initialExistingVideoAssemblyCount,
       timelineName: timelineResult.timelineName,
       trackCount: groups.size,
     }
@@ -6889,10 +7497,37 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     }
     const usesModelProductStoryboardWorkflow = yoloStoryboardWorkflowId === 'image-edit-model-product'
     const usesQwenMusicStoryboardWorkflow = isYoloMusicMode && yoloStoryboardWorkflowId === 'image-edit'
+    const musicImageAssetById = new Map(
+      (assets || [])
+        .filter((asset) => asset?.type === 'image')
+        .map((asset) => [asset.id, asset])
+    )
+    const findExistingMusicImageAssetId = (ids = []) => {
+      for (const assetId of ids) {
+        if (assetId && musicImageAssetById.has(assetId)) return assetId
+      }
+      return null
+    }
+    const defaultMusicReferenceAssetId = findExistingMusicImageAssetId([
+      ...yoloMusicResolvedCast.map((entry) => entry?.assetId),
+      yoloMusicArtistAsset?.id,
+    ])
+    const resolveQwenMusicStoryboardReferences = (variant) => {
+      const resolvedArtistAssetIds = Array.isArray(variant?.resolvedArtistAssetIds)
+        ? variant.resolvedArtistAssetIds.filter(Boolean)
+        : []
+      const primaryAssetId = findExistingMusicImageAssetId([
+        ...resolvedArtistAssetIds,
+        defaultMusicReferenceAssetId,
+      ])
+      const secondaryAssetId = findExistingMusicImageAssetId(
+        resolvedArtistAssetIds.filter((assetId) => assetId !== primaryAssetId)
+      )
+      return { primaryAssetId, secondaryAssetId }
+    }
     if (usesQwenMusicStoryboardWorkflow) {
-      const missingReference = variantsToQueue.some((variant) => !(
-        variant?.resolvedArtistAssetIds?.[0] ||
-        yoloMusicArtistAsset?.id
+      const missingReference = variantsToQueue.some((variant) => (
+        !resolveQwenMusicStoryboardReferences(variant).primaryAssetId
       ))
       if (missingReference) {
         setFormError('Qwen Image Edit keyframes need a cast/reference image. Add at least one person in the Music Video People step, or switch keyframes to Nano Banana 2.')
@@ -6928,14 +7563,25 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             ? mediumSeed
             : softSeed
       )
+      const qwenMusicReferences = usesQwenMusicStoryboardWorkflow
+        ? resolveQwenMusicStoryboardReferences(variant)
+        : { primaryAssetId: null, secondaryAssetId: null }
       const musicReferenceAssetId1 = isYoloMusicMode
-        ? (variant.resolvedArtistAssetIds?.[0] || yoloMusicArtistAsset?.id || null)
+        ? (
+          usesQwenMusicStoryboardWorkflow
+            ? qwenMusicReferences.primaryAssetId
+            : (variant.resolvedArtistAssetIds?.[0] || yoloMusicArtistAsset?.id || null)
+        )
         : null
       const musicReferenceAssetId2 = isYoloMusicMode
-        ? (variant.resolvedArtistAssetIds?.[1] || null)
+        ? (
+          usesQwenMusicStoryboardWorkflow
+            ? qwenMusicReferences.secondaryAssetId
+            : (variant.resolvedArtistAssetIds?.[1] || null)
+        )
         : null
       const qwenMusicInputAsset = usesQwenMusicStoryboardWorkflow && musicReferenceAssetId1
-        ? (assets.find((asset) => asset?.id === musicReferenceAssetId1) || null)
+        ? (musicImageAssetById.get(musicReferenceAssetId1) || null)
         : null
       const storyboardInputAsset = usesModelProductStoryboardWorkflow
         ? adStoryboardInputAsset
@@ -7011,6 +7657,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     effectiveImageResolution.width,
     yoloMusicArtistAsset,
     yoloMusicArtistAsset?.id,
+    yoloMusicResolvedCast,
     yoloMusicQualityProfile,
     yoloNormalizedAdStoryboardTier,
     yoloAdProductAsset,
@@ -10100,6 +10747,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     setYoloMusicAudioAssetId={setYoloMusicAudioAssetId}
                     yoloMusicAudioKind={yoloMusicAudioKind}
                     setYoloMusicAudioKind={setYoloMusicAudioKind}
+                    yoloMusicAsrLanguage={yoloMusicAsrLanguage}
+                    setYoloMusicAsrLanguage={setYoloMusicAsrLanguage}
                     yoloMusicAudioAsset={yoloMusicAudioAsset}
                     yoloMusicTranscribingSrt={yoloMusicTranscribingSrt}
                     yoloMusicTranscriptionStatus={yoloMusicTranscriptionStatus}
@@ -10296,7 +10945,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                                 onClick={handleYoloMusicTranscribeSrt}
                                 disabled={!yoloMusicAudioAsset || yoloMusicTranscribingSrt}
                                 title={yoloMusicAudioAsset
-                                  ? 'Transcribe the selected song audio with Qwen ASR and fill this box with SRT timings.'
+                                  ? 'If lyrics are pasted, use ASR only to infer timing offsets. If empty, transcribe the song into SRT.'
                                   : 'Select a song audio asset first.'}
                                 className="inline-flex items-center gap-1.5 rounded border border-cyan-400/40 bg-cyan-400/10 px-2 py-1 text-[10px] font-medium text-cyan-200 transition-colors hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
                               >
@@ -10305,7 +10954,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                                 ) : (
                                   <Wand2 className="h-3 w-3" />
                                 )}
-                                Transcribe to SRT
+                                {yoloMusicLyrics.trim() && !yoloMusicParsedLyrics.isTimed ? 'Prepare Timing' : 'Transcribe to SRT'}
                               </button>
                             </div>
                           </div>
@@ -12434,7 +13083,31 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             )}
 
             {formError && (
-              <div className="mt-2 text-[10px] text-sf-error text-center">{formError}</div>
+              <div className="mt-2 rounded-md border border-red-500/30 bg-red-500/10 p-2 text-left">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 text-[10px] font-semibold text-red-200">
+                    Generation message
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { void handleCopyFormError() }}
+                    className="inline-flex shrink-0 items-center gap-1 rounded border border-red-300/30 bg-sf-dark-950/60 px-1.5 py-0.5 text-[9px] font-medium text-red-100 transition-colors hover:border-red-200/60 hover:text-white"
+                    title="Copy this error and troubleshooting context"
+                  >
+                    <Copy className="h-3 w-3" />
+                    {formErrorCopyStatus || 'Copy error'}
+                  </button>
+                </div>
+                <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap break-words font-sans text-[10px] leading-4 text-sf-error">{formError}</pre>
+                {formErrorTroubleshootingHints.length > 0 && (
+                  <div className="mt-2 space-y-1 rounded border border-red-300/20 bg-sf-dark-950/50 p-2 text-[9px] leading-4 text-red-100">
+                    <div className="font-semibold text-red-50">Troubleshooting hints</div>
+                    {formErrorTroubleshootingHints.map((hint) => (
+                      <div key={hint}>{hint}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -12533,18 +13206,33 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                         <div className="text-[9px] text-sf-error">{job.error}</div>
                       </div>
                     )}
-                    {canCreateAngleSheet && (
+                    {(canCreateAngleSheet || job.status === 'error') && (
                       <div className="mt-2 flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleCreateAngleSheetForJob(job)}
-                          disabled={Boolean(job.isCombiningAngles)}
-                          className="px-2 py-1 rounded border border-sf-dark-600 bg-sf-dark-700 hover:bg-sf-dark-600 text-[10px] text-sf-text-primary disabled:opacity-60"
-                        >
-                          {job.isCombiningAngles ? 'Creating Sheet...' : 'Create Angle Sheet'}
-                        </button>
-                        {job.combineError && (
-                          <span className="text-[9px] text-sf-error">{job.combineError}</span>
+                        {canCreateAngleSheet && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleCreateAngleSheetForJob(job)}
+                              disabled={Boolean(job.isCombiningAngles)}
+                              className="px-2 py-1 rounded border border-sf-dark-600 bg-sf-dark-700 hover:bg-sf-dark-600 text-[10px] text-sf-text-primary disabled:opacity-60"
+                            >
+                              {job.isCombiningAngles ? 'Creating Sheet...' : 'Create Angle Sheet'}
+                            </button>
+                            {job.combineError && (
+                              <span className="text-[9px] text-sf-error">{job.combineError}</span>
+                            )}
+                          </>
+                        )}
+                        {job.status === 'error' && (
+                          <button
+                            type="button"
+                            onClick={() => handleRequeueFailedJob(job)}
+                            className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded border border-sf-dark-600 bg-sf-dark-700 text-sf-text-muted transition-colors hover:border-sf-accent/50 hover:bg-sf-dark-600 hover:text-sf-text-primary"
+                            title="Retry this failed job"
+                            aria-label="Retry failed job"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" />
+                          </button>
                         )}
                       </div>
                     )}

@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { 
   Move, RotateCw, Maximize2, Clock, Layers,
   ChevronDown, ChevronRight, ChevronLeft, Sparkles,
-  Zap, Eye, SlidersHorizontal, CircleDot,
+  Zap, Eye, SlidersHorizontal, CircleDot, Lock, Unlock,
   FlipHorizontal, FlipVertical, Link, Unlink, Crop,
   Anchor, RotateCcw, Type, AlignLeft, AlignCenter, AlignRight,
   AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd,
@@ -11,7 +11,7 @@ import {
   Wand2, Trash2, EyeOff, Plus, Play, Loader2, Check, AlertTriangle, X,
   Copy, ClipboardPaste
 } from 'lucide-react'
-import useTimelineStore from '../stores/timelineStore'
+import useTimelineStore, { buildClipSyncLock, isMusicVideoSyncCapableClip, isSyncLockedClip } from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 import renderCacheService from '../services/renderCache'
@@ -504,6 +504,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     removeTransition,
     getMaxTransitionDurationForAlignment,
     getMaxEdgeTransitionDuration,
+    lockSyncClips,
+    unlockSyncLockedClips,
     // Cache
     setCacheStatus,
     setCacheUrl,
@@ -517,6 +519,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   // Get assets store functions (needed for render cache)
   const { assets, getAssetById, getAllMasks, updateAsset } = useAssetsStore()
   const timelineSettings = useProjectStore(state => state.getCurrentTimelineSettings?.())
+  const { currentProjectHandle, getCurrentTimelineSettings } = useProjectStore()
+  const currentTimelineSettings = getCurrentTimelineSettings?.() || null
+  const timecodeFps = Math.max(1, Math.round(Number(currentTimelineSettings?.fps) || FRAME_RATE))
   
   const selectedTransition = selectedTransitionId
     ? transitions.find(t => t.id === selectedTransitionId) || null
@@ -558,6 +563,28 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   const selectionSignature = useMemo(
     () => orderedSelectedClips.map((clip) => clip.id).join('|'),
     [orderedSelectedClips]
+  )
+  const isSyncCapableClip = useCallback((clip) => {
+    const asset = clip?.assetId ? getAssetById(clip.assetId) : null
+    return isMusicVideoSyncCapableClip(clip, asset)
+  }, [getAssetById])
+  const selectedSyncEligibleClips = useMemo(
+    () => orderedSelectedClips.filter((clip) => isSyncCapableClip(clip)),
+    [orderedSelectedClips, isSyncCapableClip]
+  )
+  const selectedSyncLockByClipId = useMemo(() => (
+    selectedSyncEligibleClips.reduce((acc, clip) => {
+      const asset = clip.assetId ? getAssetById(clip.assetId) : null
+      const syncLock = buildClipSyncLock({ clip, asset, fps: timecodeFps })
+      if (syncLock) {
+        acc[clip.id] = syncLock
+      }
+      return acc
+    }, {})
+  ), [buildClipSyncLock, getAssetById, selectedSyncEligibleClips, timecodeFps])
+  const selectedSyncAllLocked = useMemo(
+    () => selectedSyncEligibleClips.length > 0 && selectedSyncEligibleClips.every((clip) => isSyncLockedClip(clip)),
+    [selectedSyncEligibleClips]
   )
   const [inspectorClipId, setInspectorClipId] = useState(null)
   useEffect(() => {
@@ -1502,11 +1529,6 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
     } catch (_) {}
   }, [expandedAdjustmentGroups])
 
-  // Get project handle for saving cache to disk
-  const { currentProjectHandle, getCurrentTimelineSettings } = useProjectStore()
-  const currentTimelineSettings = getCurrentTimelineSettings?.() || null
-  const timecodeFps = Math.max(1, Math.round(Number(currentTimelineSettings?.fps) || FRAME_RATE))
-
   useEffect(() => {
     if (!selectedAsset || selectedAsset.type !== 'video') return
     if (!isElectron() || typeof window === 'undefined' || typeof window.electronAPI?.getVideoFps !== 'function') return
@@ -1752,6 +1774,23 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
   const renderInspectorSettingsHeaderActions = () => {
     return renderInspectorClipboardButtons({
       scope: INSPECTOR_SETTINGS_SCOPE.ALL,
+      extraActions: selectedSyncEligibleClips.length > 0
+        ? renderHeaderActionButton({
+            icon: selectedSyncAllLocked ? Unlock : Lock,
+            label: selectedSyncAllLocked ? 'Unlock Sync' : 'Lock Sync',
+            onClick: () => {
+              const targetIds = selectedSyncEligibleClips.map((clip) => clip.id)
+              if (selectedSyncAllLocked) {
+                unlockSyncLockedClips(targetIds)
+              } else {
+                lockSyncClips(targetIds, selectedSyncLockByClipId)
+              }
+            },
+            title: selectedSyncAllLocked
+              ? `Unlock sync on ${selectedSyncEligibleClips.length} selected clips`
+              : `Lock sync on ${selectedSyncEligibleClips.length} selected clips`,
+          })
+        : null,
     })
   }
 

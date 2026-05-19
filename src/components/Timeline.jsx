@@ -6,7 +6,7 @@ import {
   Diamond, Zap, AlertTriangle, Loader2, ChevronLeft, ChevronRight, Maximize2, Flag, Scissors, Clock,
   Copy, ClipboardPaste, Trash2,
 } from 'lucide-react'
-import useTimelineStore from '../stores/timelineStore'
+import useTimelineStore, { buildClipSyncLock, isMusicVideoSyncCapableClip, isSyncLockedClip } from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
 import renderCacheService from '../services/renderCache'
 import { deleteRenderCache } from '../services/fileSystem'
@@ -704,6 +704,8 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     getLinkedClipIds,
     linkSelectedClips,
     unlinkSelectedClips,
+    lockSyncClips,
+    unlockSyncLockedClips,
     addMarker,
     removeMarker,
     selectMarker,
@@ -720,6 +722,10 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     canRedoTimelineStructureChange,
     projectHistoryLastChangedAt,
   } = useProjectStore()
+  // Assets store needs to be available before we derive sync-lock state.
+  // The sync-lock helpers below read asset metadata during render, so keep
+  // this destructure above any memo that uses getAssetById.
+  const { assets, currentPreview, setPreviewMode, getAssetUrl, getAssetById, updateAsset, isPlaying: assetIsPlaying, setIsPlaying: setAssetIsPlaying, folders, addFolder, addAsset, removeAsset } = useAssetsStore()
   const timelineFps = getCurrentTimelineSettings()?.fps
   const timecodeFps = Number.isFinite(Number(timelineFps)) && Number(timelineFps) > 0
     ? Number(timelineFps)
@@ -883,6 +889,29 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
       .filter(Boolean),
     [clips, clipContextSelectionIds]
   )
+  const isSyncCapableClip = useCallback((clip) => {
+    const asset = clip.assetId ? getAssetById(clip.assetId) : null
+    return isMusicVideoSyncCapableClip(clip, asset)
+  }, [getAssetById])
+  const clipContextSyncEligibleClips = useMemo(
+    () => clipContextSelectionClips.filter((clip) => isSyncCapableClip(clip)),
+    [clipContextSelectionClips, isSyncCapableClip]
+  )
+  const clipContextSyncLockByClipId = useMemo(() => (
+    clipContextSyncEligibleClips.reduce((acc, clip) => {
+      const asset = clip.assetId ? getAssetById(clip.assetId) : null
+      const syncLock = buildClipSyncLock({ clip, asset, fps: timecodeFps })
+      if (syncLock) {
+        acc[clip.id] = syncLock
+      }
+      return acc
+    }, {})
+  ), [buildClipSyncLock, clipContextSyncEligibleClips, getAssetById, timecodeFps])
+  const clipContextAllSyncLocked = useMemo(
+    () => clipContextSyncEligibleClips.length > 0
+      && clipContextSyncEligibleClips.every((clip) => isSyncLockedClip(clip)),
+    [clipContextSyncEligibleClips]
+  )
   const clipContextLinkedGroupIds = useMemo(
     () => [...new Set(clipContextSelectionClips.map((clip) => clip.linkGroupId).filter(Boolean))],
     [clipContextSelectionClips]
@@ -1035,9 +1064,6 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
   
   // Snapping hook
   const { snapClipPosition, snapTrim, pixelsPerSecond: snapPixelsPerSecond } = useSnapping()
-
-  // Assets store for drag & drop and preview mode
-  const { assets, currentPreview, setPreviewMode, getAssetUrl, getAssetById, updateAsset, isPlaying: assetIsPlaying, setIsPlaying: setAssetIsPlaying, folders, addFolder, addAsset, removeAsset } = useAssetsStore()
 
   // Timeline-wide caption workspace state. We mount CaptionWorkspace at the
   // timeline level (rather than per-asset in AssetsPanel) so captions can span
@@ -1982,7 +2008,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
   }, [])
 
   const splitClipAtTime = useCallback((clip, splitPosition, { saveHistory = false } = {}) => {
-    if (!clip || splitPosition <= clip.startTime || splitPosition >= clip.startTime + clip.duration) return null
+    if (!clip || isSyncLockedClip(clip) || splitPosition <= clip.startTime || splitPosition >= clip.startTime + clip.duration) return null
 
     const splitTime = splitPosition - clip.startTime
     const remainder = clip.duration - splitTime
@@ -2371,7 +2397,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedGap, selectedTransitionId, selectedMarkerId, removeSelectedClips, rippleDeleteSelectedClips, rippleDeleteSelectedGap, removeTransition, removeMarker, clearSelection, selectMarker, clips, handleUndoAction, handleRedoAction, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, addTextClipAtPlayhead, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips, selectClipsFromPlayheadToEnd, selectClipsFromTimelineStartToPlayhead, splitClipAtTime, splitAllTracksAtPlayhead, openMoveOffsetDialog, openDurationDeltaDialog, moveOffsetDialogOpen, durationDeltaDialogOpen, editorHotkeys, linkSelectedClips, unlinkSelectedClips, toggleClipSelectionEnabled, applyZoomWithPlayheadPivot, zoom, rippleEditMode, activeTrackClipAtPlayhead, canDeleteCurrentSelection, handleCopySelection, handleDeleteCurrentSelection, handlePasteAtPlayhead, handleSplitActiveTrackAtPlayhead, jumpPlayheadToClipBoundary, jumpPlayheadToMarker])
+  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedGap, selectedTransitionId, selectedMarkerId, removeSelectedClips, rippleDeleteSelectedClips, rippleDeleteSelectedGap, removeTransition, removeMarker, clearSelection, selectMarker, clips, handleUndoAction, handleRedoAction, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, addTextClipAtPlayhead, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips, selectClipsFromPlayheadToEnd, selectClipsFromTimelineStartToPlayhead, splitClipAtTime, splitAllTracksAtPlayhead, openMoveOffsetDialog, openDurationDeltaDialog, moveOffsetDialogOpen, durationDeltaDialogOpen, editorHotkeys, linkSelectedClips, unlinkSelectedClips, lockSyncClips, unlockSyncLockedClips, toggleClipSelectionEnabled, applyZoomWithPlayheadPivot, zoom, rippleEditMode, activeTrackClipAtPlayhead, canDeleteCurrentSelection, handleCopySelection, handleDeleteCurrentSelection, handlePasteAtPlayhead, handleSplitActiveTrackAtPlayhead, jumpPlayheadToClipBoundary, jumpPlayheadToMarker, clipContextSyncEligibleClips, clipContextSyncLockByClipId, clipContextAllSyncLocked])
 
   // Spacebar panning key state (dedicated listeners so keyup cannot get "stuck")
   useEffect(() => {
@@ -2620,12 +2646,29 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     return { startTime: rawStartTime, snapTime: null }
   }
 
+  const getMusicVideoAssetSyncTiming = (asset) => {
+    const yolo = asset?.yolo || asset?.settings?.yolo || null
+    const shotType = String(yolo?.shotType || '').trim().toLowerCase()
+    if (yolo?.mode !== 'music' || yolo?.stage !== 'video') return null
+    if (shotType !== 'performance' && shotType !== 'performance_wide') return null
+    const audioStart = Number(yolo.audioStart)
+    const length = Number(yolo.length ?? yolo.durationSeconds ?? asset?.settings?.duration ?? asset?.duration)
+    return {
+      startTime: Number.isFinite(audioStart) ? Math.max(0, audioStart) : 0,
+      duration: Number.isFinite(length) && length > 0 ? length : null,
+    }
+  }
+
   const getDropPreviewDuration = (asset, startTime) => {
     if (!asset) return 5
     const fps = Number.isFinite(Number(timelineFps)) && Number(timelineFps) > 0
       ? Number(timelineFps)
       : FRAME_RATE
     const minDuration = 1 / fps
+    const syncTiming = getMusicVideoAssetSyncTiming(asset)
+    if (syncTiming?.duration) {
+      return Math.max(minDuration, Math.round(syncTiming.duration * fps) / fps)
+    }
     const isImage = asset.type === 'image'
     const assetDuration = Number(asset.duration ?? asset.settings?.duration)
     const sourceDuration = Number.isFinite(assetDuration) && assetDuration > 0 ? assetDuration : 5
@@ -2778,8 +2821,11 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
         return
       }
 
-      const duration = getDropPreviewDuration(asset, rawStartTime)
-      const { startTime, snapTime } = getSnappedDropStartTime(rawStartTime, duration)
+      const syncTiming = getMusicVideoAssetSyncTiming(asset)
+      const duration = getDropPreviewDuration(asset, syncTiming?.startTime ?? rawStartTime)
+      const { startTime, snapTime } = syncTiming
+        ? { startTime: syncTiming.startTime, snapTime: syncTiming.startTime }
+        : getSnappedDropStartTime(rawStartTime, duration)
       setDropTarget(targetTrackId)
       if (snapTime !== null) {
         setActiveSnapTime(snapTime)
@@ -3081,6 +3127,17 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
       case 'unlink-selection':
         unlinkSelectedClips()
         break
+      case 'sync-toggle': {
+        const targetIds = clipContextSyncEligibleClips.length > 0
+          ? clipContextSyncEligibleClips.map((targetClip) => targetClip.id)
+          : (clipContextSelectionIds.length > 0 ? clipContextSelectionIds : [clip.id])
+        if (clipContextAllSyncLocked) {
+          unlockSyncLockedClips(targetIds)
+        } else {
+          lockSyncClips(targetIds, clipContextSyncLockByClipId)
+        }
+        break
+      }
       case 'split':
         handleSplitClipAtPlayhead(clip)
         break
@@ -3120,6 +3177,10 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     
     const clip = clips.find(c => c.id === clipId)
     if (!clip) return
+    if (isSyncLockedClip(clip)) {
+      selectClip(clipId)
+      return
+    }
 
     // Trimming must be exclusive: cancel any in-flight drag/edit gesture to avoid
     // multiple mousemove handlers fighting and moving neighboring clips.
@@ -3412,7 +3473,8 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
     }
 
     const sourceDuration = getSourceDuration(clip)
-    const canSlip = (isSlipToolActive || e.altKey)
+    const canSlip = !isSyncLockedClip(clip)
+      && (isSlipToolActive || e.altKey)
       && (clip.type === 'video' || clip.type === 'audio')
       && Number.isFinite(sourceDuration)
     if (canSlip) {
@@ -5211,6 +5273,12 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                               </div>
                             )
                           })()}
+                          {isSyncLockedClip(clip) && (
+                            <div className="rounded bg-emerald-500/85 px-1 py-0.5 text-[8px] text-white font-medium flex items-center gap-0.5 flex-shrink-0" title="Locked to song timing">
+                              <Lock className="w-2.5 h-2.5" />
+                              <span>SYNC</span>
+                            </div>
+                          )}
                         </div>
                         
                         {/* Effects/Cache indicator - top right area */}
@@ -5283,7 +5351,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                     {/* Hover overlay */}
                     <div className="absolute inset-0 bg-white/0 group-hover:bg-white/5 transition-colors pointer-events-none" />
                     
-                    {trimHandlesEnabled && (
+                    {trimHandlesEnabled && !isSyncLockedClip(clip) && (
                       <>
                         {/* Left trim handle - wider hit area for easier grabbing */}
                         <div
@@ -5745,7 +5813,7 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
                     <div className="absolute left-0 top-0 bottom-0 w-px bg-black/40 pointer-events-none" />
                     <div className="absolute right-0 top-0 bottom-0 w-px bg-black/40 pointer-events-none" />
                     
-                    {trimHandlesEnabled && (
+                    {trimHandlesEnabled && !isSyncLockedClip(clip) && (
                       <>
                         {/* Trim handles on hover - wider hit area for easier grabbing */}
                         <div
@@ -6290,6 +6358,22 @@ function Timeline({ onOpenAudioGenerate, onActiveToolChange }) {
             <span>Unlink Selected</span>
             <span className="ml-auto text-sf-text-muted text-[10px]">{unlinkHotkeyLabel}</span>
           </button>
+          {clipContextSyncEligibleClips.length > 0 && (
+            <button
+              onClick={() => handleContextMenuAction('sync-toggle')}
+              className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
+              title={clipContextAllSyncLocked
+                ? 'Convert synced performance clips back into normal timeline clips'
+                : 'Lock synced performance clips to their song timing'}
+            >
+              {clipContextAllSyncLocked ? (
+                <Unlock className="w-3 h-3" />
+              ) : (
+                <Lock className="w-3 h-3" />
+              )}
+              <span>{clipContextAllSyncLocked ? 'Unlock Sync' : 'Lock Sync'}</span>
+            </button>
+          )}
           <button
             onClick={() => { copySelectedClips(); setClipContextMenu(null) }}
             className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
