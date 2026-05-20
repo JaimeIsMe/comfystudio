@@ -250,6 +250,22 @@ function getAssetUrl(asset) {
   return asset?.url || asset?.thumbnailUrl || asset?.proxyUrl || asset?.path || ''
 }
 
+function ShotVideoPreview({ hasVideo, keyframeUrl, placeholderLabel = "Needs keyframe" }) {
+  if (keyframeUrl) {
+    return <img src={keyframeUrl} alt="" className="h-full w-full object-cover opacity-70" loading="lazy" decoding="async" />
+  }
+
+  if (hasVideo) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-sf-dark-800 text-sf-text-muted">
+        <Play className="h-5 w-5 opacity-70" />
+      </div>
+    )
+  }
+
+  return <span className="flex h-full w-full items-center justify-center text-[10px] text-sf-text-muted">{placeholderLabel}</span>
+}
+
 function getVideoWorkflowScopedKey(variantKey, workflowId) {
   const key = String(variantKey || '').trim()
   const workflow = String(workflowId || '').trim()
@@ -1813,13 +1829,7 @@ export default function MusicVideoEasyMode({
                         ? 'bg-red-950/30'
                         : 'bg-sf-dark-800'
                   }`}>
-                    {videoUrl ? (
-                      <video src={videoUrl} className="h-full w-full object-cover" muted playsInline preload="metadata" />
-                    ) : keyframeUrl ? (
-                      <img src={keyframeUrl} alt="" className="h-full w-full object-cover opacity-70" />
-                    ) : (
-                      <span className="text-[10px] text-sf-text-muted">Needs keyframe</span>
-                    )}
+                    <ShotVideoPreview hasVideo={Boolean(videoUrl)} keyframeUrl={keyframeUrl} />
                     {cardState.state === 'generating' && (
                       <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-transparent via-white/10 to-transparent" />
                     )}
