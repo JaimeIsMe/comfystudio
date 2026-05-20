@@ -422,8 +422,10 @@ export default function MusicVideoEasyMode({
   handleBuildActiveYoloPlan,
   handleQueueYoloStoryboards,
   handleQueueYoloShotStoryboard,
+  handleQueueYoloShotStoryboards,
   handleQueueYoloVideos,
   handleQueueYoloShotVideo,
+  handleQueueYoloShotVideos,
   handleYoloShotImageBeatChange,
   handleYoloShotVideoBeatChange,
   handleCopyMusicVideoLlmPrompt,
@@ -444,6 +446,8 @@ export default function MusicVideoEasyMode({
   const [includeEnvironmentalBroll, setIncludeEnvironmentalBroll] = useState(initialDraft.includeEnvironmentalBroll)
   const [includeDetailBroll, setIncludeDetailBroll] = useState(initialDraft.includeDetailBroll)
   const [selectedShotIndex, setSelectedShotIndex] = useState(0)
+  const [selectedShotIndexes, setSelectedShotIndexes] = useState([0])
+  const [selectionAnchorIndex, setSelectionAnchorIndex] = useState(0)
   const [advancedAudioOpen, setAdvancedAudioOpen] = useState(false)
   const [briefStatus, setBriefStatus] = useState('')
   const [parseStatus, setParseStatus] = useState('')
@@ -629,13 +633,48 @@ export default function MusicVideoEasyMode({
   const canBuildPlan = Boolean(String(yoloMusicScript || '').trim())
   const canQueueKeyframes = plannedShotCount > 0 && !yoloActivePlanIsStale
   const canQueueVideos = canQueueKeyframes && yoloStoryboardReadyCount > 0
+  const normalizedSelectedShotIndexes = useMemo(() => {
+    if (flatShots.length === 0) return []
+    const valid = (Array.isArray(selectedShotIndexes) ? selectedShotIndexes : [])
+      .filter((index) => Number.isInteger(index) && index >= 0 && index < flatShots.length)
+    const unique = Array.from(new Set(valid))
+    if (unique.length === 0) {
+      const fallback = Math.max(0, Math.min(selectedShotIndex, flatShots.length - 1))
+      return [fallback]
+    }
+    return unique.sort((a, b) => a - b)
+  }, [flatShots.length, selectedShotIndex, selectedShotIndexes])
+  const selectedShotIndexSet = useMemo(() => new Set(normalizedSelectedShotIndexes), [normalizedSelectedShotIndexes])
+  const selectedShotRows = useMemo(() => (
+    normalizedSelectedShotIndexes
+      .map((index) => ({ ...(flatShots[index] || {}), index }))
+      .filter((row) => row?.scene && row?.shot)
+  ), [flatShots, normalizedSelectedShotIndexes])
+  const hasMultipleSelectedShots = selectedShotRows.length > 1
+  const selectedShotCount = selectedShotRows.length
   const selectedShotRow = flatShots[selectedShotIndex] || flatShots[0] || null
   const keyframeStatusIsWarning = keyframeStatus.startsWith('All your keyframes')
 
   useEffect(() => {
-    if (selectedShotIndex >= flatShots.length) {
-      setSelectedShotIndex(Math.max(0, flatShots.length - 1))
+    if (flatShots.length === 0) {
+      if (selectedShotIndex !== 0) setSelectedShotIndex(0)
+      setSelectedShotIndexes([])
+      setSelectionAnchorIndex(0)
+      return
     }
+    const clampedSelectedIndex = Math.max(0, Math.min(selectedShotIndex, flatShots.length - 1))
+    if (selectedShotIndex !== clampedSelectedIndex) {
+      setSelectedShotIndex(clampedSelectedIndex)
+    }
+    setSelectionAnchorIndex((current) => Math.max(0, Math.min(current, flatShots.length - 1)))
+    setSelectedShotIndexes((current) => {
+      const valid = (Array.isArray(current) ? current : [])
+        .filter((index) => Number.isInteger(index) && index >= 0 && index < flatShots.length)
+      const unique = Array.from(new Set(valid)).sort((a, b) => a - b)
+      const next = unique.length > 0 ? unique : [clampedSelectedIndex]
+      if (next.length === current.length && next.every((value, index) => value === current[index])) return current
+      return next
+    })
   }, [flatShots.length, selectedShotIndex])
 
   useEffect(() => {
@@ -722,6 +761,36 @@ export default function MusicVideoEasyMode({
     if (presetId === resolutionPreset) return
     setResolutionPreset(presetId)
     setVideoStatus('')
+  }
+
+  const handleShotSelection = (event, index) => {
+    if (!Number.isInteger(index) || index < 0 || index >= flatShots.length) return
+    if (event?.shiftKey) {
+      const anchor = Math.max(0, Math.min(selectionAnchorIndex, flatShots.length - 1))
+      const start = Math.min(anchor, index)
+      const end = Math.max(anchor, index)
+      const range = []
+      for (let cursor = start; cursor <= end; cursor += 1) range.push(cursor)
+      setSelectedShotIndexes(range)
+      setSelectedShotIndex(index)
+      return
+    }
+    if (event?.metaKey || event?.ctrlKey) {
+      const valid = (Array.isArray(selectedShotIndexes) ? selectedShotIndexes : [])
+        .filter((value) => Number.isInteger(value) && value >= 0 && value < flatShots.length)
+      const isRemoving = valid.includes(index)
+      const next = isRemoving
+        ? valid.filter((value) => value !== index)
+        : [...valid, index]
+      const normalized = (next.length > 0 ? Array.from(new Set(next)) : [index]).sort((a, b) => a - b)
+      setSelectedShotIndexes(normalized)
+      setSelectedShotIndex(isRemoving && normalized[0] !== index ? normalized[0] : index)
+      setSelectionAnchorIndex(index)
+      return
+    }
+    setSelectedShotIndex(index)
+    setSelectedShotIndexes([index])
+    setSelectionAnchorIndex(index)
   }
 
   const getVariantForShot = (sceneId, shotId) => (
@@ -862,13 +931,28 @@ export default function MusicVideoEasyMode({
   }
 
   const handleRegenerateSelectedKeyframe = async () => {
-    if (!selectedShotRow) return
+    if (selectedShotRows.length === 0) return
     setIsQueuingKeyframes(true)
-    setKeyframeStatus(`Queued ${selectedKeyframeWorkflowLabel} keyframe regeneration for Shot ${selectedShotIndex + 1}.`)
+    const targetLabel = hasMultipleSelectedShots
+      ? `${selectedShotRows.length} selected shots`
+      : `Shot ${selectedShotRows[0].index + 1}`
+    setKeyframeStatus(`Queueing ${selectedKeyframeWorkflowLabel} keyframe regeneration for ${targetLabel}...`)
     try {
-      await handleQueueYoloShotStoryboard(selectedShotRow.scene.id, selectedShotRow.shot.id, {
-        resolutionOverride: outputResolution,
-      })
+      if (hasMultipleSelectedShots && handleQueueYoloShotStoryboards) {
+        const queued = await handleQueueYoloShotStoryboards(
+          selectedShotRows.map((row) => ({ sceneId: row.scene.id, shotId: row.shot.id })),
+          { resolutionOverride: outputResolution }
+        )
+        setKeyframeStatus(queued > 0
+          ? `Queued ${plural(queued, `${selectedKeyframeWorkflowLabel} keyframe regeneration job`)} for ${selectedShotRows.length} selected shots.`
+          : 'No selected keyframe regeneration jobs were queued. Check whether those shots are already running.')
+      } else {
+        const row = selectedShotRows[0]
+        await handleQueueYoloShotStoryboard(row.scene.id, row.shot.id, {
+          resolutionOverride: outputResolution,
+        })
+        setKeyframeStatus(`Queued ${selectedKeyframeWorkflowLabel} keyframe regeneration for Shot ${row.index + 1}.`)
+      }
     } finally {
       setIsQueuingKeyframes(false)
     }
@@ -910,24 +994,60 @@ export default function MusicVideoEasyMode({
   }
 
   const handleRegenerateSelectedVideo = async () => {
-    if (!selectedShotRow) return
-    const variant = getVariantForShot(selectedShotRow.scene.id, selectedShotRow.shot.id)
-    if (!variant) {
-      setVideoStatus(`No video variant found for Shot ${selectedShotIndex + 1}. Parse the script again first.`)
-      return
+    if (selectedShotRows.length === 0) return
+    const queueableRows = []
+    let missingVariants = 0
+    let missingKeyframes = 0
+    for (const row of selectedShotRows) {
+      const variant = getVariantForShot(row.scene.id, row.shot.id)
+      if (!variant) {
+        missingVariants += 1
+        continue
+      }
+      if (!yoloStoryboardAssetMap?.has(variant.key)) {
+        missingKeyframes += 1
+        continue
+      }
+      queueableRows.push(row)
     }
-    if (!yoloStoryboardAssetMap?.has(variant.key)) {
-      setVideoStatus(`Shot ${selectedShotIndex + 1} needs a keyframe before video can run.`)
+    if (queueableRows.length === 0) {
+      if (selectedShotRows.length === 1 && missingVariants > 0) {
+        setVideoStatus(`No video variant found for Shot ${selectedShotRows[0].index + 1}. Parse the script again first.`)
+        return
+      }
+      if (selectedShotRows.length === 1 && missingKeyframes > 0) {
+        setVideoStatus(`Shot ${selectedShotRows[0].index + 1} needs a keyframe before video can run.`)
+        return
+      }
+      setVideoStatus('Selected shots need keyframes before video can run.')
       return
     }
     setIsQueuingVideos(true)
-    setVideoStatus(`Queueing ${selectedVideoWorkflowLabel} video rerun for Shot ${selectedShotIndex + 1}...`)
+    const targetLabel = hasMultipleSelectedShots
+      ? `${queueableRows.length} selected shots`
+      : `Shot ${queueableRows[0].index + 1}`
+    setVideoStatus(`Queueing ${selectedVideoWorkflowLabel} video rerun for ${targetLabel}...`)
     try {
-      await handleQueueYoloShotVideo?.(selectedShotRow.scene.id, selectedShotRow.shot.id, {
-        targetWorkflowIds: selectedVideoWorkflowId ? [selectedVideoWorkflowId] : null,
-        resolutionOverride: outputResolution,
-      })
-      setVideoStatus(`Queued ${selectedVideoWorkflowLabel} video rerun for Shot ${selectedShotIndex + 1}.`)
+      if (queueableRows.length > 1 && handleQueueYoloShotVideos) {
+        const queued = await handleQueueYoloShotVideos(
+          queueableRows.map((row) => ({ sceneId: row.scene.id, shotId: row.shot.id })),
+          {
+            targetWorkflowIds: selectedVideoWorkflowId ? [selectedVideoWorkflowId] : null,
+            resolutionOverride: outputResolution,
+          }
+        )
+        const skipped = missingVariants + missingKeyframes
+        setVideoStatus(queued > 0
+          ? `Queued ${plural(queued, `${selectedVideoWorkflowLabel} video rerun job`)}${skipped > 0 ? `; skipped ${plural(skipped, 'selected shot')} without a variant or keyframe.` : '.'}`
+          : `No selected ${selectedVideoWorkflowLabel} video jobs were queued. Check whether those shots are already running.`)
+      } else {
+        const row = queueableRows[0]
+        await handleQueueYoloShotVideo?.(row.scene.id, row.shot.id, {
+          targetWorkflowIds: selectedVideoWorkflowId ? [selectedVideoWorkflowId] : null,
+          resolutionOverride: outputResolution,
+        })
+        setVideoStatus(`Queued ${selectedVideoWorkflowLabel} video rerun for Shot ${row.index + 1}.`)
+      }
     } finally {
       setIsQueuingVideos(false)
     }
@@ -1552,11 +1672,12 @@ export default function MusicVideoEasyMode({
                   key={`music-keyframe-${scene.id}-${shot.id}`}
                   role="button"
                   tabIndex={0}
-                  onClick={() => setSelectedShotIndex(index)}
+                  onClick={(event) => handleShotSelection(event, index)}
                   onKeyDown={(event) => handleShotCardKeyDown(event, index)}
+                  aria-pressed={selectedShotIndexSet.has(index)}
                   className={`overflow-hidden rounded-lg border text-left transition-colors ${
-                    selectedShotIndex === index
-                      ? 'border-sf-accent bg-sf-accent/10'
+                    selectedShotIndexSet.has(index)
+                      ? `border-sf-accent bg-sf-accent/10 ${selectedShotIndex === index ? 'ring-1 ring-sf-accent/50' : ''}`
                       : 'border-sf-dark-700 bg-sf-dark-950/70 hover:border-sf-dark-500'
                   } focus:outline-none focus:ring-2 focus:ring-sf-accent/70`}
                 >
@@ -1615,7 +1736,9 @@ export default function MusicVideoEasyMode({
               <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                 <div>
                   <div className="text-sm font-semibold text-sf-text-primary">
-                    Shot {selectedShotIndex + 1}: {selectedShotRow.shot.scriptShotLabel || selectedShotRow.scene.label || selectedShotRow.shot.id}
+                    {hasMultipleSelectedShots
+                      ? `${selectedShotCount} shots selected`
+                      : `Shot ${selectedShotIndex + 1}: ${selectedShotRow.shot.scriptShotLabel || selectedShotRow.scene.label || selectedShotRow.shot.id}`}
                   </div>
                   <div className="mt-1 text-[10px] text-sf-text-muted">
                     {[outputResolutionLabel, `${videoFps} fps`, getCoverageLabel(selectedShotRow.scene, selectedShotRow.shot)].filter(Boolean).join(' / ')}
@@ -1627,7 +1750,7 @@ export default function MusicVideoEasyMode({
                   disabled={isQueuingKeyframes || yoloDependencyCheckInProgress}
                   className="rounded-lg bg-sf-accent px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-sf-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Regenerate Selected Shot
+                  {hasMultipleSelectedShots ? `Regenerate ${selectedShotCount} Selected` : 'Regenerate Selected Shot'}
                 </button>
               </div>
               <div className="mt-3 text-xs text-sf-text-secondary">
@@ -1847,11 +1970,12 @@ export default function MusicVideoEasyMode({
                   key={`music-video-${scene.id}-${shot.id}`}
                   role="button"
                   tabIndex={0}
-                  onClick={() => setSelectedShotIndex(index)}
+                  onClick={(event) => handleShotSelection(event, index)}
                   onKeyDown={(event) => handleShotCardKeyDown(event, index)}
+                  aria-pressed={selectedShotIndexSet.has(index)}
                   className={`overflow-hidden rounded-lg border text-left transition-colors ${
-                    selectedShotIndex === index
-                      ? 'border-sf-accent bg-sf-accent/10'
+                    selectedShotIndexSet.has(index)
+                      ? `border-sf-accent bg-sf-accent/10 ${selectedShotIndex === index ? 'ring-1 ring-sf-accent/50' : ''}`
                       : 'border-sf-dark-700 bg-sf-dark-950/70 hover:border-sf-dark-500'
                   } focus:outline-none focus:ring-2 focus:ring-sf-accent/70`}
                 >
@@ -1919,7 +2043,9 @@ export default function MusicVideoEasyMode({
                 <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                   <div>
                     <div className="text-sm font-semibold text-sf-text-primary">
-                      Shot {selectedShotIndex + 1}: {selectedShotRow.shot.scriptShotLabel || selectedShotRow.scene.label || selectedShotRow.shot.id}
+                      {hasMultipleSelectedShots
+                        ? `${selectedShotCount} shots selected`
+                        : `Shot ${selectedShotIndex + 1}: ${selectedShotRow.shot.scriptShotLabel || selectedShotRow.scene.label || selectedShotRow.shot.id}`}
                     </div>
                     <div className="mt-1 text-[10px] text-sf-text-muted">
                       {[selectedVideoWorkflowLabel, outputResolutionLabel, `${videoFps} fps`, getCoverageLabel(selectedShotRow.scene, selectedShotRow.shot)].filter(Boolean).join(' / ')}
@@ -1932,24 +2058,34 @@ export default function MusicVideoEasyMode({
                     className="inline-flex items-center justify-center gap-2 rounded-lg bg-sf-accent px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-sf-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {isQueuingVideos ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                    Run Selected With {selectedVideoWorkflowLabel}
+                    {hasMultipleSelectedShots
+                      ? `Run ${selectedShotCount} Selected With ${selectedVideoWorkflowLabel}`
+                      : `Run Selected With ${selectedVideoWorkflowLabel}`}
                   </button>
                 </div>
                 <div className="mt-3 grid gap-3 lg:grid-cols-2">
                   <div>
-                    <label className="block text-xs text-sf-text-secondary">
-                      <span className="text-[10px] uppercase tracking-wider text-sf-text-muted">Edit shot motion prompt</span>
-                      <textarea
-                        value={selectedShotRow.shot.videoBeat || selectedShotRow.shot.beat || selectedShotRow.shot.shotPrompt || ''}
-                        onChange={(event) => handleYoloShotVideoBeatChange?.(selectedShotRow.scene.id, selectedShotRow.shot.id, event.target.value)}
-                        rows={5}
-                        className="mt-1 w-full resize-y rounded-lg border border-sf-dark-600 bg-sf-dark-900 px-3 py-2 text-xs leading-5 text-sf-text-primary outline-none focus:border-sf-accent"
-                        placeholder="Describe the motion/action for this one video rerun..."
-                      />
-                    </label>
-                    <p className="mt-1 text-[10px] leading-4 text-sf-text-muted">
-                      This changes the selected shot's video prompt for new renders only. It does not rewrite the original director script.
-                    </p>
+                    {hasMultipleSelectedShots ? (
+                      <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900 px-3 py-2 text-xs leading-5 text-sf-text-secondary">
+                        Motion prompt editing is available when a single shot is selected.
+                      </div>
+                    ) : (
+                      <>
+                        <label className="block text-xs text-sf-text-secondary">
+                          <span className="text-[10px] uppercase tracking-wider text-sf-text-muted">Edit shot motion prompt</span>
+                          <textarea
+                            value={selectedShotRow.shot.videoBeat || selectedShotRow.shot.beat || selectedShotRow.shot.shotPrompt || ''}
+                            onChange={(event) => handleYoloShotVideoBeatChange?.(selectedShotRow.scene.id, selectedShotRow.shot.id, event.target.value)}
+                            rows={5}
+                            className="mt-1 w-full resize-y rounded-lg border border-sf-dark-600 bg-sf-dark-900 px-3 py-2 text-xs leading-5 text-sf-text-primary outline-none focus:border-sf-accent"
+                            placeholder="Describe the motion/action for this one video rerun..."
+                          />
+                        </label>
+                        <p className="mt-1 text-[10px] leading-4 text-sf-text-muted">
+                          This changes the selected shot's video prompt for new renders only. It does not rewrite the original director script.
+                        </p>
+                      </>
+                    )}
                   </div>
                   <div>
                     <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">Timing</div>
