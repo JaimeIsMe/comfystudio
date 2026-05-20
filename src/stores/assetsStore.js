@@ -4,6 +4,7 @@ import { persist } from 'zustand/middleware'
 const SPRITE_GENERATION_CONCURRENCY = 2
 let activeSpriteGenerationCount = 0
 const pendingSpriteGenerationQueue = []
+let posterProjectSaveTimer = null
 
 const runWithSpriteGenerationSlot = async (task) => {
   if (activeSpriteGenerationCount >= SPRITE_GENERATION_CONCURRENCY) {
@@ -17,6 +18,25 @@ const runWithSpriteGenerationSlot = async (task) => {
     const next = pendingSpriteGenerationQueue.shift()
     if (next) next()
   }
+}
+
+const queueProjectPosterSave = (projectPath, delayMs = 1200) => {
+  if (!projectPath) return
+  if (posterProjectSaveTimer) {
+    clearTimeout(posterProjectSaveTimer)
+  }
+  posterProjectSaveTimer = setTimeout(async () => {
+    posterProjectSaveTimer = null
+    try {
+      const { useProjectStore } = await import('./projectStore')
+      const state = useProjectStore.getState()
+      if (state.currentProjectHandle === projectPath && typeof state.saveProject === 'function') {
+        await state.saveProject()
+      }
+    } catch (err) {
+      console.warn('Failed to persist poster metadata:', err)
+    }
+  }, delayMs)
 }
 
 /**
@@ -458,115 +478,49 @@ export const useAssetsStore = create(
       },
     })
 
+    const fileSystemHelpers = await import('../services/fileSystem')
+    const { getProjectFileUrl, getAbsoluteFileUrl, isElectron: isElectronMode } = fileSystemHelpers
+
     // Load assets - URLs need to be regenerated for imported assets
-    const assetsWithUrls = []
+    const assetsWithUrls = new Array(sourceAssets.length)
     let loadedAssetCount = 0
-    
-    for (const asset of sourceAssets) {
+
+    const hydrateAsset = async (asset, index) => {
       const needsUrlRefresh = asset?.url?.startsWith?.('blob:')
       const hasPath = !!asset?.path
       const hasAbsolutePath = !!asset?.absolutePath
 
-      if ((asset.isImported || needsUrlRefresh || hasPath || hasAbsolutePath) && projectHandle) {
-        // For imported assets (or stale blob URLs), regenerate URL from file
+      if ((asset?.isImported || needsUrlRefresh || hasPath || hasAbsolutePath) && projectHandle) {
         try {
-          const { getProjectFileUrl, getAbsoluteFileUrl, isElectron } = await import('../services/fileSystem')
           let url = null
-          if (isElectron() && hasAbsolutePath) {
+          if (isElectronMode() && hasAbsolutePath) {
             url = await getAbsoluteFileUrl(asset.absolutePath)
           } else if (hasPath) {
             url = await getProjectFileUrl(projectHandle, asset.path)
           }
-          // Regenerate playback cache URL if we have a cached transcode
-          let playbackCacheUrl = null
+
           let playbackCachePath = asset.playbackCachePath
           let playbackCacheStatus = asset.playbackCacheStatus
-          if (asset.playbackCachePath) {
-            try {
-              // Validate playback cache exists before generating a file:// URL.
-              // Missing cache files lead to networkState=3 and black flicker during playback.
-              let canUsePlaybackCache = true
-              if (
-                isElectron() &&
-                typeof projectHandle === 'string' &&
-                window.electronAPI?.pathJoin &&
-                window.electronAPI?.exists
-              ) {
-                const absolutePlaybackCachePath = await window.electronAPI.pathJoin(projectHandle, asset.playbackCachePath)
-                canUsePlaybackCache = await window.electronAPI.exists(absolutePlaybackCachePath)
-              }
 
-              if (canUsePlaybackCache) {
-                playbackCacheUrl = await getProjectFileUrl(projectHandle, asset.playbackCachePath)
-              } else {
-                playbackCachePath = null
-                playbackCacheStatus = 'failed'
-                console.warn(`[PlaybackCache] Missing cache file for ${asset.name}; falling back to source`, {
-                  assetId: asset.id,
-                  playbackCachePath: asset.playbackCachePath,
-                })
-              }
-            } catch (e) {
-              playbackCachePath = null
-              playbackCacheStatus = 'failed'
-              console.warn(`Could not load playback cache for ${asset.name}:`, e)
-            }
-          }
-          // Regenerate proxy URL (low-res NLE-style proxy) the same way.
-          // Kept separate from playbackCache so both tiers can coexist:
-          // proxy is strongly preferred for multi-layer preview, playback
-          // cache is used when proxy is missing/disabled.
-          let proxyUrl = null
-          let proxyPath = asset.proxyPath
-          let proxyStatus = asset.proxyStatus
-          if (asset.proxyPath) {
-            try {
-              let canUseProxy = true
-              if (
-                isElectron() &&
-                typeof projectHandle === 'string' &&
-                window.electronAPI?.pathJoin &&
-                window.electronAPI?.exists
-              ) {
-                const absoluteProxyPath = await window.electronAPI.pathJoin(projectHandle, asset.proxyPath)
-                canUseProxy = await window.electronAPI.exists(absoluteProxyPath)
-              }
-
-              if (canUseProxy) {
-                proxyUrl = await getProjectFileUrl(projectHandle, asset.proxyPath)
-              } else {
-                proxyPath = null
-                proxyStatus = 'failed'
-                console.warn(`[ProxyCache] Missing proxy file for ${asset.name}; falling back to source`, {
-                  assetId: asset.id,
-                  proxyPath: asset.proxyPath,
-                })
-              }
-            } catch (e) {
-              proxyPath = null
-              proxyStatus = 'failed'
-              console.warn(`Could not load proxy for ${asset.name}:`, e)
-            }
-          }
-          assetsWithUrls.push({
+          assetsWithUrls[index] = {
             ...asset,
             url,
             playbackCachePath: playbackCachePath ?? undefined,
             playbackCacheStatus,
-            playbackCacheUrl: playbackCacheUrl ?? undefined,
-            proxyPath: proxyPath ?? undefined,
-            proxyStatus,
-            proxyUrl: proxyUrl ?? undefined,
-          })
+            playbackCacheUrl: undefined,
+            proxyPath: asset.proxyPath ?? undefined,
+            proxyStatus: asset.proxyStatus,
+            proxyUrl: undefined,
+            poster: asset.poster || undefined,
+          }
         } catch (err) {
           console.warn(`Could not load asset ${asset.name}:`, err)
-          // Keep asset but mark URL as null
-          assetsWithUrls.push({ ...asset, url: null })
+          assetsWithUrls[index] = { ...asset, url: null }
         }
       } else {
-        // For AI/external assets, keep the URL as-is (may need ComfyUI to be running)
-        assetsWithUrls.push(asset)
+        assetsWithUrls[index] = asset
       }
+
       loadedAssetCount += 1
       set({
         mediaPreparation: {
@@ -579,6 +533,20 @@ export const useAssetsStore = create(
         },
       })
     }
+
+    const concurrency = Math.max(1, Math.min(8, Math.floor(Number(sourceAssets.length > 120 ? 8 : 4))))
+    let cursor = 0
+    const worker = async () => {
+      while (cursor < sourceAssets.length) {
+        const index = cursor
+        cursor += 1
+        const asset = sourceAssets[index]
+        await hydrateAsset(asset, index)
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(concurrency, sourceAssets.length) }, () => worker()))
     
     const nextState = {
       assets: assetsWithUrls,
@@ -643,6 +611,22 @@ export const useAssetsStore = create(
       ),
       currentPreview: state.currentPreview?.id === assetId 
         ? { ...state.currentPreview, sprite: spriteData }
+        : state.currentPreview
+    }))
+  },
+
+  /**
+   * Update asset's poster data
+   * @param {string} assetId - The asset ID
+   * @param {object} posterData - Poster metadata { url, posterPath, sourceSignature, ... }
+   */
+  updateAssetPoster: (assetId, posterData) => {
+    set((state) => ({
+      assets: state.assets.map(a =>
+        a.id === assetId ? { ...a, poster: posterData } : a
+      ),
+      currentPreview: state.currentPreview?.id === assetId
+        ? { ...state.currentPreview, poster: posterData }
         : state.currentPreview
     }))
   },
@@ -725,6 +709,122 @@ export const useAssetsStore = create(
   },
 
   /**
+   * Generate a single-frame poster for a video asset.
+   * Posters are used by the Assets panel as the static preview image.
+   * @param {string} assetId - The asset ID
+   * @param {string} projectPath - Project directory path (for saving)
+   */
+  generateAssetPoster: async (assetId, projectPath) => {
+    const asset = get().assets.find(a => a.id === assetId)
+    if (!asset || asset.type !== 'video' || !asset.absolutePath || !projectPath) {
+      return null
+    }
+
+    try {
+      const { loadVideoPosterFromProject, generateVideoPosterInProject, buildPosterSignature } = await import('../services/thumbnailPosters')
+      const sourcePath = asset.absolutePath
+      const sourceInfo = await window.electronAPI?.getFileInfo?.(sourcePath)
+      const sourceSignature = buildPosterSignature(sourceInfo, sourcePath)
+      const existing = await loadVideoPosterFromProject(projectPath, assetId, sourceSignature)
+      if (existing?.posterData) {
+        get().updateAssetPoster(assetId, existing.posterData)
+        queueProjectPosterSave(projectPath)
+        return existing.posterData
+      }
+
+      const result = await generateVideoPosterInProject(projectPath, assetId, sourcePath, sourceSignature)
+      if (result?.posterData) {
+        get().updateAssetPoster(assetId, result.posterData)
+        queueProjectPosterSave(projectPath)
+        return result.posterData
+      }
+    } catch (err) {
+      console.warn('Failed to generate poster:', err)
+    }
+
+    return null
+  },
+
+  /**
+   * Hydrate the browser-facing media for a single video asset when it becomes visible.
+   * This is intentionally called lazily from the Assets panel so we only touch
+   * derived paths for tiles the user can actually see.
+   * @param {string} assetId - The asset ID
+   * @param {string} projectPath - Project directory path
+   */
+  hydrateAssetBrowserMedia: async (assetId, projectPath) => {
+    if (!assetId || !projectPath || typeof window === 'undefined' || !window.electronAPI?.isElectron) return null
+    const asset = get().assets.find(a => a.id === assetId)
+    if (!asset || asset.type !== 'video') return null
+
+    const { getProjectFileUrl, getAbsoluteFileUrl } = await import('../services/fileSystem')
+    const { loadVideoPosterFromProject, generateVideoPosterInProject, buildPosterSignature } = await import('../services/thumbnailPosters')
+
+    let poster = asset.poster || null
+    let posterChanged = false
+    let playbackCacheUrl = asset.playbackCacheUrl || undefined
+    let proxyUrl = asset.proxyUrl || undefined
+
+    if (!poster && asset.absolutePath) {
+      try {
+        const sourceInfo = await window.electronAPI.getFileInfo(asset.absolutePath)
+        const sourceSignature = buildPosterSignature(sourceInfo, asset.absolutePath)
+        const existing = await loadVideoPosterFromProject(projectPath, assetId, sourceSignature)
+        if (existing?.posterData) {
+          poster = existing.posterData
+          posterChanged = true
+        } else {
+          const generated = await generateVideoPosterInProject(projectPath, assetId, asset.absolutePath, sourceSignature)
+          if (generated?.posterData) {
+            poster = generated.posterData
+            posterChanged = true
+            queueProjectPosterSave(projectPath)
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to hydrate poster for visible asset:', err)
+      }
+    }
+
+    if (!playbackCacheUrl && asset.playbackCachePath) {
+      try {
+        const absolutePlaybackCachePath = await window.electronAPI.pathJoin(projectPath, asset.playbackCachePath)
+        const exists = await window.electronAPI.exists(absolutePlaybackCachePath)
+        if (exists) {
+          playbackCacheUrl = await getProjectFileUrl(projectPath, asset.playbackCachePath)
+        }
+      } catch (err) {
+        console.warn('Failed to hydrate playback cache URL for visible asset:', err)
+      }
+    }
+
+    if (!proxyUrl && asset.proxyPath) {
+      try {
+        const absoluteProxyPath = await window.electronAPI.pathJoin(projectPath, asset.proxyPath)
+        const exists = await window.electronAPI.exists(absoluteProxyPath)
+        if (exists) {
+          proxyUrl = await getProjectFileUrl(projectPath, asset.proxyPath)
+        }
+      } catch (err) {
+        console.warn('Failed to hydrate proxy URL for visible asset:', err)
+      }
+    }
+
+    if (!posterChanged && !playbackCacheUrl && !proxyUrl) return null
+
+    const updates = {}
+    if (posterChanged) updates.poster = poster || undefined
+    if (typeof playbackCacheUrl !== 'undefined') updates.playbackCacheUrl = playbackCacheUrl
+    if (typeof proxyUrl !== 'undefined') updates.proxyUrl = proxyUrl
+
+    if (Object.keys(updates).length > 0) {
+      get().updateAsset(assetId, updates)
+    }
+
+    return updates
+  },
+
+  /**
    * Load saved thumbnail sprites for video assets without flooding the renderer.
    * Startup intentionally does not call this; use it for explicit/on-demand
    * warming where bounded background work is acceptable.
@@ -797,6 +897,97 @@ export const useAssetsStore = create(
     try {
       await Promise.all(Array.from({ length: Math.min(concurrency, videoAssets.length) }, () => worker()))
     } finally {
+      get().clearMediaPreparation()
+    }
+  },
+
+  /**
+   * Load or generate posters for video assets without flooding the renderer.
+   * Used by the Assets panel so video tiles show a static thumbnail even
+   * without a timeline preview.
+   * @param {string} projectPath - Project directory path
+   * @param {object} options - { concurrency?: number, limit?: number, assetIds?: string[] }
+   */
+  loadPostersFromProject: async (projectPath, options = {}) => {
+    if (!projectPath) return
+
+    const { loadVideoPosterFromProject, generateVideoPosterInProject, buildPosterSignature } = await import('../services/thumbnailPosters')
+    const state = get()
+    const targetIds = Array.isArray(options.assetIds) && options.assetIds.length > 0
+      ? new Set(options.assetIds)
+      : null
+    const limit = Number.isFinite(Number(options.limit)) && Number(options.limit) > 0
+      ? Math.floor(Number(options.limit))
+      : null
+    const concurrency = Math.max(1, Math.min(4, Math.floor(Number(options.concurrency) || 2)))
+    const videoAssets = state.assets
+      .filter((asset) => asset?.type === 'video' && (!targetIds || targetIds.has(asset.id)))
+      .slice(0, limit || undefined)
+
+    if (videoAssets.length === 0) {
+      return
+    }
+
+    let completed = 0
+    const updateProgress = () => {
+      set({
+        mediaPreparation: {
+          active: true,
+          phase: 'posters',
+          label: `Loading video thumbnails (${concurrency} at a time)...`,
+          completed,
+          total: videoAssets.length,
+          critical: false,
+        },
+      })
+    }
+    updateProgress()
+
+    let cursor = 0
+    let updatedAnyPoster = false
+    const loadOne = async (asset) => {
+      try {
+        if (asset?.poster?.url) {
+          return
+        }
+        const sourcePath = asset?.absolutePath || null
+        if (!sourcePath) return
+        const sourceInfo = await window.electronAPI?.getFileInfo?.(sourcePath)
+        const sourceSignature = buildPosterSignature(sourceInfo, sourcePath)
+        const loaded = await loadVideoPosterFromProject(projectPath, asset.id, sourceSignature)
+        if (loaded?.posterData) {
+          get().updateAssetPoster(asset.id, loaded.posterData)
+          updatedAnyPoster = true
+          return
+        }
+        const generated = await generateVideoPosterInProject(projectPath, asset.id, sourcePath, sourceSignature)
+        if (generated?.posterData) {
+          get().updateAssetPoster(asset.id, generated.posterData)
+          updatedAnyPoster = true
+        }
+      } catch (err) {
+        console.warn('[AssetsStore] poster load failed:', err)
+      } finally {
+        completed += 1
+        updateProgress()
+      }
+    }
+
+    const worker = async () => {
+      while (cursor < videoAssets.length) {
+        const asset = videoAssets[cursor]
+        cursor += 1
+        await loadOne(asset)
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+    }
+
+    try {
+      await Promise.all(Array.from({ length: Math.min(concurrency, videoAssets.length) }, () => worker()))
+    } finally {
+      if (updatedAnyPoster) {
+        queueProjectPosterSave(projectPath)
+      }
       get().clearMediaPreparation()
     }
   },

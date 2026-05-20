@@ -8,6 +8,7 @@ import { enqueuePlaybackTranscode } from '../../services/playbackCache'
 import { enqueueProxyTranscode, isProxyPlaybackEnabled } from '../../services/proxyCache'
 import { unstitchSequenceAsset } from '../../services/comfyAutoImport'
 import { deleteSpriteFromProject } from '../../services/thumbnailSprites'
+import { deleteVideoPosterFromProject } from '../../services/thumbnailPosters'
 import MaskGenerationDialog from '../MaskGenerationDialog'
 import OverlayGeneratorModal from '../OverlayGeneratorModal'
 import TopazVideoUpscaleDialog from '../TopazVideoUpscaleDialog'
@@ -51,22 +52,23 @@ const assetMatchesSearch = (asset, normalizedQuery) => {
     || normalizeSearchText(asset?.prompt).includes(normalizedQuery)
 }
 
-function LazyAssetThumbnail({
+function VideoAssetThumbnail({
   asset,
   Icon,
   isActive = true,
+  onVisible = null,
   iconClassName = 'w-3.5 h-3.5 text-sf-text-muted',
   imageAlt = '',
-  videoClassName = 'w-full h-full object-cover',
   imageClassName = 'w-full h-full object-cover',
-  videoProps = {},
 }) {
   const containerRef = useRef(null)
   const [shouldLoad, setShouldLoad] = useState(false)
+  const didNotifyVisibleRef = useRef(false)
 
   useEffect(() => {
     if (!isActive) {
       setShouldLoad(false)
+      didNotifyVisibleRef.current = false
       return undefined
     }
 
@@ -86,12 +88,43 @@ function LazyAssetThumbnail({
     return () => observer.disconnect()
   }, [isActive])
 
+  useEffect(() => {
+    if (!shouldLoad || didNotifyVisibleRef.current || typeof onVisible !== 'function' || !asset?.id) return
+    didNotifyVisibleRef.current = true
+    onVisible(asset)
+  }, [asset, onVisible, shouldLoad])
+
   const fallback = Icon ? <Icon className={iconClassName} /> : null
+  const poster = asset?.poster
+  const sprite = asset?.sprite
+  const posterReady = shouldLoad && asset?.type === 'video' && poster?.url
+  const spriteReady = shouldLoad && asset?.type === 'video' && !poster?.url && sprite?.url && Array.isArray(sprite?.frames) && sprite.frames.length > 0
+  const spriteFrame = spriteReady ? sprite.frames[0] : null
+  const spriteStyle = spriteReady ? {
+    width: `${spriteFrame.width}px`,
+    height: `${spriteFrame.height}px`,
+    backgroundImage: `url(${sprite.url})`,
+    backgroundRepeat: 'no-repeat',
+    backgroundSize: `${sprite.width}px ${sprite.height}px`,
+    backgroundPosition: `${-spriteFrame.x}px ${-spriteFrame.y}px`,
+  } : null
 
   return (
     <div ref={containerRef} className="w-full h-full flex items-center justify-center">
-      {shouldLoad && asset?.type === 'video' && asset?.url ? (
-        <video src={asset.url} className={videoClassName} muted preload="none" {...videoProps} />
+      {posterReady ? (
+        <img
+          src={poster.url}
+          alt={imageAlt}
+          className={imageClassName}
+          loading="lazy"
+          decoding="async"
+        />
+      ) : spriteReady ? (
+        <div
+          className="flex-shrink-0 overflow-hidden bg-sf-dark-700"
+          style={spriteStyle}
+          aria-hidden="true"
+        />
       ) : shouldLoad && asset?.type === 'image' && asset?.url ? (
         <img src={asset.url} alt={imageAlt} className={imageClassName} loading="lazy" decoding="async" />
       ) : fallback}
@@ -297,7 +330,8 @@ function AssetsPanel({ isActive = true }) {
     moveAssetToFolder,
     moveAssetsToFolder,
     generateAssetSprite,
-    getAssetSprite,
+    generateAssetPoster,
+    hydrateAssetBrowserMedia,
     setAssetAudioEnabled,
   } = useAssetsStore()
   const { currentProject, currentProjectHandle, currentTimelineId, switchTimeline, renameTimeline, setTimelineColor, moveTimelineToFolder, duplicateTimeline, deleteTimeline, getCurrentTimelineSettings } = useProjectStore()
@@ -389,6 +423,9 @@ function AssetsPanel({ isActive = true }) {
           // Generate sprites asynchronously (don't await)
           generateAssetSprite(newAsset.id, projectPath).catch(err => {
             console.warn('Auto-sprite generation failed:', err)
+          })
+          generateAssetPoster(newAsset.id, projectPath).catch(err => {
+            console.warn('Auto-poster generation failed:', err)
           })
         }
       } catch (err) {
@@ -575,6 +612,7 @@ function AssetsPanel({ isActive = true }) {
       addPath(remainingRelativePaths, asset?.proxyPath)
       if (!asset?.path) addPath(remainingAbsolutePaths, asset?.absolutePath)
       addPath(remainingAbsolutePaths, asset?.sprite?.spritePath)
+      addPath(remainingAbsolutePaths, asset?.poster?.posterPath)
     }
 
     const deleteRelativePath = async (relativePath) => {
@@ -621,6 +659,16 @@ function AssetsPanel({ isActive = true }) {
         }
       } else if (asset?.sprite?.spritePath) {
         await deleteAbsolutePath(asset.sprite.spritePath)
+      }
+
+      if (isElectron() && typeof currentProjectHandle === 'string' && asset?.poster) {
+        try {
+          await deleteVideoPosterFromProject(currentProjectHandle, asset.id)
+        } catch (_) {
+          // Ignore poster cleanup failures.
+        }
+      } else if (asset?.poster?.posterPath) {
+        await deleteAbsolutePath(asset.poster.posterPath)
       }
     }
   }, [assets, currentProjectHandle])
@@ -694,6 +742,7 @@ function AssetsPanel({ isActive = true }) {
     
     try {
       await generateAssetSprite(assetId, projectPath)
+      await generateAssetPoster(assetId, projectPath)
     } catch (err) {
       console.error('Failed to generate thumbnails:', err)
     }
@@ -1278,7 +1327,7 @@ function AssetsPanel({ isActive = true }) {
   useEffect(() => {
     setSelectedSequenceId(currentTimelineId || null)
   }, [currentTimelineId])
-  
+
   // Get thumbnail size config
   const sizeConfig = THUMBNAIL_SIZES[thumbnailSize]
   const folderTileIconSize = FOLDER_TILE_ICON_SIZES[thumbnailSize] || FOLDER_TILE_ICON_SIZES.medium
@@ -1567,7 +1616,7 @@ function AssetsPanel({ isActive = true }) {
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="w-6 h-6 rounded overflow-hidden bg-sf-dark-700 flex-shrink-0 flex items-center justify-center">
-                      <LazyAssetThumbnail
+                      <VideoAssetThumbnail
                         asset={asset}
                         Icon={Icon}
                         isActive={isActive}
@@ -1944,19 +1993,18 @@ function AssetsPanel({ isActive = true }) {
                 >
                   {/* Thumbnail */}
                   <div className="aspect-video bg-sf-dark-700 flex items-center justify-center relative overflow-hidden">
-                    <LazyAssetThumbnail
+                    <VideoAssetThumbnail
+                      key={asset.poster?.url || asset.sprite?.url || asset.id}
                       asset={asset}
                       Icon={Icon}
                       isActive={isActive}
+                      onVisible={(visibleAsset) => {
+                        hydrateAssetBrowserMedia(visibleAsset.id, currentProjectHandle).catch((err) => {
+                          console.warn('[AssetsPanel] visible asset hydration failed:', err)
+                        })
+                      }}
                       iconClassName={`${sizeConfig.iconSize} text-sf-text-muted`}
                       imageAlt={asset.name}
-                      videoProps={{
-                        onMouseEnter: (e) => e.target.play(),
-                        onMouseLeave: (e) => {
-                          e.target.pause()
-                          e.target.currentTime = 0
-                        },
-                      }}
                     />
                     
                     {/* Badge - AI, Imported, or Mask */}
@@ -1977,9 +2025,9 @@ function AssetsPanel({ isActive = true }) {
                     )}
 
                     {/* Sprite badge - shows if thumbnails are ready */}
-                    {asset.type === 'video' && asset.sprite?.url && (
-                      <div className={`absolute bottom-0.5 left-0.5 px-1 py-0.5 rounded ${sizeConfig.badgeSize} text-white font-medium bg-sf-blue/90`} title="Thumbnails ready for fast scrubbing">
-                        <Film className="w-2 h-2 inline-block" />
+                    {asset.type === 'video' && asset.poster?.url && (
+                      <div className={`absolute bottom-0.5 left-0.5 px-1 py-0.5 rounded ${sizeConfig.badgeSize} text-white font-medium bg-sf-blue/90`} title="Video poster ready">
+                        <Image className="w-2 h-2 inline-block" />
                       </div>
                     )}
                     
@@ -2131,10 +2179,16 @@ function AssetsPanel({ isActive = true }) {
                   {/* Name + thumbnail */}
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="w-7 h-7 rounded overflow-hidden bg-sf-dark-700 flex-shrink-0 flex items-center justify-center">
-                      <LazyAssetThumbnail
+                      <VideoAssetThumbnail
+                        key={asset.poster?.url || asset.sprite?.url || asset.id}
                         asset={asset}
                         Icon={Icon}
                         isActive={isActive}
+                        onVisible={(visibleAsset) => {
+                          hydrateAssetBrowserMedia(visibleAsset.id, currentProjectHandle).catch((err) => {
+                            console.warn('[AssetsPanel] visible asset hydration failed:', err)
+                          })
+                        }}
                         iconClassName="w-3.5 h-3.5 text-sf-text-muted"
                         imageAlt=""
                       />
@@ -2187,10 +2241,16 @@ function AssetsPanel({ isActive = true }) {
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-10 h-7 rounded overflow-hidden bg-sf-dark-700 flex-shrink-0 flex items-center justify-center">
               {DragPreviewIcon && (
-                <LazyAssetThumbnail
+                <VideoAssetThumbnail
+                  key={dragPreviewAsset.poster?.url || dragPreviewAsset.sprite?.url || dragPreviewAsset.id}
                   asset={dragPreviewAsset}
                   Icon={DragPreviewIcon}
                   isActive={isActive}
+                  onVisible={(visibleAsset) => {
+                    hydrateAssetBrowserMedia(visibleAsset.id, currentProjectHandle).catch((err) => {
+                      console.warn('[AssetsPanel] visible asset hydration failed:', err)
+                    })
+                  }}
                   iconClassName="w-4 h-4 text-sf-text-muted"
                   imageAlt=""
                 />
