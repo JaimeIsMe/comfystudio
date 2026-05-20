@@ -31,6 +31,7 @@ import {
   saveProject as saveProjectFile,
 } from '../services/fileSystem'
 import { enqueuePlaybackTranscode } from '../services/playbackCache'
+import { getSpriteFramePosition } from '../services/thumbnailSprites'
 import { enqueueProxyTranscode, isProxyPlaybackEnabled } from '../services/proxyCache'
 import { formatCaptionCuesAsSrt, transcribeWithComfyUI } from '../services/captionComfyTranscription'
 import {
@@ -2129,6 +2130,50 @@ function CinematographyTags({ onAddTag, selectedTags, onRemoveTag }) {
   )
 }
 
+
+function StaticAssetPreview({ asset, className = 'w-full h-full object-cover', iconClassName = 'w-4 h-4 text-sf-text-muted' }) {
+  if (!asset) return null
+
+  if (asset.type === 'image' && asset.url) {
+    return <img src={asset.url} className={className} alt="" loading="lazy" decoding="async" />
+  }
+
+  if (asset.type === 'video') {
+    const sprite = asset.sprite
+    const frame = sprite?.url && Array.isArray(sprite.frames) && sprite.frames.length > 0
+      ? (getSpriteFramePosition(sprite, 0) || sprite.frames[0])
+      : null
+
+    if (frame) {
+      const containerClass = className.includes('object-contain')
+        ? 'w-full h-full bg-sf-dark-950 bg-center bg-no-repeat'
+        : 'w-full h-full bg-sf-dark-950 bg-center bg-cover bg-no-repeat'
+      return (
+        <div
+          className={containerClass}
+          style={{
+            backgroundImage: `url(${sprite.url})`,
+            backgroundSize: `${sprite.width}px ${sprite.height}px`,
+            backgroundPosition: `${-(frame.x || 0)}px ${-(frame.y || 0)}px`,
+          }}
+        />
+      )
+    }
+
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-sf-dark-800">
+        <Film className={iconClassName} />
+      </div>
+    )
+  }
+
+  return (
+    <div className="w-full h-full flex items-center justify-center bg-sf-dark-800">
+      <Music className={iconClassName} />
+    </div>
+  )
+}
+
 // ============================================
 // Asset Input Browser (left column)
 // ============================================
@@ -2404,13 +2449,11 @@ function AssetInputBrowser({
             })()
           ) : (
             <div className="aspect-video bg-sf-dark-800 rounded overflow-hidden">
-              {selectedAssetForActiveSlot.type === 'video' ? (
-                <video src={selectedAssetForActiveSlot.url} className="w-full h-full object-contain" muted />
-              ) : selectedAssetForActiveSlot.type === 'image' ? (
-                <img src={selectedAssetForActiveSlot.url} className="w-full h-full object-contain" alt={selectedAssetForActiveSlot.name} />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center"><Music className="w-8 h-8 text-sf-text-muted" /></div>
-              )}
+              <StaticAssetPreview
+                asset={selectedAssetForActiveSlot}
+                className="w-full h-full object-contain"
+                iconClassName="w-8 h-8 text-sf-text-muted"
+              />
             </div>
           )}
           <button onClick={() => handleSelectAssetForActiveSlot(null)} className="mt-1 text-[9px] text-sf-text-muted hover:text-sf-error">Clear selection</button>
@@ -2475,13 +2518,7 @@ function AssetInputBrowser({
                   className={`bg-sf-dark-800 border rounded overflow-hidden text-left transition-all ${isSelected ? 'border-sf-accent ring-1 ring-sf-accent' : 'border-sf-dark-600 hover:border-sf-dark-500'}`}
                 >
                   <div className="aspect-video bg-sf-dark-700 flex items-center justify-center relative overflow-hidden">
-                    {asset.type === 'video' && asset.url ? (
-                      <video src={asset.url} className="w-full h-full object-cover" muted preload="metadata" />
-                    ) : asset.type === 'image' && asset.url ? (
-                      <img src={asset.url} className="w-full h-full object-cover" alt="" />
-                    ) : (
-                      <Music className="w-4 h-4 text-sf-text-muted" />
-                    )}
+                    <StaticAssetPreview asset={asset} />
                     <div className={`absolute top-0.5 left-0.5 px-1 py-0.5 rounded text-[7px] text-white ${asset.type === 'video' ? 'bg-blue-600/80' : asset.type === 'image' ? 'bg-green-600/80' : 'bg-purple-600/80'}`}>
                       {asset.type === 'video' ? 'VID' : asset.type === 'image' ? 'IMG' : 'AUD'}
                     </div>
@@ -2510,9 +2547,18 @@ function AssetInputBrowser({
 async function extractFrameAsFile(videoUrl, time, filename = 'frame.png') {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video')
+    const release = () => {
+      try { video.pause() } catch (_) {}
+      video.onloadedmetadata = null
+      video.onseeked = null
+      video.onerror = null
+      try { video.removeAttribute('src') } catch (_) {}
+      try { video.srcObject = null } catch (_) {}
+      try { video.load() } catch (_) {}
+    }
     video.crossOrigin = 'anonymous'
     video.muted = true
-    video.preload = 'auto'
+    video.preload = 'metadata'
     video.src = videoUrl
 
     video.onloadedmetadata = () => {
@@ -2525,6 +2571,7 @@ async function extractFrameAsFile(videoUrl, time, filename = 'frame.png') {
       canvas.height = video.videoHeight
       canvas.getContext('2d').drawImage(video, 0, 0)
       canvas.toBlob((blob) => {
+        release()
         if (blob) {
           resolve(new File([blob], filename, { type: 'image/png' }))
         } else {
@@ -2533,7 +2580,10 @@ async function extractFrameAsFile(videoUrl, time, filename = 'frame.png') {
       }, 'image/png')
     }
 
-    video.onerror = () => reject(new Error('Failed to load video for frame extraction'))
+    video.onerror = () => {
+      release()
+      reject(new Error('Failed to load video for frame extraction'))
+    }
   })
 }
 
@@ -5054,6 +5104,106 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
   const enqueueJob = useCallback((job) => {
     setGenerationQueue(prev => [...prev, job])
+  }, [])
+
+  const queuePeopleWizardJob = useCallback((overrides = {}) => {
+    const workflowId = String(overrides.workflowId || 'z-image-turbo').trim()
+    const peopleWizard = overrides.peopleWizard || null
+    const inputAssetId = overrides.inputAssetId || null
+    const referenceAssetId1 = overrides.referenceAssetId1 || null
+    const referenceAssetId2 = overrides.referenceAssetId2 || null
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const seedValue = Number.isFinite(Number(overrides.seed)) ? Number(overrides.seed) : Number(seed) || Math.floor(Math.random() * 1000000000)
+    const resolutionValue = overrides.resolution || imageResolution
+    const assetPrefix = String(peopleWizard?.assetPrefix || overrides.assetPrefix || '').trim()
+    const imageAssetLookup = (assetId) => (assetId ? snapshotGenerationAsset(assets.find((asset) => asset?.id === assetId) || null) : null)
+    const job = {
+      id: jobId,
+      createdAt: Date.now(),
+      category: 'image',
+      workflowId,
+      workflowLabel: String(overrides.workflowLabel || getWorkflowDisplayLabel(workflowId) || workflowId || 'People Wizard').trim(),
+      needsImage: Boolean(overrides.needsImage ?? workflowId !== 'z-image-turbo'),
+      inputAssetType: workflowId === 'z-image-turbo' ? null : 'image',
+      prompt: String(overrides.prompt || '').trim(),
+      negativePrompt: String(overrides.negativePrompt || '').trim(),
+      tags: [],
+      seed: seedValue,
+      duration: 0,
+      fps: 0,
+      interpolationMultiplier: 4,
+      enableFpsMultiplier: false,
+      resolution: resolutionValue,
+      wanQualityPreset: 'balanced',
+      editSteps: editSteps,
+      editCfg: editCfg,
+      musicTags: '',
+      lyrics: '',
+      musicDuration: 0,
+      bpm: 0,
+      keyscale: '',
+      inputAssetId,
+      inputAssetName: inputAssetId ? (assets.find((asset) => asset?.id === inputAssetId)?.name || '') : '',
+      audioAssetId: null,
+      audioAssetName: '',
+      assetFieldIds: {},
+      inputFromTimelineFrame: false,
+      referenceAssetId1,
+      referenceAssetId2,
+      peopleWizard: {
+        ...(peopleWizard || {}),
+        assetPrefix,
+      },
+      frameTime: 0,
+      status: 'queued',
+      progress: 0,
+      promptId: null,
+      node: null,
+      error: null,
+      originProject: currentProjectHandle ? {
+        handle: currentProjectHandle,
+        name: currentProject?.name || '',
+        path: typeof currentProjectHandle === 'string' ? currentProjectHandle : null,
+        created: currentProject?.created || null,
+      } : null,
+      sourceAssets: {
+        input: imageAssetLookup(inputAssetId),
+        reference1: imageAssetLookup(referenceAssetId1),
+        reference2: imageAssetLookup(referenceAssetId2),
+        audio: null,
+        assetFields: {},
+      },
+    }
+    enqueueJob(job)
+    return job
+  }, [
+    assets,
+    currentProject,
+    currentProjectHandle,
+    editCfg,
+    editSteps,
+    enqueueJob,
+    imageResolution,
+    seed,
+  ])
+
+  const buildPeopleWizardAssetName = useCallback((prefix, suffix, fallbackName) => {
+    const base = slugifyNameToken(prefix || '', { fallback: '', maxLength: 48 })
+    if (!base) return fallbackName || ''
+    const safeSuffix = String(suffix || '').trim()
+    return safeSuffix ? `${base}_${safeSuffix}` : base
+  }, [])
+
+  const inferPeopleWizardAssetPrefix = useCallback((asset, fallbackValue = '') => {
+    const metadataPrefix = slugifyNameToken(asset?.peopleWizard?.assetPrefix || '', { fallback: '', maxLength: 48 })
+    if (metadataPrefix) return metadataPrefix
+    const rawName = String(asset?.name || '').trim()
+    if (!rawName) return slugifyNameToken(fallbackValue || '', { fallback: '', maxLength: 48 })
+    const baseName = rawName
+      .replace(/\.[a-z0-9]{1,8}$/i, '')
+      .replace(/_I\d+$/i, '')
+      .replace(/_(image|sheet)$/i, '')
+    return slugifyNameToken(baseName || fallbackValue || '', { fallback: '', maxLength: 48 })
   }, [])
 
   const requestConfirm = useCallback(({
@@ -8494,7 +8644,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             duration: jobDuration,
             fps: jobFps,
             resolution: jobResolution ? `${jobResolution.width}x${jobResolution.height}` : undefined,
-            seed: jobSeed
+            seed: jobSeed,
+            inputAssetId: job?.inputAssetId || undefined,
+            keyframeAssetId: job?.inputAssetId || shortFilmMeta?.keyframeAssetId || undefined,
           }
         }, generatedVideoFolderPath)
         if (newAsset) importedAssets.push(newAsset)
@@ -8518,7 +8670,13 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           yolo: directorMeta || undefined,
           shortFilm: shortFilmMeta || undefined,
           folderId: generatedVideoFolderId,
-          settings: { duration: jobDuration, fps: jobFps, seed: jobSeed }
+          settings: {
+            duration: jobDuration,
+            fps: jobFps,
+            seed: jobSeed,
+            inputAssetId: job?.inputAssetId || undefined,
+            keyframeAssetId: job?.inputAssetId || shortFilmMeta?.keyframeAssetId || undefined,
+          }
         })
         if (fallbackAsset) importedAssets.push(fallbackAsset)
         didImportAny = true
@@ -8548,6 +8706,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       const shortFilmKeyframeName = shortFilmMeta?.kind === 'shot-keyframe'
         ? `KF ${String((Number(shortFilmMeta.shotIndex) || 0) + 1).padStart(2, '0')} - ${shortFilmMeta.shotTitle || 'Shot'}`
         : ''
+      const peopleWizardAssetPrefix = String(job?.peopleWizard?.assetPrefix || '').trim()
       for (let imageIndex = 0; imageIndex < imageItems.length; imageIndex += 1) {
         const img = imageItems[imageIndex]
         if (markImportedSignature('image', img.filename, img.subfolder, img.outputType)) continue
@@ -8558,7 +8717,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           const imageFile = await comfyui.downloadImage(img.filename, img.subfolder, img.outputType)
           const assetInfo = await importAsset(targetProjectHandle, imageFile, 'images')
           const blobUrl = importsIntoActiveProject ? URL.createObjectURL(imageFile) : null
-          const baseImageName = shortFilmKeyframeName || resolvedName
+          const wizardImageName = peopleWizardAssetPrefix ? buildPeopleWizardAssetName(peopleWizardAssetPrefix, 'image', resolvedName) : ''
+          const baseImageName = wizardImageName || shortFilmKeyframeName || resolvedName
           const imageName = imageItems.length > 1 ? `${baseImageName}_I${imageIndex + 1}` : baseImageName
           const newAsset = await saveImportedAssetRecord({
             ...assetInfo,
@@ -8569,6 +8729,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             isImported: true,
             yolo: directorMeta || undefined,
             shortFilm: shortFilmMeta || undefined,
+            peopleWizard: job?.peopleWizard || undefined,
             folderId: generatedImageFolderId,
           }, generatedImageFolderPath)
           if (newAsset) importedAssets.push(newAsset)
@@ -8577,7 +8738,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           console.warn('Failed to save image:', err)
           if (!importsIntoActiveProject) throw err
           const url = comfyui.getMediaUrl(img.filename, img.subfolder, img.outputType)
-          const baseImageName = shortFilmKeyframeName || resolvedName
+          const wizardImageName = peopleWizardAssetPrefix ? buildPeopleWizardAssetName(peopleWizardAssetPrefix, 'image', resolvedName) : ''
+          const baseImageName = wizardImageName || shortFilmKeyframeName || resolvedName
           const imageName = imageItems.length > 1 ? `${baseImageName}_I${imageIndex + 1}` : baseImageName
           const fallbackAsset = addAsset({
             name: imageName,
@@ -8586,6 +8748,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             prompt: jobPrompt,
             yolo: directorMeta || undefined,
             shortFilm: shortFilmMeta || undefined,
+            peopleWizard: job?.peopleWizard || undefined,
             folderId: generatedImageFolderId,
           })
           if (fallbackAsset) importedAssets.push(fallbackAsset)
@@ -8664,9 +8827,14 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       addComfyLog('error', 'Open or create a project before creating an angle sheet.')
       return
     }
-    const imageAssets = job.resultAssetIds
-      .map((id) => assets.find((asset) => asset?.id === id) || null)
-      .filter((asset) => asset?.type === 'image')
+    const directResultAssets = Array.isArray(job?.resultAssets)
+      ? job.resultAssets.filter((asset) => asset?.type === 'image')
+      : []
+    const imageAssets = directResultAssets.length > 0
+      ? directResultAssets
+      : job.resultAssetIds
+        .map((id) => assets.find((asset) => asset?.id === id) || null)
+        .filter((asset) => asset?.type === 'image')
     if (imageAssets.length === 0) {
       addComfyLog('error', 'No generated image angles found for this job.')
       return
@@ -8713,24 +8881,40 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Failed to export angle sheet'))), 'image/png')
       })
       const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-      const file = new File([sheetBlob], `angle_sheet_${stamp}.png`, { type: 'image/png' })
+      const sourceAsset = imageAssets[0] || null
+      const peopleWizardAssetPrefix = slugifyNameToken(
+        job?.peopleWizard?.assetPrefix
+          || inferPeopleWizardAssetPrefix(sourceAsset, '')
+          || '',
+        { fallback: '', maxLength: 48 }
+      )
+      const sheetBaseName = peopleWizardAssetPrefix
+        ? buildPeopleWizardAssetName(peopleWizardAssetPrefix, 'sheet', 'angle_sheet')
+        : `angle_sheet_${stamp}`
+      const file = new File([sheetBlob], `${sheetBaseName}.png`, { type: 'image/png' })
       const assetInfo = await importAsset(targetProjectHandle, file, 'images')
       const newAsset = addAsset({
-        name: assetInfo.fileName,
+        name: `${sheetBaseName}.png`,
         type: 'image',
         path: assetInfo.path,
         url: areProjectHandlesSame(targetProjectHandle, currentProjectHandle) ? URL.createObjectURL(file) : null,
+        peopleWizard: job?.peopleWizard ? {
+          ...job.peopleWizard,
+          assetPrefix: peopleWizardAssetPrefix || job.peopleWizard.assetPrefix || '',
+        } : undefined,
       })
       if (!newAsset) throw new Error('Failed to register angle sheet in assets')
       await saveProject?.()
       updateJob(job.id, { angleSheetAssetId: newAsset.id, isCombiningAngles: false, combineError: null })
       addComfyLog('ok', `Angle sheet created: ${assetInfo.fileName}`)
+      return newAsset
     } catch (error) {
       const message = error?.message || 'Failed to create angle sheet'
       updateJob(job.id, { isCombiningAngles: false, combineError: message })
       addComfyLog('error', message)
+      return null
     }
-  }, [addAsset, addComfyLog, assets, currentProjectHandle, saveProject, updateJob])
+  }, [addAsset, addComfyLog, assets, buildPeopleWizardAssetName, currentProjectHandle, inferPeopleWizardAssetPrefix, saveProject, updateJob])
 
   const runJob = useCallback(async (job) => {
     updateJob(job.id, { status: 'uploading', progress: 5, error: null })
@@ -8831,10 +9015,26 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             ? `image/comfystudio_${outputToken}`
             : (
               job.workflowId === 'sonilo-v2m' || job.workflowId === ELEVENLABS_TTS_WORKFLOW_ID
-                ? `audio/comfystudio_${outputToken}`
+              ? `audio/comfystudio_${outputToken}`
                 : ''
             )
       )
+      const peopleWizardPrefix = slugifyNameToken(job?.peopleWizard?.assetPrefix || '', { fallback: '', maxLength: 48 })
+    const peopleWizardImagePrefix = peopleWizardPrefix ? `image/${peopleWizardPrefix}_${outputToken}` : ''
+      const maybeFinalizePeopleWizardJob = async (jobRecord, currentImportedAssets) => {
+        if (!jobRecord?.peopleWizard?.autoCreateAngleSheet) return currentImportedAssets
+        if (!['multi-angles', 'multi-angles-scene'].includes(String(jobRecord.workflowId || '').trim())) return currentImportedAssets
+        const resultAssetIds = (currentImportedAssets || []).map((asset) => asset?.id).filter(Boolean)
+        if (resultAssetIds.length === 0) return currentImportedAssets
+        const sheetAsset = await handleCreateAngleSheetForJob({
+          ...jobRecord,
+          resultAssetIds,
+          resultAssets: currentImportedAssets,
+        })
+        if (!sheetAsset) return currentImportedAssets
+        updateJob(jobRecord.id, { resultAssetIds: [sheetAsset.id] })
+        return [sheetAsset]
+      }
 
       if (job.promptId) {
         markPromptHandledByApp(job.promptId)
@@ -8858,6 +9058,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           if (!saveResult?.didImportAny) {
             throw new Error('Generation returned a stale/duplicate output; job was not imported. Queue paused for safety.')
           }
+          importedAssets = await maybeFinalizePeopleWizardJob(job, importedAssets)
           rememberLatestWorkflowPreview(job, importedAssets)
           updateJob(job.id, {
             status: 'done',
@@ -9188,7 +9389,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             seed: job.seed,
             width: job.resolution?.width,
             height: job.resolution?.height,
-            filenamePrefix: outputPrefix || 'image/z_image_turbo',
+            filenamePrefix: peopleWizardImagePrefix || outputPrefix || 'image/z_image_turbo',
           })
           break
         case 'longcat-text-to-image':
@@ -9226,7 +9427,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             width: job.resolution?.width,
             height: job.resolution?.height,
             referenceImages: referenceFilenames,
-            filenamePrefix: outputPrefix || 'image/nano_banana_2',
+            filenamePrefix: peopleWizardImagePrefix || outputPrefix || 'image/nano_banana_2',
           })
           break
         case 'gpt-image-2-t2i':
@@ -9235,7 +9436,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             seed: job.seed,
             width: job.resolution?.width,
             height: job.resolution?.height,
-            filenamePrefix: outputPrefix || 'image/gpt_image_2',
+            filenamePrefix: peopleWizardImagePrefix || outputPrefix || 'image/gpt_image_2',
           })
           break
         case 'gpt-image-2-edit':
@@ -9245,7 +9446,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             seed: job.seed,
             width: job.resolution?.width,
             height: job.resolution?.height,
-            filenamePrefix: outputPrefix || 'image/gpt_image_2_edit',
+            filenamePrefix: peopleWizardImagePrefix || outputPrefix || 'image/gpt_image_2_edit',
           })
           break
         case 'grok-text-to-image':
@@ -9254,7 +9455,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             seed: job.seed,
             width: job.resolution?.width,
             height: job.resolution?.height,
-            filenamePrefix: outputPrefix || 'image/grok_text_to_image',
+            filenamePrefix: peopleWizardImagePrefix || outputPrefix || 'image/grok_text_to_image',
           })
           break
         case 'seedream-5-lite-image-edit':
@@ -9265,7 +9466,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             width: job.resolution?.width,
             height: job.resolution?.height,
             referenceImages: referenceFilenames,
-            filenamePrefix: outputPrefix || 'image/seedream_5_lite',
+            filenamePrefix: peopleWizardImagePrefix || outputPrefix || 'image/seedream_5_lite',
           })
           break
         case 'sonilo-v2m':
@@ -9327,6 +9528,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         if (!saveResult?.didImportAny) {
           throw new Error('Generation returned a stale/duplicate output; job was not imported. Queue paused for safety.')
         }
+        importedAssets = await maybeFinalizePeopleWizardJob(job, importedAssets)
         rememberLatestWorkflowPreview(job, importedAssets)
         updateJob(job.id, {
           status: 'done',
@@ -10181,6 +10383,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     setYoloMusicScript={setYoloMusicScript}
                     yoloMusicCast={yoloMusicCast}
                     yoloMusicResolvedCast={yoloMusicResolvedCast}
+                    setYoloMusicCast={setYoloMusicCast}
                     yoloMusicKeyframeWorkflowId={yoloStoryboardWorkflowId}
                     setYoloMusicKeyframeWorkflowId={setYoloMusicKeyframeWorkflowId}
                     yoloMusicKeyframeWorkflowOptions={YOLO_MUSIC_KEYFRAME_WORKFLOW_OPTIONS}
@@ -10193,6 +10396,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     handleYoloMusicCastSlugChange={handleYoloMusicCastSlugChange}
                     handleYoloMusicCastLabelChange={handleYoloMusicCastLabelChange}
                     handleYoloMusicCastRoleChange={handleYoloMusicCastRoleChange}
+                    queuePeopleWizardJob={queuePeopleWizardJob}
+                    canUsePeopleWizardGeneration={Boolean(BUILTIN_WORKFLOW_PATHS['z-image-turbo'] && BUILTIN_WORKFLOW_PATHS['multi-angles'])}
                     generationQueue={generationQueue}
                     yoloActivePlan={yoloActivePlan}
                     yoloQueueVariants={yoloQueueVariants}
@@ -10467,7 +10672,11 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                           </div>
                           {yoloMusicCast.length === 0 ? (
                             <div className="mt-1 rounded-lg border border-dashed border-sf-dark-600 bg-sf-dark-800/40 px-3 py-3 text-[11px] text-sf-text-muted">
-                              No cast yet. Click <span className="text-sf-text-secondary">+ Add cast member</span> to pick an image asset (a still of the singer / band member) and give them a short handle like <span className="font-mono text-sf-text-secondary">rose</span>. You can then reference them in your script with <span className="font-mono text-sf-text-secondary">Artist: rose</span> or in lyrics with <span className="font-mono text-sf-text-secondary">[Rose]</span> tag lines. Leave it empty for reference-free shots (the model will improvise the singer's look).
+                              No cast yet. Click <span className="text-sf-text-secondary">+ Add cast member</span> to pick
+                              an image asset (a still of the singer / band member) and give them a short handle like
+                              <span className="font-mono text-sf-text-secondary">rose</span>. You can then reference them in
+                              your script with <span className="font-mono text-sf-text-secondary">Artist: rose</span> or in
+                              lyrics with <span className="font-mono text-sf-text-secondary">[Rose]</span> tag lines.
                             </div>
                           ) : (
                             <div className="mt-1 space-y-1.5">
@@ -10540,7 +10749,14 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                           )}
                           <div className="mt-2 text-[10px] text-sf-text-muted">
                             <div>
-                              Reference cast in your script with <span className="font-mono text-sf-text-secondary">Artist: rose</span>, <span className="font-mono text-sf-text-secondary">Artist: jake</span>, or <span className="font-mono text-sf-text-secondary">Artist: both</span> (also <span className="font-mono">all</span> / <span className="font-mono">band</span>). In lyrics, drop a tag line above the verse: <span className="font-mono text-sf-text-secondary">[Rose]</span>, <span className="font-mono text-sf-text-secondary">[Jake]</span>, <span className="font-mono text-sf-text-secondary">[Rose, Jake]</span>. Section markers like <span className="font-mono">[Chorus]</span> and <span className="font-mono">[Verse 1]</span> are ignored.
+                              Reference cast in your script with <span className="font-mono text-sf-text-secondary">Artist: rose</span>,
+                              <span className="font-mono text-sf-text-secondary">Artist: jake</span>, or
+                              <span className="font-mono text-sf-text-secondary">Artist: both</span> (also
+                              <span className="font-mono">all</span> / <span className="font-mono">band</span>). In lyrics, drop a tag line above the verse:
+                              <span className="font-mono text-sf-text-secondary">[Rose]</span>,
+                              <span className="font-mono text-sf-text-secondary">[Jake]</span>, or
+                              <span className="font-mono text-sf-text-secondary">[Rose, Jake]</span>.
+                              Section markers like <span className="font-mono">[Chorus]</span> and <span className="font-mono">[Verse 1]</span> are ignored.
                             </div>
                           </div>
                         </div>

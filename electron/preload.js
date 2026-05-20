@@ -115,13 +115,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Export worker (run export in separate window so main UI stays responsive)
   runExportInWorker: (payload) => ipcRenderer.invoke('export:runInWorker', payload),
   onExportProgress: (cb) => {
-    ipcRenderer.on('export:progress', (_, data) => cb(data))
+    const listener = (_, data) => cb(data)
+    ipcRenderer.on('export:progress', listener)
+    return () => ipcRenderer.removeListener('export:progress', listener)
   },
   onExportComplete: (cb) => {
-    ipcRenderer.on('export:complete', (_, data) => cb(data))
+    const listener = (_, data) => cb(data)
+    ipcRenderer.on('export:complete', listener)
+    return () => ipcRenderer.removeListener('export:complete', listener)
   },
   onExportError: (cb) => {
-    ipcRenderer.on('export:error', (_, err) => cb(err))
+    const listener = (_, err) => cb(err)
+    ipcRenderer.on('export:error', listener)
+    return () => ipcRenderer.removeListener('export:error', listener)
   },
   onExportJob: (cb) => {
     ipcRenderer.once('export:job', (_, job) => cb(job))
@@ -287,6 +293,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAudioWaveform: (mediaInput, options = {}) => ipcRenderer.invoke('media:getAudioWaveform', mediaInput, options),
 
   /**
+   * Extract a poster image from the first frames of a video via ffmpeg.
+   * @param {string} inputPath - Absolute source file path
+   * @param {string} outputPath - Absolute poster destination path
+   * @param {object} options - { seekSeconds?: number, width?: number, quality?: number }
+   * @returns {Promise<{success: boolean, width?: number, height?: number, error?: string}>}
+   */
+  extractVideoPoster: (inputPath, outputPath, options = {}) => ipcRenderer.invoke('media:extractVideoPoster', inputPath, outputPath, options),
+
+  /**
    * Mix the full timeline's program audio into a single mono 16 kHz WAV file
    * via FFmpeg in the main process. Required for timeline-scope transcription
    * (decoding long videos in the renderer via Web Audio causes renderer OOMs).
@@ -301,6 +316,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<string>}
    */
   getFileUrlDirect: (filePath) => ipcRenderer.invoke('media:getFileUrlDirect', filePath),
+  createImageThumbnail: (options) => ipcRenderer.invoke('media:createImageThumbnail', options),
 
   // ============================================
   // App Settings (persistent storage in userData)
