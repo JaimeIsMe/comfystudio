@@ -394,6 +394,10 @@ export default function MusicVideoEasyMode({
   yoloMusicTranscribingSrt,
   yoloMusicTranscriptionStatus,
   handleYoloMusicTranscribeSrt,
+  yoloMusicProvidedLyrics,
+  setYoloMusicProvidedLyrics,
+  yoloMusicAlignProvidedLyrics,
+  setYoloMusicAlignProvidedLyrics,
   yoloMusicLyrics,
   setYoloMusicLyrics,
   yoloMusicParsedLyrics,
@@ -616,6 +620,13 @@ export default function MusicVideoEasyMode({
     [defaultVideoWorkflowId, selectedVideoWorkflowId, videoAssetMap, yoloQueueVariants]
   )
   const timedLineCount = Array.isArray(yoloMusicParsedLyrics?.lines) ? yoloMusicParsedLyrics.lines.length : 0
+  const providedLyricsLineCount = useMemo(
+    () => String(yoloMusicProvidedLyrics || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean).length,
+    [yoloMusicProvidedLyrics]
+  )
   const selectedAudioKindOption = getMusicVideoAudioKindOption(yoloMusicAudioKind) || getMusicVideoAudioKindOption('mixed_track')
   const selectedAudioModeHelper = getAudioModeHelper(selectedAudioKindOption?.id)
   const outputResolution = useMemo(
@@ -1294,17 +1305,60 @@ export default function MusicVideoEasyMode({
               </select>
             </label>
           </div>
+          <div className="mt-3 rounded-lg border border-sf-dark-700 bg-sf-dark-950/70 p-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="text-xs leading-5 text-sf-text-secondary">
+                <div className="font-semibold text-sf-text-primary">Lyrics source</div>
+                {yoloMusicAlignProvidedLyrics
+                  ? 'You already have lyrics. Paste them below, then click Prepare Timing to write timed SRT into the output box.'
+                  : 'Default flow: transcribe the selected song audio into SRT.'}
+              </div>
+              <button
+                type="button"
+                onClick={() => setYoloMusicAlignProvidedLyrics?.((current) => !current)}
+                className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
+                  yoloMusicAlignProvidedLyrics
+                    ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200'
+                    : 'border-cyan-400/40 bg-cyan-400/10 text-cyan-200 hover:bg-cyan-400/20'
+                }`}
+              >
+                {yoloMusicAlignProvidedLyrics ? 'Using pasted lyrics' : 'Extract lyrics from song'}
+              </button>
+            </div>
+          </div>
+          {yoloMusicAlignProvidedLyrics && (
+            <div className="mt-3 rounded-lg border border-sf-dark-700 bg-sf-dark-950/70 p-3">
+              <div className="mb-2 text-[10px] text-sf-text-muted">
+                Plain lyrics · {providedLyricsLineCount} lines
+              </div>
+              <label className="block">
+                <span className="text-[10px] uppercase text-sf-text-muted">Plain Lyrics Input</span>
+                <textarea
+                  value={yoloMusicProvidedLyrics || ''}
+                  onChange={(event) => setYoloMusicProvidedLyrics?.(event.target.value)}
+                  placeholder={'Paste plain lyrics here, one line per row.\n\n[Rose]\nYou paint your eyelids with correction fluid moons\nChewed up saints on the floor\n\n[Jake]\nSwollen sound inside my head'}
+                  className="mt-1 min-h-[160px] w-full resize-y rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 font-mono text-xs leading-5 text-sf-text-primary outline-none focus:border-sf-accent"
+                />
+              </label>
+            </div>
+          )}
           {(yoloMusicTranscribingSrt || yoloMusicTranscriptionStatus) && (
             <div className="mt-2 text-xs text-sf-text-secondary">
               {yoloMusicTranscriptionStatus || 'Preparing lyrics timing. This might take a moment.'}
             </div>
           )}
-          <textarea
-            value={yoloMusicLyrics}
-            onChange={(event) => setYoloMusicLyrics(event.target.value)}
-            placeholder="Paste lyrics, SRT, or LRC timing here."
-            className="mt-3 min-h-[220px] w-full resize-y rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 font-mono text-xs leading-5 text-sf-text-primary outline-none focus:border-sf-accent"
-          />
+          <div className="mt-3">
+            <label className="block">
+              <span className="text-[10px] uppercase text-sf-text-muted">SRT Output</span>
+              <textarea
+                value={yoloMusicLyrics}
+                onChange={(event) => setYoloMusicLyrics(event.target.value)}
+                placeholder="Timed lyrics will appear here after transcription or alignment."
+                readOnly={!yoloMusicAlignProvidedLyrics}
+                className={`mt-1 min-h-[220px] w-full resize-y rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 font-mono text-xs leading-5 text-sf-text-primary outline-none focus:border-sf-accent ${!yoloMusicAlignProvidedLyrics ? 'opacity-90' : ''}`}
+              />
+            </label>
+          </div>
         </div>
       </div>
     </div>

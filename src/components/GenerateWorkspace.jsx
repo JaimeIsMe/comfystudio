@@ -10774,6 +10774,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     yoloMusicTranscribingSrt={yoloMusicTranscribingSrt}
                     yoloMusicTranscriptionStatus={yoloMusicTranscriptionStatus}
                     handleYoloMusicTranscribeSrt={handleYoloMusicTranscribeSrt}
+                    yoloMusicProvidedLyrics={yoloMusicProvidedLyrics}
+                    setYoloMusicProvidedLyrics={setYoloMusicProvidedLyrics}
+                    yoloMusicAlignProvidedLyrics={yoloMusicAlignProvidedLyrics}
+                    setYoloMusicAlignProvidedLyrics={setYoloMusicAlignProvidedLyrics}
                     yoloMusicLyrics={yoloMusicLyrics}
                     setYoloMusicLyrics={setYoloMusicLyrics}
                     yoloMusicParsedLyrics={yoloMusicParsedLyrics}
@@ -10950,7 +10954,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                         <div>
                           <div className="flex items-center justify-between gap-2">
                             <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">
-                              Lyrics Timing / SRT Output
+                              Lyrics Timing
                             </label>
                             <div className="flex flex-wrap items-center justify-end gap-2">
                               {yoloMusicParsedLyrics.isTimed && yoloMusicParsedLyrics.lines.length > 0 && (
@@ -10977,25 +10981,44 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                                 ) : (
                                   <Wand2 className="h-3 w-3" />
                                 )}
-                                {yoloMusicAlignProvidedLyrics ? 'Prepare Timing' : 'Transcribe song to SRT'}
+                                {yoloMusicAlignProvidedLyrics ? 'Prepare Timing' : 'Transcribe song audio to SRT'}
                               </button>
                             </div>
                           </div>
-                          <div className="mt-2 rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-2 text-[10px] leading-5 text-sf-text-secondary">
-                            {yoloMusicAlignProvidedLyrics
-                              ? 'Paste plain lyrics below, then click Prepare Timing to align them to the selected audio and write the timed SRT here.'
-                              : 'Click Transcribe song to SRT to generate timed lyrics from the selected audio. You can switch on alignment mode if you already have plain lyrics.'}
+                          <div className="mt-2 rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 p-3">
+                            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                              <div className="text-[10px] leading-5 text-sf-text-secondary">
+                                <div className="font-semibold text-sf-text-primary">Lyrics source</div>
+                                {yoloMusicAlignProvidedLyrics
+                                  ? 'You already have lyrics. Paste them below, then click Prepare Timing to write timed SRT into the output box.'
+                                  : 'Default flow: transcribe the selected song audio into SRT.'}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setYoloMusicAlignProvidedLyrics((current) => !current)}
+                                className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
+                                  yoloMusicAlignProvidedLyrics
+                                    ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200'
+                                    : 'border-cyan-400/40 bg-cyan-400/10 text-cyan-200 hover:bg-cyan-400/20'
+                                }`}
+                              >
+                                {yoloMusicAlignProvidedLyrics ? 'Using pasted lyrics' : 'Extract lyrics from song'}
+                              </button>
+                            </div>
                           </div>
                           {yoloMusicAlignProvidedLyrics && (
-                            <div className="mt-3">
+                            <div className="mt-3 rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 p-3">
+                              <div className="mb-2 text-[10px] text-sf-text-muted">
+                                Plain lyrics · {yoloMusicProvidedLyricsLines.length} lines
+                              </div>
                               <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">
-                                Pasted Lyrics
+                                Plain Lyrics Input
                               </label>
                               <textarea
                                 value={yoloMusicProvidedLyrics}
                                 onChange={e => setYoloMusicProvidedLyrics(e.target.value)}
                                 rows={6}
-                                className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent resize-y"
+                                className="mt-1 w-full resize-y rounded-lg border border-sf-dark-600 bg-sf-dark-800 px-3 py-2 text-xs text-sf-text-primary outline-none focus:border-sf-accent"
                                 placeholder={'Paste plain lyrics here, one line per row.\n\n[Rose]\nYou paint your eyelids with correction fluid moons\nChewed up saints on the floor\n\n[Jake]\nSwollen sound inside my head'}
                               />
                             </div>
@@ -11013,15 +11036,6 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                               placeholder={'Timed lyrics will appear here after transcription or alignment.\n\nThis box is the final SRT output, not the source lyrics input.'}
                             />
                           </div>
-                          <label className="mt-3 flex items-center gap-2 text-xs text-sf-text-secondary">
-                            <input
-                              type="checkbox"
-                              checked={yoloMusicAlignProvidedLyrics}
-                              onChange={e => setYoloMusicAlignProvidedLyrics(e.target.checked)}
-                              className="h-4 w-4 rounded border-sf-dark-600 bg-sf-dark-800 text-sf-accent focus:ring-sf-accent"
-                            />
-                            <span>Have lyrics already? Align pasted lyrics to the audio.</span>
-                          </label>
                           {yoloMusicParsedLyrics.error && (
                             <div className="mt-1 text-[10px] text-amber-400">
                               {yoloMusicParsedLyrics.error}
@@ -11034,10 +11048,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                           )}
                           <div className="mt-1 text-[10px] text-sf-text-muted">
                             {yoloMusicAlignProvidedLyrics
-                              ? <>Alignment mode — paste plain lyrics, then generate timed SRT output for the planner to use.</>
+                              ? <>Alignment mode - paste plain lyrics, then generate timed SRT output for the planner to use.</>
                               : yoloMusicParsedLyrics.isTimed
-                                ? <>Timed lyrics detected — planner uses real times to resolve each shot's <span className="font-mono text-sf-text-secondary">Lyric moment:</span> and to cross-check any <span className="font-mono text-sf-text-secondary">Start at:</span> the LLM produced.</>
-                                : <>Transcription mode — generate SRT from song audio first. Optional <span className="font-mono text-sf-text-secondary">[Name]</span> tags above verses pick which cast member sings if you later switch to alignment mode.</>}
+                                ? <>Timed lyrics detected - planner uses real times to resolve each shot's <span className="font-mono text-sf-text-secondary">Lyric moment:</span> and to cross-check any <span className="font-mono text-sf-text-secondary">Start at:</span> the LLM produced.</>
+                                : <>Transcription mode - generate SRT from song audio first. Optional <span className="font-mono text-sf-text-secondary">[Name]</span> tags above verses pick which cast member sings if you later switch to alignment mode.</>}
                           </div>
                         </div>
 
