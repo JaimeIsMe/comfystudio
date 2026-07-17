@@ -3223,7 +3223,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 <input
                   type="range"
                   min="0"
-                  max="50"
+                  max="100"
                   value={transform.cropTop}
                   onChange={(e) => handleTransformChange('cropTop', parseInt(e.target.value))}
                   onMouseUp={(e) => handleTransformCommit('cropTop', parseInt(e.target.value))}
@@ -3240,7 +3240,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 <input
                   type="range"
                   min="0"
-                  max="50"
+                  max="100"
                   value={transform.cropBottom}
                   onChange={(e) => handleTransformChange('cropBottom', parseInt(e.target.value))}
                   onMouseUp={(e) => handleTransformCommit('cropBottom', parseInt(e.target.value))}
@@ -3257,7 +3257,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 <input
                   type="range"
                   min="0"
-                  max="50"
+                  max="100"
                   value={transform.cropLeft}
                   onChange={(e) => handleTransformChange('cropLeft', parseInt(e.target.value))}
                   onMouseUp={(e) => handleTransformCommit('cropLeft', parseInt(e.target.value))}
@@ -3274,7 +3274,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 <input
                   type="range"
                   min="0"
-                  max="50"
+                  max="100"
                   value={transform.cropRight}
                   onChange={(e) => handleTransformChange('cropRight', parseInt(e.target.value))}
                   onMouseUp={(e) => handleTransformCommit('cropRight', parseInt(e.target.value))}
@@ -4103,7 +4103,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 <input
                   type="range"
                   min="0"
-                  max="50"
+                  max="100"
                   value={animatedTransform?.cropTop ?? transform.cropTop}
                   onChange={(e) => handleTransformChange('cropTop', parseInt(e.target.value))}
                   onMouseUp={(e) => handleTransformCommit('cropTop', parseInt(e.target.value))}
@@ -4128,7 +4128,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 <input
                   type="range"
                   min="0"
-                  max="50"
+                  max="100"
                   value={animatedTransform?.cropBottom ?? transform.cropBottom}
                   onChange={(e) => handleTransformChange('cropBottom', parseInt(e.target.value))}
                   onMouseUp={(e) => handleTransformCommit('cropBottom', parseInt(e.target.value))}
@@ -4153,7 +4153,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 <input
                   type="range"
                   min="0"
-                  max="50"
+                  max="100"
                   value={animatedTransform?.cropLeft ?? transform.cropLeft}
                   onChange={(e) => handleTransformChange('cropLeft', parseInt(e.target.value))}
                   onMouseUp={(e) => handleTransformCommit('cropLeft', parseInt(e.target.value))}
@@ -4178,7 +4178,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
                 <input
                   type="range"
                   min="0"
-                  max="50"
+                  max="100"
                   value={animatedTransform?.cropRight ?? transform.cropRight}
                   onChange={(e) => handleTransformChange('cropRight', parseInt(e.target.value))}
                   onMouseUp={(e) => handleTransformCommit('cropRight', parseInt(e.target.value))}

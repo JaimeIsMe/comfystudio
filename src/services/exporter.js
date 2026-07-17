@@ -450,7 +450,9 @@ export const applyClipCrop = (ctx, rect, transform) => {
   const top = rect.height * (cropTop / 100)
   const bottom = rect.height * (cropBottom / 100)
   ctx.beginPath()
-  ctx.rect(left, top, rect.width - left - right, rect.height - top - bottom)
+  // Opposing crops can sum past 100%: a negative-size ctx.rect traces the
+  // rectangle inverted, which would UN-crop a slice instead of hiding all.
+  ctx.rect(left, top, Math.max(0, rect.width - left - right), Math.max(0, rect.height - top - bottom))
   ctx.clip()
 }
 
