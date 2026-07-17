@@ -58,6 +58,7 @@ function App() {
   const [hasMountedFlowAi, setHasMountedFlowAi] = useState(false)
   const [bottomEditorView, setBottomEditorView] = useState('timeline')
   const [activeTimelineToolLabel, setActiveTimelineToolLabel] = useState('Move tool')
+  const [timelineStatusText, setTimelineStatusText] = useState('')
   const [downloadProgressItems, setDownloadProgressItems] = useState([])
   const mainTabRef = useRef(mainTab)
   const downloadDismissTimersRef = useRef(new Map())
@@ -915,7 +916,7 @@ function App() {
                   </div>
                   <span className="text-[10px] text-sf-text-muted">
                     {bottomEditorView === 'timeline'
-                      ? `Timeline · ${activeTimelineToolLabel}`
+                      ? `${timelineStatusText ? `${timelineStatusText} · ` : ''}Timeline · ${activeTimelineToolLabel}`
                       : bottomEditorView === 'mixer'
                         ? 'Audio mixer'
                         : 'Keyframe edit mode'}
@@ -926,6 +927,7 @@ function App() {
                   {bottomEditorView === 'timeline' ? (
                     <Timeline
                       onActiveToolChange={handleActiveTimelineToolChange}
+                      onStatusChange={setTimelineStatusText}
                     />
                   ) : bottomEditorView === 'mixer' ? (
                     <MixerPanel />

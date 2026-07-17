@@ -4,7 +4,7 @@ import {
   Plus, Video, Type, Image as ImageIcon,
   Sparkles, GripVertical, Magnet, ArrowRightLeft, Square, X, Check, Pencil,
   Diamond, Zap, AlertTriangle, Loader2, ChevronLeft, ChevronRight, Maximize2, Flag, Scissors, Clock,
-  Copy, ClipboardPaste, Trash2, Music as MusicIcon,
+  Copy, ClipboardPaste, Trash2, Music as MusicIcon, MoreHorizontal,
 } from 'lucide-react'
 import useTimelineStore, { buildClipSyncLock, isMusicVideoSyncCapableClip, isSyncLockedClip } from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
@@ -495,7 +495,7 @@ function AudioWaveformBars({ clip, clipWidth, clipUrl, waveformInput = null, ste
   )
 }
 
-function Timeline({ onActiveToolChange }) {
+function Timeline({ onActiveToolChange, onStatusChange }) {
   const timelineRef = useRef(null)
   const trackHeadersRef = useRef(null)
   const trackContentRef = useRef(null)
@@ -853,6 +853,19 @@ function Timeline({ onActiveToolChange }) {
     selectGap,
     addAdjustmentClip,
   } = useTimelineStore()
+
+  // Clip/gap/selection readout for the status corner — moved out of the
+  // toolbar, where it was occupying button real estate on narrow widths.
+  const selectedGapSeconds = selectedGap ? Math.max(0, selectedGap.endTime - selectedGap.startTime) : null
+  useEffect(() => {
+    if (typeof onStatusChange !== 'function') return undefined
+    const parts = []
+    if (selectedClipIds.length > 1) parts.push(`${selectedClipIds.length} selected`)
+    if (selectedGapSeconds != null) parts.push(`Gap ${selectedGapSeconds.toFixed(2)}s`)
+    parts.push(`${clips.length} clips`)
+    onStatusChange(parts.join(' · '))
+    return () => onStatusChange('')
+  }, [onStatusChange, selectedClipIds.length, selectedGapSeconds, clips.length])
 
   const {
     currentProjectHandle,
@@ -1224,6 +1237,57 @@ function Timeline({ onActiveToolChange }) {
     copySelectedClips()
     return true
   }, [copySelectedClips, selectedClipIds])
+
+  // Responsive toolbar: full (icon+label) → compact (icons only, tooltips
+  // carry the labels) → overflow (low-priority groups spill into a ⋯ menu;
+  // the scrollable strip remains as the last-resort fallback).
+  // The tier is MEASURED, not guessed: a layout effect downgrades pre-paint
+  // whenever the strip's content overflows its width, recording how much
+  // width that tier actually needed; it upgrades (optimistically when the
+  // need is unknown — a failed attempt bounces back before paint) once that
+  // much width plus a hysteresis buffer is available again.
+  const toolbarScrollRef = useRef(null)
+  const toolbarTierNeedsRef = useRef({})
+  const [toolbarTier, setToolbarTier] = useState('full')
+  const [toolbarOverflowOpen, setToolbarOverflowOpen] = useState(false)
+  const [toolbarOverflowAnchor, setToolbarOverflowAnchor] = useState(null)
+  const [, forceToolbarMeasure] = useState(0)
+  useEffect(() => {
+    const el = toolbarScrollRef.current
+    if (!el) return undefined
+    const observer = new ResizeObserver(() => forceToolbarMeasure((n) => n + 1))
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+  useLayoutEffect(() => {
+    const el = toolbarScrollRef.current
+    if (!el) return
+    const width = el.clientWidth
+    const HYSTERESIS = 32
+    const needs = toolbarTierNeedsRef.current
+    if (el.scrollWidth > width + 1) {
+      needs[toolbarTier] = el.scrollWidth
+      if (toolbarTier === 'full') setToolbarTier('compact')
+      else if (toolbarTier === 'compact') setToolbarTier('overflow')
+      return
+    }
+    if (toolbarTier === 'overflow' && (!needs.compact || width >= needs.compact + HYSTERESIS)) {
+      setToolbarTier('compact')
+    } else if (toolbarTier === 'compact' && (!needs.full || width >= needs.full + HYSTERESIS)) {
+      setToolbarTier('full')
+    }
+  })
+  const showToolbarLabels = toolbarTier === 'full'
+  useEffect(() => {
+    if (toolbarTier !== 'overflow') setToolbarOverflowOpen(false)
+  }, [toolbarTier])
+  useEffect(() => {
+    if (!toolbarOverflowOpen) return undefined
+    const close = () => setToolbarOverflowOpen(false)
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [toolbarOverflowOpen])
+  const overflowMenuItemClass = 'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[11px] text-sf-text-secondary transition-colors hover:bg-sf-dark-700 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-45'
 
   const toolbarSectionClass = 'inline-flex h-6 items-center gap-0.5 rounded-md border border-sf-dark-700/80 bg-sf-dark-900/55 px-0.5'
   const toolbarButtonClass = 'inline-flex h-6 items-center gap-1 rounded px-1.5 text-[10px] text-sf-text-secondary transition-colors hover:bg-sf-dark-700 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-sf-text-secondary'
@@ -4663,7 +4727,7 @@ function Timeline({ onActiveToolChange }) {
       )}
       {/* Timeline Header - compact editor toolbar and zoom controls */}
       <div className="h-8 bg-sf-dark-800 border-b border-sf-dark-700 flex items-center px-2 gap-2 overflow-hidden">
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none]">
+        <div ref={toolbarScrollRef} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none]">
           <div className={toolbarSectionClass} aria-label="Add tracks">
             <button
               onClick={() => addTrack('video')}
@@ -4671,7 +4735,7 @@ function Timeline({ onActiveToolChange }) {
               title="Add video track"
             >
               <Plus className="w-3 h-3" />
-              Video
+              {showToolbarLabels && 'Video'}
             </button>
             <button
               onClick={() => addTrack('audio', { channels: 'mono' })}
@@ -4679,7 +4743,7 @@ function Timeline({ onActiveToolChange }) {
               title="Add mono audio track"
             >
               <Plus className="w-3 h-3" />
-              Mono
+              {showToolbarLabels && 'Mono'}
             </button>
             <button
               onClick={() => addTrack('audio', { channels: 'stereo' })}
@@ -4687,7 +4751,7 @@ function Timeline({ onActiveToolChange }) {
               title="Add stereo audio track"
             >
               <Plus className="w-3 h-3" />
-              Stereo
+              {showToolbarLabels && 'Stereo'}
             </button>
           </div>
 
@@ -4698,7 +4762,7 @@ function Timeline({ onActiveToolChange }) {
               title={`Add timeline marker at playhead (${markerHotkeyLabel})`}
             >
               <Flag className="w-3 h-3 text-yellow-400" />
-              Marker
+              {showToolbarLabels && 'Marker'}
             </button>
             <button
               onClick={handleAddAdjustmentLayer}
@@ -4706,7 +4770,7 @@ function Timeline({ onActiveToolChange }) {
               title="Add adjustment layer on active video track"
             >
               <Square className="w-3 h-3 text-purple-400" />
-              Adj
+              {showToolbarLabels && 'Adj'}
             </button>
             <button
               onClick={() => addTextClipAtPlayhead()}
@@ -4717,7 +4781,7 @@ function Timeline({ onActiveToolChange }) {
                 : `Add a video track to create text at the playhead (${addTextClipHotkeyLabel})`}
             >
               <Type className="w-3 h-3" />
-              Text
+              {showToolbarLabels && 'Text'}
             </button>
             <button
               onClick={() => addShapeClipAtPlayhead()}
@@ -4728,7 +4792,7 @@ function Timeline({ onActiveToolChange }) {
                 : 'Add a video track to create shapes at the playhead'}
             >
               <Square className="w-3 h-3 text-cyan-300" />
-              Shape
+              {showToolbarLabels && 'Shape'}
             </button>
             <button
               onClick={handleOpenTimelineCaptions}
@@ -4736,7 +4800,7 @@ function Timeline({ onActiveToolChange }) {
               title="Transcribe the timeline's audio and add animated captions on a new top track"
             >
               <Type className="w-3 h-3 text-cyan-300" />
-              Captions
+              {showToolbarLabels && 'Captions'}
             </button>
             {selectedMarkerId && (
               <button
@@ -4756,7 +4820,7 @@ function Timeline({ onActiveToolChange }) {
               title={`Split all clips at the playhead across every track (${splitAllHotkeyLabel})`}
             >
               <Scissors className="w-3 h-3" />
-              Cut All
+              {showToolbarLabels && 'Cut All'}
             </button>
             <button
               onClick={handleSplitActiveTrackAtPlayhead}
@@ -4767,7 +4831,7 @@ function Timeline({ onActiveToolChange }) {
                 : `Set an active track and park the playhead over a clip to split it (${splitActiveHotkeyLabel})`}
             >
               <Scissors className="w-3 h-3" />
-              Split
+              {showToolbarLabels && 'Split'}
             </button>
             <button
               onClick={handleCopySelection}
@@ -4776,7 +4840,7 @@ function Timeline({ onActiveToolChange }) {
               title={`Copy the selected clips (${copyHotkeyLabel})`}
             >
               <Copy className="w-3 h-3" />
-              Copy
+              {showToolbarLabels && 'Copy'}
             </button>
             <button
               onClick={handlePasteAtPlayhead}
@@ -4787,7 +4851,7 @@ function Timeline({ onActiveToolChange }) {
                 : `Copy clips first, then choose an active track to paste at the playhead (${pasteHotkeyLabel})`}
             >
               <ClipboardPaste className="w-3 h-3" />
-              Paste
+              {showToolbarLabels && 'Paste'}
             </button>
             <button
               onClick={() => toggleClipSelectionEnabled()}
@@ -4798,7 +4862,7 @@ function Timeline({ onActiveToolChange }) {
                 : `Select clips to enable or disable them (${toggleClipEnabledHotkeyLabel})`}
             >
               {selectedClipsShouldEnable ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-              {selectedClipsShouldEnable ? 'Enable' : 'Disable'}
+              {showToolbarLabels && (selectedClipsShouldEnable ? 'Enable' : 'Disable')}
             </button>
             <button
               onClick={() => { void handleRenderClips(renderableSelectedClips) }}
@@ -4809,7 +4873,7 @@ function Timeline({ onActiveToolChange }) {
                 : 'Select clips to render them to cache'}
             >
               <Zap className="w-3 h-3" />
-              Render
+              {showToolbarLabels && 'Render'}
             </button>
             <button
               onClick={handleDeleteCurrentSelection}
@@ -4828,7 +4892,7 @@ function Timeline({ onActiveToolChange }) {
               }
             >
               <Trash2 className="w-3 h-3" />
-              Delete
+              {showToolbarLabels && 'Delete'}
             </button>
           </div>
 
@@ -4846,7 +4910,7 @@ function Timeline({ onActiveToolChange }) {
                   aria-pressed={active}
                 >
                   <Icon className="w-3 h-3" />
-                  {tool.label}
+                  {showToolbarLabels && tool.label}
                 </button>
               )
             })}
@@ -4859,33 +4923,38 @@ function Timeline({ onActiveToolChange }) {
               title={`Snapping ${snappingEnabled ? 'ON' : 'OFF'} (${snappingHotkeyLabel} to toggle)`}
             >
               <Magnet className="w-3 h-3" />
-              Snap
+              {showToolbarLabels && 'Snap'}
             </button>
-            <button
-              onClick={toggleRippleEdit}
-              className={toolbarToggleClass(rippleEditMode)}
-              title={`Ripple Edit ${rippleEditMode ? 'ON' : 'OFF'} (${rippleHotkeyLabel} to toggle) - Moving clips shifts subsequent clips`}
-            >
-              <ArrowRightLeft className="w-3 h-3" />
-              Ripple
-            </button>
-            <button
-              onClick={(event) => {
-                if (isMusicPopoverOpen) {
-                  setIsMusicPopoverOpen(false)
-                } else {
-                  setMusicPopoverAnchor(event.currentTarget.getBoundingClientRect())
-                  setIsMusicPopoverOpen(true)
-                }
-              }}
-              className={toolbarToggleClass(isMusicPopoverOpen)}
-              title="Generate music with ACE-Step — duration prefills from the in/out range"
-            >
-              <MusicIcon className="w-3 h-3" />
-              Music
-            </button>
+            {toolbarTier !== 'overflow' && (
+              <button
+                onClick={toggleRippleEdit}
+                className={toolbarToggleClass(rippleEditMode)}
+                title={`Ripple Edit ${rippleEditMode ? 'ON' : 'OFF'} (${rippleHotkeyLabel} to toggle) - Moving clips shifts subsequent clips`}
+              >
+                <ArrowRightLeft className="w-3 h-3" />
+                {showToolbarLabels && 'Ripple'}
+              </button>
+            )}
+            {toolbarTier !== 'overflow' && (
+              <button
+                onClick={(event) => {
+                  if (isMusicPopoverOpen) {
+                    setIsMusicPopoverOpen(false)
+                  } else {
+                    setMusicPopoverAnchor(event.currentTarget.getBoundingClientRect())
+                    setIsMusicPopoverOpen(true)
+                  }
+                }}
+                className={toolbarToggleClass(isMusicPopoverOpen)}
+                title="Generate music with ACE-Step — duration prefills from the in/out range"
+              >
+                <MusicIcon className="w-3 h-3" />
+                {showToolbarLabels && 'Music'}
+              </button>
+            )}
           </div>
 
+          {toolbarTier !== 'overflow' && (
           <div className={toolbarSectionClass} aria-label="Select timeline ranges">
             <button
               onClick={selectClipsFromTimelineStartToPlayhead}
@@ -4893,7 +4962,7 @@ function Timeline({ onActiveToolChange }) {
               title={`Select clips from the start of the timeline to the playhead (${selectFromStartHotkeyLabel})`}
             >
               <ChevronLeft className="w-3 h-3" />
-              From Start
+              {showToolbarLabels && 'From Start'}
             </button>
             <button
               onClick={selectClipsFromPlayheadToEnd}
@@ -4901,7 +4970,7 @@ function Timeline({ onActiveToolChange }) {
               title={`Select clips from the playhead to the end of the timeline (${selectToEndHotkeyLabel})`}
             >
               <ChevronRight className="w-3 h-3" />
-              To End
+              {showToolbarLabels && 'To End'}
             </button>
             {selectedClipIds.length > 0 && (
               <button
@@ -4910,7 +4979,7 @@ function Timeline({ onActiveToolChange }) {
                 title={`Move selected clips by an exact signed timecode offset (${moveByHotkeyLabel})`}
               >
                 <ArrowRightLeft className="w-3 h-3" />
-                Move By
+                {showToolbarLabels && 'Move By'}
               </button>
             )}
             {selectedClipIds.length > 0 && (
@@ -4920,29 +4989,95 @@ function Timeline({ onActiveToolChange }) {
                 title={`Change selected clip duration by an exact signed amount${durationByHotkeyHint ? ` (${durationByHotkeyHint})` : ''}`}
               >
                 <Clock className="w-3 h-3" />
-                Duration By
+                {showToolbarLabels && 'Duration By'}
               </button>
             )}
           </div>
-
-          <div className="inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md border border-sf-dark-700/70 bg-sf-dark-900/45 px-1.5">
-            {selectedClipIds.length > 1 && (
-              <span className="text-[10px] text-sf-accent">{selectedClipIds.length} selected</span>
-            )}
-            {selectedGap && (
-              <span
-                className="text-[10px] text-sf-accent"
-                title={`Selected gap from ${formatTimelineTimecode(selectedGap.startTime)} to ${formatTimelineTimecode(selectedGap.endTime)}`}
-              >
-                Gap {Math.max(0, selectedGap.endTime - selectedGap.startTime).toFixed(2)}s
-              </span>
-            )}
-            <span className="text-[10px] text-sf-text-muted">{clips.length} clips</span>
-          </div>
+          )}
         </div>
 
         {/* Info & Zoom */}
         <div className="flex shrink-0 items-center gap-2">
+          {toolbarTier === 'overflow' && (
+            <>
+              <button
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  setToolbarOverflowAnchor(event.currentTarget.getBoundingClientRect())
+                  setToolbarOverflowOpen((open) => !open)
+                }}
+                className={toolbarToggleClass(toolbarOverflowOpen)}
+                title="More tools"
+              >
+                <MoreHorizontal className="w-3.5 h-3.5" />
+              </button>
+              {toolbarOverflowOpen && toolbarOverflowAnchor && (
+                <div
+                  onMouseDown={(event) => event.stopPropagation()}
+                  className="fixed z-50 w-48 rounded-md border border-sf-dark-600 bg-sf-dark-800 p-1 shadow-2xl shadow-black/50 flex flex-col gap-0.5"
+                  style={{
+                    top: toolbarOverflowAnchor.bottom + 4,
+                    right: Math.max(8, window.innerWidth - toolbarOverflowAnchor.right),
+                  }}
+                >
+                  <button
+                    onClick={() => { toggleRippleEdit(); setToolbarOverflowOpen(false) }}
+                    className={overflowMenuItemClass}
+                    title={`Ripple Edit (${rippleHotkeyLabel} to toggle)`}
+                  >
+                    <ArrowRightLeft className="w-3 h-3" />
+                    Ripple Edit {rippleEditMode ? '· ON' : ''}
+                  </button>
+                  <button
+                    onClick={(event) => {
+                      setMusicPopoverAnchor(event.currentTarget.getBoundingClientRect())
+                      setIsMusicPopoverOpen(true)
+                      setToolbarOverflowOpen(false)
+                    }}
+                    className={overflowMenuItemClass}
+                    title="Generate music with ACE-Step"
+                  >
+                    <MusicIcon className="w-3 h-3" />
+                    Generate Music
+                  </button>
+                  <button
+                    onClick={() => { selectClipsFromTimelineStartToPlayhead(); setToolbarOverflowOpen(false) }}
+                    className={overflowMenuItemClass}
+                    title={`Select clips from the timeline start to the playhead (${selectFromStartHotkeyLabel})`}
+                  >
+                    <ChevronLeft className="w-3 h-3" />
+                    Select From Start
+                  </button>
+                  <button
+                    onClick={() => { selectClipsFromPlayheadToEnd(); setToolbarOverflowOpen(false) }}
+                    className={overflowMenuItemClass}
+                    title={`Select clips from the playhead to the end (${selectToEndHotkeyLabel})`}
+                  >
+                    <ChevronRight className="w-3 h-3" />
+                    Select To End
+                  </button>
+                  <button
+                    onClick={() => { openMoveOffsetDialog(); setToolbarOverflowOpen(false) }}
+                    disabled={selectedClipIds.length === 0}
+                    className={overflowMenuItemClass}
+                    title={`Move selected clips by an exact offset (${moveByHotkeyLabel})`}
+                  >
+                    <ArrowRightLeft className="w-3 h-3" />
+                    Move By…
+                  </button>
+                  <button
+                    onClick={() => { openDurationDeltaDialog(); setToolbarOverflowOpen(false) }}
+                    disabled={selectedClipIds.length === 0}
+                    className={overflowMenuItemClass}
+                    title="Change selected clip duration by an exact amount"
+                  >
+                    <Clock className="w-3 h-3" />
+                    Duration By…
+                  </button>
+                </div>
+              )}
+            </>
+          )}
           <button
             onClick={handleFrameAll}
             className="p-1.5 hover:bg-sf-dark-600 rounded text-sf-text-muted"
