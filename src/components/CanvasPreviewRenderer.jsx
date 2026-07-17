@@ -1707,6 +1707,7 @@ function CanvasPreviewRenderer({
   return (
     <canvas
       ref={canvasRef}
+      data-preview-popout-source="canvas"
       className="absolute inset-0 h-full w-full bg-black"
       width={safeWidth}
       height={safeHeight}

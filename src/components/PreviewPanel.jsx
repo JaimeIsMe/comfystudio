@@ -1,4 +1,4 @@
-import { Maximize2, Minimize2, Plus, X, Check, Home, ZoomIn, ZoomOut, Move, Play, Pause, SkipBack, SkipForward, Volume2, Film, Image as ImageIcon, ChevronDown, Grid3X3, Crosshair, Square, Frame, Eye, EyeOff, Layers, Wand2, Camera, Loader2 } from 'lucide-react'
+import { Maximize2, Minimize2, Plus, X, Check, Home, ZoomIn, ZoomOut, Move, Play, Pause, SkipBack, SkipForward, Volume2, Film, Image as ImageIcon, ChevronDown, Grid3X3, Crosshair, Square, Frame, Eye, EyeOff, Layers, Wand2, Camera, Loader2, PictureInPicture2 } from 'lucide-react'
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import useAssetsStore from '../stores/assetsStore'
 import useTimelineStore from '../stores/timelineStore'
@@ -6,6 +6,7 @@ import useProjectStore from '../stores/projectStore'
 import { useFrameForAIStore } from '../stores/frameForAIStore'
 import { useTimelinePlayback } from '../hooks/useTimelinePlayback'
 import useViewportClampedPosition from '../hooks/useViewportClampedPosition'
+import usePreviewPopout from '../hooks/usePreviewPopout'
 import { captureTimelineFrameAt, getTopmostVideoOrImageClipAtTime } from '../utils/captureTimelineFrame'
 import { getAnimatedTransform } from '../utils/keyframes'
 import VideoLayerRenderer from './VideoLayerRenderer'
@@ -1402,9 +1403,29 @@ function PreviewPanel() {
   const currentTime = previewMode === 'timeline' ? playheadPosition : assetCurrentTime
   const duration = previewMode === 'timeline' ? endTime : assetDuration
   const togglePlay = previewMode === 'timeline' ? timelineTogglePlay : assetTogglePlay
-  const seekTo = previewMode === 'timeline' 
+  const seekTo = previewMode === 'timeline'
     ? (time) => setPlayheadPosition(Math.max(0, Math.min(endTime, time)), { snap: true })
     : assetSeekTo
+
+  // Detached preview window: mirror whichever tagged element is currently
+  // mounted (compositor canvas, render-chunk video, or asset video).
+  const getPopoutSourceElement = useCallback(() => {
+    const container = containerRef.current
+    if (!container) return null
+    let fallback = null
+    for (const el of container.querySelectorAll('[data-preview-popout-source]')) {
+      if (el.tagName === 'VIDEO') {
+        if (el.videoWidth > 0) return el
+      } else if (!fallback) {
+        fallback = el
+      }
+    }
+    return fallback
+  }, [])
+  const { isPoppedOut: isPreviewPoppedOut, toggle: togglePreviewPopout } = usePreviewPopout({
+    getSourceElement: getPopoutSourceElement,
+    onTogglePlay: togglePlay,
+  })
 
   // Check if we have content to show
   const hasContent = previewMode === 'timeline' 
@@ -2319,7 +2340,14 @@ function PreviewPanel() {
               <Crosshair className="w-4 h-4" />
             </button>
           )}
-          <button 
+          <button
+            onClick={togglePreviewPopout}
+            className={`p-1 hover:bg-sf-dark-700 rounded transition-colors ${isPreviewPoppedOut ? 'text-sf-accent' : 'text-sf-text-muted'}`}
+            title={isPreviewPoppedOut ? 'Close detached preview window' : 'Pop out preview to a separate window (drag it to another monitor; double-click it for fullscreen)'}
+          >
+            <PictureInPicture2 className="w-4 h-4" />
+          </button>
+          <button
             onClick={toggleFullscreen}
             className="p-1 hover:bg-sf-dark-700 rounded transition-colors"
             title={isFullscreen ? 'Exit Fullscreen (ESC)' : 'Fullscreen'}
@@ -2369,6 +2397,7 @@ function PreviewPanel() {
                     <video
                       key={activePreviewChunk.path}
                       ref={chunkVideoRef}
+                      data-preview-popout-source="video"
                       src={activePreviewChunk.url}
                       className="absolute inset-0 w-full h-full object-contain bg-black"
                       muted
@@ -2645,6 +2674,7 @@ function PreviewPanel() {
                     )}
                     <video
                       ref={videoRefA}
+                      data-preview-popout-source="video"
                       src={currentPreview.url}
                       className="w-full h-full"
                       style={{

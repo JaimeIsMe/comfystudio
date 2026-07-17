@@ -3554,7 +3554,22 @@ async function createWindow(restoredWindowState = null) {
       }
     })
 
-    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    mainWindow.webContents.setWindowOpenHandler(({ url, frameName }) => {
+      // Detached preview ("clean feed") window — an about:blank child the
+      // renderer scripts directly (see src/hooks/usePreviewPopout.js). No
+      // parent option: it must be free to sit on any display independently.
+      if (frameName === 'velorn-preview-popout') {
+        return {
+          action: 'allow',
+          overrideBrowserWindowOptions: {
+            title: 'Velorn Preview',
+            autoHideMenuBar: true,
+            backgroundColor: '#000000',
+            minWidth: 240,
+            minHeight: 240,
+          },
+        }
+      }
       if (isComfyAuthPopupUrl(url)) {
         return {
           action: 'allow',
