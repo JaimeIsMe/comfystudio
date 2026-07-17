@@ -74,6 +74,10 @@ function App() {
   const [leftPanelWidth, setLeftPanelWidth] = useState(280) // Content panel width (icon bar is 48px additional)
   const [inspectorWidth, setInspectorWidth] = useState(256) // Content panel width (icon bar is 48px additional)
   const [timelineHeight, setTimelineHeight] = useState(320) // Default: enough room for track headers; persisted in localStorage
+  // Editor layout preset: 'default' | 'vertical' (tall preview column on the
+  // left — made for 9:16 work).
+  const [editorLayout, setEditorLayout] = useState('default')
+  const [verticalPreviewWidth, setVerticalPreviewWidth] = useState(420)
 
   // Min/max constraints
   const ICON_BAR_WIDTH = 48 // Fixed icon toolbar width
@@ -83,6 +87,8 @@ function App() {
   const MAX_INSPECTOR = 800 // Content panel max
   const MIN_TIMELINE = 180 // Accounts for transport controls (40px) + minimum timeline
   const MAX_TIMELINE = 900
+  const MIN_VERTICAL_PREVIEW = 280
+  const MAX_VERTICAL_PREVIEW = 1200
 
   const LAYOUT_STORAGE_KEY = 'comfystudio-editor-layout'
   const [comfyIframeUrl, setComfyIframeUrl] = useState(() => getLocalComfyHttpBaseSync())
@@ -333,6 +339,12 @@ function App() {
         }
         if (typeof saved.leftPanelExpanded === 'boolean') setLeftPanelExpanded(saved.leftPanelExpanded)
         if (typeof saved.inspectorExpanded === 'boolean') setInspectorExpanded(saved.inspectorExpanded)
+        if (saved.editorLayout === 'default' || saved.editorLayout === 'vertical') {
+          setEditorLayout(saved.editorLayout)
+        }
+        if (typeof saved.verticalPreviewWidth === 'number' && saved.verticalPreviewWidth >= MIN_VERTICAL_PREVIEW && saved.verticalPreviewWidth <= MAX_VERTICAL_PREVIEW) {
+          setVerticalPreviewWidth(saved.verticalPreviewWidth)
+        }
       }
     } catch (_) { /* ignore */ }
     setLayoutLoaded(true)
@@ -407,11 +419,14 @@ function App() {
 
   // Resize handlers
   const handleLeftPanelResize = useCallback((clientX) => {
-    const contentWidth = clientX - ICON_BAR_WIDTH
+    // In the vertical layout the preview column sits left of the panel, so
+    // the panel's left edge is offset by that column (plus its resize handle).
+    const layoutOffset = editorLayout === 'vertical' ? verticalPreviewWidth + 4 : 0
+    const contentWidth = clientX - layoutOffset - ICON_BAR_WIDTH
     const newWidth = Math.min(MAX_LEFT_PANEL, Math.max(MIN_LEFT_PANEL, contentWidth))
     setLeftPanelWidth(newWidth)
     persistLayout({ leftPanelWidth: newWidth })
-  }, [persistLayout])
+  }, [persistLayout, editorLayout, verticalPreviewWidth])
 
   const handleInspectorResize = useCallback((clientX) => {
     const contentWidth = window.innerWidth - clientX - ICON_BAR_WIDTH
@@ -424,6 +439,18 @@ function App() {
     const newHeight = Math.min(MAX_TIMELINE, Math.max(MIN_TIMELINE, window.innerHeight - clientY))
     setTimelineHeight(newHeight)
     persistLayout({ timelineHeight: newHeight })
+  }, [persistLayout])
+
+  const handleEditorLayoutChange = useCallback((mode) => {
+    if (mode !== 'default' && mode !== 'vertical') return
+    setEditorLayout(mode)
+    persistLayout({ editorLayout: mode })
+  }, [persistLayout])
+
+  const handleVerticalPreviewResize = useCallback((clientX) => {
+    const newWidth = Math.min(MAX_VERTICAL_PREVIEW, Math.max(MIN_VERTICAL_PREVIEW, clientX))
+    setVerticalPreviewWidth(newWidth)
+    persistLayout({ verticalPreviewWidth: newWidth })
   }, [persistLayout])
 
   const handleToggleLeftPanelExpanded = useCallback(() => {
@@ -482,10 +509,12 @@ function App() {
   return (
     <div className="relative h-screen flex flex-col bg-sf-dark-950 no-select">
       {/* Title Bar */}
-      <TitleBar 
-        projectName={currentProject?.name || 'Untitled'} 
+      <TitleBar
+        projectName={currentProject?.name || 'Untitled'}
         activeTab={mainTab}
         onTabChange={setMainTab}
+        editorLayout={editorLayout}
+        onEditorLayoutChange={handleEditorLayoutChange}
       />
 
       {showMediaPreparation && (
@@ -698,6 +727,24 @@ function App() {
           className="flex-1 flex min-h-0 overflow-hidden bg-sf-dark-950"
         >
           <>
+            {/* Vertical layout: full-height preview column on the far left
+                (9:16 work), with the transport directly under the viewer. */}
+            {editorLayout === 'vertical' && (
+              <>
+                <div style={{ width: verticalPreviewWidth }} className="flex-shrink-0 flex flex-col min-h-0">
+                  <div className="flex-1 min-h-0">
+                    <PreviewPanel />
+                  </div>
+                  <div className="flex-shrink-0 flex items-center justify-center py-1 border-t border-sf-dark-700">
+                    <TransportControls />
+                  </div>
+                </div>
+                <ResizeHandle
+                  direction="horizontal"
+                  onResize={handleVerticalPreviewResize}
+                />
+              </>
+            )}
             {/* Left Panel - Full Height Mode (spans entire left side) */}
             {leftPanelFullHeight && (
               <>
@@ -730,14 +777,18 @@ function App() {
             <div className="flex-1 flex flex-col min-w-0">
               {/* Upper Content Area - Preview + Inspector */}
               <div className="flex-1 flex overflow-hidden min-h-0">
-                {/* Left Panel - Normal Mode (only in upper area) */}
+                {/* Left Panel - Normal Mode (only in upper area). In the
+                    vertical layout the preview leaves this row, so an expanded
+                    panel stretches to use the freed width. */}
                 {!leftPanelFullHeight && (
                   <>
-                    <div 
-                      style={{ width: leftPanelExpanded ? ICON_BAR_WIDTH + leftPanelWidth : ICON_BAR_WIDTH }} 
-                      className="flex-shrink-0 transition-[width] duration-200 ease-out"
+                    <div
+                      style={editorLayout === 'vertical' && leftPanelExpanded
+                        ? undefined
+                        : { width: leftPanelExpanded ? ICON_BAR_WIDTH + leftPanelWidth : ICON_BAR_WIDTH }}
+                      className={`${editorLayout === 'vertical' && leftPanelExpanded ? 'flex-1 min-w-0' : 'flex-shrink-0'} transition-[width] duration-200 ease-out`}
                     >
-                      <LeftPanel 
+                      <LeftPanel
                         isActive={mainTab === 'editor'}
                         isExpanded={leftPanelExpanded}
                         onToggleExpanded={handleToggleLeftPanelExpanded}
@@ -748,25 +799,36 @@ function App() {
                         onSettingsClick={() => setSettingsModalOpen(true)}
                       />
                     </div>
-                    {/* Resize Handle - Left Panel (only when expanded) */}
-                    {leftPanelExpanded && (
-                      <ResizeHandle 
-                        direction="horizontal" 
+                    {/* Resize Handle - Left Panel (fixed width layouts only) */}
+                    {leftPanelExpanded && editorLayout !== 'vertical' && (
+                      <ResizeHandle
+                        direction="horizontal"
                         onResize={handleLeftPanelResize}
                       />
                     )}
+                    {editorLayout === 'vertical' && !leftPanelExpanded && (
+                      <div className="flex-1 min-w-0" />
+                    )}
                   </>
                 )}
-                
-                {/* Center - Preview */}
-                <div className="flex-1 min-w-0">
-                  <PreviewPanel />
-                </div>
-                
+
+                {/* Center - Preview (in the vertical layout it lives in the
+                    dedicated left column instead) */}
+                {editorLayout !== 'vertical' && (
+                  <div className="flex-1 min-w-0">
+                    <PreviewPanel />
+                  </div>
+                )}
+
+                {/* Vertical + full-height panel: keep the inspector pinned right */}
+                {editorLayout === 'vertical' && leftPanelFullHeight && (
+                  <div className="flex-1 min-w-0" />
+                )}
+
                 {/* Resize Handle - Inspector (only when expanded) */}
                 {inspectorExpanded && (
-                  <ResizeHandle 
-                    direction="horizontal" 
+                  <ResizeHandle
+                    direction="horizontal"
                     onResize={handleInspectorResize}
                   />
                 )}
@@ -785,14 +847,17 @@ function App() {
               </div>
               
               {/* Resize Handle - Timeline */}
-              <ResizeHandle 
-                direction="vertical" 
+              <ResizeHandle
+                direction="vertical"
                 onResize={handleTimelineResize}
               />
-              
+
               {/* Bottom Section - Transport (centered to viewer) + Timeline */}
               <div style={{ height: timelineHeight }} className="flex-shrink-0 w-full flex flex-col min-h-0">
-                {/* Transport row - same columns as Preview row so play button is centered under viewer */}
+                {/* Transport row - same columns as Preview row so play button
+                    is centered under viewer. The vertical layout renders the
+                    transport inside the preview column instead. */}
+                {editorLayout !== 'vertical' && (
                 <div className="flex-shrink-0 w-full flex min-h-0">
                   {!leftPanelFullHeight && (
                     <div
@@ -810,6 +875,7 @@ function App() {
                     aria-hidden
                   />
                 </div>
+                )}
                 {/* Bottom editor view switcher */}
                 <div className="flex-shrink-0 h-7 px-2 bg-sf-dark-900 border-y border-sf-dark-700 flex items-center justify-between">
                   <div className="flex items-center gap-1">

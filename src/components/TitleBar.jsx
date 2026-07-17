@@ -1,8 +1,13 @@
 import { Fragment, useEffect, useState } from 'react'
-import { Copy, Minus, Square, X } from 'lucide-react'
+import { Copy, LayoutTemplate, Minus, PanelLeft, Square, X } from 'lucide-react'
 import ComfyLauncherChip from './ComfyLauncherChip'
 import CreditsChip from './CreditsChip'
 import GenerationMonitorChip from './GenerationMonitorChip'
+
+const EDITOR_LAYOUTS = [
+  { id: 'default', Icon: LayoutTemplate, label: 'Default layout' },
+  { id: 'vertical', Icon: PanelLeft, label: 'Vertical layout — tall preview on the left, made for 9:16, 1:1, and other social formats' },
+]
 
 const TOP_TABS = [
   { id: 'editor', label: 'Editor' },
@@ -25,6 +30,8 @@ function TitleBar({
   projectName,
   activeTab = 'editor',
   onTabChange,
+  editorLayout = 'default',
+  onEditorLayoutChange,
 }) {
   const tabs = TOP_TABS.filter((tab) => !HIDDEN_TOP_TAB_IDS.has(tab.id))
   const [windowState, setWindowState] = useState({
@@ -123,6 +130,24 @@ function TitleBar({
       
       {/* Right - Launcher chip + Window Controls (Windows style) */}
       <div className="no-drag flex items-center">
+        {activeTab === 'editor' && onEditorLayoutChange && (
+          <div className="mr-2 flex items-center gap-0.5 rounded bg-sf-dark-800 p-0.5">
+            {EDITOR_LAYOUTS.map(({ id, Icon, label }) => (
+              <button
+                key={id}
+                onClick={() => onEditorLayoutChange(id)}
+                title={label}
+                className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${
+                  editorLayout === id
+                    ? 'bg-sf-accent/25 text-sf-accent'
+                    : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+              </button>
+            ))}
+          </div>
+        )}
         <CreditsChip size="xs" className="mr-1" />
         <GenerationMonitorChip onOpenGenerate={() => onTabChange?.('generate')} />
         <ComfyLauncherChip />
