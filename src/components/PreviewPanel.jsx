@@ -1415,7 +1415,9 @@ function PreviewPanel() {
     let fallback = null
     for (const el of container.querySelectorAll('[data-preview-popout-source]')) {
       if (el.tagName === 'VIDEO') {
-        if (el.videoWidth > 0) return el
+        // Mirror a video only when it is actually presenting (visible in the
+        // layout); a mounted-but-hidden video would freeze the popped-out feed.
+        if (el.videoWidth > 0 && el.offsetParent !== null) return el
       } else if (!fallback) {
         fallback = el
       }
@@ -1426,6 +1428,82 @@ function PreviewPanel() {
     getSourceElement: getPopoutSourceElement,
     onTogglePlay: togglePlay,
   })
+
+  // Playback fps meter (Info overlay). The compositor bumps counters in
+  // playbackStatsRef on every committed frame; this side samples them on an
+  // interval and writes straight to the badge DOM node — a React state update
+  // per frame would cost the fps it is trying to measure.
+  const playbackStatsRef = useRef({ commits: 0, presented: 0, lastFrameIndex: -1 })
+  const fpsBadgeRef = useRef(null)
+  const fpsSessionRef = useRef({ expected: 0, basePresented: 0, skipped: 0 })
+  useEffect(() => {
+    if (previewMode !== 'timeline' || !showInfoOverlay) return undefined
+    const stats = playbackStatsRef.current
+    const targetFps = timelineSettings?.fps || timelineFps || 30
+    if (isPlaying) {
+      fpsSessionRef.current = { expected: 0, basePresented: stats.presented, skipped: 0 }
+    }
+    let prev = { presented: stats.presented, video: null, t: performance.now() }
+    const tick = () => {
+      const el = fpsBadgeRef.current
+      if (!el) return
+      const now = performance.now()
+      const dt = (now - prev.t) / 1000
+      // Never compute over a tiny window (an effect restart's first tick):
+      // a near-zero dt reads as 0 presented frames and paints a false 0.0.
+      if (dt < 0.25) return
+      const session = fpsSessionRef.current
+      let measuredFps = null
+      // Cached-chunk playback bypasses the compositor: measure the <video>
+      // element itself (decoded frame count + decoder-reported drops). Only
+      // trust a video that is visible AND playing — a mounted-but-idle video
+      // (cached chunk standing by) would report 0 new frames forever while
+      // the canvas does the real presenting.
+      const chunkVideo = containerRef.current?.querySelector('video[data-preview-popout-source]')
+      const chunkVideoActive = chunkVideo
+        && chunkVideo.videoWidth > 0
+        && chunkVideo.offsetParent !== null
+        && !chunkVideo.paused
+        && typeof chunkVideo.getVideoPlaybackQuality === 'function'
+      if (chunkVideoActive) {
+        const quality = chunkVideo.getVideoPlaybackQuality()
+        if (prev.video) {
+          measuredFps = Math.max(0, (quality.totalVideoFrames - prev.video.total) / dt)
+          session.skipped += Math.max(0, quality.droppedVideoFrames - prev.video.dropped)
+        }
+        prev.video = { total: quality.totalVideoFrames, dropped: quality.droppedVideoFrames }
+      } else {
+        prev.video = null
+        measuredFps = Math.max(0, (stats.presented - prev.presented) / dt)
+        if (isPlaying) {
+          session.expected += dt * targetFps
+          session.skipped = Math.max(0, Math.round(session.expected - (stats.presented - session.basePresented)))
+        }
+      }
+      prev.presented = stats.presented
+      prev.t = now
+      // Raw counters in the tooltip for diagnosing a dead meter: commits=0
+      // means the compositor hook isn't running at all; commits>0 with
+      // presented=0 means frames commit but the frame index never advances.
+      if (el.parentElement) {
+        el.parentElement.title = `commits ${stats.commits} · presented ${stats.presented} · target ${targetFps}fps · src ${chunkVideoActive ? 'video' : 'canvas'}`
+      }
+      if (!isPlaying) {
+        el.textContent = '— fps'
+        el.style.color = 'rgba(255,255,255,0.35)'
+      } else if (measuredFps != null) {
+        el.textContent = `${measuredFps.toFixed(1)} fps${session.skipped > 0 ? ` · ${session.skipped} skipped` : ''}`
+        el.style.color = measuredFps >= targetFps * 0.97
+          ? '#4ade80'
+          : (measuredFps >= targetFps * 0.8 ? '#fbbf24' : '#f87171')
+      }
+    }
+    const intervalId = setInterval(tick, 500)
+    return () => clearInterval(intervalId)
+    // timelineSettings is a fresh object every render — depending on it would
+    // restart this effect (and kill the interval) on every playback repaint.
+    // Depend on the fps primitive instead.
+  }, [previewMode, showInfoOverlay, isPlaying, timelineSettings?.fps, timelineFps])
 
   // Check if we have content to show
   const hasContent = previewMode === 'timeline' 
@@ -2430,6 +2508,7 @@ function PreviewPanel() {
                       timelineFps={timelineSettings?.fps || timelineFps || 30}
                       onClipPointerDown={handlePreviewClipPointerDown}
                       onClipDoubleClick={handlePreviewTextDoubleClick}
+                      playbackStatsRef={playbackStatsRef}
                     />
                   </>
                 )}
@@ -2448,6 +2527,12 @@ function PreviewPanel() {
                           {timelineSettings.width}×{timelineSettings.height} @ {timelineSettings.fps}fps
                         </div>
                       )}
+                      {/* Live playback fps (updated via DOM ref, not state).
+                          pointer-events-auto: the overlay container disables
+                          pointer events, which would make the tooltip unreachable. */}
+                      <div className="px-2 py-1 bg-sf-dark-900/80 rounded text-xs font-mono tabular-nums pointer-events-auto" title="Playback frame rate: unique frames presented per second vs the timeline rate. Skipped counts frames the current play session missed.">
+                        <span ref={fpsBadgeRef} style={{ color: 'rgba(255,255,255,0.35)' }}>— fps</span>
+                      </div>
                       {activeLayerClips.length > 1 ? (
                         // Show layer count in multi-layer mode
                         <div className="px-2 py-1 bg-green-600/80 rounded text-xs text-white">

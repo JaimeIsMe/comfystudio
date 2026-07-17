@@ -364,6 +364,7 @@ function CanvasPreviewRenderer({
   timelineFps = 30,
   onClipPointerDown,
   onClipDoubleClick,
+  playbackStatsRef = null,
 }) {
   const canvasRef = useRef(null)
   const imageCacheRef = useRef(new Map())
@@ -1486,6 +1487,19 @@ function CanvasPreviewRenderer({
     // commit (post-edit) rather than a stale frame at the same time.
     lastCommittedFrameTimeRef.current = time
     frameCommitSerialRef.current += 1
+    // Playback fps meter: `presented` counts unique timeline frames committed
+    // (a 60Hz commit loop on a 24fps timeline presents 24/s). Counted
+    // unconditionally — the badge only displays while playing, and gating on
+    // play state here would tie the meter to where that flag happens to live.
+    const playbackStats = playbackStatsRef?.current
+    if (playbackStats) {
+      playbackStats.commits += 1
+      const frameIndex = Math.floor(time * fps + 0.000001)
+      if (frameIndex !== playbackStats.lastFrameIndex) {
+        playbackStats.lastFrameIndex = frameIndex
+        playbackStats.presented += 1
+      }
+    }
     if (loopSeekHoldActive) {
       loopSeekHoldUntilRef.current = 0
     }
