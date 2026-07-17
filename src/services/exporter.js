@@ -2762,6 +2762,26 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         path: asset.path || null,
         url: asset.url || null,
       }))
+      const countExpectedMixClips = (clips) => clips.filter((clip) => {
+        if (clip.reverse) return false // Reverse audio is intentionally silent.
+        const clipStart = Number(clip.startTime) || 0
+        const clipDuration = Math.max(0, Number(clip.duration) || 0)
+        return clipDuration > 0 && clipStart < rangeEnd && clipStart + clipDuration > rangeStart
+      }).length
+      console.log('[audio-mix] export payload', JSON.stringify({
+        rangeStart,
+        rangeEnd,
+        totalDuration,
+        activeTrackIds: activeTracks.map(track => track.id),
+        clips: eligibleAudioClips.map(clip => ({
+          id: clip.id,
+          trackId: clip.trackId,
+          startTime: clip.startTime,
+          duration: clip.duration,
+          trimStart: clip.trimStart || 0,
+          assetId: clip.assetId,
+        })),
+      }))
 
       // Parses the RIFF/WAVE files our own FFmpeg stem mixes produce
       // (pcm_s16le, with float32 tolerated) into an AudioBuffer WITHOUT
@@ -2881,6 +2901,12 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
             if (!stemResult?.success) {
               throw new Error(stemResult?.error || `Stem mix failed for track ${track.id}`)
             }
+            const expectedStemClipCount = countExpectedMixClips(trackClips)
+            if (stemResult.clipCount !== expectedStemClipCount) {
+              throw new Error(
+                `Stem mix for ${track.name || track.id} included ${stemResult.clipCount || 0} of ${expectedStemClipCount} clips`
+              )
+            }
             stemPaths.push(stemPath)
             const readResult = await window.electronAPI.readFileAsBuffer(stemPath)
             if (!readResult?.success || !readResult.data) {
@@ -2914,6 +2940,12 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
             const decodeStart = Date.now()
             const stemBuffer = parseWavToAudioBuffer(arrayBuffer, offlineContext)
             console.log(`[mixerfx] parsed in ${Date.now() - decodeStart}ms: ${stemBuffer.duration.toFixed(2)}s ${stemBuffer.numberOfChannels}ch @ ${stemBuffer.sampleRate}Hz`)
+            const stemDurationTolerance = Math.max(2 / sampleRate, 0.002)
+            if (stemBuffer.duration + stemDurationTolerance < totalDuration) {
+              throw new Error(
+                `Stem for ${stem.track.name || stem.track.id} is incomplete (${stemBuffer.duration.toFixed(3)}s of ${totalDuration.toFixed(3)}s)`
+              )
+            }
             const source = offlineContext.createBufferSource()
             source.buffer = stemBuffer
             const trackChain = buildInsertChain(offlineContext, stem.track.inserts)
@@ -2961,9 +2993,12 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       }
 
       // Preferred path: mix in main process with FFmpeg (avoids renderer OfflineAudioContext hangs).
+      let mainProcessMixAttempted = false
+      let mainProcessMixError = null
       if (!audioFilePath && window.electronAPI?.mixAudio && eligibleAudioClips.length > 0) {
         let ffmpegMixHeartbeat = null
         try {
+          mainProcessMixAttempted = true
           updateAudioStatus('Preparing FFmpeg audio mix…', 82)
           ffmpegMixHeartbeat = setInterval(() => {
             updateAudioStatus('Mixing audio…', 86)
@@ -2991,8 +3026,15 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
               })),
             assets: serializeAssetsForMix(),
           })
+          console.log('[audio-mix] FFmpeg result', JSON.stringify(mixResult))
           if (ffmpegMixHeartbeat) clearInterval(ffmpegMixHeartbeat)
           if (mixResult?.success) {
+            const expectedMixClipCount = countExpectedMixClips(eligibleAudioClips)
+            if (mixResult.clipCount !== expectedMixClipCount) {
+              throw new Error(
+                `Audio mix included ${mixResult.clipCount || 0} of ${expectedMixClipCount} clips`
+              )
+            }
             audioFilePath = audioPath
             updateAudioStatus('Audio mix complete', 89)
           } else {
@@ -3000,13 +3042,21 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
           }
         } catch (err) {
           if (ffmpegMixHeartbeat) clearInterval(ffmpegMixHeartbeat)
-          console.warn('FFmpeg audio mix failed, falling back to WebAudio mix:', err)
+          console.warn('FFmpeg audio mix failed:', err)
+          mainProcessMixError = err
           audioFilePath = null
         }
       }
 
       // Fallback path for environments where FFmpeg mix IPC is unavailable.
       if (!audioFilePath) {
+        // Chromium's native decoder can crash the hidden export renderer on
+        // ordinary FLAC/WAV inputs (0xC0000005). When main-process FFmpeg was
+        // available but failed, surface that failure instead of entering the
+        // unsafe decoder fallback and taking the worker down.
+        if (mainProcessMixAttempted) {
+          throw new Error(mainProcessMixError?.message || 'Main-process audio mix failed.')
+        }
         const totalSamples = Math.ceil(totalDuration * sampleRate)
         const offlineContext = new OfflineAudioContext(channelCount, totalSamples, sampleRate)
         const decodedAudioCache = new Map()

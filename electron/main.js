@@ -189,6 +189,35 @@ async function probeVideoInfo(filePath) {
   })
 }
 
+async function probeAudioDurationSeconds(filePath) {
+  if (!ffprobePath || !filePath) return null
+  return await new Promise((resolve) => {
+    const proc = spawn(ffprobePath, [
+      '-v', 'error',
+      '-select_streams', 'a:0',
+      '-show_entries', 'stream=duration:format=duration',
+      '-of', 'json',
+      filePath,
+    ], { windowsHide: true })
+    let stdout = ''
+    proc.stdout.on('data', (data) => { stdout += data.toString() })
+    proc.on('error', () => resolve(null))
+    proc.on('close', (code) => {
+      if (code !== 0) return resolve(null)
+      try {
+        const parsed = JSON.parse(stdout)
+        const streamDuration = Number(parsed?.streams?.[0]?.duration)
+        const formatDuration = Number(parsed?.format?.duration)
+        resolve(Number.isFinite(streamDuration)
+          ? streamDuration
+          : (Number.isFinite(formatDuration) ? formatDuration : null))
+      } catch {
+        resolve(null)
+      }
+    })
+  })
+}
+
 async function writeFileAtomic(filePath, data, options) {
   const dir = path.dirname(filePath)
   await fs.mkdir(dir, { recursive: true })
@@ -5536,10 +5565,12 @@ ipcMain.handle('export:mixAudio', async (event, options = {}) => {
   const inputFilters = []
   const mixLabels = []
   preparedInputs.forEach((entry, index) => {
+    // No atempo at unity rate: ffmpeg 6.1.1 amix silently truncates the whole
+    // mix at input 0's delay when that input's chain has atempo before adelay.
     const filters = [
       `atrim=start=${formatFilterNumber(entry.sourceOffsetSec)}:duration=${formatFilterNumber(entry.sourceDurationSec)}`,
       'asetpts=PTS-STARTPTS',
-      ...buildAtempoFilterChain(entry.timeScale),
+      ...(Math.abs(entry.timeScale - 1) > 0.000001 ? buildAtempoFilterChain(entry.timeScale) : []),
     ]
 
     if (entry.forceMono) {
@@ -5580,9 +5611,23 @@ ipcMain.handle('export:mixAudio', async (event, options = {}) => {
   // normalize=0: sum inputs as-is. amix's default input normalization would
   // duck the mix as the number of live inputs changes — the preview graph
   // (and the OfflineAudioContext fallback) sum without scaling.
-  const finalMixFilter = mixLabels.length === 1
-    ? `${mixLabels[0]}atrim=duration=${formatFilterNumber(totalDuration)},asetpts=PTS-STARTPTS${masterFilter}[outa]`
-    : `${mixLabels.join('')}amix=inputs=${mixLabels.length}:duration=longest:dropout_transition=0:normalize=0,atrim=duration=${formatFilterNumber(totalDuration)},asetpts=PTS-STARTPTS${masterFilter}[outa]`
+  // A timeline mix must always span the complete delivery range. atrim only
+  // shortens audio; it does not append silence. Without apad, sparse stems can
+  // end before their delayed clips and are then started at zero by the Web
+  // Audio insert-effects pass, which drops later cues and reverb tails.
+  const padAndTrim = `apad=whole_dur=${formatFilterNumber(totalDuration)},atrim=duration=${formatFilterNumber(totalDuration)},asetpts=PTS-STARTPTS`
+  // Keep a generated full-range silence bed in the graph. It contributes no
+  // sound, but makes the output duration deterministic for sparse and delayed
+  // clips even when an input decoder reports an early EOF timestamp.
+  // The bed must be amix input 0: the ffmpeg 6.1.1 truncation bug keys off the
+  // FIRST input's chain, and the bed (no atempo/adelay) can never trigger it —
+  // this also shields speed-ramped clips, which legitimately keep atempo.
+  const silenceLabel = 'mixsilence'
+  inputFilters.push(
+    `anullsrc=r=${normalizedSampleRate}:cl=${normalizedChannels === 1 ? 'mono' : 'stereo'}:d=${formatFilterNumber(totalDuration)}[${silenceLabel}]`
+  )
+  const allMixLabels = [`[${silenceLabel}]`, ...mixLabels]
+  const finalMixFilter = `${allMixLabels.join('')}amix=inputs=${allMixLabels.length}:duration=longest:dropout_transition=0:normalize=0,${padAndTrim}${masterFilter}[outa]`
   const filterComplex = `${inputFilters.join(';')};${finalMixFilter}`
 
   args.push(
@@ -5612,14 +5657,31 @@ ipcMain.handle('export:mixAudio', async (event, options = {}) => {
       resolve({ success: false, error: err.message })
     })
 
-    ffmpeg.on('close', (code) => {
+    ffmpeg.on('close', async (code) => {
       clearTimeout(timeoutHandle)
       if (killedByTimeout) {
         resolve({ success: false, error: `Audio mix timed out after ${Math.round(normalizedTimeout / 1000)}s` })
         return
       }
       if (code === 0) {
-        resolve({ success: true, clipCount: preparedInputs.length })
+        const outputDuration = await probeAudioDurationSeconds(outputPath)
+        const durationTolerance = Math.max(0.02, 2 / normalizedSampleRate)
+        if (Number.isFinite(outputDuration) && outputDuration + durationTolerance < totalDuration) {
+          resolve({
+            success: false,
+            error: `Audio mix ended early at ${outputDuration.toFixed(3)}s (expected ${totalDuration.toFixed(3)}s).`,
+            clipCount: preparedInputs.length,
+            outputDuration,
+            expectedDuration: totalDuration,
+          })
+          return
+        }
+        resolve({
+          success: true,
+          clipCount: preparedInputs.length,
+          outputDuration,
+          expectedDuration: totalDuration,
+        })
         return
       }
       resolve({ success: false, error: stderr || `FFmpeg exited with code ${code}` })
@@ -6114,9 +6176,28 @@ ipcMain.handle('export:muxAudioVideo', async (event, options = {}) => {
       resolve({ success: false, error: err.message })
     })
 
-    ffmpeg.on('close', (code) => {
+    ffmpeg.on('close', async (code) => {
       if (code === 0) {
-        resolve({ success: true })
+        const outputDuration = audioPath
+          ? await probeAudioDurationSeconds(outputPath)
+          : null
+        const expectedDuration = Number(duration)
+        const durationTolerance = 0.05
+        if (
+          audioPath
+          && Number.isFinite(expectedDuration)
+          && Number.isFinite(outputDuration)
+          && outputDuration + durationTolerance < expectedDuration
+        ) {
+          resolve({
+            success: false,
+            error: `Muxed audio ended early at ${outputDuration.toFixed(3)}s (expected ${expectedDuration.toFixed(3)}s).`,
+            outputDuration,
+            expectedDuration,
+          })
+          return
+        }
+        resolve({ success: true, outputDuration, expectedDuration })
       } else {
         resolve({ success: false, error: stderr || `FFmpeg exited with code ${code}` })
       }
