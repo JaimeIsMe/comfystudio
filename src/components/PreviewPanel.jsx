@@ -1482,17 +1482,17 @@ function PreviewPanel() {
       }
       prev.presented = stats.presented
       prev.t = now
-      // Raw counters in the tooltip for diagnosing a dead meter: commits=0
-      // means the compositor hook isn't running at all; commits>0 with
-      // presented=0 means frames commit but the frame index never advances.
+      // The badge shows only fps; the skipped count lives here in the
+      // tooltip so diagnosis stays possible without a number on screen
+      // inviting complaints.
       if (el.parentElement) {
-        el.parentElement.title = `commits ${stats.commits} · presented ${stats.presented} · target ${targetFps}fps · src ${chunkVideoActive ? 'video' : 'canvas'}`
+        el.parentElement.title = `Playback frame rate (target ${targetFps}fps) · ${session.skipped} skipped this play`
       }
       if (!isPlaying) {
         el.textContent = '— fps'
         el.style.color = 'rgba(255,255,255,0.35)'
       } else if (measuredFps != null) {
-        el.textContent = `${measuredFps.toFixed(1)} fps${session.skipped > 0 ? ` · ${session.skipped} skipped` : ''}`
+        el.textContent = `${measuredFps.toFixed(1)} fps`
         el.style.color = measuredFps >= targetFps * 0.97
           ? '#4ade80'
           : (measuredFps >= targetFps * 0.8 ? '#fbbf24' : '#f87171')
@@ -2530,7 +2530,7 @@ function PreviewPanel() {
                       {/* Live playback fps (updated via DOM ref, not state).
                           pointer-events-auto: the overlay container disables
                           pointer events, which would make the tooltip unreachable. */}
-                      <div className="px-2 py-1 bg-sf-dark-900/80 rounded text-xs font-mono tabular-nums pointer-events-auto" title="Playback frame rate: unique frames presented per second vs the timeline rate. Skipped counts frames the current play session missed.">
+                      <div className="px-2 py-1 bg-sf-dark-900/80 rounded text-xs font-mono tabular-nums pointer-events-auto" title="Playback frame rate vs the timeline target">
                         <span ref={fpsBadgeRef} style={{ color: 'rgba(255,255,255,0.35)' }}>— fps</span>
                       </div>
                       {activeLayerClips.length > 1 ? (
