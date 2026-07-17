@@ -525,6 +525,15 @@ function Timeline({ onActiveToolChange }) {
   const TRACK_HEIGHT_MIN = 32
   const TRACK_HEIGHT_MAX = 220
   const TRACK_HEIGHTS_STORAGE_KEY = 'comfystudio-timeline-track-heights-v1'
+  const TRACK_HEIGHT_PRESET_STORAGE_KEY = 'comfystudio-timeline-track-height-preset'
+  // Per-type heights for each preset. 'normal' matches the classic defaults;
+  // compact flattens everything to the minimum so dense timelines fit on
+  // screen; new tracks follow the active preset via getDefaultTrackHeight.
+  const TRACK_HEIGHT_PRESETS = {
+    compact: { video: TRACK_HEIGHT_MIN, mono: TRACK_HEIGHT_MIN, stereo: TRACK_HEIGHT_MIN },
+    normal: { video: VIDEO_TRACK_HEIGHT_DEFAULT, mono: AUDIO_TRACK_HEIGHT_MONO_DEFAULT, stereo: AUDIO_TRACK_HEIGHT_STEREO_DEFAULT },
+    tall: { video: 80, mono: 64, stereo: 128 },
+  }
   const [trackHeadersWidth, setTrackHeadersWidth] = useState(() => {
     try {
       const w = localStorage.getItem(TRACK_HEADERS_STORAGE_KEY)
@@ -555,11 +564,28 @@ function Timeline({ onActiveToolChange }) {
     } catch (_) {}
     return TIMELINE_TOOLS.AUTO
   })
+  const [trackHeightPreset, setTrackHeightPreset] = useState(() => {
+    try {
+      const saved = localStorage.getItem(TRACK_HEIGHT_PRESET_STORAGE_KEY)
+      if (saved && TRACK_HEIGHT_PRESETS[saved]) return saved
+    } catch (_) {}
+    return 'normal'
+  })
 
   const getDefaultTrackHeight = (track) => {
-    if (!track) return VIDEO_TRACK_HEIGHT_DEFAULT
-    if (track.type === 'video') return VIDEO_TRACK_HEIGHT_DEFAULT
-    return track.channels === 'mono' ? AUDIO_TRACK_HEIGHT_MONO_DEFAULT : AUDIO_TRACK_HEIGHT_STEREO_DEFAULT
+    const preset = TRACK_HEIGHT_PRESETS[trackHeightPreset] || TRACK_HEIGHT_PRESETS.normal
+    if (!track) return preset.video
+    if (track.type === 'video') return preset.video
+    return track.channels === 'mono' ? preset.mono : preset.stereo
+  }
+
+  // Switching presets clears per-track drag overrides so the result is
+  // uniform; individual tracks can still be dragged afterward.
+  const applyTrackHeightPreset = (presetName) => {
+    if (!TRACK_HEIGHT_PRESETS[presetName]) return
+    setTrackHeightPreset(presetName)
+    setTrackHeights({})
+    try { localStorage.setItem(TRACK_HEIGHT_PRESET_STORAGE_KEY, presetName) } catch (_) {}
   }
 
   const getTrackHeight = (track) => {
@@ -4924,6 +4950,27 @@ function Timeline({ onActiveToolChange }) {
           >
             <Maximize2 className="w-3.5 h-3.5" />
           </button>
+          {/* Track height presets */}
+          <div className="flex items-center gap-0.5 mr-2">
+            {[
+              ['compact', 'S', 'Compact tracks — fit the most tracks on screen'],
+              ['normal', 'M', 'Normal track height'],
+              ['tall', 'L', 'Tall tracks — room for waveforms and keyframes'],
+            ].map(([id, label, tip]) => (
+              <button
+                key={id}
+                onClick={() => applyTrackHeightPreset(id)}
+                title={tip}
+                className={`w-5 h-5 flex items-center justify-center rounded text-[10px] transition-colors ${
+                  trackHeightPreset === id
+                    ? 'bg-sf-accent/20 text-sf-accent border border-sf-accent/40'
+                    : 'text-sf-text-muted hover:bg-sf-dark-600'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <div className="flex items-center gap-1">
             <button
               onClick={() => applyZoomWithPlayheadPivot(zoom - 50)}
