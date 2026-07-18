@@ -1247,6 +1247,22 @@ function AssetsPanel({ isActive = true }) {
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
   }, [selectedAssetIds, editingId, removeAsset, requestConfirm, confirmDialog, clearTimelineSelection, deleteAssetFilesOnly, shouldDeleteFromDisk])
+
+  // After an asset is dropped onto the timeline, the source tile still holds
+  // panel selection and keyboard focus, so the next Delete press would ask to
+  // delete the ASSET instead of the just-placed clip. Release both — the
+  // timeline selected the new clip on drop, so Delete then targets that.
+  useEffect(() => {
+    const handleTimelineAssetsDropped = () => {
+      setSelectedAssetIds([])
+      const active = document.activeElement
+      if (active && panelRef.current?.contains(active) && typeof active.blur === 'function') {
+        active.blur()
+      }
+    }
+    window.addEventListener('comfystudio-timeline-assets-dropped', handleTimelineAssetsDropped)
+    return () => window.removeEventListener('comfystudio-timeline-assets-dropped', handleTimelineAssetsDropped)
+  }, [])
   
   // Handle folder click
   const handleFolderClick = (folderId) => {

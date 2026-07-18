@@ -3416,6 +3416,10 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
       if (assetIsPlaying) {
         setAssetIsPlaying(false)
       }
+      // Tell the assets panel to release its selection and focus: after a
+      // drop it still owns both, which hijacks the next Delete press into
+      // "delete asset?" instead of deleting the just-placed clip.
+      try { window.dispatchEvent(new Event('comfystudio-timeline-assets-dropped')) } catch (_) { /* non-browser */ }
     }
   }
 
