@@ -2480,6 +2480,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         ...(clip.textProperties || {}),
         duration: remainder,
         enabled: isClipEnabled(clip),
+        effects: clip.effects,
         saveHistory: false,
       }
       return addTextClip(clip.trackId, textOptions, splitPosition)
@@ -2492,6 +2493,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         name: clip.name,
         transform: clip.transform || {},
         enabled: isClipEnabled(clip),
+        effects: clip.effects,
         saveHistory: false,
       }, splitPosition)
     }
@@ -2503,6 +2505,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         adjustments: clip.adjustments || {},
         transform: clip.transform || {},
         enabled: isClipEnabled(clip),
+        effects: clip.effects,
         saveHistory: false,
       })
     }
@@ -2516,6 +2519,8 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
       trimStart: sourceTimeAtCut,
       trimEnd: sourceTrimEnd,
       enabled: isClipEnabled(clip),
+      transform: clip.transform,
+      effects: clip.effects,
       ...(clip.type === 'audio'
         ? {
             gainDb: clip.gainDb,
@@ -3581,7 +3586,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
       case 'duplicate':
         // Duplicate clip right after current position
         if (clip.type === 'text') {
-          const textOptions = { ...(clip.textProperties || {}), duration: clip.duration, enabled: isClipEnabled(clip) }
+          const textOptions = { ...(clip.textProperties || {}), duration: clip.duration, enabled: isClipEnabled(clip), effects: clip.effects }
           addTextClip(clip.trackId, textOptions, clip.startTime + clip.duration + 0.1)
         } else if (clip.type === 'shape') {
           addShapeClip(clip.trackId, {
@@ -3590,6 +3595,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
             name: clip.name,
             transform: clip.transform || {},
             enabled: isClipEnabled(clip),
+            effects: clip.effects,
           }, clip.startTime + clip.duration + 0.1)
         } else if (clip.type === 'adjustment') {
           addAdjustmentClip(clip.trackId, clip.startTime + clip.duration + 0.1, {
@@ -3598,12 +3604,18 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
             adjustments: clip.adjustments || {},
             transform: clip.transform || {},
             enabled: isClipEnabled(clip),
+            effects: clip.effects,
           })
         } else {
           const asset = assets.find(a => a.id === clip.assetId)
           if (asset) {
             addClip(clip.trackId, asset, clip.startTime + clip.duration + 0.1, timelineFps, {
+              duration: clip.duration,
+              trimStart: clip.trimStart,
+              trimEnd: clip.trimEnd,
               enabled: isClipEnabled(clip),
+              transform: clip.transform,
+              effects: clip.effects,
               ...(clip.type === 'audio'
                 ? {
                     gainDb: clip.gainDb,

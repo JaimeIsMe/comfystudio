@@ -1117,6 +1117,11 @@ export const useTimelineStore = create(
         ...(optionTransform || {}),
         blendMode: optionTransform?.blendMode ?? assetDefaultTransform?.blendMode ?? 'normal',
       },
+      // Carry an effects stack through split/duplicate — otherwise the new
+      // half/copy silently loses its GLSL effects.
+      ...(Array.isArray(options?.effects) && options.effects.length > 0
+        ? { effects: structuredClone(options.effects) }
+        : {}),
     }, fps), fps)
     
     // Resolve overlaps with existing clips on the same track (NLE overwrite behavior)
@@ -1211,6 +1216,9 @@ export const useTimelineStore = create(
       thumbnail: null,
       // Text-specific properties
       textProperties: defaultText,
+      ...(Array.isArray(textOptions?.effects) && textOptions.effects.length > 0
+        ? { effects: structuredClone(textOptions.effects) }
+        : {}),
       // Metadata for preset-based text title animation
       titleAnimation: null,
       // 2D Transform properties (same as video clips)
@@ -1311,6 +1319,9 @@ export const useTimelineStore = create(
         ...(shapeOptions.transform || {}),
         blendMode: shapeOptions.transform?.blendMode ?? 'normal',
       },
+      ...(Array.isArray(shapeOptions?.effects) && shapeOptions.effects.length > 0
+        ? { effects: structuredClone(shapeOptions.effects) }
+        : {}),
     }
 
     const { clips: updatedClips, addedCount } = get().resolveOverlaps(
@@ -1381,6 +1392,9 @@ export const useTimelineStore = create(
         ...(options?.transform || {}),
         blendMode: options?.transform?.blendMode ?? 'normal',
       },
+      ...(Array.isArray(options?.effects) && options.effects.length > 0
+        ? { effects: structuredClone(options.effects) }
+        : {}),
     }
 
     const { clips: updatedClips, addedCount } = get().resolveOverlaps(
