@@ -9,6 +9,7 @@ import {
   buildCssFilterFromAdjustments,
   hasAdjustmentEffect,
   hasTonalAdjustmentEffect,
+  hasTransformingAdjustmentTransform,
   normalizeAdjustmentSettings,
 } from '../utils/adjustments'
 import { applyAdjustmentSettingsToCanvasGpu } from '../utils/adjustmentsGpu'
@@ -1159,8 +1160,12 @@ function CanvasPreviewRenderer({
     const clipTransform = applyEffectsToTransform(baseTransform, clip.effects, clipTime)
     const usesManagedEffects = hasManagedCanvasEffect(clip, clipTime)
     const adjustmentIsActive = hasAdjustmentEffect(adjustmentSettings)
+    // A transform-only adjustment layer (e.g. scale 110% to push everything
+    // in) still composites: it draws the transformed stage copy back over
+    // the stage, matching Premiere-style adjustment-layer transforms.
+    const transformIsActive = hasTransformingAdjustmentTransform(clipTransform)
     const glslQualityScale = getGlslPreviewQualityScale(state.glslPreviewQuality)
-    if (!adjustmentIsActive && !usesManagedEffects) return
+    if (!adjustmentIsActive && !usesManagedEffects && !transformIsActive) return
 
     // GPU compositor path: fully native adjustment layer (color/tonal/blur
     // grade of the stage + managed chain), mirroring the exporter.

@@ -200,6 +200,38 @@ export function hasAdjustmentEffect(settings = {}) {
     || hasTonalAdjustmentEffect(normalized)
 }
 
+// True when an adjustment clip's transform would visibly change the layers
+// beneath it (scale/position/rotation/crop/flip or a non-normal blend of the
+// stage copy over itself). A transform-only adjustment layer must still
+// composite — the renderers skip inactive adjustment clips entirely, and
+// gating only on color/effects made "scale everything with one adjustment
+// layer" silently do nothing. Opacity alone is excluded: a partial-alpha
+// copy of the stage over the identical stage is a visual no-op.
+export function hasTransformingAdjustmentTransform(transform = {}) {
+  const epsilon = 0.001
+  const differs = (value, base) => {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) && Math.abs(parsed - base) > epsilon
+  }
+  return (
+    differs(transform.positionX, 0)
+    || differs(transform.positionY, 0)
+    || differs(transform.positionZ, 0)
+    || differs(transform.scaleX, 100)
+    || differs(transform.scaleY, 100)
+    || differs(transform.rotation, 0)
+    || differs(transform.rotationX, 0)
+    || differs(transform.rotationY, 0)
+    || differs(transform.cropTop, 0)
+    || differs(transform.cropBottom, 0)
+    || differs(transform.cropLeft, 0)
+    || differs(transform.cropRight, 0)
+    || transform.flipH === true
+    || transform.flipV === true
+    || (typeof transform.blendMode === 'string' && transform.blendMode !== 'normal')
+  )
+}
+
 export function scaleAdjustmentSettings(settings = {}, factor = 1) {
   const normalized = normalizeAdjustmentSettings(settings)
   const clampedFactor = Math.max(0, Number.isFinite(Number(factor)) ? Number(factor) : 1)

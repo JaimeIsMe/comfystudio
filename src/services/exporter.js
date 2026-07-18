@@ -7,6 +7,7 @@ import {
   buildCssFilterFromAdjustments,
   hasAdjustmentEffect,
   hasTonalAdjustmentEffect,
+  hasTransformingAdjustmentTransform,
   normalizeAdjustmentSettings,
 } from '../utils/adjustments'
 import { getAudioClipFadeGain, getAudioClipFadeValues } from '../utils/audioClipFades'
@@ -1580,9 +1581,13 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         const clipTransform = scaleTransformToExport(applyEffectsToTransform(baseClipTransform, clip.effects, clipTime))
         const usesManagedPixelEffects = hasManagedPixelOrVignetteEffect(clip, clipTime)
         const adjustmentIsActive = hasAdjustmentEffect(adjustmentSettings)
+        // Transform-only adjustment layers must still composite (they draw
+        // the transformed stage copy back over the stage) — export parity
+        // with the preview renderer.
+        const transformIsActive = hasTransformingAdjustmentTransform(clipTransform)
 
         if (gpu) {
-          if (!adjustmentIsActive && !usesManagedPixelEffects) continue
+          if (!adjustmentIsActive && !usesManagedPixelEffects && !transformIsActive) continue
           const rect = getBaseDrawRect(width, height, width, height)
           const corners = getClipQuadCorners(rect, clipTransform, null)
           if (!corners) continue
@@ -1604,7 +1609,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
           continue
         }
 
-        if (adjustmentCtx && (adjustmentIsActive || usesManagedPixelEffects)) {
+        if (adjustmentCtx && (adjustmentIsActive || usesManagedPixelEffects || transformIsActive)) {
           const usesTonalAdjustments = hasTonalAdjustmentEffect(adjustmentSettings)
           let adjustmentOutputCanvas = null
 
@@ -1622,9 +1627,10 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
               adjustmentCtx.restore()
               adjustmentOutputCanvas = adjustmentCanvas
             }
-          } else if (usesManagedPixelEffects) {
-            // No color adjustment but there are managed effects to apply to
-            // the composited layers beneath this adjustment clip.
+          } else if (usesManagedPixelEffects || transformIsActive) {
+            // No color adjustment, but either managed effects apply to the
+            // stage snapshot, or a transform-only adjustment draws the plain
+            // snapshot back transformed.
             adjustmentCtx.clearRect(0, 0, width, height)
             adjustmentCtx.drawImage(canvas, 0, 0)
             adjustmentOutputCanvas = adjustmentCanvas
