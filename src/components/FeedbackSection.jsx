@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Loader2, Send } from 'lucide-react'
+import { CheckCircle2, Loader2, MessageCircle, Send } from 'lucide-react'
 import {
   FEEDBACK_CATEGORIES,
   FEEDBACK_MESSAGE_MAX_LENGTH,
@@ -15,6 +15,28 @@ const DIAGNOSTIC_LABELS = [
   ['comfyConnected', 'ComfyUI connected'],
   ['screen', 'Screen'],
 ]
+
+const DISCORD_INVITE_URL = 'https://discord.gg/QWZUuUChVK'
+
+function DiscordCallout() {
+  return (
+    <a
+      href={DISCORD_INVITE_URL}
+      target="_blank"
+      rel="noreferrer"
+      className="group flex items-center gap-3 rounded-lg border border-indigo-400/30 bg-indigo-500/10 px-3 py-2.5 transition-colors hover:border-indigo-400/60 hover:bg-indigo-500/15"
+    >
+      <MessageCircle className="h-5 w-5 flex-shrink-0 text-indigo-300" />
+      <span className="min-w-0 text-[11px] leading-snug text-sf-text-secondary">
+        <span className="font-semibold text-sf-text-primary">Want a faster answer? Join our Discord.</span>{' '}
+        The team hangs out there — and often another creator has already solved exactly your problem.
+      </span>
+      <span className="ml-auto flex-shrink-0 rounded bg-indigo-500/80 px-2 py-1 text-[10px] font-medium text-white transition-colors group-hover:bg-indigo-500">
+        Join
+      </span>
+    </a>
+  )
+}
 
 function formatDiagnosticValue(value) {
   if (value === null || value === undefined || value === '') return 'unknown'
@@ -64,25 +86,29 @@ export default function FeedbackSection() {
 
   if (sent) {
     return (
-      <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-4 py-6 text-center">
-        <CheckCircle2 className="mx-auto h-8 w-8 text-green-300" />
-        <div className="mt-3 text-sm font-medium text-sf-text-primary">Thanks — got it.</div>
-        <p className="mt-1 text-[11px] text-sf-text-muted">
-          Your feedback goes straight to the team. If you left an email, we may follow up.
-        </p>
-        <button
-          type="button"
-          onClick={() => { setSent(false); setError('') }}
-          className="mt-4 rounded bg-sf-dark-700 px-3 py-1.5 text-[11px] text-sf-text-secondary hover:bg-sf-dark-600"
-        >
-          Send another
-        </button>
+      <div className="space-y-3">
+        <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-4 py-6 text-center">
+          <CheckCircle2 className="mx-auto h-8 w-8 text-green-300" />
+          <div className="mt-3 text-sm font-medium text-sf-text-primary">Thanks — got it.</div>
+          <p className="mt-1 text-[11px] text-sf-text-muted">
+            Your feedback goes straight to the team. If you left an email, we may follow up.
+          </p>
+          <button
+            type="button"
+            onClick={() => { setSent(false); setError('') }}
+            className="mt-4 rounded bg-sf-dark-700 px-3 py-1.5 text-[11px] text-sf-text-secondary hover:bg-sf-dark-600"
+          >
+            Send another
+          </button>
+        </div>
+        <DiscordCallout />
       </div>
     )
   }
 
   return (
     <div className="space-y-4">
+      <DiscordCallout />
       <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
         <div className="text-sm font-medium text-sf-text-primary">Send feedback</div>
         <p className="mt-1 text-[11px] text-sf-text-muted">
