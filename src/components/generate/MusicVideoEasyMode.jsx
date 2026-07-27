@@ -168,6 +168,13 @@ function normalizeResolutionPreset(value) {
   return normalizeDraftOption(normalized, RESOLUTION_OPTIONS, DEFAULT_DRAFT.resolutionPreset)
 }
 
+function getGeneratedKeyframeWorkflowLabel(asset, fallbackLabel) {
+  const workflowId = String(asset?.yolo?.storyboardWorkflowId || '').trim()
+  if (workflowId) return getWorkflowDisplayLabel(workflowId) || workflowId
+  if (asset?.yolo?.storyboardFallbackReason === 'reference-free-broll') return 'Z-Image Turbo'
+  return fallbackLabel
+}
+
 function normalizeDraftNumber(value, allowedValues, fallback) {
   const parsed = Number(value)
   return allowedValues.includes(parsed) ? parsed : fallback
@@ -1501,7 +1508,7 @@ export default function MusicVideoEasyMode({
         sourceLabel: `Music Video Easy Mode ${selectedKeyframeWorkflowLabel} keyframe pass`,
         resolutionOverride: outputResolution,
       })
-      setKeyframeStatus(queued > 0 ? `Queued ${plural(queued, `${selectedKeyframeWorkflowLabel} keyframe`)}.` : 'No keyframes were queued. Any existing shots may already be complete or running.')
+      setKeyframeStatus(queued > 0 ? `Queued ${plural(queued, 'keyframe')}.` : 'No keyframes were queued. Any existing shots may already be complete or running.')
     } finally {
       setIsQueuingKeyframes(false)
     }
@@ -1511,12 +1518,12 @@ export default function MusicVideoEasyMode({
     if (!row || singleKeyframeActionDisabled) return
     setSelectedShotIndex(index)
     setIsQueuingKeyframes(true)
-    setKeyframeStatus(`Queueing ${selectedKeyframeWorkflowLabel} keyframe for Shot ${index + 1}...`)
+    setKeyframeStatus(`Queueing keyframe for Shot ${index + 1}...`)
     try {
       await handleQueueYoloShotStoryboard(row.scene.id, row.shot.id, {
         resolutionOverride: outputResolution,
       })
-      setKeyframeStatus(`Queued ${selectedKeyframeWorkflowLabel} keyframe for Shot ${index + 1}.`)
+      setKeyframeStatus(`Queued keyframe for Shot ${index + 1}.`)
     } finally {
       setIsQueuingKeyframes(false)
     }
@@ -1528,7 +1535,7 @@ export default function MusicVideoEasyMode({
     const targetLabel = hasMultipleSelectedShots
       ? `${selectedShotRows.length} selected shots`
       : `Shot ${selectedShotRows[0].index + 1}`
-    setKeyframeStatus(`Queueing ${selectedKeyframeWorkflowLabel} keyframe regeneration for ${targetLabel}...`)
+    setKeyframeStatus(`Queueing keyframe regeneration for ${targetLabel}...`)
     try {
       if (hasMultipleSelectedShots && handleQueueYoloShotStoryboards) {
         const queued = await handleQueueYoloShotStoryboards(
@@ -1536,14 +1543,14 @@ export default function MusicVideoEasyMode({
           { resolutionOverride: outputResolution }
         )
         setKeyframeStatus(queued > 0
-          ? `Queued ${plural(queued, `${selectedKeyframeWorkflowLabel} keyframe regeneration job`)} for ${selectedShotRows.length} selected shots.`
+          ? `Queued ${plural(queued, 'keyframe regeneration job')} for ${selectedShotRows.length} selected shots.`
           : 'No selected keyframe regeneration jobs were queued. Check whether those shots are already running.')
       } else {
         const row = selectedShotRows[0]
         await handleQueueYoloShotStoryboard(row.scene.id, row.shot.id, {
           resolutionOverride: outputResolution,
         })
-        setKeyframeStatus(`Queued ${selectedKeyframeWorkflowLabel} keyframe regeneration for Shot ${row.index + 1}.`)
+        setKeyframeStatus(`Queued keyframe regeneration for Shot ${row.index + 1}.`)
       }
     } finally {
       setIsQueuingKeyframes(false)
@@ -1560,7 +1567,7 @@ export default function MusicVideoEasyMode({
         sourceLabel: `Music Video Easy Mode ${selectedKeyframeWorkflowLabel} keyframe regeneration pass`,
         resolutionOverride: outputResolution,
       })
-      setKeyframeStatus(queued > 0 ? `Queued ${plural(queued, `${selectedKeyframeWorkflowLabel} keyframe regeneration job`)}.` : 'No keyframe regeneration jobs were queued. Check whether those shots are already running.')
+      setKeyframeStatus(queued > 0 ? `Queued ${plural(queued, 'keyframe regeneration job')}.` : 'No keyframe regeneration jobs were queued. Check whether those shots are already running.')
     } finally {
       setIsQueuingKeyframes(false)
     }
@@ -2968,7 +2975,7 @@ export default function MusicVideoEasyMode({
             : ' is used for new or regenerated keyframes.'}
           {selectedKeyframeWorkflowId === 'image-edit' && yoloMusicResolvedCast.length === 0 && (
             <span className="mt-1 block text-amber-200">
-              Qwen Image Edit needs a cast/reference image. Add a person in the People step, or switch to Nano Banana 2 for reference-free keyframes.
+              Qwen Image Edit needs a cast/reference image for performer shots. Reference-free b-roll automatically uses local Z-Image Turbo.
             </span>
           )}
           {customKeyframeWorkflowSelected && (
@@ -3032,6 +3039,7 @@ export default function MusicVideoEasyMode({
               const coverageLabel = getCoverageLabel(scene, shot)
               const keyframePrompt = String(shot.imageBeat || shot.beat || shot.referenceImagePrompt || '').trim()
               const keyframeResolutionParts = buildActualImageResolutionParts(asset, runtimeImageDimensions, outputResolutionLabel)
+              const generatedKeyframeWorkflowLabel = getGeneratedKeyframeWorkflowLabel(asset, selectedKeyframeWorkflowLabel)
               return (
                 <div
                   key={`music-keyframe-${scene.id}-${shot.id}`}
@@ -3078,7 +3086,7 @@ export default function MusicVideoEasyMode({
                         kind: 'image',
                         url,
                         title: `Shot ${index + 1}: ${shot.scriptShotLabel || scene.label || shot.id}`,
-                        subtitle: [coverageLabel, selectedKeyframeWorkflowLabel, ...keyframeResolutionParts, `${videoFps} fps`].filter(Boolean).join(' / '),
+                        subtitle: [coverageLabel, generatedKeyframeWorkflowLabel, ...keyframeResolutionParts, `${videoFps} fps`].filter(Boolean).join(' / '),
                         prompt: keyframePrompt,
                         editablePrompt: true,
                         sceneId: scene.id,

@@ -1938,9 +1938,9 @@ export function modifyMultipleAnglesWorkflow(workflow, options = {}) {
  *
  * Contract:
  * - Required node titles:
- *   VELORN_INPUT_IMAGE, VELORN_PROMPT, VELORN_OUTPUT_IMAGE
+ *   VELORN_PROMPT, VELORN_OUTPUT_IMAGE
  * - Optional node titles:
- *   VELORN_SEED, VELORN_WIDTH, VELORN_HEIGHT,
+ *   VELORN_INPUT_IMAGE, VELORN_SEED, VELORN_WIDTH, VELORN_HEIGHT,
  *   VELORN_REFERENCE_IMAGE_1, VELORN_REFERENCE_IMAGE_2
  */
 export function modifyCustomKeyframeWorkflow(workflow, options = {}) {

@@ -719,6 +719,7 @@ export function flattenYoloPlanVariants(plan = []) {
             durationSeconds: shot.durationSeconds,
             prompt: compactPromptText(videoPrompt),
             videoPrompt: compactPromptText(videoPrompt),
+            keyframePrompt,
             storyboardPrompt: compactPromptText(storyboardPrompt),
             adBeat,
             productAction,

@@ -1380,24 +1380,53 @@ function composeMusicShotReferencePrompt({
   const styleLine = String(styleNotes || '').trim()
   const cameraLine = String(cameraDirection || '').trim()
   const shotFocus = shotTypeOption?.id === 'b_roll'
-    ? 'Environment / cutaway composition, no performer singing on camera.'
+    ? 'Environment-focused cinematic cutaway.'
     : shotTypeOption?.id === 'performance_wide'
       ? 'Artist visible in a wider framing, natural body posture, readable expression.'
       : 'Artist visible with a readable face, natural performance posture.'
   const continuityFocus = shotTypeOption?.id === 'b_roll'
-    ? 'Maintain consistent environment, lighting, art direction, and key props across adjacent shots.'
+    ? 'Use cohesive environment, lighting, art direction, and key props.'
     : 'Maintain consistent subject identity and wardrobe across the video.'
+  const renderRule = shotTypeOption?.id === 'b_roll'
+    ? 'Create one full-frame cinematic still with one uninterrupted camera view.'
+    : 'Render one cinematic keyframe still, no collage, no split screen, no multiple panels.'
 
   const parts = [
     keyframe,
-    cameraLine ? `Camera setup: ${cameraLine}.` : '',
+    cameraLine ? `${shotTypeOption?.id === 'b_roll' ? 'Viewpoint' : 'Camera setup'}: ${cameraLine}.` : '',
     shotFocus,
     conceptLine ? `Concept: ${conceptLine}.` : '',
     styleLine ? `Style: ${styleLine}.` : '',
-    'Render one cinematic keyframe still, no collage, no split screen, no multiple panels.',
+    renderRule,
     continuityFocus,
   ].filter(Boolean)
   return parts.join(' ')
+}
+
+function buildPromptOnlyBrollFallbackPrompt(variant = {}) {
+  const sourcePrompt = String(
+    variant?.keyframePrompt
+      || variant?.storyboardPrompt
+      || variant?.prompt
+      || ''
+  ).trim()
+  const exclusionPattern = /\b(?:collage|split[- ]screen|multiple panels?|diptych|triptych|storyboard grid|comic panels?|before\/after|montage|performer singing|on-screen text|captions?|subtitles?|labels?|watermarks?|random letters?|fake typography|overlay words?|end-card words?|adjacent shots?)\b/i
+  const cleanedPrompt = sourcePrompt
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((part) => part.trim())
+    .filter((part) => part && !exclusionPattern.test(part))
+    .join(' ')
+    .replace(/^Single cinematic keyframe still for\s+\S+\s+\S+\.\s*/i, '')
+    .replace(/^Use this full keyframe prompt:\s*/i, '')
+    .replace(/\bCamera setup:\s*/gi, 'Viewpoint: ')
+    .trim()
+  const framing = String(variant?.angle || '').trim()
+
+  return [
+    cleanedPrompt,
+    framing ? `${framing} composition.` : '',
+    'Full-frame cinematic photograph with one uninterrupted camera view, cohesive lighting, natural depth, and a clearly defined focal point.',
+  ].filter(Boolean).join(' ')
 }
 
 /**
@@ -4230,6 +4259,31 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     return currentCategoryWorkflows[0]
     // eslint-disable-next-line react-hooks/exhaustive-deps -- importedWorkflowsVersion invalidates the registry lookup
   }, [currentCategoryWorkflows, workflowId, importedWorkflowsVersion])
+  const errorReportWorkflow = useMemo(() => {
+    const isMusicKeyframeError = generationMode === 'yolo'
+      && yoloCreationType === 'music'
+      && /\b(?:keyframe|storyboard|input image|cast\/reference image)\b/i.test(String(formError || ''))
+    if (!isMusicKeyframeError) return currentWorkflow
+
+    const keyframeWorkflowId = String(yoloMusicKeyframeWorkflowId || '').trim()
+    if (keyframeWorkflowId === CUSTOM_MUSIC_KEYFRAME_WORKFLOW_ID) {
+      return {
+        id: keyframeWorkflowId,
+        label: yoloMusicCustomKeyframeWorkflow?.name || 'Custom keyframe workflow',
+      }
+    }
+    return {
+      id: keyframeWorkflowId || 'unknown',
+      label: getWorkflowDisplayLabel(keyframeWorkflowId) || keyframeWorkflowId || 'Unknown keyframe workflow',
+    }
+  }, [
+    currentWorkflow,
+    formError,
+    generationMode,
+    yoloCreationType,
+    yoloMusicCustomKeyframeWorkflow?.name,
+    yoloMusicKeyframeWorkflowId,
+  ])
   const formErrorTroubleshootingHints = useMemo(
     () => buildGenerationErrorTroubleshootingHints(formError),
     [formError]
@@ -4242,7 +4296,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     const text = buildGenerationErrorClipboardText({
       errorText: formError,
       hints: formErrorTroubleshootingHints,
-      workflow: currentWorkflow,
+      workflow: errorReportWorkflow,
       generationMode,
     })
     try {
@@ -4253,7 +4307,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       setFormErrorCopyStatus('Copy failed')
       setTimeout(() => setFormErrorCopyStatus(''), 1600)
     }
-  }, [currentWorkflow, formError, formErrorTroubleshootingHints, generationMode])
+  }, [errorReportWorkflow, formError, formErrorTroubleshootingHints, generationMode])
   const activeWorkflowBrowserMode = generationMode === 'yolo' ? 'create' : 'generate'
   const visibleWorkflowManifests = useMemo(() => {
     // Curated manifests plus registered imports (catalog templates and
@@ -5598,7 +5652,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       }
 
       const workflow = JSON.parse(selected.text)
-      const validation = validateCustomKeyframeWorkflow(workflow)
+      const validation = validateCustomKeyframeWorkflow(workflow, { requireInputImage: false })
       setYoloMusicCustomKeyframeWorkflow({
         name: selected.name || 'Custom workflow',
         jsonText: JSON.stringify(workflow, null, 2),
@@ -5640,7 +5694,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         setYoloMusicKeyframeWorkflowId(CUSTOM_MUSIC_KEYFRAME_WORKFLOW_ID)
       }
 
-      const validation = validateCustomKeyframeWorkflow(workflow)
+      const validation = validateCustomKeyframeWorkflow(workflow, { requireInputImage: false })
       if (!validation.ok) {
         setFormError(validation.message)
         addComfyLog('warning', `Custom keyframe workflow is not ready: ${validation.message}`)
@@ -5800,7 +5854,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
       const validation = isVideo
         ? validateCustomVideoWorkflow(converted.apiWorkflow)
-        : validateCustomKeyframeWorkflow(converted.apiWorkflow)
+        : validateCustomKeyframeWorkflow(converted.apiWorkflow, { requireInputImage: false })
       const record = {
         name: converted.title || 'Saved workflow',
         jsonText: JSON.stringify(converted.apiWorkflow, null, 2),
@@ -5892,7 +5946,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         const isVideoTarget = target === 'music-video' || target === 'generate-video'
         const validation = isVideoTarget
           ? validateCustomVideoWorkflow(workflow, { requireInputImage: target === 'music-video' })
-          : validateCustomKeyframeWorkflow(workflow, { requireInputImage: target === 'music-keyframe' })
+          : validateCustomKeyframeWorkflow(workflow, { requireInputImage: false })
         if (target === 'music-video') {
           setYoloMusicCustomVideoWorkflow({
             name,
@@ -6560,7 +6614,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       }
     }
     try {
-      return validateCustomKeyframeWorkflow(JSON.parse(text))
+      return validateCustomKeyframeWorkflow(JSON.parse(text), { requireInputImage: false })
     } catch (error) {
       return {
         ok: false,
@@ -10055,6 +10109,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     const {
       allowExistingDoneKeys = false,
       skipConfirm = false,
+      skipMixedWorkflowConfirm = false,
       sourceLabel = `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel.toLowerCase()} keyframe pass`,
       productAssetIdOverride = undefined,
       modelAssetIdOverride = undefined,
@@ -10100,14 +10155,6 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       return 0
     }
 
-    if (!skipConfirm) {
-      const confirmed = await confirmLargeQueueBatch(variantsToQueue.length, 'keyframe')
-      if (!confirmed) {
-        setFormError('Queue cancelled')
-        return 0
-      }
-    }
-
     const extractNumericId = (value, fallback = 1) => {
       const match = String(value || '').match(/\d+/)
       const parsed = match ? Number(match[0]) : fallback
@@ -10119,7 +10166,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     const usesQwenMusicStoryboardWorkflow = isYoloMusicMode && effectiveStoryboardWorkflowId === 'image-edit'
     const usesCustomMusicStoryboardWorkflow = isYoloMusicMode && effectiveStoryboardWorkflowId === CUSTOM_MUSIC_KEYFRAME_WORKFLOW_ID
     const usesCustomStoryboardWorkflow = usesCustomMusicStoryboardWorkflow || usesCustomAdStoryboardWorkflow
-    const usesReferenceMusicStoryboardWorkflow = usesQwenMusicStoryboardWorkflow || usesCustomMusicStoryboardWorkflow
+    const customMusicRequiresInputImage = usesCustomMusicStoryboardWorkflow
+      && Boolean(yoloMusicCustomKeyframeValidation?.endpoints?.inputImage)
+    const usesReferenceMusicStoryboardWorkflow = usesQwenMusicStoryboardWorkflow || customMusicRequiresInputImage
     const musicImageAssetById = new Map(
       (assets || [])
         .filter((asset) => asset?.type === 'image')
@@ -10166,21 +10215,75 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       )
       return { primaryAssetId, secondaryAssetId }
     }
+    let variantsForJobs = variantsToQueue
+    const fallbackWorkflowId = 'z-image-turbo'
+    const fallbackVariantKeys = new Set()
+    let skippedPerformerReferenceCount = 0
+    let skippedFallbackUnavailableCount = 0
     if (usesReferenceMusicStoryboardWorkflow) {
       const missingReferenceVariants = variantsToQueue.filter((variant) => (
         !resolveQwenMusicStoryboardReferences(variant).primaryAssetId
       ))
       if (missingReferenceVariants.length > 0) {
-        const missingBrollCount = missingReferenceVariants
-          .filter((variant) => !shouldUseDefaultMusicPerformerReference(variant))
-          .length
-        const workflowName = usesCustomMusicStoryboardWorkflow ? 'Custom keyframe workflows' : 'Qwen Image Edit'
-        const message = missingBrollCount > 0
-          ? `${workflowName} needs an input image. ${missingBrollCount} b-roll/cutaway shot${missingBrollCount === 1 ? '' : 's'} will not borrow the default character reference, so switch keyframes to Nano Banana 2 for prompt-only b-roll or regenerate those shots with an explicit environment/reference image.`
-          : `${workflowName} need a cast/reference image. Add at least one person in the Music Video People step, or switch keyframes to Nano Banana 2.`
-        setFormError(message)
-        return 0
+        const missingPerformerReferenceKeys = new Set()
+        for (const variant of missingReferenceVariants) {
+          if (shouldUseDefaultMusicPerformerReference(variant)) {
+            missingPerformerReferenceKeys.add(variant.key)
+          } else {
+            fallbackVariantKeys.add(variant.key)
+          }
+        }
+        skippedPerformerReferenceCount = missingPerformerReferenceKeys.size
+        variantsForJobs = variantsToQueue.filter((variant) => !missingPerformerReferenceKeys.has(variant.key))
       }
+    }
+    if (fallbackVariantKeys.size > 0) {
+      const fallbackDepsOk = await validateDependenciesForQueue(
+        [fallbackWorkflowId],
+        `${sourceLabel} prompt-only b-roll fallback`
+      )
+      if (!fallbackDepsOk) {
+        skippedFallbackUnavailableCount = fallbackVariantKeys.size
+        variantsForJobs = variantsForJobs.filter((variant) => !fallbackVariantKeys.has(variant.key))
+        fallbackVariantKeys.clear()
+      }
+    }
+    if (variantsForJobs.length === 0) {
+      const selectedWorkflowName = usesCustomMusicStoryboardWorkflow
+        ? (yoloMusicCustomKeyframeWorkflow?.name || 'Custom keyframe workflow')
+        : (getWorkflowDisplayLabel(effectiveStoryboardWorkflowId) || effectiveStoryboardWorkflowId)
+      setFormError(
+        skippedFallbackUnavailableCount > 0
+          ? `${selectedWorkflowName} keyframes need an input image, and the local Z-Image Turbo prompt-only b-roll fallback is not available. Check its Workflow Setup requirements.`
+          : `${selectedWorkflowName} keyframes need an input image. No queueable shots have a usable cast/reference image.`
+      )
+      return 0
+    }
+    let confirmed = true
+    if (fallbackVariantKeys.size > 0 && !skipMixedWorkflowConfirm) {
+      const selectedWorkflowName = usesCustomMusicStoryboardWorkflow
+        ? (yoloMusicCustomKeyframeWorkflow?.name || 'Custom keyframe workflow')
+        : (getWorkflowDisplayLabel(effectiveStoryboardWorkflowId) || effectiveStoryboardWorkflowId)
+      const selectedWorkflowCount = variantsForJobs.length - fallbackVariantKeys.size
+      confirmed = await requestConfirm({
+        title: 'Mixed keyframe workflows',
+        message: [
+          `${selectedWorkflowCount} keyframe${selectedWorkflowCount === 1 ? '' : 's'} will use ${selectedWorkflowName}.`,
+          `${fallbackVariantKeys.size} reference-free b-roll keyframe${fallbackVariantKeys.size === 1 ? '' : 's'} will use local Z-Image Turbo because ${selectedWorkflowName} needs an input image.`,
+          skippedPerformerReferenceCount > 0
+            ? `${skippedPerformerReferenceCount} performer shot${skippedPerformerReferenceCount === 1 ? '' : 's'} without a cast/reference image will be skipped.`
+            : '',
+        ].filter(Boolean).join('\n\n'),
+        confirmLabel: 'Queue keyframes',
+        cancelLabel: 'Cancel',
+        tone: 'primary',
+      })
+    } else if (!skipConfirm) {
+      confirmed = await confirmLargeQueueBatch(variantsForJobs.length, 'keyframe')
+    }
+    if (!confirmed) {
+      setFormError('Queue cancelled')
+      return 0
     }
     if (usesGptImage2UgcStoryboardWorkflow && normalizedStoryboardReferenceAssetIds.length === 0) {
       setFormError('GPT Image 2 UGC keyframes need at least one creator, product, or environment reference image.')
@@ -10199,7 +10302,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       width: Number(resolutionOverride?.width) || effectiveImageResolution.width,
       height: Number(resolutionOverride?.height) || effectiveImageResolution.height,
     }
-    const jobs = variantsToQueue.map((variant, index) => {
+    const jobs = variantsForJobs.map((variant, index) => {
       const sceneNum = extractNumericId(variant.sceneId, index + 1)
       const shotNum = extractNumericId(variant.shotId, 1)
       const angleNum = extractNumericId(variant.angle, 1)
@@ -10215,12 +10318,15 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             ? mediumSeed
             : softSeed
       )
-      const qwenMusicReferences = usesReferenceMusicStoryboardWorkflow
+      const usesPromptOnlyFallback = fallbackVariantKeys.has(variant.key)
+      const jobWorkflowId = usesPromptOnlyFallback ? fallbackWorkflowId : effectiveStoryboardWorkflowId
+      const variantUsesReferenceMusicWorkflow = usesReferenceMusicStoryboardWorkflow && !usesPromptOnlyFallback
+      const qwenMusicReferences = variantUsesReferenceMusicWorkflow
         ? resolveQwenMusicStoryboardReferences(variant)
         : { primaryAssetId: null, secondaryAssetId: null }
       const shouldUseDefaultMusicReference = shouldUseDefaultMusicPerformerReference(variant)
       const usesNanoBananaMusicOverride = isYoloMusicMode &&
-        ['nano-banana-2', 'nano-banana-pro'].includes(effectiveStoryboardWorkflowId) &&
+        ['nano-banana-2', 'nano-banana-pro'].includes(jobWorkflowId) &&
         Boolean(variant?.nanoBananaReferenceOverride?.enabled)
       const nanoBananaOverrideAssetIds = usesNanoBananaMusicOverride
         ? (Array.isArray(variant?.nanoBananaReferenceOverride?.assetIds)
@@ -10229,7 +10335,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         : []
       const musicReferenceAssetId1 = isYoloMusicMode
         ? (
-          usesReferenceMusicStoryboardWorkflow
+          variantUsesReferenceMusicWorkflow
             ? qwenMusicReferences.primaryAssetId
             : usesNanoBananaMusicOverride
               ? (nanoBananaOverrideAssetIds[0] || null)
@@ -10238,24 +10344,24 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         : null
       const musicReferenceAssetId2 = isYoloMusicMode
         ? (
-          usesReferenceMusicStoryboardWorkflow
+          variantUsesReferenceMusicWorkflow
             ? qwenMusicReferences.secondaryAssetId
             : usesNanoBananaMusicOverride
               ? (nanoBananaOverrideAssetIds[1] || null)
             : (variant.resolvedArtistAssetIds?.[1] || null)
         )
         : null
-      const musicInputAsset = usesReferenceMusicStoryboardWorkflow && musicReferenceAssetId1
+      const musicInputAsset = variantUsesReferenceMusicWorkflow && musicReferenceAssetId1
         ? (musicImageAssetById.get(musicReferenceAssetId1) || null)
         : null
       const storyboardInputAsset = usesModelProductStoryboardWorkflow || usesCustomAdStoryboardWorkflow
         ? adStoryboardInputAsset
         : musicInputAsset
       const storyboardReferenceAssetId1 = isYoloMusicMode
-        ? (usesReferenceMusicStoryboardWorkflow ? musicReferenceAssetId2 : musicReferenceAssetId1)
+        ? (variantUsesReferenceMusicWorkflow ? musicReferenceAssetId2 : musicReferenceAssetId1)
         : (effectiveAdProductAsset?.id || null)
       const storyboardReferenceAssetId2 = isYoloMusicMode
-        ? (usesReferenceMusicStoryboardWorkflow ? null : musicReferenceAssetId2)
+        ? (variantUsesReferenceMusicWorkflow ? null : musicReferenceAssetId2)
         : (effectiveAdModelAsset?.id || null)
       const storyboardAssetFieldIds = usesGptImage2UgcStoryboardWorkflow
         ? normalizedStoryboardReferenceAssetIds.slice(0, 3).reduce((acc, assetId, refIndex) => {
@@ -10263,15 +10369,20 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             return acc
           }, {})
         : {}
+      const storyboardPrompt = usesPromptOnlyFallback
+        ? buildPromptOnlyBrollFallbackPrompt(variant)
+        : (variant.storyboardPrompt || variant.prompt)
       return createQueuedJob({
         category: 'image',
-        workflowId: effectiveStoryboardWorkflowId,
-        workflowLabel: usesCustomStoryboardWorkflow
+        workflowId: jobWorkflowId,
+        workflowLabel: usesPromptOnlyFallback
+          ? `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel} Keyframe (Z-Image Turbo b-roll fallback)`
+          : usesCustomStoryboardWorkflow
           ? `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel} Keyframe (${usesCustomAdStoryboardWorkflow ? (yoloAdCustomKeyframeWorkflow?.name || 'Custom Workflow') : (yoloMusicCustomKeyframeWorkflow?.name || 'Custom Workflow')})`
           : `${DIRECTOR_MODE_BETA_LABEL} ${yoloModeLabel} Keyframe (${effectiveStoryboardWorkflowId})`,
         needsImage: Boolean(storyboardInputAsset),
         inputAssetType: storyboardInputAsset ? 'image' : null,
-        prompt: variant.storyboardPrompt || variant.prompt,
+        prompt: storyboardPrompt,
         seed: storyboardSeed,
         resolution: storyboardResolution,
         inputAssetId: storyboardInputAsset?.id || null,
@@ -10284,7 +10395,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         referenceAssetId2: storyboardReferenceAssetId2,
         ...(Object.keys(storyboardAssetFieldIds).length > 0 ? { assetFieldIds: storyboardAssetFieldIds } : {}),
         directorLabel: yoloQueueNameLabel,
-        customWorkflow: usesCustomStoryboardWorkflow
+        customWorkflow: usesCustomStoryboardWorkflow && !usesPromptOnlyFallback
           ? {
               name: usesCustomAdStoryboardWorkflow
                 ? (yoloAdCustomKeyframeWorkflow?.name || 'Custom Workflow')
@@ -10292,6 +10403,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
               jsonText: usesCustomAdStoryboardWorkflow
                 ? (yoloAdCustomKeyframeWorkflow?.jsonText || '')
                 : (yoloMusicCustomKeyframeWorkflow?.jsonText || ''),
+              requiresInputImage: usesCustomMusicStoryboardWorkflow
+                ? customMusicRequiresInputImage
+                : Boolean(storyboardInputAsset),
             }
           : null,
         yolo: {
@@ -10317,6 +10431,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           // the UI can show a pass badge and future filters can group by pass.
           pass: (isYoloMusicMode && variant?.pass && typeof variant.pass === 'object') ? variant.pass : null,
           coverage: (isYoloMusicMode && variant?.coverage && typeof variant.coverage === 'object') ? variant.coverage : null,
+          storyboardWorkflowId: jobWorkflowId,
+          requestedStoryboardWorkflowId: usesPromptOnlyFallback ? effectiveStoryboardWorkflowId : null,
+          storyboardFallbackReason: usesPromptOnlyFallback ? 'reference-free-broll' : null,
         },
       })
     })
@@ -10324,6 +10441,24 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     setGenerationQueue(prev => [...prev, ...jobs])
     setFormError(null)
     addComfyLog('status', `${sourceLabel} queued: ${jobs.length} job${jobs.length === 1 ? '' : 's'}`)
+    if (fallbackVariantKeys.size > 0) {
+      addComfyLog(
+        'warning',
+        `${fallbackVariantKeys.size} reference-free b-roll keyframe${fallbackVariantKeys.size === 1 ? '' : 's'} routed to local Z-Image Turbo.`
+      )
+    }
+    if (skippedPerformerReferenceCount > 0) {
+      addComfyLog(
+        'warning',
+        `${skippedPerformerReferenceCount} performer keyframe${skippedPerformerReferenceCount === 1 ? '' : 's'} skipped because no cast/reference image was available.`
+      )
+    }
+    if (skippedFallbackUnavailableCount > 0) {
+      addComfyLog(
+        'warning',
+        `${skippedFallbackUnavailableCount} reference-free b-roll keyframe${skippedFallbackUnavailableCount === 1 ? '' : 's'} skipped because the local Z-Image Turbo fallback is not available.`
+      )
+    }
     return jobs.length
   }, [
     addComfyLog,
@@ -10333,8 +10468,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     getExistingYoloStageKeys,
     isYoloMusicMode,
     negativePrompt,
+    requestConfirm,
     seed,
     assets,
+    validateDependenciesForQueue,
     yoloAdConsistency,
     yoloAdCustomKeyframeWorkflow,
     yoloAdModelAsset,
@@ -10344,6 +10481,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicArtistAsset,
     yoloMusicArtistAsset?.id,
     yoloMusicCustomKeyframeWorkflow,
+    yoloMusicCustomKeyframeValidation,
     yoloMusicResolvedCast,
     yoloMusicQualityProfile,
     yoloNormalizedAdStoryboardTier,
@@ -10461,6 +10599,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       modelAssetIdOverride = undefined,
       storyboardWorkflowIdOverride = '',
       storyboardReferenceAssetIdsOverride = [],
+      skipMixedWorkflowConfirm = false,
     } = options || {}
     const effectiveStoryboardWorkflowId = String(storyboardWorkflowIdOverride || yoloStoryboardWorkflowId || '').trim()
     const effectiveStoryboardSupportsReferenceAnchors = STORYBOARD_REFERENCE_WORKFLOW_IDS.has(effectiveStoryboardWorkflowId)
@@ -10519,9 +10658,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       return
     }
 
-    await queueYoloStoryboardVariants(variants, {
+    return await queueYoloStoryboardVariants(variants, {
       allowExistingDoneKeys: true,
       skipConfirm: true,
+      skipMixedWorkflowConfirm,
       sourceLabel: `Queued keyframe re-render for ${sceneId} ${shotId}`,
       resolutionOverride,
       productAssetIdOverride,
@@ -10546,6 +10686,253 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloStoryboardSupportsReferenceAnchors,
     yoloStoryboardWorkflowId,
   ])
+
+  const buildMcpMusicVideoKeyframeReport = useCallback((sceneId, shotId) => {
+    const targetSceneId = String(sceneId || '').trim()
+    const targetShotId = String(shotId || '').trim()
+    if (!targetSceneId || !targetShotId) {
+      throw new Error('Both sceneId and shotId are required.')
+    }
+    if (!isYoloMusicMode) {
+      throw new Error('Open the Music Video workflow in Generate before inspecting a Step 4 keyframe.')
+    }
+    if (!Array.isArray(yoloActivePlan) || yoloActivePlan.length === 0) {
+      throw new Error('The Music Video workflow does not have a parsed director script yet.')
+    }
+
+    const scene = yoloActivePlan.find((entry) => String(entry?.id || '') === targetSceneId)
+    const shot = scene?.shots?.find((entry) => String(entry?.id || '') === targetShotId)
+    const variants = flattenYoloPlanVariants(yoloActivePlan)
+      .filter((variant) => variant.sceneId === targetSceneId && variant.shotId === targetShotId)
+    if (!scene || !shot || variants.length === 0) {
+      throw new Error(`No Music Video keyframe variants found for ${targetSceneId} ${targetShotId}.`)
+    }
+
+    const selectedWorkflowId = String(yoloStoryboardWorkflowId || '').trim()
+    const selectedWorkflowLabel = getWorkflowDisplayLabel(selectedWorkflowId) || selectedWorkflowId
+    const imageAssetById = new Map(
+      (assets || [])
+        .filter((asset) => asset?.type === 'image')
+        .map((asset) => [asset.id, asset])
+    )
+    const findExistingImageAssetId = (ids = []) => {
+      for (const assetId of ids) {
+        if (assetId && imageAssetById.has(assetId)) return assetId
+      }
+      return null
+    }
+    const defaultPerformerReferenceId = findExistingImageAssetId([
+      ...yoloMusicResolvedCast.map((entry) => entry?.assetId),
+      yoloMusicArtistAsset?.id,
+    ])
+    const customWorkflowNeedsInput = selectedWorkflowId === CUSTOM_MUSIC_KEYFRAME_WORKFLOW_ID
+      && Boolean(yoloMusicCustomKeyframeValidation?.endpoints?.inputImage)
+    const selectedWorkflowNeedsInput = selectedWorkflowId === 'image-edit' || customWorkflowNeedsInput
+    const summarizeAsset = (asset) => asset ? {
+      id: asset.id,
+      name: asset.name || '',
+      absolutePath: asset.absolutePath || '',
+      createdAt: asset.createdAt || null,
+      width: Number(asset.width ?? asset.settings?.width) || null,
+      height: Number(asset.height ?? asset.settings?.height) || null,
+      prompt: String(asset.prompt || asset.settings?.prompt || ''),
+      workflowId: String(asset?.yolo?.storyboardWorkflowId || asset.workflowId || asset.settings?.workflowId || ''),
+      requestedWorkflowId: String(asset?.yolo?.requestedStoryboardWorkflowId || ''),
+      fallbackReason: String(asset?.yolo?.storyboardFallbackReason || ''),
+    } : null
+
+    const variantReports = variants.map((variant) => {
+      const rawShotType = String(variant?.musicShotType || variant?.shotType || '').trim()
+      const resolvedShotType = resolveMusicVideoShotTypeFromText(rawShotType)
+      let shotTypeOption = resolvedShotType ? getMusicVideoShotTypeOption(resolvedShotType) : null
+      if (!shotTypeOption) {
+        const coverageText = [variant?.coverage?.type, variant?.coverage?.label].filter(Boolean).join(' ')
+        shotTypeOption = getMusicVideoShotTypeOption(
+          /\b(?:b[_\s-]?roll|cutaway|environment|detail|insert)\b/i.test(coverageText)
+            ? 'b_roll'
+            : 'performance'
+        )
+      }
+      const needsPerformerReference = Boolean(shotTypeOption?.needsVocalAlignment)
+      const resolvedArtistAssetIds = Array.isArray(variant?.resolvedArtistAssetIds)
+        ? variant.resolvedArtistAssetIds.filter(Boolean)
+        : []
+      const primaryReferenceAssetId = findExistingImageAssetId([
+        ...resolvedArtistAssetIds,
+        ...(needsPerformerReference ? [defaultPerformerReferenceId] : []),
+      ])
+      const missingRequiredReference = selectedWorkflowNeedsInput && !primaryReferenceAssetId
+      const usesPromptOnlyFallback = missingRequiredReference && !needsPerformerReference
+      const expectedWorkflowId = usesPromptOnlyFallback ? 'z-image-turbo' : selectedWorkflowId
+      const blockedReason = missingRequiredReference && needsPerformerReference
+        ? `${selectedWorkflowLabel} needs a cast/reference image for this performance shot.`
+        : ''
+      const activeJobs = (generationQueue || [])
+        .filter((job) => (
+          job?.yolo?.stage === 'storyboard'
+          && job?.yolo?.key === variant.key
+          && NON_TERMINAL_JOB_STATUSES.includes(job.status)
+        ))
+        .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
+      const latestAsset = yoloStoryboardAssetMap.get(variant.key) || null
+      const assetHistory = (assets || [])
+        .filter((asset) => (
+          asset?.type === 'image'
+          && asset?.yolo?.stage === 'storyboard'
+          && asset?.yolo?.key === variant.key
+        ))
+        .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+        .slice(0, 10)
+        .map(summarizeAsset)
+
+      return {
+        key: variant.key,
+        angle: variant.angle || '',
+        take: variant.take || 1,
+        shotType: shotTypeOption?.id || rawShotType || '',
+        selectedWorkflowId,
+        selectedWorkflowLabel,
+        expectedWorkflowId,
+        expectedWorkflowLabel: getWorkflowDisplayLabel(expectedWorkflowId) || expectedWorkflowId,
+        routingReason: usesPromptOnlyFallback ? 'reference-free-broll' : '',
+        referenceAssetId: primaryReferenceAssetId,
+        prompt: usesPromptOnlyFallback
+          ? buildPromptOnlyBrollFallbackPrompt(variant)
+          : String(variant.storyboardPrompt || variant.prompt || ''),
+        blockedReason,
+        activeJob: activeJobs[0] ? {
+          id: activeJobs[0].id,
+          status: activeJobs[0].status,
+          progress: Number(activeJobs[0].progress) || 0,
+          workflowId: activeJobs[0].workflowId || '',
+          workflowLabel: activeJobs[0].workflowLabel || '',
+          error: activeJobs[0].error || '',
+        } : null,
+        latestAsset: summarizeAsset(latestAsset),
+        assetHistory,
+      }
+    })
+
+    const blockedReasons = []
+    if (!isConnected) blockedReasons.push('ComfyUI is not connected.')
+    if (yoloActivePlanIsStale) blockedReasons.push('The director script is out of date. Parse it again before regenerating keyframes.')
+    if (!selectedWorkflowId) blockedReasons.push('No Step 4 keyframe workflow is selected.')
+    if (
+      selectedWorkflowId === CUSTOM_MUSIC_KEYFRAME_WORKFLOW_ID
+      && !yoloMusicCustomKeyframeValidation?.ok
+    ) {
+      blockedReasons.push(
+        yoloMusicCustomKeyframeValidation?.message
+          || 'The selected custom keyframe workflow is not ready.'
+      )
+    }
+    for (const variant of variantReports) {
+      if (variant.blockedReason) blockedReasons.push(variant.blockedReason)
+      if (variant.activeJob) blockedReasons.push(`${variant.key} is already ${variant.activeJob.status}.`)
+    }
+
+    return {
+      sceneId: targetSceneId,
+      shotId: targetShotId,
+      sceneLabel: scene.label || '',
+      shotLabel: shot.scriptShotLabel || shot.label || '',
+      imagePrompt: String(shot.imageBeat || shot.beat || shot.referenceImagePrompt || ''),
+      selectedWorkflowId,
+      selectedWorkflowLabel,
+      resolution: {
+        width: Number(effectiveImageResolution?.width) || null,
+        height: Number(effectiveImageResolution?.height) || null,
+      },
+      videoFps: Number(yoloVideoFps) || null,
+      connected: Boolean(isConnected),
+      planIsStale: Boolean(yoloActivePlanIsStale),
+      variantCount: variantReports.length,
+      canRegenerate: blockedReasons.length === 0,
+      blockedReasons: Array.from(new Set(blockedReasons)),
+      variants: variantReports,
+    }
+  }, [
+    assets,
+    effectiveImageResolution,
+    generationQueue,
+    isConnected,
+    isYoloMusicMode,
+    yoloActivePlan,
+    yoloActivePlanIsStale,
+    yoloMusicArtistAsset,
+    yoloMusicCustomKeyframeValidation,
+    yoloMusicResolvedCast,
+    yoloStoryboardAssetMap,
+    yoloStoryboardWorkflowId,
+    yoloVideoFps,
+  ])
+
+  useEffect(() => {
+    const eventName = 'comfystudio-mcp-music-video-keyframe'
+    const probeEventName = 'comfystudio-mcp-music-video-keyframe-probe'
+    const handleProbe = (event) => {
+      event?.detail?.respond?.({ ready: true })
+    }
+    const handler = async (event) => {
+      const detail = event?.detail || {}
+      const respond = typeof detail.respond === 'function' ? detail.respond : () => {}
+      try {
+        const report = buildMcpMusicVideoKeyframeReport(detail.sceneId, detail.shotId)
+        const operation = String(detail.operation || 'inspect').trim().toLowerCase()
+        const previewOnly = operation !== 'regenerate' || detail.previewOnly !== false
+        if (previewOnly) {
+          respond({
+            success: true,
+            previewOnly: operation === 'regenerate',
+            operation,
+            report,
+            message: operation === 'regenerate'
+              ? `Previewed the Step 4 keyframe regeneration for ${report.sceneId} ${report.shotId}. Nothing was queued.`
+              : `Inspected the Step 4 keyframe for ${report.sceneId} ${report.shotId}.`,
+          })
+          return
+        }
+        if (!report.canRegenerate) {
+          respond({
+            success: false,
+            error: report.blockedReasons.join(' ') || 'This keyframe cannot be regenerated right now.',
+            report,
+          })
+          return
+        }
+        const queuedCount = await handleQueueYoloShotStoryboard(report.sceneId, report.shotId, {
+          skipMixedWorkflowConfirm: true,
+        })
+        if (!Number.isFinite(Number(queuedCount)) || Number(queuedCount) <= 0) {
+          respond({
+            success: false,
+            error: 'Velorn did not queue a keyframe job. Inspect the shot again for its current state.',
+            report,
+          })
+          return
+        }
+        respond({
+          success: true,
+          previewOnly: false,
+          operation,
+          queuedCount: Number(queuedCount),
+          report,
+          message: `Queued ${queuedCount} Step 4 keyframe regeneration job${Number(queuedCount) === 1 ? '' : 's'} for ${report.sceneId} ${report.shotId}.`,
+        })
+      } catch (error) {
+        respond({
+          success: false,
+          error: error instanceof Error ? error.message : String(error || 'Could not process the Music Video keyframe request.'),
+        })
+      }
+    }
+    window.addEventListener(eventName, handler)
+    window.addEventListener(probeEventName, handleProbe)
+    return () => {
+      window.removeEventListener(eventName, handler)
+      window.removeEventListener(probeEventName, handleProbe)
+    }
+  }, [buildMcpMusicVideoKeyframeReport, handleQueueYoloShotStoryboard])
 
   const handleQueueYoloShotStoryboards = useCallback(async (targets = [], options = {}) => {
     const {
@@ -11599,6 +11986,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     if (totalQueued === 0) {
       setFormError(`No video jobs queued for ${sceneId} ${shotId}. Check if target workflows are already running.`)
     }
+    return totalQueued
   }, [
     buildActiveYoloPlan,
     isConnected,
@@ -11609,6 +11997,416 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloActivePlan,
     yoloMusicCustomVideoValidation,
     yoloSelectedVideoWorkflowIds,
+  ])
+
+  const buildMcpMusicVideoPlanReport = useCallback(() => {
+    if (!isYoloMusicMode) {
+      throw new Error('Open the Music Video workflow in Generate before inspecting its plan.')
+    }
+    if (!Array.isArray(yoloActivePlan) || yoloActivePlan.length === 0) {
+      throw new Error('The Music Video workflow does not have a parsed director script yet.')
+    }
+
+    const variants = flattenYoloPlanVariants(yoloActivePlan)
+    const variantByShot = new Map()
+    for (const variant of variants) {
+      const key = `${variant?.sceneId || ''}|${variant?.shotId || ''}`
+      if (key !== '|' && !variantByShot.has(key)) variantByShot.set(key, variant)
+    }
+    const selectedVideoWorkflowId = String(yoloSelectedVideoWorkflowIds?.[0] || '').trim()
+    const getLatestVideoAsset = (variantKey) => {
+      const matches = (assets || [])
+        .filter((asset) => (
+          asset?.type === 'video'
+          && asset?.yolo?.mode === 'music'
+          && asset?.yolo?.stage === 'video'
+          && (
+            asset?.yolo?.variantKey === variantKey
+            || asset?.yolo?.key === variantKey
+            || asset?.yolo?.key === `${variantKey}::${selectedVideoWorkflowId}`
+          )
+          && (
+            !selectedVideoWorkflowId
+            || !asset?.yolo?.workflowId
+            || asset?.yolo?.workflowId === selectedVideoWorkflowId
+          )
+        ))
+        .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+      return matches[0] || null
+    }
+    let shotCount = 0
+    let readyKeyframeCount = 0
+    let readyVideoCount = 0
+    let activeKeyframeCount = 0
+    let activeVideoCount = 0
+
+    const scenes = yoloActivePlan.map((scene, sceneIndex) => ({
+      sceneId: String(scene?.id || `S${sceneIndex + 1}`),
+      label: scene?.label || '',
+      pass: scene?.pass || null,
+      coverage: scene?.coverage || null,
+      shots: (scene?.shots || []).map((shot, shotIndex) => {
+        shotCount += 1
+        const sceneId = String(scene?.id || `S${sceneIndex + 1}`)
+        const shotId = String(shot?.id || `${sceneId}_SH${shotIndex + 1}`)
+        const variant = variantByShot.get(`${sceneId}|${shotId}`) || null
+        const keyframeAsset = variant?.key ? yoloStoryboardAssetMap.get(variant.key) || null : null
+        const videoAsset = variant?.key ? getLatestVideoAsset(variant.key) : null
+        const keyframeJob = variant?.key
+          ? (generationQueue || []).find((job) => (
+              job?.yolo?.stage === 'storyboard'
+              && job?.yolo?.key === variant.key
+              && NON_TERMINAL_JOB_STATUSES.includes(job.status)
+            )) || null
+          : null
+        const videoJob = variant?.key
+          ? (generationQueue || []).find((job) => (
+              job?.yolo?.stage === 'video'
+              && (job?.yolo?.variantKey === variant.key || job?.yolo?.key === variant.key || String(job?.yolo?.key || '').startsWith(`${variant.key}::`))
+              && NON_TERMINAL_JOB_STATUSES.includes(job.status)
+            )) || null
+          : null
+        if (keyframeAsset) readyKeyframeCount += 1
+        if (videoAsset) readyVideoCount += 1
+        if (keyframeJob) activeKeyframeCount += 1
+        if (videoJob) activeVideoCount += 1
+        return {
+          sceneId,
+          shotId,
+          index: shotIndex,
+          label: shot?.scriptShotLabel || shot?.label || '',
+          shotType: shot?.musicShotType || variant?.musicShotType || '',
+          audioStart: Number(shot?.audioStart) || 0,
+          durationSeconds: Number(shot?.length || shot?.durationSeconds || variant?.durationSeconds) || 0,
+          keyframePrompt: String(shot?.imageBeat || shot?.referenceImagePrompt || shot?.beat || variant?.keyframePrompt || ''),
+          motionPrompt: String(shot?.shotPrompt || shot?.videoBeat || shot?.beat || variant?.videoPrompt || ''),
+          camera: String(shot?.camera || shot?.cameraDirection || ''),
+          artist: String(shot?.artist || ''),
+          variantKey: variant?.key || '',
+          keyframe: keyframeAsset ? {
+            assetId: keyframeAsset.id,
+            name: keyframeAsset.name || '',
+            workflowId: String(keyframeAsset?.yolo?.storyboardWorkflowId || keyframeAsset.workflowId || ''),
+            createdAt: keyframeAsset.createdAt || null,
+          } : null,
+          video: videoAsset ? {
+            assetId: videoAsset.id,
+            name: videoAsset.name || '',
+            workflowId: String(videoAsset?.yolo?.workflowId || videoAsset.workflowId || ''),
+            createdAt: videoAsset.createdAt || null,
+          } : null,
+          activeKeyframeJob: keyframeJob ? {
+            id: keyframeJob.id,
+            status: keyframeJob.status,
+            progress: Number(keyframeJob.progress) || 0,
+          } : null,
+          activeVideoJob: videoJob ? {
+            id: videoJob.id,
+            status: videoJob.status,
+            progress: Number(videoJob.progress) || 0,
+            workflowId: videoJob.workflowId || '',
+          } : null,
+        }
+      }),
+    }))
+
+    return {
+      planIsStale: Boolean(yoloActivePlanIsStale),
+      connected: Boolean(isConnected),
+      selectedKeyframeWorkflow: {
+        id: String(yoloStoryboardWorkflowId || ''),
+        label: getWorkflowDisplayLabel(yoloStoryboardWorkflowId) || String(yoloStoryboardWorkflowId || ''),
+      },
+      selectedVideoWorkflows: (yoloSelectedVideoWorkflowIds || []).map((id) => ({
+        id,
+        label: getWorkflowDisplayLabel(id) || id,
+      })),
+      output: {
+        imageResolution: {
+          width: Number(effectiveImageResolution?.width) || null,
+          height: Number(effectiveImageResolution?.height) || null,
+        },
+        videoResolution: {
+          width: Number(resolution?.width) || null,
+          height: Number(resolution?.height) || null,
+        },
+        videoFps: Number(yoloVideoFps) || null,
+      },
+      audio: yoloMusicAudioAsset ? {
+        assetId: yoloMusicAudioAsset.id,
+        name: yoloMusicAudioAsset.name || '',
+        kind: yoloMusicAudioKind || '',
+        durationSeconds: Number(yoloMusicSongDurationSeconds || yoloMusicAudioAsset?.duration) || null,
+      } : null,
+      summary: {
+        sceneCount: scenes.length,
+        shotCount,
+        readyKeyframeCount,
+        missingKeyframeCount: Math.max(0, shotCount - readyKeyframeCount),
+        readyVideoCount,
+        missingVideoCount: Math.max(0, shotCount - readyVideoCount),
+        activeKeyframeCount,
+        activeVideoCount,
+      },
+      scenes,
+    }
+  }, [
+    assets,
+    effectiveImageResolution,
+    generationQueue,
+    isConnected,
+    isYoloMusicMode,
+    resolution,
+    yoloActivePlan,
+    yoloActivePlanIsStale,
+    yoloMusicAudioAsset,
+    yoloMusicAudioKind,
+    yoloMusicSongDurationSeconds,
+    yoloSelectedVideoWorkflowIds,
+    yoloStoryboardAssetMap,
+    yoloStoryboardWorkflowId,
+    yoloVideoFps,
+  ])
+
+  const buildMcpMusicVideoVideoReport = useCallback((sceneId, shotId) => {
+    const targetSceneId = String(sceneId || '').trim()
+    const targetShotId = String(shotId || '').trim()
+    if (!targetSceneId || !targetShotId) {
+      throw new Error('Both sceneId and shotId are required.')
+    }
+    if (!isYoloMusicMode) {
+      throw new Error('Open the Music Video workflow in Generate before inspecting a Step 5 video.')
+    }
+    if (!Array.isArray(yoloActivePlan) || yoloActivePlan.length === 0) {
+      throw new Error('The Music Video workflow does not have a parsed director script yet.')
+    }
+
+    const scene = yoloActivePlan.find((entry) => String(entry?.id || '') === targetSceneId)
+    const shot = scene?.shots?.find((entry) => String(entry?.id || '') === targetShotId)
+    const variants = flattenYoloPlanVariants(yoloActivePlan)
+      .filter((variant) => variant.sceneId === targetSceneId && variant.shotId === targetShotId)
+    if (!scene || !shot || variants.length === 0) {
+      throw new Error(`No Music Video video variants found for ${targetSceneId} ${targetShotId}.`)
+    }
+
+    const selectedWorkflowIds = Array.from(new Set(
+      (yoloSelectedVideoWorkflowIds || []).map((id) => String(id || '').trim()).filter(Boolean)
+    ))
+    const summarizeImageAsset = (asset) => asset ? {
+      id: asset.id,
+      name: asset.name || '',
+      absolutePath: asset.absolutePath || '',
+      createdAt: asset.createdAt || null,
+      width: Number(asset.width ?? asset.settings?.width) || null,
+      height: Number(asset.height ?? asset.settings?.height) || null,
+      workflowId: String(asset?.yolo?.storyboardWorkflowId || asset.workflowId || ''),
+    } : null
+    const summarizeVideoAsset = (asset) => asset ? {
+      id: asset.id,
+      name: asset.name || '',
+      absolutePath: asset.absolutePath || '',
+      createdAt: asset.createdAt || null,
+      width: Number(asset.width ?? asset.settings?.width) || null,
+      height: Number(asset.height ?? asset.settings?.height) || null,
+      durationSeconds: Number(asset.duration ?? asset.settings?.duration) || null,
+      fps: Number(asset.fps ?? asset.settings?.fps) || null,
+      workflowId: String(asset?.yolo?.workflowId || asset.workflowId || ''),
+      posterPath: String(asset?.poster?.posterPath || ''),
+    } : null
+
+    const variantReports = []
+    for (const variant of variants) {
+      const keyframeAsset = yoloStoryboardAssetMap.get(variant.key) || null
+      for (const workflowId of selectedWorkflowIds) {
+        const scopedKey = `${variant.key}::${workflowId}`
+        const activeJobs = (generationQueue || [])
+          .filter((job) => (
+            job?.yolo?.stage === 'video'
+            && (
+              job?.yolo?.key === scopedKey
+              || (
+                job?.yolo?.variantKey === variant.key
+                && (!job?.yolo?.workflowId || job?.yolo?.workflowId === workflowId)
+              )
+            )
+            && NON_TERMINAL_JOB_STATUSES.includes(job.status)
+          ))
+          .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
+        const assetHistory = (assets || [])
+          .filter((asset) => (
+            asset?.type === 'video'
+            && asset?.yolo?.mode === 'music'
+            && asset?.yolo?.stage === 'video'
+            && (
+              asset?.yolo?.key === scopedKey
+              || (
+                (asset?.yolo?.variantKey === variant.key || asset?.yolo?.key === variant.key)
+                && (!asset?.yolo?.workflowId || asset?.yolo?.workflowId === workflowId)
+              )
+            )
+          ))
+          .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+          .slice(0, 10)
+          .map(summarizeVideoAsset)
+        const durationOptions = getVideoDurationPresets(workflowId)
+        const requestedDuration = Number(shot?.length || shot?.durationSeconds || variant?.durationSeconds) || 3
+        const mappedDuration = durationOptions.reduce((closest, candidate) => (
+          Math.abs(candidate - requestedDuration) < Math.abs(closest - requestedDuration) ? candidate : closest
+        ), durationOptions[0])
+        const customFpsWorkflowIds = new Set(['wan22-i2v', 'ltx23-i2v', 'ltx23-ia2v', 'ltx23-id-lora', MUSIC_VIDEO_SHOT_WORKFLOW_ID, CUSTOM_MUSIC_VIDEO_WORKFLOW_ID])
+        variantReports.push({
+          key: variant.key,
+          scopedKey,
+          angle: variant.angle || '',
+          take: variant.take || 1,
+          workflowId,
+          workflowLabel: getWorkflowDisplayLabel(workflowId) || workflowId,
+          prompt: String(shot?.shotPrompt || shot?.videoBeat || shot?.beat || variant?.videoPrompt || variant?.prompt || ''),
+          audioStart: Number(shot?.audioStart) || 0,
+          requestedDurationSeconds: requestedDuration,
+          mappedDurationSeconds: mappedDuration,
+          requestedFps: customFpsWorkflowIds.has(workflowId) ? (Number(yoloVideoFps) || 24) : null,
+          inputKeyframe: summarizeImageAsset(keyframeAsset),
+          activeJob: activeJobs[0] ? {
+            id: activeJobs[0].id,
+            status: activeJobs[0].status,
+            progress: Number(activeJobs[0].progress) || 0,
+            workflowId: activeJobs[0].workflowId || '',
+            workflowLabel: activeJobs[0].workflowLabel || '',
+            error: activeJobs[0].error || '',
+          } : null,
+          latestAsset: assetHistory[0] || null,
+          assetHistory,
+        })
+      }
+    }
+
+    const blockedReasons = []
+    if (!isConnected) blockedReasons.push('ComfyUI is not connected.')
+    if (yoloActivePlanIsStale) blockedReasons.push('The director script is out of date. Parse it again before regenerating videos.')
+    if (selectedWorkflowIds.length === 0) blockedReasons.push('No Step 5 video workflow is selected.')
+    if (
+      selectedWorkflowIds.includes(CUSTOM_MUSIC_VIDEO_WORKFLOW_ID)
+      && !yoloMusicCustomVideoValidation?.ok
+    ) {
+      blockedReasons.push(
+        yoloMusicCustomVideoValidation?.message
+          || 'The selected custom video workflow is not ready.'
+      )
+    }
+    for (const variant of variantReports) {
+      if (!variant.inputKeyframe) blockedReasons.push(`${variant.key} needs a generated Step 4 keyframe first.`)
+      if (variant.activeJob) blockedReasons.push(`${variant.scopedKey} is already ${variant.activeJob.status}.`)
+      if (variant.workflowId === MUSIC_VIDEO_SHOT_WORKFLOW_ID && !yoloMusicAudioAsset) {
+        blockedReasons.push(`${variant.workflowLabel} needs the song audio asset from Step 1.`)
+      }
+    }
+
+    return {
+      sceneId: targetSceneId,
+      shotId: targetShotId,
+      sceneLabel: scene.label || '',
+      shotLabel: shot.scriptShotLabel || shot.label || '',
+      shotType: shot.musicShotType || variants[0]?.musicShotType || '',
+      motionPrompt: String(shot?.shotPrompt || shot?.videoBeat || shot?.beat || variants[0]?.videoPrompt || ''),
+      selectedWorkflowIds,
+      resolution: {
+        width: Number(resolution?.width) || null,
+        height: Number(resolution?.height) || null,
+      },
+      connected: Boolean(isConnected),
+      planIsStale: Boolean(yoloActivePlanIsStale),
+      variantCount: variantReports.length,
+      canRegenerate: blockedReasons.length === 0,
+      blockedReasons: Array.from(new Set(blockedReasons)),
+      variants: variantReports,
+    }
+  }, [
+    assets,
+    generationQueue,
+    isConnected,
+    isYoloMusicMode,
+    resolution,
+    yoloActivePlan,
+    yoloActivePlanIsStale,
+    yoloMusicAudioAsset,
+    yoloMusicCustomVideoValidation,
+    yoloSelectedVideoWorkflowIds,
+    yoloStoryboardAssetMap,
+    yoloVideoFps,
+  ])
+
+  useEffect(() => {
+    const eventName = 'comfystudio-mcp-music-video-workflow'
+    const handler = async (event) => {
+      const detail = event?.detail || {}
+      const respond = typeof detail.respond === 'function' ? detail.respond : () => {}
+      const operation = String(detail.operation || '').trim().toLowerCase()
+      try {
+        if (operation === 'get-plan') {
+          const plan = buildMcpMusicVideoPlanReport()
+          respond({
+            success: true,
+            operation,
+            plan,
+            message: `Read ${plan.summary.shotCount} planned Music Video shot${plan.summary.shotCount === 1 ? '' : 's'}.`,
+          })
+          return
+        }
+        const report = buildMcpMusicVideoVideoReport(detail.sceneId, detail.shotId)
+        const previewOnly = operation !== 'regenerate-video' || detail.previewOnly !== false
+        if (previewOnly) {
+          respond({
+            success: true,
+            previewOnly: operation === 'regenerate-video',
+            operation,
+            report,
+            message: operation === 'regenerate-video'
+              ? `Previewed the Step 5 video regeneration for ${report.sceneId} ${report.shotId}. Nothing was queued.`
+              : `Inspected the Step 5 video for ${report.sceneId} ${report.shotId}.`,
+          })
+          return
+        }
+        if (!report.canRegenerate) {
+          respond({
+            success: false,
+            error: report.blockedReasons.join(' ') || 'This Step 5 video cannot be regenerated right now.',
+            report,
+          })
+          return
+        }
+        const queuedCount = await handleQueueYoloShotVideo(report.sceneId, report.shotId, {
+          targetWorkflowIds: report.selectedWorkflowIds,
+        })
+        if (!Number.isFinite(Number(queuedCount)) || Number(queuedCount) <= 0) {
+          respond({
+            success: false,
+            error: 'Velorn did not queue a Step 5 video job. Inspect the shot again for its current state.',
+            report,
+          })
+          return
+        }
+        respond({
+          success: true,
+          previewOnly: false,
+          operation,
+          queuedCount: Number(queuedCount),
+          report,
+          message: `Queued ${queuedCount} Step 5 video regeneration job${Number(queuedCount) === 1 ? '' : 's'} for ${report.sceneId} ${report.shotId}.`,
+        })
+      } catch (error) {
+        respond({
+          success: false,
+          error: error instanceof Error ? error.message : String(error || 'Could not process the Music Video workflow request.'),
+        })
+      }
+    }
+    window.addEventListener(eventName, handler)
+    return () => window.removeEventListener(eventName, handler)
+  }, [
+    buildMcpMusicVideoPlanReport,
+    buildMcpMusicVideoVideoReport,
+    handleQueueYoloShotVideo,
   ])
 
   const handleQueueYoloShotVideos = useCallback(async (targets = [], options = {}) => {
@@ -14362,7 +15160,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         case CUSTOM_MUSIC_KEYFRAME_WORKFLOW_ID:
         case CUSTOM_AD_KEYFRAME_WORKFLOW_ID:
           modifiedWorkflow = modifyCustomKeyframeWorkflow(workflowJson, {
-            requireInputImage: job.workflowId !== CUSTOM_AD_KEYFRAME_WORKFLOW_ID,
+            requireInputImage: job.workflowId === CUSTOM_MUSIC_KEYFRAME_WORKFLOW_ID
+              ? job?.customWorkflow?.requiresInputImage !== false
+              : false,
             prompt: job.prompt,
             inputImage: uploadedFilename,
             seed: job.seed,

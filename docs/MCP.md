@@ -251,7 +251,7 @@ For interchange, preview `export_fcpxml` before writing a file.
 
 ## Tool Catalog
 
-Velorn currently exposes 103 MCP tools.
+Velorn currently exposes 109 MCP tools.
 
 ### Project, Recipes, And Discovery
 
@@ -281,6 +281,11 @@ Velorn currently exposes 103 MCP tools.
 | `inspect_visible_shots` | Find top-visible shot changes and sample each visible shot. |
 | `get_generation_status` | Summarize active, failed, and recent generated asset status. |
 | `get_music_video_status` | Summarize music-video workflow assets, assembled clips, and sync locks. |
+| `get_music_video_plan` | Return every parsed Music Video scene and shot, including IDs, prompts, timing, workflows, active jobs, and Step 4/5 completion state. |
+| `inspect_music_video_keyframe` | Inspect one Music Video Step 4 shot, including its prompt, workflow routing, active job, latest image, and generation history. |
+| `regenerate_music_video_keyframe` | Preview or queue one Step 4 shot through the active Music Video keyframe settings and native routing. |
+| `inspect_music_video_video` | Inspect one Music Video Step 5 shot, including its input keyframe, motion prompt, timing, active job, latest video, history, and poster. |
+| `regenerate_music_video_video` | Preview or queue one Step 5 shot through the active Music Video video settings and native routing. |
 | `analyze_timeline` | Produce an AI-friendly timeline health report. |
 | `analyze_music_video_workflow` | Produce an AI-friendly music-video workflow health report. |
 
@@ -534,4 +539,3 @@ For square or vertical exports, make sure the agent previews `deliveryFraming` s
 - Do not assume a write tool changed the project unless the returned result says it applied successfully.
 - Favor explicit IDs from read tools over natural-language targeting for write tools.
 - Queueing generation and running exports can take time. Poll status tools such as `get_generation_status`, `get_caption_status`, or inspect output files after completion.
-

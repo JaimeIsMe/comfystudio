@@ -39,7 +39,7 @@ import {
   handleGenerateCaptions,
 } from './mcpCaptions'
 
-export const MCP_ACTION_BRIDGE_VERSION = 2
+export const MCP_ACTION_BRIDGE_VERSION = 4
 
 const MCP_PROJECT_CHECKPOINTS = new Map()
 const MCP_PROJECT_CHECKPOINT_LIMIT = 20
@@ -1949,6 +1949,124 @@ async function handleQueuePreparedGeneration(payload = {}) {
         },
       },
     }))
+  })
+}
+
+async function waitForMusicVideoWorkspaceReady(timeoutMs = 30000) {
+  if (typeof window === 'undefined') {
+    throw new Error('Music Video tools are only available in the renderer.')
+  }
+
+  window.dispatchEvent(new CustomEvent('comfystudio-open-generate-tab', {
+    detail: { source: 'mcp-music-video-workspace' },
+  }))
+
+  return await new Promise((resolve, reject) => {
+    const startedAt = Date.now()
+    const readyTimeoutMs = Math.min(timeoutMs, 10000)
+    let probeTimer = null
+    let settled = false
+    const finish = (callback, value) => {
+      if (settled) return
+      settled = true
+      if (probeTimer) clearTimeout(probeTimer)
+      callback(value)
+    }
+    const probe = () => {
+      window.dispatchEvent(new CustomEvent('comfystudio-mcp-music-video-keyframe-probe', {
+        detail: {
+          respond: () => finish(resolve),
+        },
+      }))
+      if (settled) return
+      if (Date.now() - startedAt >= readyTimeoutMs) {
+        finish(reject, new Error('The Generate workspace did not become ready. Open a Velorn project and try again.'))
+        return
+      }
+      probeTimer = setTimeout(probe, 100)
+    }
+    probe()
+  })
+}
+
+async function dispatchMusicVideoWorkspaceRequest(payload = {}, {
+  operation,
+  eventName,
+  errorLabel = 'Music Video request',
+} = {}) {
+  if (typeof window === 'undefined') {
+    throw new Error('Music Video tools are only available in the renderer.')
+  }
+
+  const timeoutMs = Math.min(120000, Math.max(1000, Number(payload.timeoutMs) || 30000))
+  await waitForMusicVideoWorkspaceReady(timeoutMs)
+
+  return await new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (callback, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      callback(value)
+    }
+
+    const timeout = setTimeout(() => {
+      finish(reject, new Error('The Music Video workspace did not respond. Open Generate > Create Beta > Music Video Generation and try again.'))
+    }, timeoutMs)
+
+    window.dispatchEvent(new CustomEvent(eventName, {
+      detail: {
+        ...payload,
+        operation,
+        respond: (result = {}) => {
+          if (result?.success === false) {
+            finish(reject, new Error(result.error || result.message || `Could not process the ${errorLabel}.`))
+            return
+          }
+          finish(resolve, result)
+        },
+      },
+    }))
+  })
+}
+
+async function handleInspectMusicVideoKeyframe(payload = {}) {
+  return await dispatchMusicVideoWorkspaceRequest(payload, {
+    operation: 'inspect',
+    eventName: 'comfystudio-mcp-music-video-keyframe',
+    errorLabel: 'Music Video keyframe inspection',
+  })
+}
+
+async function handleRegenerateMusicVideoKeyframe(payload = {}) {
+  return await dispatchMusicVideoWorkspaceRequest(payload, {
+    operation: 'regenerate',
+    eventName: 'comfystudio-mcp-music-video-keyframe',
+    errorLabel: 'Music Video keyframe regeneration',
+  })
+}
+
+async function handleGetMusicVideoPlan(payload = {}) {
+  return await dispatchMusicVideoWorkspaceRequest(payload, {
+    operation: 'get-plan',
+    eventName: 'comfystudio-mcp-music-video-workflow',
+    errorLabel: 'Music Video plan inspection',
+  })
+}
+
+async function handleInspectMusicVideoVideo(payload = {}) {
+  return await dispatchMusicVideoWorkspaceRequest(payload, {
+    operation: 'inspect-video',
+    eventName: 'comfystudio-mcp-music-video-workflow',
+    errorLabel: 'Music Video Step 5 inspection',
+  })
+}
+
+async function handleRegenerateMusicVideoVideo(payload = {}) {
+  return await dispatchMusicVideoWorkspaceRequest(payload, {
+    operation: 'regenerate-video',
+    eventName: 'comfystudio-mcp-music-video-workflow',
+    errorLabel: 'Music Video Step 5 regeneration',
   })
 }
 
@@ -7804,6 +7922,16 @@ async function handleMcpAction(request = {}) {
       return handlePrepareGenerationFromTimelineContext(request.payload || {})
     case 'queue_prepared_generation':
       return handleQueuePreparedGeneration(request.payload || {})
+    case 'inspect_music_video_keyframe':
+      return handleInspectMusicVideoKeyframe(request.payload || {})
+    case 'regenerate_music_video_keyframe':
+      return handleRegenerateMusicVideoKeyframe(request.payload || {})
+    case 'get_music_video_plan':
+      return handleGetMusicVideoPlan(request.payload || {})
+    case 'inspect_music_video_video':
+      return handleInspectMusicVideoVideo(request.payload || {})
+    case 'regenerate_music_video_video':
+      return handleRegenerateMusicVideoVideo(request.payload || {})
     case 'queue_timeline_generation_batch':
       return handleQueueTimelineGenerationBatch(request.payload || {})
     case 'queue_timeline_template_generation':

@@ -74,6 +74,8 @@ const MCP_ACTION_PLAN_WRITABLE_TOOLS = new Set([
   'set_clip_keyframes',
   'add_dip_to_black',
   'generate_music',
+  'regenerate_music_video_keyframe',
+  'regenerate_music_video_video',
   'queue_timeline_template_generation',
   'export_timeline',
   'export_delivery_batch',
@@ -2633,6 +2635,19 @@ function buildAiReviewPasses(snapshot) {
           maxPromptBatchJobs: MCP_PROMPT_BATCH_MAX_TOTAL_JOBS,
           defaultImageWorkflowId: 'z-image-turbo',
           defaultVideoWorkflowId: 'ltx23-t2v',
+        },
+      },
+      {
+        id: 'music_video_keyframe_rerun',
+        title: 'Music Video Shot Rerun',
+        goal: 'Discover, inspect, and regenerate one Music Video Step 4 keyframe or Step 5 video through the active workflow settings.',
+        prompt: 'Call get_music_video_plan first to discover the exact sceneId and shotId, prompts, timing, and missing stages. For Step 4, inspect with inspect_music_video_keyframe, then preview regenerate_music_video_keyframe. For Step 5, inspect with inspect_music_video_video, then preview regenerate_music_video_video. Show the current inputs, selected workflow, routing, active job, and latest result. Apply only after I approve because a rerun may start local GPU work or spend cloud credits. Inspect the same stage again after generation finishes.',
+        tools: ['get_music_video_status', 'get_music_video_plan', 'inspect_music_video_keyframe', 'regenerate_music_video_keyframe', 'inspect_music_video_video', 'regenerate_music_video_video', 'get_generation_status'],
+        safeDefaults: {
+          previewOnlyFirst: true,
+          usesActiveMusicVideoSettings: true,
+          queuesGenerationOnlyAfterApproval: true,
+          inspectAgainAfterCompletion: true,
         },
       },
       {
@@ -7524,6 +7539,74 @@ function createToolDefinitions() {
       },
     },
     {
+      name: 'inspect_music_video_keyframe',
+      description: 'Inspect one Music Video Step 4 shot through the open Generate workspace. Returns its prompt, current keyframe, generation history, active job, selected workflow, expected workflow routing, and whether it can be regenerated. Read-only.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sceneId: { type: 'string', description: 'Exact scene ID from the parsed Music Video director script, such as S1.' },
+          shotId: { type: 'string', description: 'Exact shot ID from the parsed Music Video director script, such as S1_SH1.' },
+          includeImage: { type: 'boolean', description: 'Include the latest generated keyframe image when it is small enough to embed. Defaults to true.' },
+          maxImageBytes: { type: 'integer', description: 'Maximum latest-image size to embed. Defaults to 3MB and is capped at 10MB.' },
+          timeoutMs: { type: 'integer', description: 'Optional renderer response timeout in milliseconds. Defaults to 30000.' },
+        },
+        required: ['sceneId', 'shotId'],
+      },
+    },
+    {
+      name: 'regenerate_music_video_keyframe',
+      description: 'Preview or queue regeneration of one Music Video Step 4 shot using the exact active keyframe settings and native Velorn routing. This includes reference-free b-roll fallback routing. Defaults to previewOnly and may start local GPU work or spend cloud credits when applied.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sceneId: { type: 'string', description: 'Exact scene ID from the parsed Music Video director script, such as S1.' },
+          shotId: { type: 'string', description: 'Exact shot ID from the parsed Music Video director script, such as S1_SH1.' },
+          previewOnly: { type: 'boolean', description: 'When true, returns the exact routing and prompt without queueing generation. Defaults to true.' },
+          timeoutMs: { type: 'integer', description: 'Optional renderer response timeout in milliseconds. Defaults to 30000.' },
+        },
+        required: ['sceneId', 'shotId'],
+      },
+    },
+    {
+      name: 'get_music_video_plan',
+      description: 'Return the parsed Music Video director plan from the open Generate workspace, including every sceneId and shotId, timing, shot type, keyframe and motion prompts, selected workflows, active jobs, and Step 4/5 completion state. Includes shots that have not generated assets yet. Read-only.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          timeoutMs: { type: 'integer', description: 'Optional renderer response timeout in milliseconds. Defaults to 30000.' },
+        },
+      },
+    },
+    {
+      name: 'inspect_music_video_video',
+      description: 'Inspect one Music Video Step 5 shot through the open Generate workspace. Returns its input keyframe, motion prompt, timing, active workflow settings, active job, latest video, output history, and latest poster image when available. Read-only.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sceneId: { type: 'string', description: 'Exact scene ID from get_music_video_plan, such as S1.' },
+          shotId: { type: 'string', description: 'Exact shot ID from get_music_video_plan, such as S1_SH1.' },
+          includeImage: { type: 'boolean', description: 'Include the latest video poster image when available and small enough to embed. Defaults to true.' },
+          maxImageBytes: { type: 'integer', description: 'Maximum poster-image size to embed. Defaults to 3MB and is capped at 10MB.' },
+          timeoutMs: { type: 'integer', description: 'Optional renderer response timeout in milliseconds. Defaults to 30000.' },
+        },
+        required: ['sceneId', 'shotId'],
+      },
+    },
+    {
+      name: 'regenerate_music_video_video',
+      description: 'Preview or queue regeneration of one Music Video Step 5 shot using its generated keyframe and the exact active video settings and native Velorn routing. Defaults to previewOnly and may start local GPU work or spend cloud credits when applied.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sceneId: { type: 'string', description: 'Exact scene ID from get_music_video_plan, such as S1.' },
+          shotId: { type: 'string', description: 'Exact shot ID from get_music_video_plan, such as S1_SH1.' },
+          previewOnly: { type: 'boolean', description: 'When true, returns the exact input, prompt, timing, and workflow without queueing generation. Defaults to true.' },
+          timeoutMs: { type: 'integer', description: 'Optional renderer response timeout in milliseconds. Defaults to 30000.' },
+        },
+        required: ['sceneId', 'shotId'],
+      },
+    },
+    {
       name: 'analyze_timeline',
       description: 'Return an AI-friendly read-only timeline health report with likely export risks, missing media, tiny clips/gaps, overlaps, track state, XML imports, transforms, and next actions.',
       inputSchema: {
@@ -10216,6 +10299,16 @@ class ComfyStudioMcpServer {
         return this.runRendererActionTool('generate_captions', args, { bridgeName: 'MCP captions bridge', suggestedTool: 'generate_captions', defaultPreviewOnly: true })
       case 'get_music_video_status':
         return textResult(summarizeMusicVideoWorkflow(snapshot))
+      case 'inspect_music_video_keyframe':
+        return this.inspectMusicVideoKeyframeTool(args)
+      case 'regenerate_music_video_keyframe':
+        return this.runRendererActionTool('regenerate_music_video_keyframe', args, { bridgeName: 'MCP Music Video keyframe bridge', suggestedTool: 'regenerate_music_video_keyframe', defaultPreviewOnly: true })
+      case 'get_music_video_plan':
+        return this.runRendererActionTool('get_music_video_plan', args, { bridgeName: 'MCP Music Video plan bridge', suggestedTool: 'get_music_video_plan' })
+      case 'inspect_music_video_video':
+        return this.inspectMusicVideoVideoTool(snapshot, args)
+      case 'regenerate_music_video_video':
+        return this.runRendererActionTool('regenerate_music_video_video', args, { bridgeName: 'MCP Music Video Step 5 bridge', suggestedTool: 'regenerate_music_video_video', defaultPreviewOnly: true })
       case 'analyze_timeline':
         return textResult(analyzeTimeline(snapshot, args))
       case 'analyze_music_video_workflow':
@@ -10827,6 +10920,93 @@ class ComfyStudioMcpServer {
       })
     } catch (error) {
       return errorResult(`${suggestedTool} failed: ${error?.message || String(error)}`)
+    }
+  }
+
+  async inspectMusicVideoKeyframeTool(args = {}) {
+    if (!this.performAction) {
+      return errorResult('MCP Music Video keyframe inspection is not available. Restart Velorn and try again.')
+    }
+    try {
+      const result = await this.performAction({
+        action: 'inspect_music_video_keyframe',
+        payload: args || {},
+      })
+      const latestAsset = result?.report?.variants?.[0]?.latestAsset || null
+      const includeImage = args.includeImage !== false
+      const maxImageBytes = clampLimit(args.maxImageBytes, 3 * 1024 * 1024, 10 * 1024 * 1024)
+      let imageContent = null
+      let imageWarning = ''
+      let imageSize = null
+      if (includeImage && latestAsset?.absolutePath) {
+        const imageResult = await readImageContent(latestAsset.absolutePath, maxImageBytes)
+        imageContent = imageResult.imageContent
+        imageWarning = imageResult.warning || ''
+        imageSize = imageResult.size || null
+      } else if (includeImage) {
+        imageWarning = 'No generated keyframe image is available for this shot yet.'
+      }
+      return mixedResult({
+        success: result?.success !== false,
+        action: 'inspect_music_video_keyframe',
+        message: result?.message || 'Inspected the Music Video Step 4 keyframe.',
+        result,
+        previewImage: {
+          assetId: latestAsset?.id || null,
+          path: latestAsset?.absolutePath || '',
+          imageIncluded: Boolean(imageContent),
+          imageSize,
+          warning: imageWarning,
+        },
+      }, imageContent ? [imageContent] : [])
+    } catch (error) {
+      return errorResult(`inspect_music_video_keyframe failed: ${error?.message || String(error)}`)
+    }
+  }
+
+  async inspectMusicVideoVideoTool(snapshot, args = {}) {
+    if (!this.performAction) {
+      return errorResult('MCP Music Video Step 5 inspection is not available. Restart Velorn and try again.')
+    }
+    try {
+      const result = await this.performAction({
+        action: 'inspect_music_video_video',
+        payload: args || {},
+      })
+      const latestAsset = result?.report?.variants?.[0]?.latestAsset || null
+      const includeImage = args.includeImage !== false
+      const maxImageBytes = clampLimit(args.maxImageBytes, 3 * 1024 * 1024, 10 * 1024 * 1024)
+      const posterPath = latestAsset?.posterPath
+        ? resolveProjectFilePath(snapshot, latestAsset.posterPath)
+        : ''
+      let imageContent = null
+      let imageWarning = ''
+      let imageSize = null
+      if (includeImage && posterPath) {
+        const imageResult = await readImageContent(posterPath, maxImageBytes)
+        imageContent = imageResult.imageContent
+        imageWarning = imageResult.warning || ''
+        imageSize = imageResult.size || null
+      } else if (includeImage && latestAsset) {
+        imageWarning = 'The latest video does not have a generated poster image yet.'
+      } else if (includeImage) {
+        imageWarning = 'No generated Step 5 video is available for this shot yet.'
+      }
+      return mixedResult({
+        success: result?.success !== false,
+        action: 'inspect_music_video_video',
+        message: result?.message || 'Inspected the Music Video Step 5 video.',
+        result,
+        previewImage: {
+          assetId: latestAsset?.id || null,
+          path: posterPath,
+          imageIncluded: Boolean(imageContent),
+          imageSize,
+          warning: imageWarning,
+        },
+      }, imageContent ? [imageContent] : [])
+    } catch (error) {
+      return errorResult(`inspect_music_video_video failed: ${error?.message || String(error)}`)
     }
   }
 
