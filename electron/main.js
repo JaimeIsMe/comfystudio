@@ -2453,6 +2453,7 @@ function deriveWorkflowIdFromFile(filename = '') {
     api_openai_gpt_image_2_t2i: 'gpt-image-2-t2i',
     api_openai_gpt_image_2_ugc_keyframe: 'gpt-image-2-ugc-keyframe',
     api_seedance2_0_flf2v: 'seedance2-flf2v',
+    api_seedance2_0_mini_r2v: 'seedance2-mini-r2v',
     api_seedance2_0_r2v: 'seedance2-r2v',
     api_seedance2_0_t2v: 'seedance2-t2v',
     api_sonilo_v2m: 'sonilo-v2m',

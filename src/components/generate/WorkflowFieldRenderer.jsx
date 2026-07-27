@@ -363,7 +363,7 @@ export default function WorkflowFieldRenderer({ field, workflow, values, actions
 
   if (field.type === 'duration') {
     const ltxDurationWorkflowIds = new Set(['ltx23-i2v', 'ltx23-ia2v', 'ltx23-t2v'])
-    const seedanceDurationWorkflowIds = new Set(['seedance2-t2v', 'seedance2-flf2v', 'seedance2-r2v'])
+    const seedanceDurationWorkflowIds = new Set(['seedance2-t2v', 'seedance2-mini-r2v', 'seedance2-flf2v', 'seedance2-r2v'])
     const durationOptions = ltxDurationWorkflowIds.has(workflow?.workflowId)
       ? [5, 8, 10, 15]
       : seedanceDurationWorkflowIds.has(workflow?.workflowId)

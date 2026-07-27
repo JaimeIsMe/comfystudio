@@ -432,6 +432,32 @@ export const WORKFLOW_DEPENDENCY_PACKS = Object.freeze({
     docsUrl: COMFY_REGISTRY_URL,
   }),
 
+  'seedance2-mini-t2v': Object.freeze({
+    id: 'seedance2-mini-t2v',
+    displayName: 'Seedance 2.0 Mini Text-to-Video',
+    requiredNodes: Object.freeze([
+      { classType: 'ByteDance2TextToVideoNode' },
+      { classType: 'SaveVideo' },
+    ]),
+    requiredModels: Object.freeze([]),
+    requiresComfyOrgApiKey: true,
+    docsUrl: COMFY_REGISTRY_URL,
+  }),
+
+  'seedance2-mini-r2v': Object.freeze({
+    id: 'seedance2-mini-r2v',
+    displayName: 'Seedance 2.0 Mini Reference + Audio Guide',
+    requiredNodes: Object.freeze([
+      { classType: 'ByteDance2ReferenceNode' },
+      { classType: 'LoadImage' },
+      { classType: 'LoadVideo' },
+      { classType: 'SaveVideo' },
+    ]),
+    requiredModels: Object.freeze([]),
+    requiresComfyOrgApiKey: true,
+    docsUrl: COMFY_REGISTRY_URL,
+  }),
+
   'seedance2-flf2v': Object.freeze({
     id: 'seedance2-flf2v',
     displayName: 'Seedance 2.0 First/Last Frame-to-Video',

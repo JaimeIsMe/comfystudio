@@ -2702,6 +2702,11 @@ export function modifySeedance2Workflow(workflow, options = {}) {
     assetFilenames.referenceAudio3,
     assetFilenames.referenceAudio4,
   ]
+  const referenceVideos = [
+    assetFilenames.referenceVideo1,
+    assetFilenames.referenceVideo2,
+    assetFilenames.referenceVideo3,
+  ]
 
   for (const [nodeId, node] of Object.entries(modified)) {
     if (!node?.inputs) continue
@@ -2744,6 +2749,18 @@ export function modifySeedance2Workflow(workflow, options = {}) {
           if (!Array.isArray(node.inputs[inputKey])) return
           const loadNode = modified[String(node.inputs[inputKey][0])]
           if (loadNode?.inputs && 'audio' in loadNode.inputs) loadNode.inputs.audio = filename
+        })
+        referenceVideos.forEach((filename, index) => {
+          const inputKey = `model.reference_videos.video_${index + 1}`
+          if (!filename) {
+            if (inputKey in node.inputs) delete node.inputs[inputKey]
+            return
+          }
+          if (!Array.isArray(node.inputs[inputKey])) return
+          const loadNode = modified[String(node.inputs[inputKey][0])]
+          if (loadNode?.class_type === 'LoadVideo' && loadNode.inputs && 'file' in loadNode.inputs) {
+            loadNode.inputs.file = filename
+          }
         })
       }
     }

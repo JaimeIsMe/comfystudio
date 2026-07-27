@@ -1,0 +1,33 @@
+{
+  "343": {
+    "inputs": {
+      "model": "Seedance 2.0 Mini",
+      "model.prompt": "A cinematic shot of a lighthouse on a cliff at golden hour, waves crashing below, birds circling, warm sunlight.",
+      "model.resolution": "720p",
+      "model.ratio": "16:9",
+      "model.duration": 5,
+      "model.generate_audio": true,
+      "seed": 675586000,
+      "watermark": false
+    },
+    "class_type": "ByteDance2TextToVideoNode",
+    "_meta": {
+      "title": "ByteDance Seedance 2.0 Mini Text to Video"
+    }
+  },
+  "344": {
+    "inputs": {
+      "filename_prefix": "video/Seedance2.0Mini_t2v",
+      "format": "auto",
+      "codec": "auto",
+      "video": [
+        "343",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  }
+}

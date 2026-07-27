@@ -39,6 +39,7 @@ export const WORKFLOWS = {
     { id: 'grok-video-i2v', label: 'Image to Video (Grok Imagine Video)', needsImage: true, description: 'Cloud image-to-video with Grok Imagine Video Beta' },
     { id: 'vidu-q2-i2v', label: 'Image to Video (Vidu Q2)', needsImage: true, description: 'Cloud image-to-video with Vidu Q2 Pro Fast' },
     { id: 'seedance2-t2v', label: 'Text to Video (Seedance 2.0)', needsImage: false, description: 'Cloud text-to-video with ByteDance Seedance 2.0' },
+    { id: 'seedance2-mini-r2v', label: 'Reference + Audio Guide (Seedance 2.0 Mini)', needsImage: false, description: 'Lower-cost multi-reference video with an audio-guide video' },
     { id: 'seedance2-flf2v', label: 'First/Last Frame to Video (Seedance 2.0)', needsImage: false, description: 'Cloud first/last-frame video with ByteDance Seedance 2.0' },
     { id: 'seedance2-r2v', label: 'Reference to Video (Seedance 2.0)', needsImage: false, description: 'Cloud multi-reference video with ByteDance Seedance 2.0' },
     { id: TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID, label: 'Topaz Video Enhance', needsImage: false, description: 'Cloud video upscaling and enhancement' },
@@ -173,7 +174,7 @@ export function getVideoDurationPresets(workflowId = '') {
   if (['ltx23-i2v', 'ltx23-ia2v', 'ltx23-id-lora', 'ltx23-t2v'].includes(normalized)) {
     return LTX23_VIDEO_DURATION_PRESETS
   }
-  if (['seedance2-t2v', 'seedance2-flf2v', 'seedance2-r2v'].includes(normalized)) {
+  if (['seedance2-t2v', 'seedance2-mini-r2v', 'seedance2-flf2v', 'seedance2-r2v'].includes(normalized)) {
     return SEEDANCE_VIDEO_DURATION_PRESETS
   }
   return VIDEO_DURATION_PRESETS
@@ -345,6 +346,7 @@ const WORKFLOW_DISPLAY_LABELS = Object.freeze({
   'grok-video-i2v': 'Grok Imagine Video',
   'vidu-q2-i2v': 'Vidu Q2',
   'seedance2-t2v': 'Seedance 2.0 Text to Video',
+  'seedance2-mini-r2v': 'Seedance 2.0 Mini Reference + Audio Guide',
   'seedance2-flf2v': 'Seedance 2.0 First/Last Frame',
   'seedance2-r2v': 'Seedance 2.0 Reference to Video',
   [TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID]: 'Topaz Video Upscale',
@@ -537,6 +539,10 @@ const WORKFLOW_HARDWARE = Object.freeze({
     runtime: 'cloud',
   },
   'seedance2-t2v': {
+    tierId: 'cloud',
+    runtime: 'cloud',
+  },
+  'seedance2-mini-r2v': {
     tierId: 'cloud',
     runtime: 'cloud',
   },

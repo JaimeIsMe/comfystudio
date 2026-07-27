@@ -886,6 +886,7 @@ const AD_MODEL_FOLDER_NAMES = {
   'ltx23-i2v': 'LTX 2.3',
   'wan22-i2v': 'WAN 2.2',
   'seedance2-r2v': 'Seedance 2.0',
+  'seedance2-mini-r2v': 'Seedance 2.0 Mini',
   'music-video-shot-ltx23': 'LTX 2.3 Lip Sync',
   'nano-banana-2': 'Nano Banana 2',
   'image-edit-model-product': 'Qwen Image Edit',
@@ -13846,6 +13847,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         job.workflowId === 'ltx23-t2v' ||
         job.workflowId === 'wan22-t2v' ||
         job.workflowId === 'seedance2-t2v' ||
+        job.workflowId === 'seedance2-mini-r2v' ||
         job.workflowId === 'seedance2-flf2v' ||
         job.workflowId === 'seedance2-r2v' ||
         job.workflowId === TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID
@@ -14318,6 +14320,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           })
           break
         case 'seedance2-t2v':
+        case 'seedance2-mini-t2v':
+        case 'seedance2-mini-r2v':
         case 'seedance2-flf2v':
         case 'seedance2-r2v': {
           const seedanceAssetFilenames = { ...assetFieldFilenames }

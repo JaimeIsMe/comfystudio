@@ -1,0 +1,100 @@
+{
+  "344": {
+    "inputs": {
+      "filename_prefix": "video/Seedance2.0Mini_r2v",
+      "format": "auto",
+      "codec": "auto",
+      "video": [
+        "359",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  },
+  "352": {
+    "inputs": {
+      "image": "seedance_reference_1.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Reference Image 1"
+    }
+  },
+  "353": {
+    "inputs": {
+      "image": "seedance_reference_2.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Reference Image 2"
+    }
+  },
+  "354": {
+    "inputs": {
+      "image": "seedance_reference_3.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Reference Image 3"
+    }
+  },
+  "355": {
+    "inputs": {
+      "image": "seedance_reference_4.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Reference Image 4"
+    }
+  },
+  "357": {
+    "inputs": {
+      "file": "seedance_audio_guide.mp4"
+    },
+    "class_type": "LoadVideo",
+    "_meta": {
+      "title": "Audio Guide Video"
+    }
+  },
+  "359": {
+    "inputs": {
+      "model": "Seedance 2.0 Mini",
+      "model.prompt": "A cinematic, photorealistic performance using the supplied character and shot references. Preserve identity, wardrobe, materials, lighting, and composition. The active puppet performs the supplied audio-guide video with precise mouth timing while all other mouths remain closed.",
+      "model.resolution": "720p",
+      "model.ratio": "9:16",
+      "model.duration": 5,
+      "model.generate_audio": true,
+      "model.auto_downscale": false,
+      "model.auto_upscale": false,
+      "seed": 0,
+      "watermark": false,
+      "model.reference_images.image_1": [
+        "352",
+        0
+      ],
+      "model.reference_images.image_2": [
+        "353",
+        0
+      ],
+      "model.reference_images.image_3": [
+        "354",
+        0
+      ],
+      "model.reference_images.image_4": [
+        "355",
+        0
+      ],
+      "model.reference_videos.video_1": [
+        "357",
+        0
+      ]
+    },
+    "class_type": "ByteDance2ReferenceNode",
+    "_meta": {
+      "title": "ByteDance Seedance 2.0 Mini Reference to Video"
+    }
+  }
+}
