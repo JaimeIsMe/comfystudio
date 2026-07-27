@@ -600,3 +600,33 @@ Generate-from-timeline preparation tools after the launcher/log support pass.
 - `src/components/SettingsModal.jsx` - visible MCP tool list.
 
 ---
+
+## 4. Separate cloud Music Video Creation experience
+
+**Added:** 2026-07-14
+**Priority:** Parked; explicitly not for the current work session
+
+The existing Music Video Creation flow is primarily built around local LTX
+generation. A separate cloud-oriented creator is worth implementing for more
+complex, reference-heavy productions. A dormant catalog entry already exists
+as `music-video-template-cloud` in `src/config/generateWorkflowCatalog.js`.
+
+This should reuse the existing song import, timed lyrics, director script,
+cast, keyframes, coverage planning, shot review, reruns, and timeline assembly.
+The cloud-specific generation stage should support:
+
+- GPT Image-quality keyframes and multiple character/environment references.
+- Seedance 2.0 Mini reference-video generation with native audio enabled.
+- A padded generation window: one second of pre-roll and post-roll for
+  interior shots, with sensible first-shot and last-shot exceptions.
+- Separate action timing, padded generation timing, and editable source
+  handles so timeline assembly does not throw away the padding.
+- A test-first flow that generates one approved shot before the paid batch.
+- Per-shot and total cost estimates before queueing cloud work.
+- Audio-guide videos created from the song automatically; generated clip audio
+  must not be placed on the timeline, which should retain the original song.
+
+Keep the naming simple: this is the cloud counterpart to Music Video Creation,
+not a new branded "director" or "lip-sync" product.
+
+---
