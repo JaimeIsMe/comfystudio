@@ -5,6 +5,7 @@ import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import exportTimeline from '../services/exporter'
 import buildFcpXml from '../services/fcpxmlExporter'
+import buildPremiereXml from '../services/premiereXmlExporter'
 import { mixTimelineAudioToWav } from '../services/timelineAudioMix'
 import { analyzeAudioBuffer } from '../services/audioAnalysis'
 
@@ -16,6 +17,29 @@ const EXPORT_FORMATS = [
   { id: 'prores', label: 'MOV (ProRes)' },
   { id: 'gif', label: 'GIF (Preview - Soon)', disabled: true },
   { id: 'png-seq', label: 'PNG Sequence - Soon', disabled: true },
+]
+
+const XML_EXPORT_FORMATS = [
+  {
+    id: 'fcpxml',
+    label: 'Resolve / Final Cut (FCPXML)',
+    buttonLabel: 'Export FCPXML',
+    progressLabel: 'FCPXML',
+    extension: 'fcpxml',
+    dialogTitle: 'Export FCPXML',
+    filterName: 'Final Cut Pro XML',
+    tooltip: 'Export the current timeline as FCPXML for DaVinci Resolve or Final Cut Pro',
+  },
+  {
+    id: 'premiere',
+    label: 'Premiere Pro XML (Beta)',
+    buttonLabel: 'Export Premiere XML',
+    progressLabel: 'Premiere XML',
+    extension: 'xml',
+    dialogTitle: 'Export Premiere Pro XML',
+    filterName: 'Adobe Premiere Pro XML',
+    tooltip: 'Export the current timeline as Final Cut Pro 7 XMEML v5 for Adobe Premiere Pro',
+  },
 ]
 
 const RANGE_PRESETS = [
@@ -359,6 +383,9 @@ function ExportPanel() {
     }
   }
   const [isXmlExporting, setIsXmlExporting] = useState(false)
+  const [xmlExportFormat, setXmlExportFormat] = useState('fcpxml')
+  const xmlExportConfig = XML_EXPORT_FORMATS.find((format) => format.id === xmlExportFormat)
+    || XML_EXPORT_FORMATS[0]
   const exportStartRef = useRef(null)
   const renderStartRef = useRef(null)
   const [nvencStatus, setNvencStatus] = useState({
@@ -989,14 +1016,14 @@ function ExportPanel() {
     }
   }
 
-  const handleExportFcpXml = async () => {
+  const handleExportXml = async () => {
     if (isExporting || queueRunning || isXmlExporting) return
     if (!window.electronAPI?.writeFile || !window.electronAPI?.saveFileDialog || !window.electronAPI?.pathJoin) {
-      setExportError('FCPXML export is only available in the desktop app.')
+      setExportError(`${xmlExportConfig.progressLabel} export is only available in the desktop app.`)
       return
     }
     if (typeof currentProjectHandle !== 'string') {
-      setExportError('Open a saved project before exporting FCPXML.')
+      setExportError(`Open a saved project before exporting ${xmlExportConfig.progressLabel}.`)
       return
     }
 
@@ -1006,7 +1033,7 @@ function ExportPanel() {
     setExportProgress(0)
     setEtaSeconds(null)
     setRenderFps(null)
-    setExportStatus('Preparing FCPXML...')
+    setExportStatus(`Preparing ${xmlExportConfig.progressLabel}...`)
 
     try {
       const projectPath = currentProjectHandle
@@ -1028,12 +1055,13 @@ function ExportPanel() {
         && exportableAssetIds.has(clip.assetId)
       )).length
       if (exportableClipCount === 0) {
-        throw new Error('No media clips with project file paths are available for FCPXML export.')
+        throw new Error(`No media clips with project file paths are available for ${xmlExportConfig.progressLabel} export.`)
       }
 
       const timelineSettings = getCurrentTimelineSettings() || { width: 1920, height: 1080, fps: 24 }
       const timelineName = currentTimeline?.name || 'Timeline'
-      const xml = buildFcpXml({
+      const buildXml = xmlExportConfig.id === 'premiere' ? buildPremiereXml : buildFcpXml
+      const xml = buildXml({
         projectName,
         timelineName,
         timelineSettings,
@@ -1051,28 +1079,32 @@ function ExportPanel() {
       await window.electronAPI.createDirectory(outputFolder)
       const defaultPath = await window.electronAPI.pathJoin(
         outputFolder,
-        `${sanitizeExportBaseName(`${projectName}_${timelineName}`)}.fcpxml`
+        `${sanitizeExportBaseName(`${projectName}_${timelineName}`)}.${xmlExportConfig.extension}`
       )
       const outputPath = await window.electronAPI.saveFileDialog({
-        title: 'Export FCPXML',
+        title: xmlExportConfig.dialogTitle,
         defaultPath,
-        filters: [{ name: 'Final Cut Pro XML', extensions: ['fcpxml'] }],
+        filters: [{ name: xmlExportConfig.filterName, extensions: [xmlExportConfig.extension] }],
       })
       if (!outputPath) {
-        setExportStatus('FCPXML export cancelled')
+        setExportStatus(`${xmlExportConfig.progressLabel} export cancelled`)
         return
       }
 
       const writeResult = await window.electronAPI.writeFile(outputPath, xml, { encoding: 'utf8' })
       if (!writeResult?.success) {
-        throw new Error(writeResult?.error || 'Failed to write FCPXML file.')
+        throw new Error(writeResult?.error || `Failed to write ${xmlExportConfig.progressLabel} file.`)
       }
 
-      setExportResult({ outputPath, encoderUsed: 'FCPXML', clipCount: exportableClipCount })
-      setExportStatus(`FCPXML export complete (${exportableClipCount} clips)`)
+      setExportResult({
+        outputPath,
+        encoderUsed: xmlExportConfig.progressLabel,
+        clipCount: exportableClipCount,
+      })
+      setExportStatus(`${xmlExportConfig.progressLabel} export complete (${exportableClipCount} clips)`)
     } catch (err) {
-      setExportError(err?.message || 'FCPXML export failed')
-      setExportStatus('FCPXML export failed')
+      setExportError(err?.message || `${xmlExportConfig.progressLabel} export failed`)
+      setExportStatus(`${xmlExportConfig.progressLabel} export failed`)
     } finally {
       setIsXmlExporting(false)
     }
@@ -1635,7 +1667,7 @@ function ExportPanel() {
             
           </div>
           
-          <div className="mt-3 flex items-center justify-end gap-2 shrink-0">
+          <div className="mt-3 flex flex-wrap items-center justify-end gap-2 shrink-0">
             <button
               onClick={handleAddToQueue}
               className="px-3 py-1.5 text-xs rounded bg-sf-dark-700 text-sf-text-primary hover:bg-sf-dark-600 transition-colors flex items-center gap-1.5"
@@ -1655,19 +1687,32 @@ function ExportPanel() {
               <Play className="w-3 h-3" />
               {isExporting ? 'Exporting...' : (queueRunning ? 'Queue Running' : 'Start Export')}
             </button>
-            <button
-              onClick={handleExportFcpXml}
-              disabled={isExporting || queueRunning || isXmlExporting}
-              className={`px-3 py-1.5 text-xs rounded border flex items-center gap-1.5 transition-colors ${
-                isExporting || queueRunning || isXmlExporting
-                  ? 'bg-sf-dark-800 text-sf-text-muted border-sf-dark-600 cursor-not-allowed'
-                  : 'bg-sf-dark-800 text-sf-text-primary border-sf-dark-600 hover:border-sf-accent hover:text-white'
-              }`}
-              title="Export the current timeline as FCPXML for Resolve, Final Cut, or Premiere interchange"
-            >
-              <Download className="w-3 h-3" />
-              {isXmlExporting ? 'Exporting XML...' : 'Export FCPXML'}
-            </button>
+            <div className="flex items-center">
+              <select
+                value={xmlExportFormat}
+                onChange={(event) => setXmlExportFormat(event.target.value)}
+                disabled={isExporting || queueRunning || isXmlExporting}
+                aria-label="XML export format"
+                className="h-[30px] max-w-52 px-2 text-xs rounded-l border border-r-0 bg-sf-dark-800 text-sf-text-primary border-sf-dark-600 focus:outline-none focus:border-sf-accent disabled:text-sf-text-muted disabled:cursor-not-allowed"
+              >
+                {XML_EXPORT_FORMATS.map((format) => (
+                  <option key={format.id} value={format.id}>{format.label}</option>
+                ))}
+              </select>
+              <button
+                onClick={handleExportXml}
+                disabled={isExporting || queueRunning || isXmlExporting}
+                className={`h-[30px] px-3 text-xs rounded-r border flex items-center gap-1.5 transition-colors ${
+                  isExporting || queueRunning || isXmlExporting
+                    ? 'bg-sf-dark-800 text-sf-text-muted border-sf-dark-600 cursor-not-allowed'
+                    : 'bg-sf-dark-800 text-sf-text-primary border-sf-dark-600 hover:border-sf-accent hover:text-white'
+                }`}
+                title={xmlExportConfig.tooltip}
+              >
+                <Download className="w-3 h-3" />
+                {isXmlExporting ? `Exporting ${xmlExportConfig.progressLabel}...` : xmlExportConfig.buttonLabel}
+              </button>
+            </div>
           </div>
 
           {(isExporting || exportProgress > 0) && (

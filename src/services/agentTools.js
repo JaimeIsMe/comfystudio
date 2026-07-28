@@ -179,8 +179,8 @@ export const AGENT_TOOLS = [
   {
     name: 'export_fcpxml',
     mode: 'write',
-    description: 'Export the active timeline as FCPXML for Resolve, Final Cut, or Premiere interchange.',
-    arguments: '{ "previewOnly": true }',
+    description: 'Export interchange XML: modern FCPXML for Resolve/Final Cut, or legacy XMEML v5 for Premiere Pro.',
+    arguments: '{ "format": "premiere", "previewOnly": true }',
   },
 ]
 

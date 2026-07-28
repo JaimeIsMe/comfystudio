@@ -195,6 +195,18 @@ const EMPTY_CUSTOM_KEYFRAME_WORKFLOW = Object.freeze({
 })
 
 const COMFYSTUDIO_BRIDGE_SOURCE = 'comfystudio-comfyui-bridge'
+const MUSIC_VIDEO_AGENT_PHASES = new Set([
+  'intake',
+  'song',
+  'artist',
+  'creative_direction',
+  'director_plan',
+  'keyframes',
+  'videos',
+  'edit',
+  'review',
+  'complete',
+])
 const EMPTY_COMFYSTUDIO_BRIDGE_STATUS = Object.freeze({
   state: 'unknown',
   installed: false,
@@ -207,6 +219,29 @@ const EMPTY_COMFYSTUDIO_BRIDGE_STATUS = Object.freeze({
   error: '',
   restartRequired: false,
 })
+
+function normalizeMusicVideoAgentSession(value = {}) {
+  const source = value && typeof value === 'object' ? value : {}
+  const phase = MUSIC_VIDEO_AGENT_PHASES.has(String(source.phase || '').trim())
+    ? String(source.phase).trim()
+    : 'intake'
+  const normalizeTextList = (items, maxItems = 50) => (
+    Array.isArray(items)
+      ? items.map((item) => String(item || '').trim()).filter(Boolean).slice(0, maxItems)
+      : []
+  )
+  return {
+    phase,
+    title: String(source.title || '').trim().slice(0, 120),
+    goal: String(source.goal || '').trim().slice(0, 1000),
+    summary: String(source.summary || '').trim().slice(0, 4000),
+    nextQuestion: String(source.nextQuestion || '').trim().slice(0, 1000),
+    decisions: normalizeTextList(source.decisions),
+    approvals: normalizeTextList(source.approvals),
+    notes: normalizeTextList(source.notes, 100),
+    updatedAt: Number(source.updatedAt) || 0,
+  }
+}
 
 function normalizeTemplateSearchText(value) {
   return String(value || '')
@@ -3702,6 +3737,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   })
   const [yoloMusicPlan, setYoloMusicPlan] = useState(() => normalizePersistedYoloPlan(persistedState?.yoloMusicPlan || []))
   const [yoloMusicPlanSignature, setYoloMusicPlanSignature] = useState(persistedState?.yoloMusicPlanSignature || '')
+  const [yoloMusicAgentSession, setYoloMusicAgentSession] = useState(() => (
+    normalizeMusicVideoAgentSession(persistedState?.yoloMusicAgentSession)
+  ))
   // Planner warnings surfaced next to the build button: unresolved Artist: /
   // [Name] tags, too-many-artists overflow, etc. Advisory — does not block.
   const [yoloMusicPlanWarnings, setYoloMusicPlanWarnings] = useState([])
@@ -3998,6 +4036,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         yoloMusicVideoWorkflowId,
         yoloMusicPlan,
         yoloMusicPlanSignature,
+        yoloMusicAgentSession,
       }
       if (generateWorkspaceProjectStorageKey && typeof localStorage !== 'undefined') {
         localStorage.setItem(generateWorkspaceProjectStorageKey, JSON.stringify(stateToSave))
@@ -4090,6 +4129,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloMusicVideoWorkflowId,
     yoloMusicPlan,
     yoloMusicPlanSignature,
+    yoloMusicAgentSession,
   ])
 
   // Keep queue ref in sync
@@ -6016,23 +6056,32 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     setYoloMusicVideoWorkflowId,
   ])
 
-  const handleYoloMusicTranscribeSrt = useCallback(async () => {
+  const handleYoloMusicTranscribeSrt = useCallback(async (options = {}) => {
     if (!yoloMusicAudioAsset) {
-      setFormError('Select the song audio asset first')
-      return
+      const message = 'Select the song audio asset first'
+      setFormError(message)
+      throw new Error(message)
     }
-    if (yoloMusicTranscribingSrt) return
+    if (yoloMusicTranscribingSrt) {
+      throw new Error('Music Video transcription is already running.')
+    }
 
     const providedLyricsText = String(yoloMusicProvidedLyrics || '').trim()
     const providedLyricsLines = getPlainMusicLyricLines(providedLyricsText)
     const shouldAlignProvidedLyrics = Boolean(yoloMusicAlignProvidedLyrics && providedLyricsLines.length > 0)
     const outputLyricsText = String(yoloMusicLyrics || '').trim()
+    const effectiveLanguage = String(options.language || yoloMusicAsrLanguage || 'English').trim()
 
     if (outputLyricsText && !shouldAlignProvidedLyrics) {
-      const shouldReplace = window.confirm(
-        'Replace the current Lyrics/SRT text with a fresh transcription from the selected song audio?'
-      )
-      if (!shouldReplace) return
+      if (options.replaceExisting !== true) {
+        if (options.interactive === false) {
+          throw new Error('Lyrics/SRT already exists. Set replaceExisting to true to explicitly replace it.')
+        }
+        const shouldReplace = window.confirm(
+          'Replace the current Lyrics/SRT text with a fresh transcription from the selected song audio?'
+        )
+        if (!shouldReplace) return { cancelled: true }
+      }
     }
 
     setFormError(null)
@@ -6043,7 +6092,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
     try {
       const result = await transcribeWithComfyUI(yoloMusicAudioAsset, {
-        language: yoloMusicAsrLanguage,
+        language: effectiveLanguage,
         onProgress: (progress) => {
           setYoloMusicTranscriptionStatus(progress?.message || (shouldAlignProvidedLyrics
             ? 'Detecting vocal timing from song audio...'
@@ -6074,10 +6123,19 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         setYoloMusicTranscriptionStatus(`Transcribed ${result.cues.length} timed lyric line${result.cues.length === 1 ? '' : 's'} into SRT.`)
         addComfyLog('status', `Music video SRT generated from ${yoloMusicAudioAsset.name || 'song audio'}`)
       }
+      return {
+        success: true,
+        alignedProvidedLyrics: shouldAlignProvidedLyrics,
+        cueCount: Number(timingResult.cueCount) || 0,
+        lyricLineCount: Number(timingResult.lyricLineCount) || null,
+        timingSource: timingResult.timingSource || 'asr',
+        srt,
+      }
     } catch (error) {
       const message = error?.message || 'Unknown transcription error'
       setFormError(`Could not transcribe song audio: ${message}`)
       setYoloMusicTranscriptionStatus('')
+      throw error
     } finally {
       setYoloMusicTranscribingSrt(false)
     }
@@ -6345,24 +6403,35 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
    * affect the generated plan-shape downstream (keyframe refs, variant
    * fan-out), so we want a rebuild prompt when those change.
    */
-  const makeMusicPlanSignature = useCallback(({ script, concept, styleNotes } = {}) => createYoloPlanSignature({
+  const makeMusicPlanSignature = useCallback(({
+    script,
+    concept,
+    styleNotes,
+    audioAssetId,
+    audioKind,
+    artistAssetId,
+    cast,
+    lyrics: lyricsOverride,
+    targetDuration,
+    qualityProfile,
+  } = {}) => createYoloPlanSignature({
     mode: 'music',
-    audioAssetId: yoloMusicAudioAssetId || '',
-    audioKind: yoloMusicAudioKind,
+    audioAssetId: String(audioAssetId ?? yoloMusicAudioAssetId ?? ''),
+    audioKind: String(audioKind ?? yoloMusicAudioKind),
     // Legacy field kept in the signature only for migration continuity. Once
     // the cast is populated the planner ignores it, but including it here
     // ensures "I just converted my legacy artist to cast[0]" still invalidates
     // the cached plan and prompts a rebuild.
-    artistAssetId: yoloMusicArtistAssetId || '',
-    castSignature: yoloMusicResolvedCast
+    artistAssetId: String(artistAssetId ?? yoloMusicArtistAssetId ?? ''),
+    castSignature: (Array.isArray(cast) ? cast : yoloMusicResolvedCast)
       .map((c) => `${c.slug}:${c.assetId}:${c.role || ''}`)
       .join('|'),
-    lyrics: yoloMusicLyrics,
+    lyrics: String(lyricsOverride ?? yoloMusicLyrics),
     script: String(script ?? yoloMusicScript),
     concept: String(concept ?? yoloMusicConcept),
     styleNotes: String(styleNotes ?? yoloMusicStyleNotes),
-    targetDuration: yoloMusicTargetDuration,
-    qualityProfile: yoloMusicQualityProfile,
+    targetDuration: Number(targetDuration ?? yoloMusicTargetDuration),
+    qualityProfile: String(qualityProfile ?? yoloMusicQualityProfile),
   }), [
     yoloMusicAudioAssetId,
     yoloMusicAudioKind,
@@ -8703,10 +8772,28 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       setFormError('Alt pass not found. Switch to it again and retry.')
       return null
     }
-    const scriptContent = targetSlot ? targetSlot.script : yoloMusicScript
+    const hasScriptOverride = Object.prototype.hasOwnProperty.call(options, 'scriptOverride')
+    const scriptContent = hasScriptOverride
+      ? String(options.scriptOverride || '')
+      : (targetSlot ? targetSlot.script : yoloMusicScript)
     const isAltTarget = Boolean(targetSlot)
+    const effectiveAudioAssetId = Object.prototype.hasOwnProperty.call(options, 'audioAssetIdOverride')
+      ? String(options.audioAssetIdOverride || '')
+      : yoloMusicAudioAssetId
+    const effectiveLyrics = Object.prototype.hasOwnProperty.call(options, 'lyricsOverride')
+      ? String(options.lyricsOverride || '')
+      : yoloMusicLyrics
+    const effectiveTargetDuration = Object.prototype.hasOwnProperty.call(options, 'targetDurationOverride')
+      ? Number(options.targetDurationOverride)
+      : yoloMusicTargetDuration
+    const effectiveSongDuration = Object.prototype.hasOwnProperty.call(options, 'songDurationSecondsOverride')
+      ? Number(options.songDurationSecondsOverride)
+      : yoloMusicSongDurationSeconds
+    const effectiveCast = Array.isArray(options.castOverride)
+      ? options.castOverride
+      : yoloMusicResolvedCast
 
-    if (!yoloMusicAudioAssetId) {
+    if (!effectiveAudioAssetId) {
       setFormError('Select the song audio asset first')
       return null
     }
@@ -8732,12 +8819,12 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
     const { scenes: nextPlan, warnings: planWarnings } = buildMusicVideoPlanFromScript({
       script: scriptContent,
-      lyrics: yoloMusicLyrics,
+      lyrics: effectiveLyrics,
       concept: effectiveConcept,
       styleNotes: effectiveStyleNotes,
-      targetDuration: yoloMusicTargetDuration,
-      songDurationSeconds: yoloMusicSongDurationSeconds,
-      cast: isAltTarget ? [] : yoloMusicResolvedCast,
+      targetDuration: effectiveTargetDuration,
+      songDurationSeconds: effectiveSongDuration,
+      cast: isAltTarget ? [] : effectiveCast,
     })
     if (!Array.isArray(nextPlan) || nextPlan.length === 0) {
       setFormError('Could not parse the director script. Make sure each shot starts with "Shot N:" and includes at least a Keyframe prompt and a Motion prompt.')
@@ -8763,7 +8850,15 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       ...scene,
       pass: passMeta,
     }))
-    const signature = makeMusicPlanSignature({ script: scriptContent, concept: effectiveConcept, styleNotes: effectiveStyleNotes })
+    const signature = makeMusicPlanSignature({
+      script: scriptContent,
+      concept: effectiveConcept,
+      styleNotes: effectiveStyleNotes,
+      audioAssetId: effectiveAudioAssetId,
+      cast: effectiveCast,
+      lyrics: effectiveLyrics,
+      targetDuration: effectiveTargetDuration,
+    })
     const rawWarnings = Array.isArray(planWarnings) ? planWarnings : []
     // Alt builds pass cast:[] to the planner on purpose (alt passes either
     // have no performers, as for b-roll, or inherit cast via the LLM prompt
@@ -12336,6 +12431,169 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloVideoFps,
   ])
 
+  const buildMcpMusicVideoSessionReport = useCallback(() => {
+    const summarizeProjectAsset = (asset) => asset ? {
+      id: asset.id,
+      name: asset.name || '',
+      type: asset.type || '',
+      durationSeconds: Number(asset.duration ?? asset.settings?.duration) || null,
+      width: Number(asset.width ?? asset.settings?.width) || null,
+      height: Number(asset.height ?? asset.settings?.height) || null,
+      createdAt: asset.createdAt || asset.imported || null,
+    } : null
+    const summarizePass = (entry, active = false) => ({
+      id: entry.id,
+      label: entry.label || '',
+      passType: entry.passType || 'alt_performance',
+      variantDescriptor: entry.variantDescriptor || '',
+      active,
+      hasScript: Boolean(String(entry.script || '').trim()),
+      scriptLength: String(entry.script || '').length,
+      sceneCount: Array.isArray(entry.plan) ? entry.plan.length : 0,
+      shotCount: Array.isArray(entry.plan)
+        ? entry.plan.reduce((count, scene) => count + (Array.isArray(scene?.shots) ? scene.shots.length : 0), 0)
+        : 0,
+      planIsStale: Boolean(yoloMusicAltPlanStaleness[entry.id]),
+    })
+    const lyricsText = String(yoloMusicLyrics || '')
+    const providedLyricsText = String(yoloMusicProvidedLyrics || '')
+    return {
+      active: Boolean(isYoloMusicMode),
+      agentSession: normalizeMusicVideoAgentSession(yoloMusicAgentSession),
+      song: {
+        asset: summarizeProjectAsset(yoloMusicAudioAsset),
+        audioKind: yoloMusicAudioKind,
+        asrLanguage: yoloMusicAsrLanguage,
+        targetDurationSeconds: Number(yoloMusicTargetDuration) || null,
+        detectedDurationSeconds: Number(yoloMusicSongDurationSeconds) || null,
+        alignProvidedLyrics: Boolean(yoloMusicAlignProvidedLyrics),
+        providedLyrics: providedLyricsText,
+        lyricsOrSrt: lyricsText,
+        lyricsFormat: detectTimedLyricsFormat(lyricsText) || (providedLyricsText ? 'plain' : 'empty'),
+        transcriptionRunning: Boolean(yoloMusicTranscribingSrt),
+        transcriptionStatus: yoloMusicTranscriptionStatus || '',
+      },
+      creativeDirection: {
+        concept: yoloMusicConcept || '',
+        styleNotes: yoloMusicStyleNotes || '',
+      },
+      cast: (yoloMusicCast || []).map((entry) => ({
+        ...entry,
+        asset: summarizeProjectAsset(assets.find((asset) => asset?.id === entry?.assetId) || null),
+      })),
+      workflows: {
+        keyframe: {
+          id: yoloMusicKeyframeWorkflowId,
+          label: getWorkflowDisplayLabel(yoloMusicKeyframeWorkflowId) || yoloMusicKeyframeWorkflowId,
+        },
+        video: {
+          id: yoloMusicVideoWorkflowId,
+          label: getWorkflowDisplayLabel(yoloMusicVideoWorkflowId) || yoloMusicVideoWorkflowId,
+        },
+      },
+      output: {
+        width: Number(resolution?.width) || null,
+        height: Number(resolution?.height) || null,
+        imageWidth: Number(effectiveImageResolution?.width) || null,
+        imageHeight: Number(effectiveImageResolution?.height) || null,
+        fps: Number(yoloVideoFps) || null,
+      },
+      director: {
+        activePassId: yoloMusicActiveScriptId || 'master',
+        master: {
+          id: 'master',
+          label: 'Master Performance',
+          active: !yoloMusicActiveScriptId,
+          hasScript: Boolean(String(yoloMusicScript || '').trim()),
+          scriptLength: String(yoloMusicScript || '').length,
+          sceneCount: yoloMusicPlan.length,
+          shotCount: yoloMusicPlan.reduce((count, scene) => count + (Array.isArray(scene?.shots) ? scene.shots.length : 0), 0),
+          planIsStale: Boolean(yoloMusicPlanIsStale),
+        },
+        passes: yoloMusicAltScripts.map((entry) => summarizePass(entry, entry.id === yoloMusicActiveScriptId)),
+        activePlanSceneCount: yoloActivePlan.length,
+        activePlanShotCount: yoloActivePlan.reduce((count, scene) => count + (Array.isArray(scene?.shots) ? scene.shots.length : 0), 0),
+        activePlanIsStale: Boolean(yoloActivePlanIsStale),
+        warnings: yoloMusicActiveTargetPlanWarnings,
+      },
+      queue: {
+        activeJobCount: generationQueue.filter((job) => NON_TERMINAL_JOB_STATUSES.includes(job?.status)).length,
+        musicVideoJobCount: generationQueue.filter((job) => job?.yolo?.mode === 'music').length,
+      },
+      project: {
+        name: currentProject?.name || '',
+        path: typeof currentProjectHandle === 'string' ? currentProjectHandle : null,
+      },
+    }
+  }, [
+    assets,
+    currentProject?.name,
+    currentProjectHandle,
+    effectiveImageResolution,
+    generationQueue,
+    isYoloMusicMode,
+    resolution,
+    yoloActivePlan,
+    yoloActivePlanIsStale,
+    yoloMusicActiveScriptId,
+    yoloMusicAgentSession,
+    yoloMusicAlignProvidedLyrics,
+    yoloMusicAltPlanStaleness,
+    yoloMusicAltScripts,
+    yoloMusicAsrLanguage,
+    yoloMusicAudioAsset,
+    yoloMusicAudioKind,
+    yoloMusicCast,
+    yoloMusicConcept,
+    yoloMusicKeyframeWorkflowId,
+    yoloMusicLyrics,
+    yoloMusicPlan,
+    yoloMusicPlanIsStale,
+    yoloMusicProvidedLyrics,
+    yoloMusicSongDurationSeconds,
+    yoloMusicStyleNotes,
+    yoloMusicTargetDuration,
+    yoloMusicTranscribingSrt,
+    yoloMusicTranscriptionStatus,
+    yoloMusicVideoWorkflowId,
+    yoloMusicActiveTargetPlanWarnings,
+    yoloMusicScript,
+    yoloVideoFps,
+  ])
+
+  const resolveMcpMusicVideoShotTargets = useCallback((detail = {}, stage = 'keyframe') => {
+    const allShots = []
+    for (const scene of yoloActivePlan || []) {
+      for (const shot of scene?.shots || []) {
+        allShots.push({
+          sceneId: String(scene?.id || ''),
+          shotId: String(shot?.id || ''),
+          label: shot?.scriptShotLabel || shot?.label || '',
+        })
+      }
+    }
+    const scope = String(detail.scope || 'missing').trim().toLowerCase()
+    if (!['missing', 'all', 'selected'].includes(scope)) {
+      throw new Error('scope must be missing, all, or selected.')
+    }
+    if (scope === 'selected') {
+      const requested = Array.isArray(detail.shots) ? detail.shots : []
+      const requestedKeys = new Set(requested.map((shot) => `${shot?.sceneId || ''}|${shot?.shotId || ''}`))
+      const targets = allShots.filter((shot) => requestedKeys.has(`${shot.sceneId}|${shot.shotId}`))
+      if (targets.length !== requestedKeys.size) {
+        throw new Error('One or more selected sceneId/shotId pairs were not found in the active Music Video plan.')
+      }
+      return { scope, targets }
+    }
+    if (scope === 'all') return { scope, targets: allShots }
+
+    const report = buildMcpMusicVideoPlanReport()
+    const targets = report.scenes.flatMap((scene) => scene.shots
+      .filter((shot) => stage === 'video' ? !shot.video : !shot.keyframe)
+      .map((shot) => ({ sceneId: shot.sceneId, shotId: shot.shotId, label: shot.label || '' })))
+    return { scope, targets }
+  }, [buildMcpMusicVideoPlanReport, yoloActivePlan])
+
   useEffect(() => {
     const eventName = 'comfystudio-mcp-music-video-workflow'
     const handler = async (event) => {
@@ -12343,6 +12601,743 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       const respond = typeof detail.respond === 'function' ? detail.respond : () => {}
       const operation = String(detail.operation || '').trim().toLowerCase()
       try {
+        if (operation === 'get-session') {
+          respond({
+            success: true,
+            operation,
+            session: buildMcpMusicVideoSessionReport(),
+            message: 'Read the current Music Video creation session.',
+          })
+          return
+        }
+        if (operation === 'configure') {
+          const previewOnly = detail.previewOnly !== false
+          const changes = {}
+          let nextAudioAsset = yoloMusicAudioAsset
+          if (Object.prototype.hasOwnProperty.call(detail, 'audioAssetId')) {
+            nextAudioAsset = detail.audioAssetId
+              ? assets.find((asset) => asset?.id === detail.audioAssetId) || null
+              : null
+            if (detail.audioAssetId && !nextAudioAsset) throw new Error(`Audio asset ${detail.audioAssetId} was not found.`)
+            if (nextAudioAsset && nextAudioAsset.type !== 'audio') throw new Error('audioAssetId must reference an audio asset.')
+            changes.audioAssetId = nextAudioAsset?.id || null
+          }
+          const nextAudioKind = Object.prototype.hasOwnProperty.call(detail, 'audioKind')
+            ? String(detail.audioKind || '').trim()
+            : yoloMusicAudioKind
+          if (!['mixed_track', 'vocal_stem', 'instrumental'].includes(nextAudioKind)) {
+            throw new Error('audioKind must be mixed_track, vocal_stem, or instrumental.')
+          }
+          if (Object.prototype.hasOwnProperty.call(detail, 'audioKind')) changes.audioKind = nextAudioKind
+
+          const nextKeyframeWorkflowId = Object.prototype.hasOwnProperty.call(detail, 'keyframeWorkflowId')
+            ? String(detail.keyframeWorkflowId || '').trim()
+            : yoloMusicKeyframeWorkflowId
+          if (!YOLO_MUSIC_KEYFRAME_WORKFLOW_OPTIONS.some((option) => option.id === nextKeyframeWorkflowId)) {
+            throw new Error(`Unsupported Music Video keyframe workflow: ${nextKeyframeWorkflowId || 'empty'}.`)
+          }
+          if (Object.prototype.hasOwnProperty.call(detail, 'keyframeWorkflowId')) changes.keyframeWorkflowId = nextKeyframeWorkflowId
+
+          const nextVideoWorkflowId = Object.prototype.hasOwnProperty.call(detail, 'videoWorkflowId')
+            ? String(detail.videoWorkflowId || '').trim()
+            : yoloMusicVideoWorkflowId
+          if (!YOLO_MUSIC_VIDEO_WORKFLOW_OPTIONS.some((option) => option.id === nextVideoWorkflowId)) {
+            throw new Error(`Unsupported Music Video video workflow: ${nextVideoWorkflowId || 'empty'}.`)
+          }
+          if (Object.prototype.hasOwnProperty.call(detail, 'videoWorkflowId')) changes.videoWorkflowId = nextVideoWorkflowId
+
+          const aspect = String(detail.aspectRatio || '').trim()
+          const preset = String(detail.resolutionPreset || '').trim()
+          let nextResolution = null
+          if (Number(detail.width) > 0 && Number(detail.height) > 0) {
+            nextResolution = {
+              width: Math.max(16, Math.round(Number(detail.width))),
+              height: Math.max(16, Math.round(Number(detail.height))),
+            }
+          } else if (aspect || preset) {
+            const effectiveAspect = aspect || (
+              Number(resolution?.height) > Number(resolution?.width)
+                ? 'vertical_9x16'
+                : Number(resolution?.height) === Number(resolution?.width)
+                  ? 'square_1x1'
+                  : 'landscape_16x9'
+            )
+            const effectivePreset = preset || (Math.max(Number(resolution?.width), Number(resolution?.height)) > 1280 ? '1080p' : '720p')
+            if (!['landscape_16x9', 'vertical_9x16', 'square_1x1'].includes(effectiveAspect)) {
+              throw new Error('aspectRatio must be landscape_16x9, vertical_9x16, or square_1x1.')
+            }
+            if (!['720p', '1080p'].includes(effectivePreset)) {
+              throw new Error('resolutionPreset must be 720p or 1080p.')
+            }
+            const longEdge = effectivePreset === '1080p' ? 1920 : 1280
+            const shortEdge = effectivePreset === '1080p' ? 1080 : 720
+            nextResolution = effectiveAspect === 'vertical_9x16'
+              ? { width: shortEdge, height: longEdge }
+              : effectiveAspect === 'square_1x1'
+                ? { width: shortEdge, height: shortEdge }
+                : { width: longEdge, height: shortEdge }
+          }
+          if (nextResolution) changes.resolution = nextResolution
+
+          const nextFps = Object.prototype.hasOwnProperty.call(detail, 'fps') ? Number(detail.fps) : Number(yoloVideoFps)
+          if (![24, 25, 30].includes(nextFps)) throw new Error('fps must be 24, 25, or 30.')
+          if (Object.prototype.hasOwnProperty.call(detail, 'fps')) changes.fps = nextFps
+
+          const textUpdates = [
+            ['asrLanguage', yoloMusicAsrLanguage],
+            ['lyricsOrSrt', yoloMusicLyrics],
+            ['providedLyrics', yoloMusicProvidedLyrics],
+            ['concept', yoloMusicConcept],
+            ['styleNotes', yoloMusicStyleNotes],
+          ]
+          for (const [key, currentValue] of textUpdates) {
+            if (Object.prototype.hasOwnProperty.call(detail, key)) changes[key] = String(detail[key] ?? currentValue)
+          }
+          if (Object.prototype.hasOwnProperty.call(detail, 'alignProvidedLyrics')) {
+            changes.alignProvidedLyrics = Boolean(detail.alignProvidedLyrics)
+          }
+          if (Object.prototype.hasOwnProperty.call(detail, 'targetDurationSeconds')) {
+            const value = Number(detail.targetDurationSeconds)
+            if (!Number.isFinite(value) || value <= 0) throw new Error('targetDurationSeconds must be greater than zero.')
+            changes.targetDurationSeconds = value
+          }
+          changes.activate = detail.activate !== false
+
+          if (previewOnly) {
+            respond({
+              success: true,
+              previewOnly: true,
+              operation,
+              changes,
+              current: buildMcpMusicVideoSessionReport(),
+              message: 'Previewed the Music Video configuration. No settings were changed.',
+            })
+            return
+          }
+
+          if (changes.activate) {
+            setGenerationMode('yolo')
+            setYoloCreationType('music')
+          }
+          if (Object.prototype.hasOwnProperty.call(changes, 'audioAssetId')) setYoloMusicAudioAssetId(changes.audioAssetId)
+          if (Object.prototype.hasOwnProperty.call(changes, 'audioKind')) setYoloMusicAudioKind(changes.audioKind)
+          if (Object.prototype.hasOwnProperty.call(changes, 'asrLanguage')) setYoloMusicAsrLanguage(changes.asrLanguage)
+          if (Object.prototype.hasOwnProperty.call(changes, 'lyricsOrSrt')) setYoloMusicLyrics(changes.lyricsOrSrt)
+          if (Object.prototype.hasOwnProperty.call(changes, 'providedLyrics')) setYoloMusicProvidedLyrics(changes.providedLyrics)
+          if (Object.prototype.hasOwnProperty.call(changes, 'alignProvidedLyrics')) setYoloMusicAlignProvidedLyrics(changes.alignProvidedLyrics)
+          if (Object.prototype.hasOwnProperty.call(changes, 'concept')) setYoloMusicConcept(changes.concept)
+          if (Object.prototype.hasOwnProperty.call(changes, 'styleNotes')) setYoloMusicStyleNotes(changes.styleNotes)
+          if (Object.prototype.hasOwnProperty.call(changes, 'targetDurationSeconds')) setYoloMusicTargetDuration(changes.targetDurationSeconds)
+          if (Object.prototype.hasOwnProperty.call(changes, 'keyframeWorkflowId')) setYoloMusicKeyframeWorkflowId(changes.keyframeWorkflowId)
+          if (Object.prototype.hasOwnProperty.call(changes, 'videoWorkflowId')) setYoloMusicVideoWorkflowId(changes.videoWorkflowId)
+          if (changes.resolution) {
+            setResolution(changes.resolution)
+            setImageResolution(changes.resolution)
+          }
+          if (Object.prototype.hasOwnProperty.call(changes, 'fps')) {
+            setFps(changes.fps)
+            setYoloVideoFps(changes.fps)
+          }
+          setFormError(null)
+          respond({
+            success: true,
+            previewOnly: false,
+            operation,
+            changes,
+            message: 'Updated the Music Video setup in the Director workspace.',
+          })
+          return
+        }
+        if (operation === 'update-session') {
+          const previewOnly = detail.previewOnly !== false
+          const current = normalizeMusicVideoAgentSession(yoloMusicAgentSession)
+          const mode = String(detail.mode || 'merge').trim().toLowerCase()
+          if (!['merge', 'replace'].includes(mode)) throw new Error('mode must be merge or replace.')
+          const patch = detail.session && typeof detail.session === 'object' ? detail.session : detail
+          const next = normalizeMusicVideoAgentSession({
+            ...(mode === 'replace' ? {} : current),
+            ...patch,
+            updatedAt: Date.now(),
+          })
+          if (!previewOnly) setYoloMusicAgentSession(next)
+          respond({
+            success: true,
+            previewOnly,
+            operation,
+            before: current,
+            session: next,
+            message: previewOnly
+              ? 'Previewed the Music Video agent-session update.'
+              : 'Saved the Music Video agent-session checkpoint.',
+          })
+          return
+        }
+        if (operation === 'manage-cast') {
+          const previewOnly = detail.previewOnly !== false
+          const action = String(detail.action || '').trim().toLowerCase()
+          if (!['add', 'update', 'remove', 'replace', 'clear'].includes(action)) {
+            throw new Error('action must be add, update, remove, replace, or clear.')
+          }
+          const normalizeEntry = (entry = {}, index = 0, fallback = {}) => {
+            const assetId = Object.prototype.hasOwnProperty.call(entry, 'assetId')
+              ? (entry.assetId || null)
+              : (fallback.assetId || null)
+            const asset = assetId ? assets.find((item) => item?.id === assetId) || null : null
+            if (assetId && !asset) throw new Error(`Cast image asset ${assetId} was not found.`)
+            if (asset && asset.type !== 'image') throw new Error(`Cast asset ${assetId} must be an image.`)
+            const label = String(entry.label ?? entry.name ?? fallback.label ?? '').trim()
+            const slug = normalizeCastSlug(String(entry.slug ?? fallback.slug ?? label))
+            return {
+              id: String(entry.id || fallback.id || `cast-${Date.now()}-${index}`),
+              slug,
+              label,
+              assetId,
+              role: String(entry.role ?? fallback.role ?? (index === 0 ? 'lead' : 'co_lead')).trim() || 'lead',
+              notes: String(entry.notes ?? fallback.notes ?? '').trim().slice(0, 500),
+            }
+          }
+          let nextCast = [...(yoloMusicCast || [])]
+          if (action === 'clear') nextCast = []
+          if (action === 'replace') {
+            if (!Array.isArray(detail.entries)) throw new Error('entries is required when action is replace.')
+            nextCast = detail.entries.map((entry, index) => normalizeEntry(entry, index))
+          }
+          if (action === 'add') {
+            nextCast.push(normalizeEntry(detail.entry || detail, nextCast.length))
+          }
+          if (action === 'update') {
+            const castId = String(detail.castId || detail.entry?.id || '').trim()
+            const index = nextCast.findIndex((entry) => entry.id === castId)
+            if (index < 0) throw new Error(`Cast member ${castId || 'unknown'} was not found.`)
+            nextCast[index] = normalizeEntry(detail.entry || detail, index, nextCast[index])
+          }
+          if (action === 'remove') {
+            const castId = String(detail.castId || '').trim()
+            if (!nextCast.some((entry) => entry.id === castId)) throw new Error(`Cast member ${castId || 'unknown'} was not found.`)
+            nextCast = nextCast.filter((entry) => entry.id !== castId)
+          }
+          if (!previewOnly) {
+            setYoloMusicCast(nextCast)
+            setYoloMusicArtistAssetId(nextCast[0]?.assetId || null)
+          }
+          respond({
+            success: true,
+            previewOnly,
+            operation,
+            action,
+            cast: nextCast,
+            message: previewOnly ? 'Previewed the Music Video cast update.' : 'Updated the Music Video cast.',
+          })
+          return
+        }
+        if (operation === 'queue-character-asset') {
+          const previewOnly = detail.previewOnly !== false
+          const stage = String(detail.stage || 'portrait').trim().toLowerCase()
+          if (!['portrait', 'character_sheet'].includes(stage)) {
+            throw new Error('stage must be portrait or character_sheet.')
+          }
+          const inputAssetId = String(detail.inputAssetId || '').trim()
+          const inputAsset = inputAssetId ? assets.find((asset) => asset?.id === inputAssetId) || null : null
+          if (stage === 'character_sheet' && !inputAsset) throw new Error('inputAssetId is required for a character sheet.')
+          if (inputAsset && inputAsset.type !== 'image') throw new Error('inputAssetId must reference an image asset.')
+          const name = String(detail.name || 'Character').trim()
+          const assetPrefix = normalizeCastSlug(detail.assetPrefix || name) || 'person'
+          const workflowId = stage === 'portrait' ? 'z-image-turbo' : 'multi-angles'
+          const promptText = String(detail.prompt || '').trim() || (
+            stage === 'portrait'
+              ? `${name} cinematic portrait, clean single character reference image`
+              : `${name} character sheet with front, side, 3/4, expressions, and wardrobe consistency.`
+          )
+          const plan = {
+            stage,
+            workflowId,
+            workflowLabel: stage === 'portrait' ? 'Z Image Turbo' : 'Multiple Angles (Characters)',
+            prompt: promptText,
+            inputAssetId: inputAsset?.id || null,
+            assetPrefix,
+            resolution: {
+              width: Math.max(16, Math.round(Number(detail.width) || Number(imageResolution?.width) || 1024)),
+              height: Math.max(16, Math.round(Number(detail.height) || Number(imageResolution?.height) || 1024)),
+            },
+          }
+          if (previewOnly) {
+            respond({
+              success: true,
+              previewOnly: true,
+              operation,
+              plan,
+              message: `Previewed the ${stage === 'portrait' ? 'portrait' : 'character sheet'} generation. Nothing was queued.`,
+            })
+            return
+          }
+          if (!isConnected) throw new Error('ComfyUI is not connected.')
+          const job = queuePeopleWizardJob({
+            workflowId,
+            workflowLabel: plan.workflowLabel,
+            prompt: promptText,
+            negativePrompt: String(detail.negativePrompt || '').trim(),
+            seed: detail.seed,
+            resolution: plan.resolution,
+            needsImage: stage === 'character_sheet',
+            inputAssetId: inputAsset?.id || null,
+            peopleWizard: {
+              stage: stage === 'portrait' ? 'image' : 'sheet',
+              baseAssetId: inputAsset?.id || null,
+              autoCreateAngleSheet: stage === 'character_sheet',
+              assetPrefix,
+              source: 'mcp',
+            },
+          })
+          respond({
+            success: true,
+            previewOnly: false,
+            operation,
+            plan,
+            job: { id: job.id, status: job.status, workflowId: job.workflowId },
+            message: `Queued ${plan.workflowLabel} for ${name}.`,
+          })
+          return
+        }
+        if (operation === 'manage-pass') {
+          const previewOnly = detail.previewOnly !== false
+          const action = String(detail.action || '').trim().toLowerCase()
+          if (!['create', 'update', 'remove', 'activate'].includes(action)) {
+            throw new Error('action must be create, update, remove, or activate.')
+          }
+          let nextPasses = [...yoloMusicAltScripts]
+          let nextActiveId = yoloMusicActiveScriptId
+          let affectedPass = null
+          const targetId = String(detail.passId || '').trim()
+          if (action === 'create') {
+            const passType = String(detail.passType || 'alt_performance').trim()
+            if (!['alt_performance', 'environmental_broll', 'detail_broll'].includes(passType)) {
+              throw new Error('passType must be alt_performance, environmental_broll, or detail_broll.')
+            }
+            affectedPass = {
+              id: targetId || `alt-script-${Date.now()}-${nextPasses.length}`,
+              passType,
+              label: String(detail.label || (
+                passType === 'environmental_broll' ? 'Environmental B-roll'
+                  : passType === 'detail_broll' ? 'Detail B-roll'
+                    : `Alt Performance ${nextPasses.filter((entry) => entry.passType === 'alt_performance').length + 1}`
+              )).trim().slice(0, 80),
+              variantDescriptor: String(detail.variantDescriptor || '').trim(),
+              script: String(detail.script || ''),
+              createdAt: Date.now(),
+              plan: [],
+              planSignature: '',
+              planWarnings: [],
+            }
+            nextPasses.push(affectedPass)
+            if (detail.activate !== false) nextActiveId = affectedPass.id
+          } else if (action === 'activate' && (targetId === 'master' || !targetId)) {
+            nextActiveId = null
+          } else {
+            const index = nextPasses.findIndex((entry) => entry.id === targetId)
+            if (index < 0) throw new Error(`Music Video pass ${targetId || 'unknown'} was not found.`)
+            if (action === 'remove') {
+              affectedPass = nextPasses[index]
+              nextPasses.splice(index, 1)
+              if (nextActiveId === targetId) nextActiveId = null
+            } else if (action === 'activate') {
+              affectedPass = nextPasses[index]
+              nextActiveId = targetId
+            } else {
+              const patch = detail.pass && typeof detail.pass === 'object' ? detail.pass : detail
+              const passType = String(patch.passType ?? nextPasses[index].passType)
+              if (!['alt_performance', 'environmental_broll', 'detail_broll'].includes(passType)) {
+                throw new Error('passType must be alt_performance, environmental_broll, or detail_broll.')
+              }
+              affectedPass = {
+                ...nextPasses[index],
+                passType,
+                label: String(patch.label ?? nextPasses[index].label).trim().slice(0, 80),
+                variantDescriptor: String(patch.variantDescriptor ?? nextPasses[index].variantDescriptor).trim(),
+                script: String(patch.script ?? nextPasses[index].script),
+                plan: Object.prototype.hasOwnProperty.call(patch, 'script') ? [] : nextPasses[index].plan,
+                planSignature: Object.prototype.hasOwnProperty.call(patch, 'script') ? '' : nextPasses[index].planSignature,
+                planWarnings: Object.prototype.hasOwnProperty.call(patch, 'script') ? [] : nextPasses[index].planWarnings,
+              }
+              nextPasses[index] = affectedPass
+            }
+          }
+          if (!previewOnly) {
+            setYoloMusicAltScripts(nextPasses)
+            setYoloMusicActiveScriptId(nextActiveId)
+          }
+          respond({
+            success: true,
+            previewOnly,
+            operation,
+            action,
+            activePassId: nextActiveId || 'master',
+            affectedPass,
+            passes: nextPasses,
+            message: previewOnly ? 'Previewed the Music Video pass update.' : 'Updated the Music Video pass library.',
+          })
+          return
+        }
+        if (operation === 'set-script') {
+          const previewOnly = detail.previewOnly !== false
+          const script = String(detail.script || '')
+          if (!script.trim()) throw new Error('script is required.')
+          const requestedTarget = String(detail.target || 'active').trim()
+          const targetId = requestedTarget === 'master'
+            ? null
+            : requestedTarget === 'active'
+              ? yoloMusicActiveScriptId
+              : requestedTarget
+          const targetPass = targetId ? yoloMusicAltScripts.find((entry) => entry.id === targetId) || null : null
+          if (targetId && !targetPass) throw new Error(`Music Video pass ${targetId} was not found.`)
+          const shouldParse = detail.parse !== false
+          const parseResult = shouldParse ? buildMusicVideoPlanFromScript({
+            script,
+            lyrics: yoloMusicLyrics,
+            concept: yoloMusicConcept,
+            styleNotes: yoloMusicStyleNotes,
+            targetDuration: yoloMusicTargetDuration,
+            songDurationSeconds: yoloMusicSongDurationSeconds,
+            cast: targetPass ? [] : yoloMusicResolvedCast,
+          }) : { scenes: [], warnings: [] }
+          if (shouldParse && (!Array.isArray(parseResult.scenes) || parseResult.scenes.length === 0)) {
+            throw new Error('Could not parse the director script. Each shot needs a Shot line plus Keyframe prompt and Motion prompt fields.')
+          }
+          const preview = {
+            target: targetId || 'master',
+            scriptLength: script.length,
+            parse: shouldParse,
+            sceneCount: parseResult.scenes?.length || 0,
+            shotCount: (parseResult.scenes || []).reduce((count, scene) => count + (scene?.shots?.length || 0), 0),
+            warnings: parseResult.warnings || [],
+          }
+          if (previewOnly) {
+            respond({
+              success: true,
+              previewOnly: true,
+              operation,
+              preview,
+              message: 'Previewed and validated the Music Video director script. No script was changed.',
+            })
+            return
+          }
+          if (targetId) {
+            setYoloMusicAltScripts((previous) => previous.map((entry) => entry.id === targetId
+              ? { ...entry, script, plan: [], planSignature: '', planWarnings: [] }
+              : entry))
+            setYoloMusicActiveScriptId(targetId)
+          } else {
+            setYoloMusicScript(script)
+            setYoloMusicPlan([])
+            setYoloMusicPlanSignature('')
+            setYoloMusicPlanWarnings([])
+            setYoloMusicActiveScriptId(null)
+          }
+          let parsedPlan = null
+          if (shouldParse) {
+            parsedPlan = buildYoloMusicPlan({
+              target: targetId || 'master',
+              scriptOverride: script,
+            })
+            if (!parsedPlan) throw new Error('The director script was saved but could not be parsed into a plan.')
+            setDirectorSubTab('scene-shot')
+          }
+          respond({
+            success: true,
+            previewOnly: false,
+            operation,
+            preview,
+            parsedSceneCount: parsedPlan?.length || 0,
+            message: shouldParse
+              ? `Saved and parsed the ${targetId ? 'coverage pass' : 'master'} director script.`
+              : `Saved the ${targetId ? 'coverage pass' : 'master'} director script.`,
+          })
+          return
+        }
+        if (operation === 'update-shot') {
+          const previewOnly = detail.previewOnly !== false
+          const sceneId = String(detail.sceneId || '').trim()
+          const shotId = String(detail.shotId || '').trim()
+          const scene = yoloActivePlan.find((entry) => String(entry?.id || '') === sceneId)
+          const shot = scene?.shots?.find((entry) => String(entry?.id || '') === shotId)
+          if (!scene || !shot) throw new Error(`Music Video shot ${sceneId} ${shotId} was not found in the active plan.`)
+          const patch = detail.patch && typeof detail.patch === 'object' ? detail.patch : detail
+          const nextShot = { ...shot }
+          if (Object.prototype.hasOwnProperty.call(patch, 'keyframePrompt')) nextShot.imageBeat = String(patch.keyframePrompt || '')
+          if (Object.prototype.hasOwnProperty.call(patch, 'motionPrompt')) {
+            nextShot.videoBeat = String(patch.motionPrompt || '')
+            nextShot.shotPrompt = String(patch.motionPrompt || '')
+            nextShot.beat = String(patch.motionPrompt || '')
+          }
+          if (Object.prototype.hasOwnProperty.call(patch, 'camera')) {
+            nextShot.camera = String(patch.camera || '')
+            nextShot.cameraDirection = String(patch.camera || '')
+          }
+          if (Object.prototype.hasOwnProperty.call(patch, 'shotType')) nextShot.musicShotType = String(patch.shotType || '')
+          if (Object.prototype.hasOwnProperty.call(patch, 'audioStart')) {
+            const value = Number(patch.audioStart)
+            if (!Number.isFinite(value) || value < 0) throw new Error('audioStart must be zero or greater.')
+            nextShot.audioStart = value
+          }
+          if (Object.prototype.hasOwnProperty.call(patch, 'durationSeconds')) {
+            const value = Number(patch.durationSeconds)
+            if (!Number.isFinite(value) || value <= 0) throw new Error('durationSeconds must be greater than zero.')
+            nextShot.durationSeconds = value
+            nextShot.length = value
+          }
+          if (Object.prototype.hasOwnProperty.call(patch, 'artist')) nextShot.artist = String(patch.artist || '')
+          if (Object.prototype.hasOwnProperty.call(patch, 'referenceOverrideEnabled')) {
+            nextShot.nanoBananaReferenceOverrideEnabled = Boolean(patch.referenceOverrideEnabled)
+          }
+          if (Object.prototype.hasOwnProperty.call(patch, 'referenceAssetId1')) {
+            nextShot.nanoBananaReferenceAssetId1 = String(patch.referenceAssetId1 || '')
+          }
+          if (Object.prototype.hasOwnProperty.call(patch, 'referenceAssetId2')) {
+            nextShot.nanoBananaReferenceAssetId2 = String(patch.referenceAssetId2 || '')
+          }
+          if (!previewOnly) updateYoloShot(sceneId, shotId, nextShot)
+          respond({
+            success: true,
+            previewOnly,
+            operation,
+            before: shot,
+            shot: nextShot,
+            message: previewOnly ? 'Previewed the Music Video shot update.' : `Updated ${sceneId} ${shotId} in the active Director plan.`,
+          })
+          return
+        }
+        if (operation === 'queue-keyframes' || operation === 'queue-videos') {
+          if (!isYoloMusicMode) throw new Error('Open or activate Music Video Creation first.')
+          if (!Array.isArray(yoloActivePlan) || yoloActivePlan.length === 0) throw new Error('Parse a Music Video director script first.')
+          const stage = operation === 'queue-videos' ? 'video' : 'keyframe'
+          const previewOnly = detail.previewOnly !== false
+          const { scope, targets } = resolveMcpMusicVideoShotTargets(detail, stage)
+          const plan = {
+            stage,
+            scope,
+            targetCount: targets.length,
+            targets,
+            workflowIds: stage === 'video'
+              ? (Array.isArray(detail.workflowIds) && detail.workflowIds.length > 0
+                ? detail.workflowIds
+                : yoloSelectedVideoWorkflowIds)
+              : [String(detail.workflowId || yoloStoryboardWorkflowId)],
+          }
+          if (previewOnly) {
+            respond({
+              success: true,
+              previewOnly: true,
+              operation,
+              plan,
+              message: `Previewed ${targets.length} Music Video ${stage} target${targets.length === 1 ? '' : 's'}. Nothing was queued.`,
+            })
+            return
+          }
+          if (targets.length === 0) {
+            respond({
+              success: true,
+              previewOnly: false,
+              operation,
+              plan,
+              queuedCount: 0,
+              message: `No missing Music Video ${stage}s need to be queued.`,
+            })
+            return
+          }
+          let queuedCount = 0
+          if (stage === 'keyframe') {
+            queuedCount = await handleQueueYoloShotStoryboards(targets, {
+              storyboardWorkflowIdOverride: plan.workflowIds[0],
+            })
+          } else if (scope === 'missing') {
+            queuedCount = Number(await handleQueueYoloVideos({
+              skipConfirm: true,
+              targetWorkflowIds: plan.workflowIds,
+            })) || 0
+          } else {
+            for (const target of targets) {
+              queuedCount += Number(await handleQueueYoloShotVideo(target.sceneId, target.shotId, {
+                targetWorkflowIds: plan.workflowIds,
+              })) || 0
+            }
+          }
+          if (queuedCount <= 0) throw new Error(`Velorn did not queue any Music Video ${stage} jobs.`)
+          respond({
+            success: true,
+            previewOnly: false,
+            operation,
+            plan,
+            queuedCount,
+            message: `Queued ${queuedCount} Music Video ${stage} job${queuedCount === 1 ? '' : 's'}.`,
+          })
+          return
+        }
+        if (operation === 'replace-keyframe' || operation === 'replace-video') {
+          const isVideoReplacement = operation === 'replace-video'
+          const previewOnly = detail.previewOnly !== false
+          const sceneId = String(detail.sceneId || '').trim()
+          const shotId = String(detail.shotId || '').trim()
+          const assetId = String(detail.assetId || '').trim()
+          const asset = assets.find((entry) => entry?.id === assetId) || null
+          if (!asset) throw new Error(`Replacement asset ${assetId || 'unknown'} was not found.`)
+          if (asset.type !== (isVideoReplacement ? 'video' : 'image')) {
+            throw new Error(`Replacement asset must be a${isVideoReplacement ? ' video' : 'n image'}.`)
+          }
+          const report = isVideoReplacement
+            ? buildMcpMusicVideoVideoReport(sceneId, shotId)
+            : buildMcpMusicVideoKeyframeReport(sceneId, shotId)
+          if (previewOnly) {
+            respond({
+              success: true,
+              previewOnly: true,
+              operation,
+              report,
+              replacementAsset: { id: asset.id, name: asset.name || '', type: asset.type },
+              message: `Previewed replacing ${sceneId} ${shotId} with ${asset.name || asset.id}.`,
+            })
+            return
+          }
+          const addedAsset = isVideoReplacement
+            ? await handleReplaceYoloMusicVideo({ sceneId, shotId, assetId, workflowId: detail.workflowId })
+            : await handleReplaceYoloMusicKeyframe({ sceneId, shotId, assetId })
+          respond({
+            success: true,
+            previewOnly: false,
+            operation,
+            asset: addedAsset ? { id: addedAsset.id, name: addedAsset.name || '', type: addedAsset.type } : null,
+            message: `Replaced the Music Video ${isVideoReplacement ? 'video' : 'keyframe'} for ${sceneId} ${shotId}.`,
+          })
+          return
+        }
+        if (operation === 'transcribe-audio') {
+          const previewOnly = detail.previewOnly !== false
+          if (!yoloMusicAudioAsset) throw new Error('Select the song audio asset first.')
+          const providedLyricsLines = getPlainMusicLyricLines(String(yoloMusicProvidedLyrics || '').trim())
+          const plan = {
+            audioAssetId: yoloMusicAudioAsset.id,
+            audioAssetName: yoloMusicAudioAsset.name || '',
+            language: String(detail.language || yoloMusicAsrLanguage),
+            alignProvidedLyrics: Boolean(yoloMusicAlignProvidedLyrics && providedLyricsLines.length > 0),
+            replaceExisting: detail.replaceExisting === true,
+            existingOutput: Boolean(String(yoloMusicLyrics || '').trim()),
+          }
+          if (previewOnly) {
+            respond({
+              success: true,
+              previewOnly: true,
+              operation,
+              plan,
+              message: 'Previewed Music Video transcription. No GPU job was started.',
+            })
+            return
+          }
+          if (detail.language) setYoloMusicAsrLanguage(String(detail.language))
+          const result = await handleYoloMusicTranscribeSrt({
+            language: detail.language,
+            replaceExisting: detail.replaceExisting === true,
+            interactive: false,
+          })
+          respond({
+            success: true,
+            previewOnly: false,
+            operation,
+            plan,
+            result,
+            message: `Created ${result.cueCount} timed Music Video lyric cue${result.cueCount === 1 ? '' : 's'}.`,
+          })
+          return
+        }
+        if (operation === 'assemble-timeline') {
+          const previewOnly = detail.previewOnly !== false
+          const planReport = buildMcpMusicVideoPlanReport()
+          const timelineState = useTimelineStore.getState()
+          const assembledClips = (timelineState.clips || []).filter((clip) => (
+            clip?.metadata?.musicVideoAssembly?.mode === MUSIC_VIDEO_TIMELINE_ASSEMBLY_MODE
+          ))
+          const plan = {
+            readyVideoCount: planReport.summary.readyVideoCount,
+            missingVideoCount: planReport.summary.missingVideoCount,
+            existingAssembledVideoCount: assembledClips.filter((clip) => clip?.metadata?.musicVideoAssembly?.kind === 'video').length,
+            songAlreadyAssembled: assembledClips.some((clip) => clip?.metadata?.musicVideoAssembly?.kind === 'song-audio'),
+            saveAfterAssembly: detail.saveAfterAssembly !== false,
+          }
+          if (previewOnly) {
+            respond({
+              success: true,
+              previewOnly: true,
+              operation,
+              plan,
+              message: 'Previewed Music Video timeline assembly. No timeline was changed.',
+            })
+            return
+          }
+          const result = await handleAssembleMusicVideoTimeline()
+          if (!result?.ok) throw new Error(result?.message || 'Could not assemble the Music Video timeline.')
+          if (detail.saveAfterAssembly !== false) await saveProject?.()
+          respond({
+            success: true,
+            previewOnly: false,
+            operation,
+            plan,
+            result,
+            message: result.message,
+          })
+          return
+        }
+        if (operation === 'resolve-timeline-shot') {
+          const sceneId = String(detail.sceneId || '').trim()
+          const shotId = String(detail.shotId || '').trim()
+          if (!sceneId || !shotId) throw new Error('sceneId and shotId are required.')
+          const timelineState = useTimelineStore.getState()
+          const matches = (timelineState.clips || []).filter((clip) => {
+            const assembly = clip?.metadata?.musicVideoAssembly || {}
+            return assembly.kind === 'video'
+              && String(assembly.sceneId || '') === sceneId
+              && String(assembly.shotId || '') === shotId
+          })
+          if (matches.length === 0) throw new Error(`No assembled timeline clip was found for ${sceneId} ${shotId}.`)
+          if (matches.length > 1 && !detail.clipId) {
+            throw new Error(`Multiple assembled clips match ${sceneId} ${shotId}. Provide clipId explicitly.`)
+          }
+          const clip = detail.clipId
+            ? matches.find((entry) => entry.id === detail.clipId) || null
+            : matches[0]
+          if (!clip) throw new Error(`Timeline clip ${detail.clipId} does not match ${sceneId} ${shotId}.`)
+          const variantKey = clip?.metadata?.musicVideoAssembly?.variantKey || ''
+          let replacementAsset = detail.assetId ? assets.find((asset) => asset?.id === detail.assetId) || null : null
+          if (detail.assetId && !replacementAsset) throw new Error(`Replacement asset ${detail.assetId} was not found.`)
+          if (!replacementAsset) {
+            replacementAsset = (assets || [])
+              .filter((asset) => (
+                asset?.type === 'video'
+                && asset?.yolo?.mode === 'music'
+                && asset?.yolo?.stage === 'video'
+                && (
+                  asset?.yolo?.variantKey === variantKey
+                  || asset?.yolo?.key === variantKey
+                  || (
+                    String(asset?.yolo?.sceneId || '') === sceneId
+                    && String(asset?.yolo?.shotId || '') === shotId
+                  )
+                )
+              ))
+              .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())[0] || null
+          }
+          if (!replacementAsset) throw new Error(`No generated replacement video was found for ${sceneId} ${shotId}.`)
+          if (replacementAsset.type !== 'video') throw new Error('The replacement asset must be a video.')
+          respond({
+            success: true,
+            operation,
+            sceneId,
+            shotId,
+            clipId: clip.id,
+            currentAssetId: clip.assetId || null,
+            assetId: replacementAsset.id,
+            assetName: replacementAsset.name || '',
+            variantKey,
+            message: `Resolved the assembled timeline clip and replacement video for ${sceneId} ${shotId}.`,
+          })
+          return
+        }
         if (operation === 'get-plan') {
           const plan = buildMcpMusicVideoPlanReport()
           respond({
@@ -12404,9 +13399,50 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     window.addEventListener(eventName, handler)
     return () => window.removeEventListener(eventName, handler)
   }, [
+    assets,
+    buildMcpMusicVideoKeyframeReport,
     buildMcpMusicVideoPlanReport,
+    buildMcpMusicVideoSessionReport,
     buildMcpMusicVideoVideoReport,
+    buildYoloMusicPlan,
+    handleAssembleMusicVideoTimeline,
+    handleQueueYoloShotStoryboards,
     handleQueueYoloShotVideo,
+    handleQueueYoloVideos,
+    handleReplaceYoloMusicKeyframe,
+    handleReplaceYoloMusicVideo,
+    handleYoloMusicTranscribeSrt,
+    imageResolution,
+    isConnected,
+    isYoloMusicMode,
+    queuePeopleWizardJob,
+    resolution,
+    resolveMcpMusicVideoShotTargets,
+    saveProject,
+    updateYoloShot,
+    yoloActivePlan,
+    yoloMusicActiveScriptId,
+    yoloMusicAgentSession,
+    yoloMusicAlignProvidedLyrics,
+    yoloMusicAltScripts,
+    yoloMusicAsrLanguage,
+    yoloMusicAudioAsset,
+    yoloMusicAudioKind,
+    yoloMusicCast,
+    yoloMusicConcept,
+    yoloMusicKeyframeWorkflowId,
+    yoloMusicLyrics,
+    yoloMusicPlan,
+    yoloMusicProvidedLyrics,
+    yoloMusicResolvedCast,
+    yoloMusicScript,
+    yoloMusicSongDurationSeconds,
+    yoloMusicStyleNotes,
+    yoloMusicTargetDuration,
+    yoloMusicVideoWorkflowId,
+    yoloSelectedVideoWorkflowIds,
+    yoloStoryboardWorkflowId,
+    yoloVideoFps,
   ])
 
   const handleQueueYoloShotVideos = useCallback(async (targets = [], options = {}) => {

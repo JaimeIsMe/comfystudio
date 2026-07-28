@@ -1,6 +1,6 @@
 {
   "name": "velorn",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "AI-native video editing built around real creative timelines, generative workflows, and local agent control.",
   "main": "electron/main.js",
   "scripts": {
@@ -17,7 +17,9 @@
     "electron:pack": "npm run build && electron-builder --dir",
     "angles:sheet": "node ./scripts/build-angle-sheet.mjs",
     "starter-pack:build": "node ./scripts/build-workflow-starter-pack.mjs",
-    "starter-pack:package": "npm run starter-pack:build && node ./scripts/package-workflow-starter-pack.mjs"
+    "starter-pack:package": "npm run starter-pack:build && node ./scripts/package-workflow-starter-pack.mjs",
+    "test:premiere-xml": "node --experimental-default-type=module --test ./src/services/premiereXmlExporter.test.js",
+    "test:export-frame-source": "node --experimental-default-type=module --test ./src/services/exportFrameSource.test.js"
   },
   "keywords": [
     "animatic",

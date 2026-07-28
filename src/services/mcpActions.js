@@ -32,6 +32,7 @@ import {
 import { saveLocalComfyConnectionPort } from './localComfyConnection'
 import { getAbsoluteFileUrl, importAsset, writeGeneratedOverlayToProject } from './fileSystem'
 import buildFcpXml from './fcpxmlExporter'
+import buildPremiereXml from './premiereXmlExporter'
 import {
   handleTranscribeCaptions,
   handleGetCaptionStatus,
@@ -39,7 +40,7 @@ import {
   handleGenerateCaptions,
 } from './mcpCaptions'
 
-export const MCP_ACTION_BRIDGE_VERSION = 4
+export const MCP_ACTION_BRIDGE_VERSION = 5
 
 const MCP_PROJECT_CHECKPOINTS = new Map()
 const MCP_PROJECT_CHECKPOINT_LIMIT = 20
@@ -2068,6 +2069,98 @@ async function handleRegenerateMusicVideoVideo(payload = {}) {
     eventName: 'comfystudio-mcp-music-video-workflow',
     errorLabel: 'Music Video Step 5 regeneration',
   })
+}
+
+async function handleMusicVideoWorkspaceOperation(operation, payload = {}, errorLabel = 'Music Video request') {
+  return await dispatchMusicVideoWorkspaceRequest(payload, {
+    operation,
+    eventName: 'comfystudio-mcp-music-video-workflow',
+    errorLabel,
+  })
+}
+
+async function handleReplaceMusicVideoTimelineShot(payload = {}) {
+  const resolved = await handleMusicVideoWorkspaceOperation(
+    'resolve-timeline-shot',
+    payload,
+    'Music Video timeline shot replacement'
+  )
+  const replacement = handleReplaceClipWithAsset({
+    ...payload,
+    clipId: resolved.clipId,
+    assetId: resolved.assetId,
+    preserveDuration: payload.preserveDuration !== false,
+    preserveTrim: payload.preserveTrim === true,
+    previewOnly: payload.previewOnly !== false,
+  })
+
+  if (payload.previewOnly !== false) {
+    return {
+      ...replacement,
+      action: 'replace_music_video_timeline_shot',
+      target: resolved,
+      message: 'Music Video timeline replacement plan only. No timeline change was made.',
+    }
+  }
+
+  useTimelineStore.setState((state) => ({
+    clips: (state.clips || []).map((clip) => {
+      if (clip.id !== resolved.clipId) return clip
+      const musicVideoAssembly = {
+        ...(safeClone(clip?.metadata?.musicVideoAssembly) || {}),
+        assetId: resolved.assetId,
+        replacedAt: new Date().toISOString(),
+      }
+      return {
+        ...clip,
+        metadata: {
+          ...(safeClone(clip.metadata) || {}),
+          musicVideoAssembly,
+        },
+      }
+    }),
+  }))
+
+  return {
+    ...replacement,
+    action: 'replace_music_video_timeline_shot',
+    target: resolved,
+    message: `Replaced the assembled ${resolved.sceneId} ${resolved.shotId} clip while preserving its timeline edit.`,
+  }
+}
+
+async function handleSaveProject(payload = {}) {
+  const projectState = useProjectStore.getState()
+  if (!projectState.currentProjectHandle || !projectState.currentProject) {
+    throw new Error('Open a Velorn project before saving.')
+  }
+  const previewOnly = payload.previewOnly !== false
+  const project = {
+    name: projectState.currentProject?.name || '',
+    path: typeof projectState.currentProjectHandle === 'string' ? projectState.currentProjectHandle : null,
+    modified: projectState.currentProject?.modified || null,
+  }
+  if (previewOnly) {
+    return {
+      previewOnly: true,
+      action: 'save_project',
+      project,
+      message: `Previewed saving "${project.name || 'the current project'}". No file was written.`,
+    }
+  }
+  const saved = await projectState.saveProject()
+  if (!saved) throw new Error('Velorn could not save the current project.')
+  const nextProject = useProjectStore.getState().currentProject
+  return {
+    success: true,
+    previewOnly: false,
+    action: 'save_project',
+    project: {
+      ...project,
+      modified: nextProject?.modified || null,
+    },
+    message: `Saved "${nextProject?.name || project.name || 'the current project'}".`,
+  }
 }
 
 async function handleQueueTimelineGenerationBatch(payload = {}) {
@@ -6590,9 +6683,26 @@ async function handleExportTimeline(payload = {}) {
 }
 
 async function handleExportFcpXml(payload = {}) {
+  const requestedFormat = String(payload.format || payload.xmlFormat || 'fcpxml').trim().toLowerCase()
+  const isPremiereXml = ['premiere', 'premiere-xml', 'fcp7', 'xmeml'].includes(requestedFormat)
+  const exportConfig = isPremiereXml
+    ? {
+        format: 'premiere',
+        label: 'Premiere XML',
+        extension: 'xml',
+        xmlDialect: 'xmeml-v5',
+        buildXml: buildPremiereXml,
+      }
+    : {
+        format: 'fcpxml',
+        label: 'FCPXML',
+        extension: 'fcpxml',
+        xmlDialect: 'fcpxml-1.10',
+        buildXml: buildFcpXml,
+      }
   const api = typeof window !== 'undefined' ? window.electronAPI : null
   if (!api?.writeFile || !api?.pathJoin || !api?.createDirectory) {
-    throw new Error('FCPXML export is only available in the desktop app.')
+    throw new Error(`${exportConfig.label} export is only available in the desktop app.`)
   }
 
   const projectState = useProjectStore.getState()
@@ -6600,7 +6710,7 @@ async function handleExportFcpXml(payload = {}) {
   const assetsState = useAssetsStore.getState()
   const projectPath = projectState.currentProjectHandle
   if (typeof projectPath !== 'string' || !projectPath) {
-    throw new Error('Open a saved project before exporting FCPXML.')
+    throw new Error(`Open a saved project before exporting ${exportConfig.label}.`)
   }
 
   const project = projectState.currentProject || {}
@@ -6627,7 +6737,7 @@ async function handleExportFcpXml(payload = {}) {
     && exportableAssetIds.has(clip.assetId)
   )).length
   if (exportableClipCount === 0) {
-    throw new Error('No media clips with project file paths are available for FCPXML export.')
+    throw new Error(`No media clips with project file paths are available for ${exportConfig.label} export.`)
   }
 
   const width = Math.max(1, Math.round(Number(timelineSettings.width || project.settings?.width || 1920)))
@@ -6636,7 +6746,7 @@ async function handleExportFcpXml(payload = {}) {
   const timelineEnd = typeof timelineState.getTimelineEndTime === 'function'
     ? timelineState.getTimelineEndTime()
     : getTimelineEndTimeForMcp(timelineState.clips || [], timelineState.duration || currentTimeline?.duration || 0)
-  const xml = buildFcpXml({
+  const xml = exportConfig.buildXml({
     projectName: project.name || 'Velorn Project',
     timelineName,
     timelineSettings: { width, height, fps },
@@ -6655,16 +6765,18 @@ async function handleExportFcpXml(payload = {}) {
   const outputPath = String(payload.outputPath || '').trim()
     || await api.pathJoin(
       outputFolder,
-      `${sanitizeExportBaseName(payload.filename || `${project.name || 'Velorn'}_${timelineName}`)}_${Date.now()}.fcpxml`
+      `${sanitizeExportBaseName(payload.filename || `${project.name || 'Velorn'}_${timelineName}`)}_${Date.now()}.${exportConfig.extension}`
     )
   const writeResult = await api.writeFile(outputPath, xml, { encoding: 'utf8' })
   if (!writeResult?.success) {
-    throw new Error(writeResult?.error || 'Failed to write FCPXML file.')
+    throw new Error(writeResult?.error || `Failed to write ${exportConfig.label} file.`)
   }
 
   return {
     exported: true,
     action: 'export_fcpxml',
+    format: exportConfig.format,
+    xmlDialect: exportConfig.xmlDialect,
     outputPath,
     clipCount: exportableClipCount,
     timeline: {
@@ -7932,6 +8044,38 @@ async function handleMcpAction(request = {}) {
       return handleInspectMusicVideoVideo(request.payload || {})
     case 'regenerate_music_video_video':
       return handleRegenerateMusicVideoVideo(request.payload || {})
+    case 'get_music_video_session':
+      return handleMusicVideoWorkspaceOperation('get-session', request.payload || {}, 'Music Video session inspection')
+    case 'configure_music_video':
+      return handleMusicVideoWorkspaceOperation('configure', request.payload || {}, 'Music Video configuration')
+    case 'update_music_video_session':
+      return handleMusicVideoWorkspaceOperation('update-session', request.payload || {}, 'Music Video agent session update')
+    case 'manage_music_video_cast':
+      return handleMusicVideoWorkspaceOperation('manage-cast', request.payload || {}, 'Music Video cast update')
+    case 'queue_music_video_character_asset':
+      return handleMusicVideoWorkspaceOperation('queue-character-asset', request.payload || {}, 'Music Video character asset generation')
+    case 'manage_music_video_pass':
+      return handleMusicVideoWorkspaceOperation('manage-pass', request.payload || {}, 'Music Video coverage pass update')
+    case 'set_music_video_director_script':
+      return handleMusicVideoWorkspaceOperation('set-script', request.payload || {}, 'Music Video director script update')
+    case 'update_music_video_shot':
+      return handleMusicVideoWorkspaceOperation('update-shot', request.payload || {}, 'Music Video shot update')
+    case 'queue_music_video_keyframes':
+      return handleMusicVideoWorkspaceOperation('queue-keyframes', request.payload || {}, 'Music Video keyframe batch')
+    case 'queue_music_video_videos':
+      return handleMusicVideoWorkspaceOperation('queue-videos', request.payload || {}, 'Music Video video batch')
+    case 'replace_music_video_keyframe':
+      return handleMusicVideoWorkspaceOperation('replace-keyframe', request.payload || {}, 'Music Video keyframe replacement')
+    case 'replace_music_video_video':
+      return handleMusicVideoWorkspaceOperation('replace-video', request.payload || {}, 'Music Video video replacement')
+    case 'transcribe_music_video_audio':
+      return handleMusicVideoWorkspaceOperation('transcribe-audio', request.payload || {}, 'Music Video audio transcription')
+    case 'assemble_music_video_timeline':
+      return handleMusicVideoWorkspaceOperation('assemble-timeline', request.payload || {}, 'Music Video timeline assembly')
+    case 'replace_music_video_timeline_shot':
+      return handleReplaceMusicVideoTimelineShot(request.payload || {})
+    case 'save_project':
+      return handleSaveProject(request.payload || {})
     case 'queue_timeline_generation_batch':
       return handleQueueTimelineGenerationBatch(request.payload || {})
     case 'queue_timeline_template_generation':

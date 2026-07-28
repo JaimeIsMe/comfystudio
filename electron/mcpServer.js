@@ -74,6 +74,21 @@ const MCP_ACTION_PLAN_WRITABLE_TOOLS = new Set([
   'set_clip_keyframes',
   'add_dip_to_black',
   'generate_music',
+  'configure_music_video',
+  'update_music_video_session',
+  'manage_music_video_cast',
+  'queue_music_video_character_asset',
+  'manage_music_video_pass',
+  'set_music_video_director_script',
+  'update_music_video_shot',
+  'queue_music_video_keyframes',
+  'queue_music_video_videos',
+  'replace_music_video_keyframe',
+  'replace_music_video_video',
+  'transcribe_music_video_audio',
+  'assemble_music_video_timeline',
+  'replace_music_video_timeline_shot',
+  'save_project',
   'regenerate_music_video_keyframe',
   'regenerate_music_video_video',
   'queue_timeline_template_generation',
@@ -2638,6 +2653,21 @@ function buildAiReviewPasses(snapshot) {
         },
       },
       {
+        id: 'guided_music_video_creation',
+        title: 'Guided Music Video Creation',
+        goal: 'Create a complete, editable Music Video through a collaborative, approval-based conversation using the same Director state as the Velorn UI.',
+        prompt: 'Start with get_music_video_session and continue from its saved agentSession checkpoint. Work in phases: song, artist/cast, creative direction, director plan, keyframes, videos, edit, and review. Ask focused questions and save the current phase, next question, decisions, and approvals with update_music_video_session. Use import_asset_from_path for new media, configure_music_video for setup, queue_music_video_character_asset plus manage_music_video_cast for people, manage_music_video_pass for alternate performance and b-roll coverage, and set_music_video_director_script to validate and parse each approved script. Use update_music_video_shot for targeted revisions. Always preview generation batches and timeline assembly, show exact targets/workflows, and apply only after explicit approval because generation may start local GPU work or spend cloud credits. Poll generation, inspect results, allow targeted replacement/reruns, then assemble and save. Keep every result editable in the normal Director and timeline UI.',
+        tools: ['get_music_video_session', 'update_music_video_session', 'import_asset_from_path', 'configure_music_video', 'queue_music_video_character_asset', 'manage_music_video_cast', 'manage_music_video_pass', 'set_music_video_director_script', 'get_music_video_plan', 'update_music_video_shot', 'queue_music_video_keyframes', 'inspect_music_video_keyframe', 'replace_music_video_keyframe', 'queue_music_video_videos', 'inspect_music_video_video', 'replace_music_video_video', 'get_generation_status', 'assemble_music_video_timeline', 'replace_music_video_timeline_shot', 'save_project'],
+        safeDefaults: {
+          previewOnlyFirst: true,
+          saveConversationCheckpoint: true,
+          requireApprovalBeforeGeneration: true,
+          requireApprovalBeforeTimelineAssembly: true,
+          useExistingDirectorState: true,
+          keepNormalUiEditable: true,
+        },
+      },
+      {
         id: 'music_video_keyframe_rerun',
         title: 'Music Video Shot Rerun',
         goal: 'Discover, inspect, and regenerate one Music Video Step 4 keyframe or Step 5 video through the active workflow settings.',
@@ -2727,9 +2757,9 @@ function buildAiReviewPasses(snapshot) {
       },
       {
         id: 'fcpxml_interchange',
-        title: 'FCPXML Interchange Pass',
-        goal: 'Export the active Velorn timeline as FCPXML for Resolve, Final Cut, or Premiere finishing.',
-        prompt: 'Preview the FCPXML export plan first, including the active timeline name, clip count, and output path. After I approve, export the FCPXML to the project renders folder or the path I requested.',
+        title: 'XML Interchange Pass',
+        goal: 'Export the active Velorn timeline as FCPXML for Resolve/Final Cut or XMEML v5 for Premiere Pro.',
+        prompt: 'Choose fcpxml for Resolve or Final Cut, or premiere for Adobe Premiere Pro. Preview the XML export plan first, including the active timeline name, clip count, format, and output path. After I approve, export the XML to the project renders folder or the path I requested.',
         tools: ['get_project', 'get_timeline', 'export_fcpxml'],
         safeDefaults: {
           previewOnlyFirst: true,
@@ -2779,7 +2809,7 @@ function buildAiReviewPasses(snapshot) {
       'Use export_delivery_batch with previewOnly before rendering multiple versions such as 16:9, square, and vertical from the same range.',
       'Use inspect_export_file after rendering when the user asks whether the file exists, has the expected codec, duration, FPS, or dimensions.',
       'Use run_mcp_action_plan with previewOnly before applying an approved multi-step operation in one checkpointed pass.',
-      'Use export_fcpxml with previewOnly before writing an interchange XML for Resolve, Final Cut, or Premiere.',
+      'Use export_fcpxml with previewOnly before writing interchange XML. Choose format fcpxml for Resolve/Final Cut or premiere for Adobe Premiere Pro.',
     ],
     generatedAt: new Date().toISOString(),
   }
@@ -7531,6 +7561,307 @@ function createToolDefinitions() {
       },
     },
     {
+      name: 'get_music_video_session',
+      description: 'Read the complete agent-guided Music Video session from the Director workspace: song, lyrics/SRT, creative direction, cast, workflows, output settings, master and coverage passes, active plan, queue, and resumable conversation checkpoint. Read-only.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          timeoutMs: { type: 'integer', description: 'Optional renderer response timeout in milliseconds. Defaults to 30000.' },
+        },
+      },
+    },
+    {
+      name: 'configure_music_video',
+      description: 'Preview or update Music Video setup using existing project assets. Configures the song, lyrics, creative direction, workflows, resolution, and FPS in the same Director state used by the UI. Use import_asset_from_path first for a new local song. Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          audioAssetId: { type: 'string', description: 'Existing project audio asset ID. Use an empty string to clear it.' },
+          audioKind: { type: 'string', enum: ['mixed_track', 'vocal_stem', 'instrumental'] },
+          asrLanguage: { type: 'string' },
+          lyricsOrSrt: { type: 'string', description: 'Generated/finished lyrics timing field. Accepts plain lyrics, SRT, or LRC.' },
+          providedLyrics: { type: 'string', description: 'Optional source lyrics to align against audio.' },
+          alignProvidedLyrics: { type: 'boolean' },
+          concept: { type: 'string' },
+          styleNotes: { type: 'string' },
+          targetDurationSeconds: { type: 'number' },
+          keyframeWorkflowId: { type: 'string', enum: ['image-edit', 'nano-banana-2', 'custom-music-keyframe'] },
+          videoWorkflowId: { type: 'string', enum: ['music-video-shot-ltx23', 'wan22-i2v', 'custom-music-video'] },
+          aspectRatio: { type: 'string', enum: ['landscape_16x9', 'vertical_9x16', 'square_1x1'] },
+          resolutionPreset: { type: 'string', enum: ['720p', '1080p'] },
+          width: { type: 'integer', description: 'Explicit output width. Supply with height to override aspect/preset.' },
+          height: { type: 'integer', description: 'Explicit output height. Supply with width to override aspect/preset.' },
+          fps: { type: 'integer', enum: [24, 25, 30] },
+          activate: { type: 'boolean', description: 'Open/activate Music Video Creation. Defaults to true.' },
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+          timeoutMs: { type: 'integer' },
+        },
+      },
+    },
+    {
+      name: 'update_music_video_session',
+      description: 'Preview or persist the conversational Music Video checkpoint so an agent can resume a multi-turn creation session without hiding state from the user. Store the current phase, goal, summary, next question, decisions, approvals, and notes. Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          mode: { type: 'string', enum: ['merge', 'replace'], description: 'Merge into the checkpoint by default, or replace it.' },
+          session: {
+            type: 'object',
+            properties: {
+              phase: { type: 'string', enum: ['intake', 'song', 'artist', 'creative_direction', 'director_plan', 'keyframes', 'videos', 'edit', 'review', 'complete'] },
+              title: { type: 'string' },
+              goal: { type: 'string' },
+              summary: { type: 'string' },
+              nextQuestion: { type: 'string' },
+              decisions: { type: 'array', items: { type: 'string' } },
+              approvals: { type: 'array', items: { type: 'string' } },
+              notes: { type: 'array', items: { type: 'string' } },
+            },
+          },
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+          timeoutMs: { type: 'integer' },
+        },
+      },
+    },
+    {
+      name: 'manage_music_video_cast',
+      description: 'Preview or manage the Music Video cast roster in the Director workspace. Add, update, remove, replace, or clear named performers and their existing image references. Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['add', 'update', 'remove', 'replace', 'clear'] },
+          castId: { type: 'string', description: 'Required for update/remove.' },
+          entry: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string' },
+              label: { type: 'string' },
+              slug: { type: 'string' },
+              assetId: { type: 'string', description: 'Existing project image asset ID.' },
+              role: { type: 'string' },
+              notes: { type: 'string' },
+            },
+          },
+          entries: { type: 'array', items: { type: 'object' }, description: 'Full cast list for replace.' },
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+          timeoutMs: { type: 'integer' },
+        },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'queue_music_video_character_asset',
+      description: 'Preview or queue a local AI portrait or character sheet for the Music Video cast. Portrait uses Z-Image Turbo; character_sheet uses Multiple Angles and requires an existing input image. Applying starts local GPU work. Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          stage: { type: 'string', enum: ['portrait', 'character_sheet'] },
+          name: { type: 'string' },
+          prompt: { type: 'string' },
+          negativePrompt: { type: 'string' },
+          inputAssetId: { type: 'string', description: 'Required image asset for character_sheet.' },
+          assetPrefix: { type: 'string' },
+          seed: { type: 'integer' },
+          width: { type: 'integer' },
+          height: { type: 'integer' },
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+          timeoutMs: { type: 'integer' },
+        },
+        required: ['stage'],
+      },
+    },
+    {
+      name: 'manage_music_video_pass',
+      description: 'Preview or manage second-unit Music Video coverage passes. Create, update, remove, or activate alternate performance, environmental b-roll, and detail b-roll passes. The master pass can be activated with passId master. Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['create', 'update', 'remove', 'activate'] },
+          passId: { type: 'string' },
+          passType: { type: 'string', enum: ['alt_performance', 'environmental_broll', 'detail_broll'] },
+          label: { type: 'string' },
+          variantDescriptor: { type: 'string' },
+          script: { type: 'string' },
+          activate: { type: 'boolean', description: 'For create, activate the new pass. Defaults to true.' },
+          pass: { type: 'object', description: 'Optional update fields for action update.' },
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+          timeoutMs: { type: 'integer' },
+        },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'set_music_video_director_script',
+      description: 'Preview, validate, save, and optionally parse a complete Music Video director script into the editable Director plan. Targets master, active, or a coverage pass ID. Defaults to parsing and previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: 'master, active, or an exact pass ID.' },
+          script: { type: 'string' },
+          parse: { type: 'boolean', description: 'Parse into scenes and shots. Defaults to true.' },
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+          timeoutMs: { type: 'integer' },
+        },
+        required: ['script'],
+      },
+    },
+    {
+      name: 'update_music_video_shot',
+      description: 'Preview or update one shot in the active parsed Music Video plan. Supports prompt, timing, camera, shot type, artist, and per-shot reference overrides. Use get_music_video_plan for exact IDs. Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sceneId: { type: 'string' },
+          shotId: { type: 'string' },
+          patch: {
+            type: 'object',
+            properties: {
+              keyframePrompt: { type: 'string' },
+              motionPrompt: { type: 'string' },
+              camera: { type: 'string' },
+              shotType: { type: 'string' },
+              audioStart: { type: 'number' },
+              durationSeconds: { type: 'number' },
+              artist: { type: 'string' },
+              referenceOverrideEnabled: { type: 'boolean' },
+              referenceAssetId1: { type: 'string' },
+              referenceAssetId2: { type: 'string' },
+            },
+          },
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+          timeoutMs: { type: 'integer' },
+        },
+        required: ['sceneId', 'shotId', 'patch'],
+      },
+    },
+    {
+      name: 'queue_music_video_keyframes',
+      description: 'Preview or queue Music Video keyframes for missing, all, or selected shots using native Director routing. Reference-free b-roll still follows Velorn local fallback rules. Applying may start local GPU work or spend cloud credits. Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          scope: { type: 'string', enum: ['missing', 'all', 'selected'] },
+          shots: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { sceneId: { type: 'string' }, shotId: { type: 'string' } },
+              required: ['sceneId', 'shotId'],
+            },
+          },
+          workflowId: { type: 'string', description: 'Optional keyframe workflow override.' },
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+          timeoutMs: { type: 'integer' },
+        },
+      },
+    },
+    {
+      name: 'queue_music_video_videos',
+      description: 'Preview or queue Music Video videos for missing, all, or selected shots using generated keyframes and native Director routing. Applying may start local GPU work or spend cloud credits. Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          scope: { type: 'string', enum: ['missing', 'all', 'selected'] },
+          shots: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { sceneId: { type: 'string' }, shotId: { type: 'string' } },
+              required: ['sceneId', 'shotId'],
+            },
+          },
+          workflowIds: { type: 'array', items: { type: 'string' }, description: 'Optional video workflow overrides.' },
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+          timeoutMs: { type: 'integer' },
+        },
+      },
+    },
+    {
+      name: 'replace_music_video_keyframe',
+      description: 'Preview or replace one Music Video Step 4 keyframe with an existing project image asset while preserving Director metadata. Use import_asset_from_path first for a new local file. Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sceneId: { type: 'string' },
+          shotId: { type: 'string' },
+          assetId: { type: 'string' },
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+          timeoutMs: { type: 'integer' },
+        },
+        required: ['sceneId', 'shotId', 'assetId'],
+      },
+    },
+    {
+      name: 'replace_music_video_video',
+      description: 'Preview or replace one Music Video Step 5 result with an existing project video asset while preserving Director metadata. Use import_asset_from_path first for a new local file. Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sceneId: { type: 'string' },
+          shotId: { type: 'string' },
+          assetId: { type: 'string' },
+          workflowId: { type: 'string' },
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+          timeoutMs: { type: 'integer' },
+        },
+        required: ['sceneId', 'shotId', 'assetId'],
+      },
+    },
+    {
+      name: 'transcribe_music_video_audio',
+      description: 'Preview or run the Music Video Qwen ASR transcription/alignment workflow for the selected song. Existing SRT is only replaced when replaceExisting is explicitly true. Applying starts local GPU work. Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          language: { type: 'string' },
+          replaceExisting: { type: 'boolean' },
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+          timeoutMs: { type: 'integer', description: 'May need a long timeout while ASR runs.' },
+        },
+      },
+    },
+    {
+      name: 'assemble_music_video_timeline',
+      description: 'Preview or assemble ready Music Video clips and song audio into a generated edit timeline with coverage tracks and vocal-performance sync locks. Existing assembled shots are kept. Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          saveAfterAssembly: { type: 'boolean', description: 'Save the project after assembly. Defaults to true.' },
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+          timeoutMs: { type: 'integer' },
+        },
+      },
+    },
+    {
+      name: 'replace_music_video_timeline_shot',
+      description: 'Preview or replace an already assembled Music Video timeline shot with its latest or a specified generated video, preserving timing, transforms, effects, and sync lock. Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sceneId: { type: 'string' },
+          shotId: { type: 'string' },
+          clipId: { type: 'string', description: 'Required only when multiple assembled clips match the same shot.' },
+          assetId: { type: 'string', description: 'Specific replacement video. Defaults to the latest result for the shot.' },
+          preserveDuration: { type: 'boolean', description: 'Defaults to true.' },
+          preserveTrim: { type: 'boolean', description: 'Preserve current source trims. Defaults to false.' },
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+          timeoutMs: { type: 'integer' },
+        },
+        required: ['sceneId', 'shotId'],
+      },
+    },
+    {
+      name: 'save_project',
+      description: 'Preview or explicitly save the current Velorn project, including Director state, assets, and the active timeline. Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          previewOnly: { type: 'boolean', description: 'Defaults to true.' },
+        },
+      },
+    },
+    {
       name: 'get_music_video_status',
       description: 'Summarize Velorn music-video workflow assets, assembled clips, and sync-locked clips in the current project.',
       inputSchema: {
@@ -9852,21 +10183,26 @@ function createToolDefinitions() {
     },
     {
       name: 'export_fcpxml',
-      description: 'Preview or export the active Velorn timeline as Final Cut Pro XML for Resolve, Final Cut, or Premiere interchange. Writes to the project renders folder unless outputPath is provided.',
+      description: 'Preview or export the active Velorn timeline as modern FCPXML for Resolve/Final Cut or legacy XMEML v5 for Adobe Premiere Pro. Writes to the project renders folder unless outputPath is provided.',
       inputSchema: {
         type: 'object',
         properties: {
+          format: {
+            type: 'string',
+            enum: ['fcpxml', 'premiere'],
+            description: 'Use fcpxml for Resolve/Final Cut or premiere for Adobe Premiere Pro. Defaults to fcpxml.',
+          },
           filename: {
             type: 'string',
             description: 'Optional output filename without extension. Defaults to project_timeline_timestamp.',
           },
           outputPath: {
             type: 'string',
-            description: 'Optional absolute .fcpxml output path. If omitted, writes to the project renders folder.',
+            description: 'Optional absolute .fcpxml or .xml output path. If omitted, writes to the project renders folder.',
           },
           previewOnly: {
             type: 'boolean',
-            description: 'When true, returns the FCPXML export plan without writing a file. Defaults to true.',
+            description: 'When true, returns the XML export plan without writing a file. Defaults to true.',
           },
         },
       },
@@ -10092,7 +10428,7 @@ class ComfyStudioMcpServer {
               name: 'velorn',
               version: this.version,
             },
-            instructions: 'You are connected to Velorn. Use guide_comfyui_setup first for beginner local ComfyUI setup questions like "How do I connect Velorn to ComfyUI?"; it diagnoses, probes likely ports, gives Portable/Desktop/Docker/manual steps, and previews safe port fixes. Use diagnose_comfyui_connection, repair_comfyui_connection, set_comfyui_connection, control_comfyui_launcher, get_comfyui_launcher_logs, validate_comfyui_nodes, list_velorn_workflows, and inspect_velorn_workflow for deeper local ComfyUI setup/support questions. Use get_mcp_recipes or get_ai_review_passes to choose safe review workflows. Use find_timeline_items before targeting timeline clips, tracks, markers, transitions, or project assets from a natural-language request. Use check_media_health before delivery/relinking work, relink_asset with previewOnly before changing asset paths, and inspect_export_file after rendering when the user asks whether a file exists or has the expected codec, duration, FPS, or dimensions. Use run_mcp_action_plan with previewOnly before applying an approved multi-step edit in one checkpointed pass. Use the tools to inspect the open project, timeline, assets, generation status, music-video workflow state, the composed timeline frame at the playhead, sampled visual timeline ranges, and top-visible shot pages for fast-cut edit review. Use create_project with previewOnly first when the user wants a fresh Velorn project, and use duplicate_project with previewOnly first before risky AI experiments on an existing project. Use create_timeline with previewOnly first when the user wants a new sequence/timeline for an alternate edit, review selects, generated variations, or a fresh AI-built layout; use switch_timeline, rename_timeline, duplicate_timeline, and delete_timeline with previewOnly first for sequence management. Use update_track and remove_track with previewOnly first for track cleanup, locking/muting/showing tracks, renaming, and layer order. Use add_transition, update_transition, and remove_transitions with previewOnly first for native dissolves, fades, wipes, slides, zooms, blur transitions, and dip-to-black style edits. Use move_clips, trim_clips, and delete_clips with previewOnly first for timeline edit operations such as cleanup passes, staggered layouts, trims, and ripple deletes. Use create_asset_folder with previewOnly first when a generation batch or AI-built layout should keep its source assets organized in a named/nested project folder. Use move_assets_to_folder with previewOnly first when assets should be cleaned up or moved into a folder, for example rootOnly + constantsOnly into a Constants folder. Use queue_prompt_generation_batch with previewOnly first when the user wants new images or videos generated from a written brief; show prompts, workflows, counts, seeds, resolution, duration, FPS, and output folder, then apply only after approval. Use prepare_generation_from_timeline_context with previewOnly first when the user wants to turn a timeline frame into a Generate-tab image-to-video or keyframe request; applying it only captures the frame and prefills Generate. Use queue_prepared_generation with previewOnly first and explicit user approval before queueing a staged Generate request. Use queue_timeline_generation_batch with previewOnly first when the user asks for multiple variations or multiple workflows from the same timeline frame; show workflow counts and seeds, then apply only after approval. Use list_comfyui_templates and queue_timeline_template_generation with previewOnly first when the user asks to run an official ComfyUI template such as LTX 2.3 LoRA video outpainting on a selected timeline clip; applying may import the template and queue local GPU work. Use import_comfyui_workflow with previewOnly first when the user brings a community ComfyUI workflow (comfy.org share URL, local .json, or pasted JSON); then install_workflow_setup with previewOnly and explicit approval for missing node packs/models (poll get_workflow_install_status, restart ComfyUI via control_comfyui_launcher when recommended), and run it with queue_timeline_template_generation using importedWorkflowId. Use add_asset_to_timeline with previewOnly first when the user wants one generated/imported asset placed back into the edit, or add_assets_to_timeline with previewOnly first when placing multiple results as review lanes or a sequential strip. Use add_solid_color with previewOnly first when the user needs black/color constants or background plates; it can create a bottom video track so solids sit behind the edit. Use add_adjustment_clip with previewOnly first when the user wants a color look, blur, GLSL effect, camera shake, vignette, grain, or keyframed treatment applied to multiple clips below a single adjustment layer. Use add_text_clip, add_shape_clip, update_text_clip, and update_shape_clip with previewOnly first for titles, lower thirds, lines, boxes, circles, frames, graphic accents, and simple motion graphics; use motionBlurEnabled/motionBlurSamples/motionBlurShutter on fast animated layers when requested. Use list_glsl_effects, add_glsl_effect, update_glsl_effect, and remove_glsl_effect with previewOnly first for GPU effects such as camera shake, directional blur, lens blur, fisheye, chroma warp, digital glitch, film grain, film look, flicker, VHS, and vignette; effect parameters can also be keyframed, including when the target clip is an adjustment clip. Use set_clip_keyframes with previewOnly first for visual clip fades, dips to black, moves, blur, crop reveals, and color/transform/shape style automation. Use export_fcpxml with previewOnly first when the user wants an interchange XML for Resolve, Final Cut, or Premiere. Queue tools use the same path as the Velorn Queue button and may spend credits or start local GPU work depending on the selected workflow. The write actions currently exposed are ComfyUI setup guidance/settings, ComfyUI launcher start/stop/restart, project creation/duplication, asset folder creation, asset folder cleanup/move/relink operations, sequence/timeline creation and management, track management, native transitions, clip move/trim/delete operations, clip label coloring, clip enable/disable, timeline marker creation/removal/property updates, text/title/shape/adjustment clip creation and updates, GLSL effect add/update/remove operations, visual clip keyframes, solid color asset/clip creation, media asset placement, prompt-based generation queueing, preparing/queueing Generate from a timeline frame, official ComfyUI template generation from timeline media, checkpointed multi-step action plans, starting timeline delivery exports through Velorn export worker, export-file QC, and FCPXML interchange export. Project creation/duplication writes project folders on disk; timeline/sequence, clip/marker/text/shape/adjustment/effect/media/keyframe actions are undoable in Velorn; exports write new files to disk.',
+            instructions: 'You are connected to Velorn. Use guide_comfyui_setup first for beginner local ComfyUI setup questions like "How do I connect Velorn to ComfyUI?"; it diagnoses, probes likely ports, gives Portable/Desktop/Docker/manual steps, and previews safe port fixes. Use diagnose_comfyui_connection, repair_comfyui_connection, set_comfyui_connection, control_comfyui_launcher, get_comfyui_launcher_logs, validate_comfyui_nodes, list_velorn_workflows, and inspect_velorn_workflow for deeper local ComfyUI setup/support questions. Use get_mcp_recipes or get_ai_review_passes to choose safe review workflows. For agent-guided Music Video creation, begin with get_music_video_session, preserve the multi-turn checkpoint with update_music_video_session, and use the dedicated configure/cast/pass/script/shot/generation/assembly tools so the result stays editable in the visible Director and timeline UI; preview any generation or assembly action and get explicit approval before applying it. Use find_timeline_items before targeting timeline clips, tracks, markers, transitions, or project assets from a natural-language request. Use check_media_health before delivery/relinking work, relink_asset with previewOnly before changing asset paths, and inspect_export_file after rendering when the user asks whether a file exists or has the expected codec, duration, FPS, or dimensions. Use run_mcp_action_plan with previewOnly before applying an approved multi-step edit in one checkpointed pass. Use the tools to inspect the open project, timeline, assets, generation status, music-video workflow state, the composed timeline frame at the playhead, sampled visual timeline ranges, and top-visible shot pages for fast-cut edit review. Use create_project with previewOnly first when the user wants a fresh Velorn project, and use duplicate_project with previewOnly first before risky AI experiments on an existing project. Use create_timeline with previewOnly first when the user wants a new sequence/timeline for an alternate edit, review selects, generated variations, or a fresh AI-built layout; use switch_timeline, rename_timeline, duplicate_timeline, and delete_timeline with previewOnly first for sequence management. Use update_track and remove_track with previewOnly first for track cleanup, locking/muting/showing tracks, renaming, and layer order. Use add_transition, update_transition, and remove_transitions with previewOnly first for native dissolves, fades, wipes, slides, zooms, blur transitions, and dip-to-black style edits. Use move_clips, trim_clips, and delete_clips with previewOnly first for timeline edit operations such as cleanup passes, staggered layouts, trims, and ripple deletes. Use create_asset_folder with previewOnly first when a generation batch or AI-built layout should keep its source assets organized in a named/nested project folder. Use move_assets_to_folder with previewOnly first when assets should be cleaned up or moved into a folder, for example rootOnly + constantsOnly into a Constants folder. Use queue_prompt_generation_batch with previewOnly first when the user wants new images or videos generated from a written brief; show prompts, workflows, counts, seeds, resolution, duration, FPS, and output folder, then apply only after approval. Use prepare_generation_from_timeline_context with previewOnly first when the user wants to turn a timeline frame into a Generate-tab image-to-video or keyframe request; applying it only captures the frame and prefills Generate. Use queue_prepared_generation with previewOnly first and explicit user approval before queueing a staged Generate request. Use queue_timeline_generation_batch with previewOnly first when the user asks for multiple variations or multiple workflows from the same timeline frame; show workflow counts and seeds, then apply only after approval. Use list_comfyui_templates and queue_timeline_template_generation with previewOnly first when the user asks to run an official ComfyUI template such as LTX 2.3 LoRA video outpainting on a selected timeline clip; applying may import the template and queue local GPU work. Use import_comfyui_workflow with previewOnly first when the user brings a community ComfyUI workflow (comfy.org share URL, local .json, or pasted JSON); then install_workflow_setup with previewOnly and explicit approval for missing node packs/models (poll get_workflow_install_status, restart ComfyUI via control_comfyui_launcher when recommended), and run it with queue_timeline_template_generation using importedWorkflowId. Use add_asset_to_timeline with previewOnly first when the user wants one generated/imported asset placed back into the edit, or add_assets_to_timeline with previewOnly first when placing multiple results as review lanes or a sequential strip. Use add_solid_color with previewOnly first when the user needs black/color constants or background plates; it can create a bottom video track so solids sit behind the edit. Use add_adjustment_clip with previewOnly first when the user wants a color look, blur, GLSL effect, camera shake, vignette, grain, or keyframed treatment applied to multiple clips below a single adjustment layer. Use add_text_clip, add_shape_clip, update_text_clip, and update_shape_clip with previewOnly first for titles, lower thirds, lines, boxes, circles, frames, graphic accents, and simple motion graphics; use motionBlurEnabled/motionBlurSamples/motionBlurShutter on fast animated layers when requested. Use list_glsl_effects, add_glsl_effect, update_glsl_effect, and remove_glsl_effect with previewOnly first for GPU effects such as camera shake, directional blur, lens blur, fisheye, chroma warp, digital glitch, film grain, film look, flicker, VHS, and vignette; effect parameters can also be keyframed, including when the target clip is an adjustment clip. Use set_clip_keyframes with previewOnly first for visual clip fades, dips to black, moves, blur, crop reveals, and color/transform/shape style automation. Use export_fcpxml with previewOnly first when the user wants an interchange XML for Resolve, Final Cut, or Premiere. Queue tools use the same path as the Velorn Queue button and may spend credits or start local GPU work depending on the selected workflow. The write actions currently exposed are ComfyUI setup guidance/settings, ComfyUI launcher start/stop/restart, project creation/duplication/save, agent-guided Music Video setup/cast/pass/script/shot/generation/assembly, asset folder creation, asset folder cleanup/move/relink operations, sequence/timeline creation and management, track management, native transitions, clip move/trim/delete operations, clip label coloring, clip enable/disable, timeline marker creation/removal/property updates, text/title/shape/adjustment clip creation and updates, GLSL effect add/update/remove operations, visual clip keyframes, solid color asset/clip creation, media asset placement, prompt-based generation queueing, preparing/queueing Generate from a timeline frame, official ComfyUI template generation from timeline media, checkpointed multi-step action plans, starting timeline delivery exports through Velorn export worker, export-file QC, and FCPXML interchange export. Project creation/duplication writes project folders on disk; timeline/sequence, clip/marker/text/shape/adjustment/effect/media/keyframe actions are undoable in Velorn; exports write new files to disk.',
           }
           break
         case 'ping':
@@ -10297,6 +10633,28 @@ class ComfyStudioMcpServer {
         return this.runRendererActionTool('update_caption_cues', args, { bridgeName: 'MCP captions bridge', suggestedTool: 'update_caption_cues' })
       case 'generate_captions':
         return this.runRendererActionTool('generate_captions', args, { bridgeName: 'MCP captions bridge', suggestedTool: 'generate_captions', defaultPreviewOnly: true })
+      case 'get_music_video_session':
+        return this.runRendererActionTool('get_music_video_session', args, { bridgeName: 'MCP Music Video session bridge', suggestedTool: 'get_music_video_session' })
+      case 'configure_music_video':
+      case 'update_music_video_session':
+      case 'manage_music_video_cast':
+      case 'queue_music_video_character_asset':
+      case 'manage_music_video_pass':
+      case 'set_music_video_director_script':
+      case 'update_music_video_shot':
+      case 'queue_music_video_keyframes':
+      case 'queue_music_video_videos':
+      case 'replace_music_video_keyframe':
+      case 'replace_music_video_video':
+      case 'transcribe_music_video_audio':
+      case 'assemble_music_video_timeline':
+      case 'replace_music_video_timeline_shot':
+      case 'save_project':
+        return this.runRendererActionTool(name, args, {
+          bridgeName: 'MCP Music Video creation bridge',
+          suggestedTool: name,
+          defaultPreviewOnly: true,
+        })
       case 'get_music_video_status':
         return textResult(summarizeMusicVideoWorkflow(snapshot))
       case 'inspect_music_video_keyframe':
@@ -13903,10 +14261,23 @@ class ComfyStudioMcpServer {
   }
 
   async exportFcpXml(snapshot, args = {}) {
+    const requestedFormat = String(args.format || 'fcpxml').trim().toLowerCase()
+    const normalizedFormat = ['premiere', 'premiere-xml', 'fcp7', 'xmeml'].includes(requestedFormat)
+      ? 'premiere'
+      : requestedFormat === 'fcpxml'
+        ? 'fcpxml'
+        : ''
+    if (!normalizedFormat) {
+      return errorResult('Unsupported XML format. Use fcpxml for Resolve/Final Cut or premiere for Adobe Premiere Pro.')
+    }
+    const isPremiereXml = normalizedFormat === 'premiere'
+    const formatLabel = isPremiereXml ? 'Premiere XML' : 'FCPXML'
+    const xmlDialect = isPremiereXml ? 'xmeml-v5' : 'fcpxml-1.10'
+    const extension = isPremiereXml ? 'xml' : 'fcpxml'
     const timeline = snapshot.currentTimeline || null
     if (!timeline) return errorResult('No current timeline is available.')
     const projectPath = String(snapshot.project?.path || '').trim()
-    if (!projectPath) return errorResult('Open a saved project before exporting FCPXML.')
+    if (!projectPath) return errorResult(`Open a saved project before exporting ${formatLabel}.`)
 
     const assetsById = new Map((snapshot.assets || []).map((asset) => [asset.id, asset]))
     const exportableClips = (timeline.clips || []).filter((clip) => {
@@ -13916,7 +14287,7 @@ class ComfyStudioMcpServer {
       return Boolean(asset?.absolutePath || asset?.path)
     })
     if (exportableClips.length === 0) {
-      return errorResult('No media clips with project file paths are available for FCPXML export.')
+      return errorResult(`No media clips with project file paths are available for ${formatLabel} export.`)
     }
 
     const filename = String(args.filename || `${snapshot.project?.name || 'Velorn'}_${timeline.name || 'Timeline'}`).trim()
@@ -13925,6 +14296,9 @@ class ComfyStudioMcpServer {
       projectPath,
       outputPath: outputPath || 'project renders folder',
       filename: filename || `${snapshot.project?.name || 'Velorn'}_${timeline.name || 'Timeline'}`,
+      format: normalizedFormat,
+      xmlDialect,
+      extension,
       timeline: {
         id: timeline.id,
         name: timeline.name,
@@ -13935,18 +14309,21 @@ class ComfyStudioMcpServer {
       },
       exportableClipCount: exportableClips.length,
       skippedClipCount: (timeline.clips || []).length - exportableClips.length,
-      note: 'FCPXML exports media clips with project file paths plus static transform data where supported.',
+      note: isPremiereXml
+        ? 'Premiere XML Beta exports media clips, track placement, cuts, and source trims. Advanced effects, transitions, and keyframes may require rebuilding in Premiere.'
+        : 'FCPXML exports media clips with project file paths plus static transform data where supported.',
     }
 
     if (args.previewOnly !== false) {
       return textResult({
         previewOnly: true,
         action: 'export_fcpxml',
-        message: 'FCPXML export plan only. No file was written.',
+        message: `${formatLabel} export plan only. No file was written.`,
         plan,
         suggestedApplyCall: {
           tool: 'export_fcpxml',
           arguments: {
+            format: normalizedFormat,
             filename,
             ...(outputPath ? { outputPath } : {}),
             previewOnly: false,
@@ -13956,12 +14333,13 @@ class ComfyStudioMcpServer {
     }
 
     if (!this.performAction) {
-      return errorResult('MCP FCPXML export bridge is not available. Restart Velorn and try again.')
+      return errorResult(`MCP ${formatLabel} export bridge is not available. Restart Velorn and try again.`)
     }
 
     const result = await this.performAction({
       action: 'export_fcpxml',
       payload: {
+        format: normalizedFormat,
         filename,
         outputPath,
         previewOnly: false,
@@ -13971,7 +14349,7 @@ class ComfyStudioMcpServer {
     return textResult({
       success: true,
       action: 'export_fcpxml',
-      message: 'FCPXML exported through Velorn.',
+      message: `${formatLabel} exported through Velorn.`,
       plan,
       result,
     })

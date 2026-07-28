@@ -247,11 +247,11 @@ Use this when delivery matters:
 
 For social variants, preview `export_delivery_batch` before running it.
 
-For interchange, preview `export_fcpxml` before writing a file.
+For interchange, preview `export_fcpxml` before writing a file. Use `format: "fcpxml"` for Resolve/Final Cut or `format: "premiere"` for Adobe Premiere Pro.
 
 ## Tool Catalog
 
-Velorn currently exposes 109 MCP tools.
+Velorn currently exposes 125 MCP tools.
 
 ### Project, Recipes, And Discovery
 
@@ -267,6 +267,7 @@ Velorn currently exposes 109 MCP tools.
 | `open_project` | Preview or open a project by path or recent project name. |
 | `create_project` | Preview or create a new project in the configured Projects folder. |
 | `duplicate_project` | Preview or duplicate a project folder and open it on apply. |
+| `save_project` | Preview or explicitly save the current project, including Director state and the active timeline. |
 
 ### Health, Inspection, And Review
 
@@ -288,6 +289,28 @@ Velorn currently exposes 109 MCP tools.
 | `regenerate_music_video_video` | Preview or queue one Step 5 shot through the active Music Video video settings and native routing. |
 | `analyze_timeline` | Produce an AI-friendly timeline health report. |
 | `analyze_music_video_workflow` | Produce an AI-friendly music-video workflow health report. |
+
+### Agent-Guided Music Video Creation
+
+These tools use the same persistent Director state as the visible Music Video UI. An agent-created project can therefore be opened, revised, regenerated, assembled, and saved through either MCP or the normal interface.
+
+| Tool | Purpose |
+| --- | --- |
+| `get_music_video_session` | Read song, lyrics, creative direction, cast, workflows, output, passes, plan state, queue, and the resumable conversation checkpoint. |
+| `configure_music_video` | Preview or set the song, lyrics, concept, style, workflows, output resolution, and FPS. |
+| `update_music_video_session` | Preview or persist the current conversational phase, next question, decisions, approvals, and notes. |
+| `manage_music_video_cast` | Preview or add, update, remove, replace, or clear named performers and their image references. |
+| `queue_music_video_character_asset` | Preview or queue a Z-Image Turbo portrait or Multiple Angles character sheet. |
+| `manage_music_video_pass` | Preview or manage alternate performance, environmental b-roll, and detail b-roll passes. |
+| `set_music_video_director_script` | Validate, save, and optionally parse a master or coverage-pass director script. |
+| `update_music_video_shot` | Preview or revise one parsed shot's prompts, timing, camera, type, artist, or reference overrides. |
+| `queue_music_video_keyframes` | Preview or queue missing, all, or selected keyframes through native Director routing. |
+| `queue_music_video_videos` | Preview or queue missing, all, or selected videos from their generated keyframes. |
+| `replace_music_video_keyframe` | Preview or replace a Step 4 result with an existing project image. |
+| `replace_music_video_video` | Preview or replace a Step 5 result with an existing project video. |
+| `transcribe_music_video_audio` | Preview or run Qwen ASR transcription or provided-lyrics alignment. |
+| `assemble_music_video_timeline` | Preview or assemble ready videos and song audio into editable coverage tracks with sync locks. |
+| `replace_music_video_timeline_shot` | Preview or replace an assembled shot while preserving its edit timing, effects, transforms, and sync lock. |
 
 ### ComfyUI Setup And Workflow Support
 
@@ -411,7 +434,7 @@ Velorn currently exposes 109 MCP tools.
 | --- | --- |
 | `export_timeline` | Preview/start a timeline export through Velorn's export worker. |
 | `export_delivery_batch` | Preview/run several delivery exports such as 16:9, 1:1, and 9:16. |
-| `export_fcpxml` | Preview/export the active timeline as FCPXML for Resolve, Final Cut, or Premiere. |
+| `export_fcpxml` | Preview/export modern FCPXML for Resolve/Final Cut or XMEML v5 for Adobe Premiere Pro. |
 
 ## Preview/Apply Examples
 

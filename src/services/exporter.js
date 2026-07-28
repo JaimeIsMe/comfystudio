@@ -37,7 +37,13 @@ import { hasActiveCornerPin, applyCornerPinToQuad } from '../utils/cornerPin'
 import { drawShape, getShapeCanvasRect } from '../utils/shapes'
 import { getMotionBlurSamples, getVelocityMotionBlurOptions } from '../utils/motionBlur'
 import { applyVelocityMotionBlurToCanvas, buildVelocityBlurUniformValues, canUseVelocityMotionBlur } from '../utils/velocityMotionBlur'
-import { createClipFrameCursor, getFrameSourceStats, isWebCodecsExportEnabled, resetFrameSourceStats } from './exportFrameSource'
+import {
+  createClipFrameCursor,
+  getFrameSourceStats,
+  getWebCodecsExportFallbackReason,
+  isWebCodecsExportEnabled,
+  resetFrameSourceStats,
+} from './exportFrameSource'
 import { applyTransitionClip, getFadeOverlayInfo, getTransitionCanvasStyle } from '../utils/transitionStyles'
 import { isFullBakeFresh } from '../utils/clipBakeSignature'
 import { createGpuCompositor, isGpuExportEnabled } from './gpuCompositor'
@@ -1208,6 +1214,8 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   // stdin must be preserved); it overlaps with the next frame's render.
   let pendingFrameWrite = null
   const clipFrameCursors = new Map() // clipId -> { promise, cursor, settled, clipEnd }
+  const standardDecoderClipIds = new Set()
+  const loggedStandardDecoderSources = new Set()
   let webCodecsClipCount = 0
   let elementPathClipCount = 0
   const countedClipPaths = new Set()
@@ -1219,7 +1227,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   }
 
   const getClipCursorEntry = (clip) => {
-    if (!webCodecsEnabled || clip.type !== 'video' || clip.reverse) return null
+    if (!webCodecsEnabled || clip.type !== 'video' || clip.reverse || standardDecoderClipIds.has(clip.id)) return null
     const existing = clipFrameCursors.get(clip.id)
     if (existing) return existing
     const cachedUrl = cachedVideoSources.get(clip.id)
@@ -1227,6 +1235,22 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     if (!sourceUrl || failedVideoSources.has(sourceUrl)) return null
     const usingCached = !!cachedUrl
     const trimStart = usingCached ? 0 : (clip.trimStart || 0)
+    const cursorStartTime = Math.max(0, trimStart - 1.5)
+    const sourceVideo = videoElements.get(sourceUrl)
+    const fallbackReason = getWebCodecsExportFallbackReason({
+      sourceDuration: sourceVideo?.duration,
+      startTime: cursorStartTime,
+    })
+    if (fallbackReason) {
+      standardDecoderClipIds.add(clip.id)
+      if (!loggedStandardDecoderSources.has(sourceUrl)) {
+        loggedStandardDecoderSources.add(sourceUrl)
+        const asset = assetsState.getAssetById(clip.assetId)
+        const sourceName = asset?.name || `clip ${clip.id}`
+        console.warn(`[Export] Using standard video decoder for ${sourceName}: ${fallbackReason}`)
+      }
+      return null
+    }
     const rawTrimEnd = clip.trimEnd ?? clip.sourceDuration
     const sourceEnd = usingCached
       ? (Number(clip.duration) || null)
@@ -1240,9 +1264,9 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       url: sourceUrl,
       // Transitions sample source handles beyond the trim window
       // (allowHandles), so decode from a bit before the in-point.
-      startTime: Math.max(0, trimStart - 1.5),
+      startTime: cursorStartTime,
       endTime: sourceEnd,
-      label: `clip ${clip.id}`,
+      label: `clip ${clip.id} (${assetsState.getAssetById(clip.assetId)?.name || 'unnamed source'})`,
     }).then((cursor) => {
       entry.cursor = cursor
       entry.settled = true

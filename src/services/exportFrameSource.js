@@ -35,6 +35,23 @@ import { createFile, DataStream, MP4BoxBuffer } from 'mp4box'
 const WEBCODECS_EXPORT_FLAG_KEY = 'comfystudio-export-webcodecs'
 
 const MICROS = 1e6
+export const WEBCODECS_EXPORT_MAX_SOURCE_DURATION_SEC = 20 * 60
+export const WEBCODECS_EXPORT_MAX_START_TIME_SEC = 5 * 60
+
+export const getWebCodecsExportFallbackReason = ({ sourceDuration, startTime } = {}) => {
+  const duration = Number(sourceDuration)
+  if (Number.isFinite(duration) && duration > WEBCODECS_EXPORT_MAX_SOURCE_DURATION_SEC) {
+    return `source duration ${duration.toFixed(1)}s exceeds the ${WEBCODECS_EXPORT_MAX_SOURCE_DURATION_SEC}s fast-decoder limit`
+  }
+
+  const sourceStart = Number(startTime)
+  if (Number.isFinite(sourceStart) && sourceStart > WEBCODECS_EXPORT_MAX_START_TIME_SEC) {
+    return `source in-point ${sourceStart.toFixed(1)}s exceeds the ${WEBCODECS_EXPORT_MAX_START_TIME_SEC}s fast-decoder limit`
+  }
+
+  return null
+}
+
 // Recently-presented frames kept alive for backward re-requests (frame
 // blending). Ring + ready caps must stay well under the hardware decoder's
 // output pool (~10) or the decoder stalls waiting for frames to be closed.
