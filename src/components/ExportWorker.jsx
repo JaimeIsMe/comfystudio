@@ -57,7 +57,9 @@ export default function ExportWorker() {
             window.electronAPI.sendExportProgress?.(progress)
           }
         )
-        console.log('[ExportWorker] Export complete', result)
+        // Stringify: the worker's console reaches export-worker.log via the
+        // console-message event, which flattens objects to "[object Object]".
+        console.log('[ExportWorker] Export complete', JSON.stringify(result))
         window.electronAPI.sendExportComplete?.(result)
       } catch (err) {
         const errMsg = err && typeof err === 'object' && err instanceof Event
