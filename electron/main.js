@@ -5312,12 +5312,25 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
   })
   const workerContents = exportWorkerWindow.webContents
   // The export worker is a hidden window, so its console is invisible in
-  // normal use. Mirror it to userData/export-worker.log (truncated per run)
-  // so export failures are diagnosable from disk — including renderer
-  // crashes, which otherwise present as a silently frozen progress line.
+  // normal use. Mirror it to userData/export-worker.log so export failures
+  // are diagnosable from disk — including renderer crashes, which otherwise
+  // present as a silently frozen progress line. Runs append (support needs
+  // the perf lines from the last several exports, not only the most
+  // recent); the file is trimmed to a size cap on worker start, kept
+  // aligned to a session header so it always begins at a run boundary.
   const workerLogPath = path.join(app.getPath('userData'), 'export-worker.log')
+  const WORKER_LOG_MAX_BYTES = 2 * 1024 * 1024
   try {
-    fsSync.writeFileSync(workerLogPath, `--- export worker started ${new Date().toISOString()}\n`)
+    try {
+      const stat = fsSync.statSync(workerLogPath)
+      if (stat.size > WORKER_LOG_MAX_BYTES) {
+        const existing = fsSync.readFileSync(workerLogPath, 'utf8')
+        const keepBytes = Math.floor(WORKER_LOG_MAX_BYTES / 2)
+        const keepFrom = existing.indexOf('--- export worker started', existing.length - keepBytes)
+        fsSync.writeFileSync(workerLogPath, keepFrom > 0 ? existing.slice(keepFrom) : existing.slice(-keepBytes))
+      }
+    } catch { /* first run or unreadable log — appendFileSync creates it */ }
+    fsSync.appendFileSync(workerLogPath, `--- export worker started ${new Date().toISOString()}\n`)
   } catch { /* logging must never block exporting */ }
   const workerLog = (line) => {
     try { fsSync.appendFileSync(workerLogPath, `${line}\n`) } catch { /* ignore */ }
