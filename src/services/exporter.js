@@ -42,6 +42,7 @@ import {
   getFrameSourceStats,
   getWebCodecsExportFallbackReason,
   isWebCodecsExportEnabled,
+  needsWebCodecsSourcePreparation,
   resetFrameSourceStats,
 } from './exportFrameSource'
 import { applyTransitionClip, getFadeOverlayInfo, getTransitionCanvasStyle } from '../utils/transitionStyles'
@@ -147,6 +148,21 @@ async function getExportAssetUrl(asset, projectHandle) {
     }
   }
   return asset.url
+}
+
+async function getExportAssetPath(asset, projectHandle) {
+  if (!isElectron() || !asset) return null
+  if (typeof projectHandle === 'string' && asset.path) {
+    try {
+      return await window.electronAPI.pathJoin(projectHandle, asset.path)
+    } catch (err) {
+      console.warn('Export: could not resolve local asset path:', asset.name, err)
+    }
+  }
+  if (typeof asset.absolutePath === 'string' && asset.absolutePath.trim()) {
+    return asset.absolutePath
+  }
+  return null
 }
 
 async function getExportProxyUrl(asset, projectHandle) {
@@ -1107,6 +1123,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   const maskElements = new Map()
   const maskRenderBuffers = new Map()
   const cachedVideoSources = new Map()
+  const webCodecsEnabled = isWebCodecsExportEnabled()
 
   const applyAdvancedAdjustmentsToCanvas = (sourceCanvas, settings, extraBlurPx = null) => {
     const normalizedSettings = normalizeAdjustmentSettings(settings)
@@ -1166,6 +1183,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   
   const projectHandle = projectState.currentProjectHandle
   const resolvedAssetUrls = new Map()
+  const resolvedVideoInputPaths = new Map()
   for (const clip of [...videoClips, ...imageClips]) {
     const overrideUrl = cachedVideoSources.get(clip.id) || null
     const asset = assetsState.getAssetById(clip.assetId)
@@ -1180,6 +1198,19 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     if (clip.type === 'video' || overrideUrl) {
       const sourceUrl = overrideUrl || resolvedUrl
       if (!sourceUrl) continue
+      if (!overrideUrl && !resolvedVideoInputPaths.has(sourceUrl)) {
+        let inputPath = null
+        if (proxyUrl && asset?.proxyPath) {
+          try {
+            inputPath = await window.electronAPI.pathJoin(projectHandle, asset.proxyPath)
+          } catch (err) {
+            console.warn('Export: could not resolve local proxy path:', asset.name, err)
+          }
+        } else {
+          inputPath = await getExportAssetPath(asset, projectHandle)
+        }
+        if (inputPath) resolvedVideoInputPaths.set(sourceUrl, inputPath)
+      }
       if (!videoElements.has(sourceUrl) && !failedVideoSources.has(sourceUrl)) {
         try {
           const video = await loadVideo(sourceUrl)
@@ -1198,13 +1229,86 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       }
     }
   }
+
+  // Long sources and clips with deep source in-points need one extra safety
+  // step before the sequential decoder can use them. The main process first
+  // checks whether the movie index is already at the front; when it is not,
+  // FFmpeg makes a temporary video-only stream copy with no quality loss.
+  // Preparation is per source (not per clip), and any failure keeps the
+  // conservative video-element path available.
+  const preparedFrameSourceUrls = new Map()
+  const sourcePreparation = { candidates: 0, reused: 0, remuxed: 0, failed: 0 }
+  if (webCodecsEnabled && window.electronAPI?.prepareVideoSourceForExport) {
+    const candidates = new Map()
+    for (const clip of videoClips) {
+      if (clip.type !== 'video' || clip.reverse || cachedVideoSources.has(clip.id)) continue
+      const sourceUrl = resolvedAssetUrls.get(clip.assetId)
+      const sourceVideo = sourceUrl ? videoElements.get(sourceUrl) : null
+      if (!sourceUrl || !sourceVideo || candidates.has(sourceUrl)) continue
+      const cursorStartTime = Math.max(0, (Number(clip.trimStart) || 0) - 1.5)
+      const needsPreparation = needsWebCodecsSourcePreparation({
+        sourceDuration: sourceVideo.duration,
+        startTime: cursorStartTime,
+      })
+      if (!needsPreparation) continue
+      const asset = assetsState.getAssetById(clip.assetId)
+      candidates.set(sourceUrl, {
+        sourceUrl,
+        inputPath: resolvedVideoInputPaths.get(sourceUrl) || null,
+        sourceName: asset?.name || `clip ${clip.id}`,
+      })
+    }
+
+    sourcePreparation.candidates = candidates.size
+    let sourceIndex = 0
+    for (const candidate of candidates.values()) {
+      sourceIndex += 1
+      throwIfCancelled()
+      if (!candidate.inputPath) {
+        sourcePreparation.failed += 1
+        console.warn(`[Export] Cannot prepare ${candidate.sourceName}: no local source path is available`)
+        continue
+      }
+
+      onProgress({
+        status: `Preparing long source ${sourceIndex}/${candidates.size}: ${candidate.sourceName}`,
+        progress: 3,
+      })
+      const preparedPath = await window.electronAPI.pathJoin(tempFolder, `prepared_source_${sourceIndex}.mp4`)
+      let result = null
+      try {
+        result = await window.electronAPI.prepareVideoSourceForExport({
+          inputPath: candidate.inputPath,
+          outputPath: preparedPath,
+        })
+      } catch (err) {
+        result = { success: false, error: getMediaErrorMessage(err) }
+      }
+
+      if (!result?.success) {
+        sourcePreparation.failed += 1
+        console.warn(`[Export] Could not prepare ${candidate.sourceName}; standard decoder remains available: ${result?.error || 'unknown error'}`)
+        continue
+      }
+
+      if (result.prepared) {
+        const preparedUrl = await window.electronAPI.getFileUrlDirect(result.outputPath || preparedPath)
+        preparedFrameSourceUrls.set(candidate.sourceUrl, preparedUrl)
+        sourcePreparation.remuxed += 1
+        console.log(`[Export] Prepared ${candidate.sourceName} for fast sequential decoding with a lossless stream copy`)
+      } else {
+        preparedFrameSourceUrls.set(candidate.sourceUrl, candidate.sourceUrl)
+        sourcePreparation.reused += 1
+        console.log(`[Export] ${candidate.sourceName} is already optimized for fast sequential decoding`)
+      }
+    }
+  }
   
   // WebCodecs sequential decode (see exportFrameSource.js). Random-access
   // <video> seeks dominate export time; qualifying clips route through a
   // per-clip sequential decoder instead, falling back to the element path
   // per clip on any doubt. Kill switch: localStorage
   // 'comfystudio-export-webcodecs' = '0'.
-  const webCodecsEnabled = isWebCodecsExportEnabled()
   const FRAME_CURSOR_PREFETCH_SEC = 3
   // Per-phase wall-clock accumulators, surfaced in the completion payload so
   // a single export run shows where render time actually goes.
@@ -1233,6 +1337,8 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     const cachedUrl = cachedVideoSources.get(clip.id)
     const sourceUrl = cachedUrl || resolvedAssetUrls.get(clip.assetId)
     if (!sourceUrl || failedVideoSources.has(sourceUrl)) return null
+    const preparedSourceUrl = preparedFrameSourceUrls.get(sourceUrl) || null
+    const sourcePrepared = preparedFrameSourceUrls.has(sourceUrl)
     const usingCached = !!cachedUrl
     const trimStart = usingCached ? 0 : (clip.trimStart || 0)
     const cursorStartTime = Math.max(0, trimStart - 1.5)
@@ -1240,6 +1346,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     const fallbackReason = getWebCodecsExportFallbackReason({
       sourceDuration: sourceVideo?.duration,
       startTime: cursorStartTime,
+      sourcePrepared,
     })
     if (fallbackReason) {
       standardDecoderClipIds.add(clip.id)
@@ -1261,7 +1368,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       clipEnd: (Number(clip.startTime) || 0) + (Number(clip.duration) || 0),
     }
     entry.promise = createClipFrameCursor({
-      url: sourceUrl,
+      url: preparedSourceUrl || sourceUrl,
       // Transitions sample source handles beyond the trim window
       // (allowHandles), so decode from a bit before the in-point.
       startTime: cursorStartTime,
@@ -2708,7 +2815,10 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     }
   }
   if (webCodecsEnabled) {
-    console.log(`[Export] Frame sources: ${webCodecsClipCount} clip(s) via WebCodecs, ${elementPathClipCount} via video element`)
+    console.log(
+      `[Export] Frame sources: ${webCodecsClipCount} clip(s) via WebCodecs, ${elementPathClipCount} via video element; `
+      + `long-source preparation ${sourcePreparation.remuxed} remuxed, ${sourcePreparation.reused} reused, ${sourcePreparation.failed} failed`
+    )
   }
   closeAllFrameCursors()
   gpu?.dispose()
@@ -3349,7 +3459,11 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     // log — the export runs in a hidden worker window whose own console
     // isn't visible in normal devtools captures.
     frameSources: webCodecsEnabled
-      ? { webcodecs: webCodecsClipCount, element: elementPathClipCount }
+      ? {
+        webcodecs: webCodecsClipCount,
+        element: elementPathClipCount,
+        sourcePreparation,
+      }
       : null,
     perf: {
       frames: totalFrames,

@@ -38,18 +38,34 @@ const MICROS = 1e6
 export const WEBCODECS_EXPORT_MAX_SOURCE_DURATION_SEC = 20 * 60
 export const WEBCODECS_EXPORT_MAX_START_TIME_SEC = 5 * 60
 
-export const getWebCodecsExportFallbackReason = ({ sourceDuration, startTime } = {}) => {
+export const needsWebCodecsSourcePreparation = ({ sourceDuration, startTime } = {}) => {
   const duration = Number(sourceDuration)
-  if (Number.isFinite(duration) && duration > WEBCODECS_EXPORT_MAX_SOURCE_DURATION_SEC) {
-    return `source duration ${duration.toFixed(1)}s exceeds the ${WEBCODECS_EXPORT_MAX_SOURCE_DURATION_SEC}s fast-decoder limit`
+  const sourceStart = Number(startTime)
+  return (
+    (Number.isFinite(duration) && duration > WEBCODECS_EXPORT_MAX_SOURCE_DURATION_SEC)
+    || (Number.isFinite(sourceStart) && sourceStart > WEBCODECS_EXPORT_MAX_START_TIME_SEC)
+  )
+}
+
+export const getWebCodecsExportFallbackReason = ({ sourceDuration, startTime, sourcePrepared = false } = {}) => {
+  const duration = Number(sourceDuration)
+  if (!sourcePrepared && Number.isFinite(duration) && duration > WEBCODECS_EXPORT_MAX_SOURCE_DURATION_SEC) {
+    return `source duration ${duration.toFixed(1)}s could not be prepared for the fast decoder`
   }
 
   const sourceStart = Number(startTime)
-  if (Number.isFinite(sourceStart) && sourceStart > WEBCODECS_EXPORT_MAX_START_TIME_SEC) {
-    return `source in-point ${sourceStart.toFixed(1)}s exceeds the ${WEBCODECS_EXPORT_MAX_START_TIME_SEC}s fast-decoder limit`
+  if (!sourcePrepared && Number.isFinite(sourceStart) && sourceStart > WEBCODECS_EXPORT_MAX_START_TIME_SEC) {
+    return `source in-point ${sourceStart.toFixed(1)}s requires fast-decoder preparation`
   }
 
   return null
+}
+
+export const isExpectedFrameSourceReadAbort = (err, { closed = false, pastEnd = false } = {}) => {
+  if (!closed && !pastEnd) return false
+  const name = String(err?.name || '').toLowerCase()
+  const message = String(err?.message || err || '').toLowerCase()
+  return name === 'aborterror' || message.includes('abort')
 }
 
 // Recently-presented frames kept alive for backward re-requests (frame
@@ -58,7 +74,10 @@ export const getWebCodecsExportFallbackReason = ({ sourceDuration, startTime } =
 const FRAME_RING_SIZE = 3
 const MAX_READY_FRAMES = 4
 const MAX_DECODE_QUEUE = 24
-const PENDING_CHUNK_HIGH_WATER = 3000
+// Keep compressed-frame buffering bounded on long, high-bitrate masters.
+// Roughly ten seconds at 24 fps is ample read-ahead without retaining
+// thousands of 4K/8K packets in the renderer.
+const PENDING_CHUNK_HIGH_WATER = 240
 const SEEK_WAIT_TIMEOUT_MS = 5000
 const DEMUX_READY_TIMEOUT_MS = 15000
 // Decode past the clip's out point so boundary frame blends, end-clamped
@@ -69,7 +88,7 @@ const DEMUX_READY_TIMEOUT_MS = 15000
 const END_FEED_MARGIN_SEC = 1.5
 // Give up on sources whose moov hasn't parsed after this much data
 // (non-faststart gigabyte originals would otherwise buffer whole-file).
-const MAX_BYTES_BEFORE_READY = 1.5e9
+const MAX_BYTES_BEFORE_READY = 64 * 1024 * 1024
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -232,6 +251,7 @@ class ClipFrameCursor {
     this._mp4box.onSamples = (id, user, samples) => this._onSamples(samples)
 
     this._runReadLoop(response).catch((err) => {
+      if (isExpectedFrameSourceReadAbort(err, { closed: this.closed, pastEnd: this._pastEnd })) return
       if (!this.closed) this._fail(err)
       readyReject?.(err)
     })
@@ -341,7 +361,7 @@ class ClipFrameCursor {
           append(chunk)
         }
       } finally {
-        try { reader.cancel() } catch { /* ignore */ }
+        try { await reader.cancel() } catch { /* ignore */ }
       }
     } else {
       const buffer = await response.arrayBuffer()

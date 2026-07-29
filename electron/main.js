@@ -12,6 +12,7 @@ const yaml = require('js-yaml')
 const ffmpegStaticPath = require('ffmpeg-static')
 const ffprobeStatic = require('ffprobe-static')
 const ffprobeStaticPath = ffprobeStatic?.path || ffprobeStatic
+const { inspectIsoBmffLayout } = require('./exportSourcePreparation')
 const {
   ComfyLauncher,
   detectLaunchersForComfyRoot,
@@ -5901,6 +5902,119 @@ const appendLimitedStderr = (current, data) => {
   const next = `${current}${data.toString()}`
   return next.length > 24000 ? next.slice(-24000) : next
 }
+
+ipcMain.handle('export:prepareVideoSource', async (event, options = {}) => {
+  const inputPath = typeof options.inputPath === 'string' ? options.inputPath.trim() : ''
+  const outputPath = typeof options.outputPath === 'string' ? options.outputPath.trim() : ''
+  if (!ffmpegPath) {
+    return { success: false, error: 'FFmpeg binary not available.' }
+  }
+  if (!inputPath || !outputPath) {
+    return { success: false, error: 'Missing source-preparation inputs.' }
+  }
+  const resolvedInputPath = path.resolve(inputPath)
+  const resolvedOutputPath = path.resolve(outputPath)
+  const samePath = process.platform === 'win32'
+    ? resolvedInputPath.toLowerCase() === resolvedOutputPath.toLowerCase()
+    : resolvedInputPath === resolvedOutputPath
+  if (samePath) {
+    return { success: false, error: 'Prepared source must use a different output path.' }
+  }
+
+  let layout = null
+  try {
+    layout = await inspectIsoBmffLayout(inputPath)
+    if (layout.streamable) {
+      return {
+        success: true,
+        prepared: false,
+        inputPath,
+        layout: {
+          fileSize: layout.fileSize,
+          moovOffset: layout.moovOffset,
+          mdatOffset: layout.mdatOffset,
+        },
+      }
+    }
+  } catch (err) {
+    console.warn('[Export] Could not inspect long source container; attempting stream-copy preparation:', err.message)
+  }
+
+  await fs.mkdir(path.dirname(outputPath), { recursive: true })
+  const tempOutputPath = path.join(
+    path.dirname(outputPath),
+    `.${path.basename(outputPath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp.mp4`
+  )
+  const args = [
+    '-y',
+    '-i', inputPath,
+    '-map', '0:v:0',
+    '-c:v', 'copy',
+    '-an',
+    '-sn',
+    '-dn',
+    '-movflags', '+faststart',
+    tempOutputPath,
+  ]
+
+  return await new Promise((resolve) => {
+    const ffmpeg = spawn(ffmpegPath, args, { windowsHide: true })
+    let stderr = ''
+    let settled = false
+
+    const finish = async (payload) => {
+      if (settled) return
+      settled = true
+      if (!payload?.success) {
+        try { await fs.unlink(tempOutputPath) } catch { /* ignore */ }
+      }
+      resolve(payload)
+    }
+
+    ffmpeg.stderr.on('data', (data) => {
+      stderr = appendLimitedStderr(stderr, data)
+    })
+
+    ffmpeg.on('error', (err) => {
+      finish({ success: false, error: err.message })
+    })
+
+    ffmpeg.on('close', async (code) => {
+      if (code !== 0) {
+        await finish({
+          success: false,
+          error: stderr || `FFmpeg exited with code ${code}`,
+          layout,
+        })
+        return
+      }
+
+      const outputProbe = await probeVideoInfo(tempOutputPath)
+      if (!outputProbe?.success || !outputProbe?.hasVideo) {
+        await finish({
+          success: false,
+          error: outputProbe?.error || 'Prepared source validation failed.',
+          layout,
+        })
+        return
+      }
+
+      try {
+        try { await fs.unlink(outputPath) } catch { /* output did not exist */ }
+        await fs.rename(tempOutputPath, outputPath)
+        await finish({
+          success: true,
+          prepared: true,
+          outputPath,
+          videoCodec: outputProbe.videoCodec || null,
+          layout,
+        })
+      } catch (err) {
+        await finish({ success: false, error: err.message || 'Could not finalize prepared source.' })
+      }
+    })
+  })
+})
 
 ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
   const {
