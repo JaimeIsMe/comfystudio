@@ -736,6 +736,26 @@ export const createGpuCompositor = ({ width, height, transparent = false } = {})
   const readbackBuffers = [new Uint8Array(width * height * 4), new Uint8Array(width * height * 4)]
   let readbackIndex = 0
 
+  // Async export readback ring: readPixels lands in a PBO and is collected
+  // later behind a fence, so the CPU never stalls on the GPU finishing the
+  // frame it just composited. Three slots cover the exporter's one-frame
+  // collection delay plus the end-of-export flush. Allocated lazily so
+  // preview compositors pay nothing.
+  const ASYNC_READBACK_SLOT_COUNT = 3
+  let asyncReadbackSlots = null
+  const getAsyncReadbackSlots = () => {
+    if (!asyncReadbackSlots) {
+      asyncReadbackSlots = Array.from({ length: ASYNC_READBACK_SLOT_COUNT }, () => {
+        const pbo = gl.createBuffer()
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo)
+        gl.bufferData(gl.PIXEL_PACK_BUFFER, width * height * 4, gl.STREAM_READ)
+        return { pbo, cpu: new Uint8Array(width * height * 4), fence: null, busy: false }
+      })
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
+    }
+    return asyncReadbackSlots
+  }
+
   gl.disable(gl.DEPTH_TEST)
   gl.disable(gl.SCISSOR_TEST)
   gl.clearColor(0, 0, 0, 0)
@@ -1461,6 +1481,60 @@ export const createGpuCompositor = ({ width, height, transparent = false } = {})
     },
 
     /**
+     * Queue an async readback of the finished frame into a PBO and return
+     * a ticket for resolveFrameReadback. Later draws are ordered after the
+     * copy in the GL command stream, so the next frame can start rendering
+     * immediately without disturbing this one.
+     */
+    beginFrameReadback() {
+      const slots = getAsyncReadbackSlots()
+      const ticket = slots.findIndex((slot) => !slot.busy)
+      if (ticket === -1) {
+        throw new Error('GPU readback ring exhausted; resolve pending readbacks first.')
+      }
+      const slot = slots[ticket]
+      renderFinalToScratchB()
+      gl.bindFramebuffer(gl.FRAMEBUFFER, scratchB.fbo)
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.pbo)
+      gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, 0)
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+      slot.fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)
+      slot.busy = true
+      // Fences are not guaranteed to signal until the commands are flushed.
+      gl.flush()
+      return ticket
+    },
+
+    /**
+     * Cooperatively wait for a queued readback's fence, copy the PBO into
+     * the slot's CPU buffer, and free the slot. Returns the same
+     * straight-alpha top-down RGBA layout as readFramePixels; the buffer
+     * is only rewritten after the slot is next acquired and resolved, so
+     * the caller has a full ring cycle to consume it.
+     */
+    async resolveFrameReadback(ticket) {
+      const slot = asyncReadbackSlots?.[ticket]
+      if (!slot?.busy) {
+        throw new Error('Unknown GPU readback ticket.')
+      }
+      if (slot.fence) {
+        for (;;) {
+          const status = gl.clientWaitSync(slot.fence, 0, 0)
+          if (status === gl.ALREADY_SIGNALED || status === gl.CONDITION_SATISFIED || status === gl.WAIT_FAILED) break
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        gl.deleteSync(slot.fence)
+        slot.fence = null
+      }
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.pbo)
+      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, slot.cpu)
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
+      slot.busy = false
+      return slot.cpu
+    },
+
+    /**
      * Blit the finished stage to the compositor's own canvas (the default
      * framebuffer) for live-preview display. The stage is premultiplied and
      * bottom-up, which matches the default framebuffer's presentation, so a
@@ -1501,6 +1575,13 @@ export const createGpuCompositor = ({ width, height, transparent = false } = {})
         gl.deleteTexture(entry.texture)
       }
       sourceTextures.clear()
+      if (asyncReadbackSlots) {
+        for (const slot of asyncReadbackSlots) {
+          if (slot.fence) gl.deleteSync(slot.fence)
+          gl.deleteBuffer(slot.pbo)
+        }
+        asyncReadbackSlots = null
+      }
       const loseContext = gl.getExtension('WEBGL_lose_context')
       if (loseContext) loseContext.loseContext()
     },

@@ -73,6 +73,16 @@ const getLocalStorageFlag = (key) => {
   }
 }
 
+// Kill switch: localStorage 'comfystudio-export-pipeline' = '0' restores
+// lockstep pipe writes and synchronous GPU readback.
+const isExportPipelineEnabled = () => {
+  try {
+    return typeof localStorage === 'undefined' || localStorage.getItem('comfystudio-export-pipeline') !== '0'
+  } catch {
+    return true
+  }
+}
+
 const withTimeout = (promise, timeoutMs, label = 'Operation') => {
   return Promise.race([
     promise,
@@ -1314,9 +1324,41 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   // a single export run shows where render time actually goes.
   const exportPerf = { yieldMs: 0, layersMs: 0, sampleMs: 0, readbackMs: 0, pipeMs: 0, preSeekBatches: 0, preSeekClips: 0 }
   resetFrameSourceStats()
-  // At most ONE frame write is in flight at a time (order into FFmpeg's
-  // stdin must be preserved); it overlaps with the next frame's render.
-  let pendingFrameWrite = null
+  // Pipe writes stack up to a small in-flight depth so the renderer's
+  // structured-clone serialize, the main process's handling, and FFmpeg's
+  // stdin write overlap across frames instead of running as one serial
+  // round trip per frame. Order into FFmpeg's stdin is preserved: writes
+  // fire and settle strictly FIFO, and Electron delivers same-channel
+  // messages in send order. invoke() serializes its arguments
+  // synchronously, so a queued frame's buffer may be reused as soon as the
+  // call returns.
+  const exportPipelineEnabled = isExportPipelineEnabled()
+  const maxInFlightPipeWrites = exportPipelineEnabled ? 3 : 1
+  const inFlightPipeWrites = []
+  const pendingGpuReadbacks = []
+  const settleOldestPipeWrite = async () => {
+    const result = await inFlightPipeWrites.shift()
+    if (!result?.success) {
+      throw new Error(result?.error || 'Failed to write frame to FFmpeg pipe.')
+    }
+  }
+  const sendFrameToPipe = async (frameBuffer) => {
+    const pipeWriteStart = performance.now()
+    while (inFlightPipeWrites.length >= maxInFlightPipeWrites) {
+      await settleOldestPipeWrite()
+    }
+    inFlightPipeWrites.push(window.electronAPI.writeFrameToPipe(framePipeSessionId, frameBuffer))
+    exportPerf.pipeMs += performance.now() - pipeWriteStart
+  }
+  // GPU frames are collected one frame late (fence + PBO in the compositor)
+  // so the loop never blocks on the GPU finishing the frame it just
+  // composited.
+  const sendOldestGpuReadback = async () => {
+    const readbackStart = performance.now()
+    const pixels = await gpu.resolveFrameReadback(pendingGpuReadbacks.shift())
+    exportPerf.readbackMs += performance.now() - readbackStart
+    await sendFrameToPipe(pixels.buffer)
+  }
   const clipFrameCursors = new Map() // clipId -> { promise, cursor, settled, clipEnd }
   const standardDecoderClipIds = new Set()
   const loggedStandardDecoderSources = new Set()
@@ -2742,30 +2784,28 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     exportPerf.layersMs += performance.now() - layersStart
 
     if (framePipeSessionId) {
-      const readbackStart = performance.now()
-      let frameBuffer
-      if (gpu) {
-        frameBuffer = gpu.readFramePixels().buffer
-      } else {
-        const frameData = ctx.getImageData(0, 0, width, height)
-        const pixelData = frameData.data
-        frameBuffer = pixelData.byteOffset === 0 && pixelData.byteLength === pixelData.buffer.byteLength
-          ? pixelData.buffer
-          : pixelData.buffer.slice(pixelData.byteOffset, pixelData.byteOffset + pixelData.byteLength)
-      }
-      exportPerf.readbackMs += performance.now() - readbackStart
-      // Pipeline: the previous frame's write ran while this frame rendered.
-      // Settle it, then fire this frame's write without waiting on it.
-      const pipeWriteStart = performance.now()
-      if (pendingFrameWrite) {
-        const previousWrite = await pendingFrameWrite
-        if (!previousWrite?.success) {
-          pendingFrameWrite = null
-          throw new Error(previousWrite?.error || 'Failed to write frame to FFmpeg pipe.')
+      if (gpu && exportPipelineEnabled) {
+        const readbackStart = performance.now()
+        pendingGpuReadbacks.push(gpu.beginFrameReadback())
+        exportPerf.readbackMs += performance.now() - readbackStart
+        if (pendingGpuReadbacks.length > 1) {
+          await sendOldestGpuReadback()
         }
+      } else {
+        const readbackStart = performance.now()
+        let frameBuffer
+        if (gpu) {
+          frameBuffer = gpu.readFramePixels().buffer
+        } else {
+          const frameData = ctx.getImageData(0, 0, width, height)
+          const pixelData = frameData.data
+          frameBuffer = pixelData.byteOffset === 0 && pixelData.byteLength === pixelData.buffer.byteLength
+            ? pixelData.buffer
+            : pixelData.buffer.slice(pixelData.byteOffset, pixelData.byteOffset + pixelData.byteLength)
+        }
+        exportPerf.readbackMs += performance.now() - readbackStart
+        await sendFrameToPipe(frameBuffer)
       }
-      pendingFrameWrite = window.electronAPI.writeFrameToPipe(framePipeSessionId, frameBuffer)
-      exportPerf.pipeMs += performance.now() - pipeWriteStart
       // Real task-queue yield while the write is in flight: decoder output
       // callbacks are event-loop tasks, and this loop is otherwise mostly
       // synchronous — without yielding, decoded frames sit undelivered
@@ -2812,12 +2852,11 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       }
     }
   }
-  if (pendingFrameWrite) {
-    const finalWrite = await pendingFrameWrite
-    pendingFrameWrite = null
-    if (!finalWrite?.success) {
-      throw new Error(finalWrite?.error || 'Failed to write frame to FFmpeg pipe.')
-    }
+  while (pendingGpuReadbacks.length > 0) {
+    await sendOldestGpuReadback()
+  }
+  while (inFlightPipeWrites.length > 0) {
+    await settleOldestPipeWrite()
   }
   if (webCodecsEnabled) {
     console.log(
@@ -2830,10 +2869,11 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   } catch (err) {
     closeAllFrameCursors()
     gpu?.dispose()
-    if (pendingFrameWrite) {
-      pendingFrameWrite.catch(() => {})
-      pendingFrameWrite = null
+    pendingGpuReadbacks.length = 0
+    for (const write of inFlightPipeWrites) {
+      Promise.resolve(write).catch(() => {})
     }
+    inFlightPipeWrites.length = 0
     if (framePipeSessionId) {
       try {
         await window.electronAPI.abortFramePipe(framePipeSessionId)
