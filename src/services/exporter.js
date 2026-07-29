@@ -141,8 +141,29 @@ const yieldToMain = () => new Promise(resolve => {
   requestAnimationFrame(resolve)
 })
 
-/** Stronger yield: give the event loop a full time slice (helps prevent renderer crash under heavy export) */
-const yieldToEventLoop = () => new Promise(resolve => setTimeout(resolve, 0))
+/**
+ * Stronger yield: a full event-loop task boundary (helps prevent renderer
+ * crash under heavy export — tasks already queued, like decoder outputs and
+ * IPC responses, run before the promise resolves). MessageChannel instead
+ * of setTimeout(0) because consecutive zero-delay timers are clamped to
+ * ~4ms in a hot loop.
+ */
+const yieldTaskQueue = []
+let yieldPostPort = null
+const yieldToEventLoop = () => {
+  if (typeof MessageChannel === 'undefined') {
+    return new Promise(resolve => setTimeout(resolve, 0))
+  }
+  if (!yieldPostPort) {
+    const channel = new MessageChannel()
+    channel.port1.onmessage = () => yieldTaskQueue.shift()?.()
+    yieldPostPort = channel.port2
+  }
+  return new Promise((resolve) => {
+    yieldTaskQueue.push(resolve)
+    yieldPostPort.postMessage(null)
+  })
+}
 
 const isElectron = () => typeof window !== 'undefined' && window.electronAPI != null
 
