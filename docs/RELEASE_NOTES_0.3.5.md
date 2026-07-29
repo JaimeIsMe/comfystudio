@@ -3,6 +3,7 @@
 ## Highlights
 
 - Dramatically improved export performance for timelines that use unusually long source videos or clips with deep source in-points.
+- Made all fast-pipe exports substantially faster: in testing, timelines that previously rendered around 30 fps now render at roughly 40 fps at 1080p and 75+ fps at 720p with hardware encoding.
 - Added automatic lossless source preparation so long local videos can use Velorn's faster sequential decoder instead of falling back to repeated random-access seeking.
 - Reduced renderer memory pressure during long exports and improved export diagnostics.
 
@@ -15,6 +16,14 @@
 - Prepared sources are created only inside the export's temporary folder and are removed with the rest of the temporary export files.
 - Preparation happens once per source file, even when that source appears in many timeline clips.
 - If preparation is unavailable or fails, Velorn keeps the existing standard decoder as a fallback instead of failing the export.
+
+## Export Performance
+
+- Frames are now delivered to the encoder through a pipelined feed (several frames in flight) instead of one blocking round trip per frame.
+- GPU frame readback is now asynchronous, removing a per-frame stall while the GPU finishes rendering — at any export resolution.
+- Removed a per-frame timer delay in the export loop.
+- Exports write a per-phase performance breakdown to export-worker.log, and the log now keeps the last several export runs instead of only the most recent one.
+- If anything looks wrong on specific hardware, setting localStorage key `comfystudio-export-pipeline` to `0` restores the previous serial export behavior.
 
 ## Stability And Diagnostics
 
