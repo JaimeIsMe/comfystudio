@@ -22,6 +22,7 @@
 - Avoided loading extremely large source headers into the Electron renderer.
 - Suppressed expected stream-abort messages when a decoder reaches the end of a clip or closes normally.
 - Added source-preparation counts to export diagnostics so logs report how many long sources were reused, remuxed, or fell back.
+- Export now verifies that FFmpeg can actually start before rendering begins, and a missing or blocked FFmpeg installation is reported with its expected location instead of a bare numeric error code.
 
 ## Downloads
 
