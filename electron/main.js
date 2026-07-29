@@ -122,6 +122,18 @@ function resolvePackagedBinaryPath(binaryPath) {
 const ffmpegPath = resolvePackagedBinaryPath(ffmpegStaticPath)
 const ffprobePath = resolvePackagedBinaryPath(ffprobeStaticPath)
 
+// ffmpeg-static resolves a path whether or not its install script actually
+// downloaded the binary (skipped postinstalls, antivirus quarantine), and
+// spawning a dangling path dies with a bare ENOENT (-4058 on Windows). Export
+// entry points check existence up front so the failure names the path.
+function getFfmpegUnavailableError() {
+  if (!ffmpegPath) return 'FFmpeg binary not available.'
+  if (!fsSync.existsSync(ffmpegPath)) {
+    return `FFmpeg binary is missing at ${ffmpegPath}. Reinstall Velorn (or run npm install in a dev checkout) to restore it.`
+  }
+  return null
+}
+
 function parseFpsRatio(value) {
   if (!value || value === '0/0') return null
   const [num, den] = String(value).split('/').map(Number)
@@ -5467,8 +5479,9 @@ const buildAudioFadeVolumeExpression = (clipDuration, fadeIn, fadeOut, clipOffse
 }
 
 ipcMain.handle('export:mixAudio', async (event, options = {}) => {
-  if (!ffmpegPath) {
-    return { success: false, error: 'FFmpeg binary not available.' }
+  const mixFfmpegUnavailable = getFfmpegUnavailableError()
+  if (mixFfmpegUnavailable) {
+    return { success: false, error: mixFfmpegUnavailable }
   }
 
   const {
@@ -5906,8 +5919,9 @@ const appendLimitedStderr = (current, data) => {
 ipcMain.handle('export:prepareVideoSource', async (event, options = {}) => {
   const inputPath = typeof options.inputPath === 'string' ? options.inputPath.trim() : ''
   const outputPath = typeof options.outputPath === 'string' ? options.outputPath.trim() : ''
-  if (!ffmpegPath) {
-    return { success: false, error: 'FFmpeg binary not available.' }
+  const prepareFfmpegUnavailable = getFfmpegUnavailableError()
+  if (prepareFfmpegUnavailable) {
+    return { success: false, error: prepareFfmpegUnavailable }
   }
   if (!inputPath || !outputPath) {
     return { success: false, error: 'Missing source-preparation inputs.' }
@@ -6029,8 +6043,9 @@ ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
     audioSampleRate = 44100
   } = options
 
-  if (!ffmpegPath) {
-    return { success: false, error: 'FFmpeg binary not available.' }
+  const encodeFfmpegUnavailable = getFfmpegUnavailableError()
+  if (encodeFfmpegUnavailable) {
+    return { success: false, error: encodeFfmpegUnavailable }
   }
   if (!framePattern || !outputPath) {
     return { success: false, error: 'Missing export inputs.' }
@@ -6089,8 +6104,9 @@ ipcMain.handle('export:startFramePipe', async (event, options = {}) => {
     duration = null,
   } = options
 
-  if (!ffmpegPath) {
-    return { success: false, error: 'FFmpeg binary not available.' }
+  const pipeFfmpegUnavailable = getFfmpegUnavailableError()
+  if (pipeFfmpegUnavailable) {
+    return { success: false, error: pipeFfmpegUnavailable, code: 'ffmpeg-missing' }
   }
   if (!width || !height || !outputPath) {
     return { success: false, error: 'Missing frame pipe inputs.' }
@@ -6152,6 +6168,32 @@ ipcMain.handle('export:startFramePipe', async (event, options = {}) => {
     })
   })
 
+  // Failed spawns (missing/blocked binary) emit 'error' + 'close' and never
+  // 'spawn' — don't report the pipe live until one of them fires.
+  const startup = await new Promise((resolve) => {
+    const settle = (result) => {
+      ffmpeg.off('spawn', onSpawn)
+      ffmpeg.off('error', onError)
+      ffmpeg.off('close', onClose)
+      resolve(result)
+    }
+    const onSpawn = () => settle({ ok: true })
+    const onError = (err) => settle({ ok: false, reason: err?.message || String(err) })
+    const onClose = (code) => settle({ ok: false, reason: `FFmpeg exited with code ${code} before accepting frames` })
+    ffmpeg.once('spawn', onSpawn)
+    ffmpeg.once('error', onError)
+    ffmpeg.once('close', onClose)
+  })
+  if (!startup.ok) {
+    console.error(`[Export] Frame pipe FFmpeg failed to start (${ffmpegPath}): ${startup.reason}`)
+    return {
+      success: false,
+      error: `FFmpeg could not start (${ffmpegPath}): ${startup.reason}`,
+      code: 'spawn-failed',
+      encoderUsed,
+    }
+  }
+
   activeFramePipeExports.set(sessionId, {
     ffmpeg,
     closePromise,
@@ -6172,9 +6214,11 @@ ipcMain.handle('export:writeFrameToPipe', async (event, sessionId, frameBuffer) 
     return { success: false, error: 'Frame pipe session not found.' }
   }
   if (session.getClosed()) {
+    const spawnErr = session.getError()
     return {
       success: false,
-      error: session.getStderr() || `Frame pipe closed with code ${session.getCloseCode()}`,
+      error: session.getStderr()
+        || (spawnErr ? (spawnErr.message || String(spawnErr)) : `Frame pipe closed with code ${session.getCloseCode()}`),
     }
   }
   if (!frameBuffer) {
@@ -6264,8 +6308,9 @@ ipcMain.handle('export:muxAudioVideo', async (event, options = {}) => {
     audioSampleRate = 44100,
   } = options
 
-  if (!ffmpegPath) {
-    return { success: false, error: 'FFmpeg binary not available.' }
+  const muxFfmpegUnavailable = getFfmpegUnavailableError()
+  if (muxFfmpegUnavailable) {
+    return { success: false, error: muxFfmpegUnavailable }
   }
   if (!videoPath || !outputPath) {
     return { success: false, error: 'Missing mux inputs.' }

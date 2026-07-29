@@ -1445,6 +1445,11 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       framePipeSessionId = pipeStart.sessionId
       framePipeEncoderUsed = pipeStart.encoderUsed || null
       console.log(`Export frame pipe started with: ${framePipeEncoderUsed || 'unknown encoder'}`)
+    } else if (pipeStart?.code === 'ffmpeg-missing' || pipeStart?.code === 'spawn-failed') {
+      // The PNG fallback needs the same FFmpeg binary for its encode step,
+      // so an unstartable FFmpeg would only fail again after rendering
+      // every frame.
+      throw new Error(pipeStart?.error || 'FFmpeg could not be started for export.')
     } else {
       console.warn('[Export] Fast FFmpeg pipe unavailable; falling back to PNG frame sequence:', pipeStart?.error)
       onProgress({ status: 'Fast pipe unavailable - using PNG frame sequence...', progress: 4 })
