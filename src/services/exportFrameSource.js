@@ -78,6 +78,19 @@ const MAX_DECODE_QUEUE = 24
 // Roughly ten seconds at 24 fps is ample read-ahead without retaining
 // thousands of 4K/8K packets in the renderer.
 const PENDING_CHUNK_HIGH_WATER = 240
+// Cap how far the reader may run ahead of the last released video sample.
+// The pending-chunk gate only sees decoder pressure — a fast consumer keeps
+// that queue drained while the reader ingests the entire file, all of it
+// retained by the demuxer until released, which OOMs the renderer on
+// multi-GB sources.
+const MAX_READ_AHEAD_BYTES = 128 * 1024 * 1024
+// One bounded Range request's worth of source — and therefore the cap on
+// how much response body Chromium can buffer renderer-side per fetch.
+const READ_WINDOW_BYTES = 64 * 1024 * 1024
+// IPC range windows are appended in slices this large, with the same gate
+// checks between slices as streamed chunks, so one window's synchronous
+// parse cannot blow far past the pending-chunk cap in a single burst.
+const APPEND_SLICE_BYTES = 4 * 1024 * 1024
 const SEEK_WAIT_TIMEOUT_MS = 5000
 const DEMUX_READY_TIMEOUT_MS = 15000
 // Decode past the clip's out point so boundary frame blends, end-clamped
@@ -91,6 +104,22 @@ const END_FEED_MARGIN_SEC = 1.5
 const MAX_BYTES_BEFORE_READY = 64 * 1024 * 1024
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// file:// URL -> local filesystem path for main-process range reads.
+// Returns null for anything else (http(s), blob, UNC hosts) so callers
+// fall back to fetch.
+const fileUrlToLocalPath = (url) => {
+  if (typeof url !== 'string' || !url.startsWith('file:')) return null
+  try {
+    const parsed = new URL(url)
+    if (parsed.host) return null
+    let pathname = decodeURIComponent(parsed.pathname)
+    if (/^\/[A-Za-z]:/.test(pathname)) pathname = pathname.slice(1)
+    return pathname
+  } catch {
+    return null
+  }
+}
 
 // Aggregate diagnostics across all cursors in an export run, surfaced in the
 // export completion payload. serves = frames handed to the exporter;
@@ -195,6 +224,8 @@ class ClipFrameCursor {
     this._flushed = false
     this._ended = false
     this._lastSampleNumber = 0
+    this._releasedByteOffset = 0
+    this._foreignTrackSamples = new Map()
     this._waiters = []
     this._warnedBackward = false
     this._servedFrame = null
@@ -225,10 +256,6 @@ class ClipFrameCursor {
 
   async init() {
     this._abortController = new AbortController()
-    const response = await fetch(this.url, { signal: this._abortController.signal })
-    if (!response.ok && response.status !== 0 && response.status !== 200) {
-      throw new Error(`Fetch failed with status ${response.status}`)
-    }
 
     // keepMdatData=true is load-bearing: mp4box v2 changed the default to
     // DISCARD sample data as it parses (v0.5 always kept it). Extraction
@@ -248,9 +275,9 @@ class ClipFrameCursor {
       readyReject?.(error)
       this._fail(error)
     }
-    this._mp4box.onSamples = (id, user, samples) => this._onSamples(samples)
+    this._mp4box.onSamples = (id, user, samples) => this._onSamples(id, samples)
 
-    this._runReadLoop(response).catch((err) => {
+    this._runReadLoop().catch((err) => {
       if (isExpectedFrameSourceReadAbort(err, { closed: this.closed, pastEnd: this._pastEnd })) return
       if (!this.closed) this._fail(err)
       readyReject?.(err)
@@ -315,12 +342,20 @@ class ClipFrameCursor {
     this.height = swap ? codedWidth : codedHeight
 
     this._mp4box.setExtractionOptions(track.id, null, { nbSamples: 100 })
+    // Extract-and-release every other track too. Untouched tracks are never
+    // released, and one unreleased sample pins its whole interleaved buffer,
+    // so a with-audio source would otherwise retain every byte it streams.
+    for (const otherTrack of info?.tracks || []) {
+      if (otherTrack?.id != null && otherTrack.id !== track.id) {
+        this._mp4box.setExtractionOptions(otherTrack.id, null, { nbSamples: 500 })
+      }
+    }
     this._mp4box.start()
     this._pump()
     return true
   }
 
-  async _runReadLoop(response) {
+  async _runReadLoop() {
     let offset = 0
     let sniffed = false
     const append = (arrayBuffer) => {
@@ -336,38 +371,152 @@ class ClipFrameCursor {
       if (!text.includes('ftyp')) throw new Error('Not an MP4/MOV container')
     }
 
-    if (response.body && typeof response.body.getReader === 'function') {
-      const reader = response.body.getReader()
-      try {
-        while (true) {
-          if (this.closed || this._pastEnd) break
-          while (this._pendingChunks.length > PENDING_CHUNK_HIGH_WATER && !this.closed && !this._pastEnd) {
-            await sleep(25)
+    // Preferred source: bounded range reads through the main process. The
+    // renderer's file:// fetch ignores Range headers (Electron's asar-aware
+    // loader), so a single fetch buffers a multi-GB source whole in the
+    // renderer no matter how slowly it is consumed. IPC range reads cap
+    // resident source bytes at one window. Falls back to fetch when the
+    // handler or a local path is unavailable (older main process, non-file
+    // URLs); HTTP(S) servers that honor Range still get windowed fetches.
+    let rangePath = typeof window !== 'undefined' && window.electronAPI?.readFileRange
+      ? fileUrlToLocalPath(this.url)
+      : null
+
+    if (rangePath) {
+      let rangeUnavailable = false
+      for (;;) {
+        if (this.closed || this._pastEnd) break
+        while (this._pendingChunks.length > PENDING_CHUNK_HIGH_WATER && !this.closed && !this._pastEnd) {
+          await sleep(25)
+        }
+        while (
+          this._trackId != null
+          && offset - this._releasedByteOffset > MAX_READ_AHEAD_BYTES
+          && !this.closed && !this._pastEnd
+        ) {
+          await sleep(25)
+        }
+        if (this.closed || this._pastEnd) break
+        let result = null
+        try {
+          result = await window.electronAPI.readFileRange({ path: rangePath, start: offset, length: READ_WINDOW_BYTES })
+        } catch (err) {
+          // Handler missing (older main process): fall back before any data.
+          if (offset === 0) { rangeUnavailable = true; break }
+          throw err
+        }
+        if (!result?.success) {
+          if (offset === 0) { rangeUnavailable = true; break }
+          throw new Error(result?.error || 'Range read failed')
+        }
+        const bytes = result.bytes
+        if (bytes && bytes.byteLength > 0) {
+          let sliceStart = 0
+          while (sliceStart < bytes.byteLength) {
+            if (this.closed || this._pastEnd) break
+            while (this._pendingChunks.length > PENDING_CHUNK_HIGH_WATER && !this.closed && !this._pastEnd) {
+              await sleep(25)
+            }
+            if (this.closed || this._pastEnd) break
+            const slice = bytes.slice(sliceStart, sliceStart + APPEND_SLICE_BYTES)
+            sliceStart += slice.byteLength
+            if (!sniffed) {
+              sniff(new Uint8Array(slice, 0, Math.min(64, slice.byteLength)))
+              sniffed = true
+            }
+            if (offset > MAX_BYTES_BEFORE_READY && !this._trackId) {
+              throw new Error('Source too large before demux ready (non-faststart)')
+            }
+            append(slice)
           }
-          if (this.closed || this._pastEnd) break
-          const { done, value } = await reader.read()
-          if (done) break
-          if (!value || value.byteLength === 0) continue
+        }
+        if (this.closed || this._pastEnd) break
+        if (result.eof || !bytes || bytes.byteLength === 0) break
+      }
+      if (!rangeUnavailable) {
+        try { this._mp4box.flush() } catch { /* demuxer already stopped */ }
+        this._demuxDone = true
+        this._pump()
+        this._notifyWaiters()
+        return
+      }
+      rangePath = null
+    }
+
+    const response = await fetch(this.url, {
+      signal: this._abortController.signal,
+      headers: { Range: `bytes=0-${READ_WINDOW_BYTES - 1}` },
+    })
+    if (!response.ok && response.status !== 0 && response.status !== 200) {
+      throw new Error(`Fetch failed with status ${response.status}`)
+    }
+    const contentRange = response.headers?.get?.('Content-Range') || ''
+    const rangeTotalMatch = /\/(\d+)\s*$/.exec(contentRange)
+    const windowed = response.status === 206 && !!rangeTotalMatch
+    const totalBytes = windowed ? Number(rangeTotalMatch[1]) : Infinity
+
+    let windowResponse = response
+    for (;;) {
+      if (this.closed || this._pastEnd) break
+      if (windowResponse.body && typeof windowResponse.body.getReader === 'function') {
+        const reader = windowResponse.body.getReader()
+        try {
+          while (true) {
+            if (this.closed || this._pastEnd) break
+            while (this._pendingChunks.length > PENDING_CHUNK_HIGH_WATER && !this.closed && !this._pastEnd) {
+              await sleep(25)
+            }
+            // Byte-based read-ahead cap: wait for video sample releases to
+            // catch up before ingesting further. Gated only once the demuxer
+            // is ready — pre-moov reads are bounded by MAX_BYTES_BEFORE_READY.
+            while (
+              this._trackId != null
+              && offset - this._releasedByteOffset > MAX_READ_AHEAD_BYTES
+              && !this.closed && !this._pastEnd
+            ) {
+              await sleep(25)
+            }
+            if (this.closed || this._pastEnd) break
+            const { done, value } = await reader.read()
+            if (done) break
+            if (!value || value.byteLength === 0) continue
+            if (!sniffed) {
+              sniff(value)
+              sniffed = true
+            }
+            if (offset > MAX_BYTES_BEFORE_READY && !this._trackId) {
+              throw new Error('Source too large before demux ready (non-faststart)')
+            }
+            const chunk = value.byteOffset === 0 && value.byteLength === value.buffer.byteLength
+              ? value.buffer
+              : value.slice().buffer
+            append(chunk)
+          }
+        } finally {
+          try { await reader.cancel() } catch { /* ignore */ }
+        }
+      } else {
+        const buffer = await windowResponse.arrayBuffer()
+        // Whole-file reads have no back-pressure at all; refuse sources that
+        // would sit fully resident and let the clip use the element path.
+        if (buffer.byteLength > MAX_READ_AHEAD_BYTES * 4) {
+          throw new Error('Source too large for non-streaming read')
+        }
+        if (buffer.byteLength > 0) {
           if (!sniffed) {
-            sniff(value)
+            sniff(new Uint8Array(buffer, 0, Math.min(64, buffer.byteLength)))
             sniffed = true
           }
-          if (offset > MAX_BYTES_BEFORE_READY && !this._trackId) {
-            throw new Error('Source too large before demux ready (non-faststart)')
-          }
-          const chunk = value.byteOffset === 0 && value.byteLength === value.buffer.byteLength
-            ? value.buffer
-            : value.slice().buffer
-          append(chunk)
+          append(buffer)
         }
-      } finally {
-        try { await reader.cancel() } catch { /* ignore */ }
       }
-    } else {
-      const buffer = await response.arrayBuffer()
-      if (buffer.byteLength > 0) {
-        sniff(new Uint8Array(buffer, 0, Math.min(64, buffer.byteLength)))
-        append(buffer)
+      if (!windowed || this.closed || this._pastEnd || offset >= totalBytes) break
+      windowResponse = await fetch(this.url, {
+        signal: this._abortController.signal,
+        headers: { Range: `bytes=${offset}-${offset + READ_WINDOW_BYTES - 1}` },
+      })
+      if (!windowResponse.ok) {
+        throw new Error(`Ranged fetch failed with status ${windowResponse.status}`)
       }
     }
 
@@ -377,8 +526,19 @@ class ClipFrameCursor {
     this._notifyWaiters()
   }
 
-  _onSamples(samples) {
+  _onSamples(trackId, samples) {
     if (this.closed || this.dead) return
+    if (trackId !== this._trackId) {
+      // Foreign (audio/data) tracks are extracted only so they can be
+      // released — nothing consumes them.
+      const last = samples.length > 0 ? samples[samples.length - 1] : null
+      if (last?.number != null) {
+        const next = Math.max(this._foreignTrackSamples.get(trackId) || 0, last.number)
+        this._foreignTrackSamples.set(trackId, next)
+        try { this._mp4box.releaseUsedSamples(trackId, next) } catch { /* best effort */ }
+      }
+      return
+    }
     for (const sample of samples) {
       this._lastSampleNumber = Math.max(this._lastSampleNumber, sample.number || 0)
       if (this._pastEnd || !sample.data) continue
@@ -426,6 +586,10 @@ class ClipFrameCursor {
         this._mp4box.releaseUsedSamples(this._trackId, this._lastSampleNumber)
       }
     } catch { /* best effort */ }
+    const lastSample = samples.length > 0 ? samples[samples.length - 1] : null
+    if (lastSample && Number.isFinite(lastSample.offset) && Number.isFinite(lastSample.size)) {
+      this._releasedByteOffset = Math.max(this._releasedByteOffset, lastSample.offset + lastSample.size)
+    }
     this._pump()
   }
 

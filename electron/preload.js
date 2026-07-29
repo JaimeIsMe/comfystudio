@@ -147,6 +147,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   prepareVideoSourceForExport: (options) => ipcRenderer.invoke('export:prepareVideoSource', options),
 
   /**
+   * Read one bounded byte range of a local file (export frame source
+   * windowed reads — the renderer's file:// fetch ignores Range headers).
+   * @param {{ path: string, start: number, length: number }}
+   * @returns {Promise<{ success: boolean, bytes?: ArrayBuffer, fileSize?: number, eof?: boolean, error?: string }>}
+   */
+  readFileRange: (options) => ipcRenderer.invoke('media:readFileRange', options),
+
+  /**
    * Transcode video for playback cache (same resolution, constant-FPS H.264, keyframe every 6, no B-frames)
    * @param {{ inputPath: string, outputPath: string }}
    * @returns {Promise<{ success: boolean, error?: string }>}

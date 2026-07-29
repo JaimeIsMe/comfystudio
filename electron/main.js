@@ -4105,6 +4105,44 @@ function resolveMediaInputPath(mediaInput) {
   return mediaInput
 }
 
+// Bounded byte-range reads for the export frame source. The renderer's
+// file:// fetch ignores Range headers (Electron's asar-aware loader), so a
+// single fetch buffers a multi-GB source whole in the renderer regardless
+// of consumption pace. Length is capped server-side as defense in depth.
+ipcMain.handle('media:readFileRange', async (event, options = {}) => {
+  const filePath = typeof options.path === 'string' ? options.path : ''
+  const start = Number(options.start)
+  const length = Number(options.length)
+  const MAX_RANGE_READ_BYTES = 256 * 1024 * 1024
+  if (!filePath || !Number.isFinite(start) || start < 0 || !Number.isFinite(length) || length <= 0) {
+    return { success: false, error: 'Invalid range read request.' }
+  }
+  if (length > MAX_RANGE_READ_BYTES) {
+    return { success: false, error: 'Range read too large.' }
+  }
+  let handle = null
+  try {
+    handle = await fs.open(filePath, 'r')
+    const stat = await handle.stat()
+    if (start >= stat.size) {
+      return { success: true, bytes: new ArrayBuffer(0), fileSize: stat.size, eof: true }
+    }
+    const readLength = Math.min(length, stat.size - start)
+    const buffer = Buffer.allocUnsafe(readLength)
+    const { bytesRead } = await handle.read(buffer, 0, readLength, start)
+    return {
+      success: true,
+      bytes: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + bytesRead),
+      fileSize: stat.size,
+      eof: start + bytesRead >= stat.size,
+    }
+  } catch (err) {
+    return { success: false, error: err?.message || String(err) }
+  } finally {
+    try { await handle?.close() } catch { /* ignore */ }
+  }
+})
+
 ipcMain.handle('media:getAudioWaveform', async (event, mediaInput, options = {}) => {
   if (!ffmpegPath) {
     return { success: false, error: 'FFmpeg binary not available.' }
