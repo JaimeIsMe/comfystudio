@@ -1830,8 +1830,8 @@ function handleSetClipsEnabled(payload = {}) {
 async function handlePrepareGenerationFromTimelineContext(payload = {}) {
   const state = useTimelineStore.getState()
   const mode = String(payload.mode || 'extend').trim().toLowerCase() === 'keyframe' ? 'keyframe' : 'extend'
-  const workflowId = String(payload.workflowId || 'ltx23-i2v').trim() || 'ltx23-i2v'
   const category = String(payload.category || 'video').trim().toLowerCase() || 'video'
+  const workflowId = String(payload.workflowId || '').trim() || (category === 'image' ? 'image-edit' : 'ltx23-i2v')
   const prompt = String(payload.prompt || '').trim().slice(0, 5000)
   const negativePrompt = String(payload.negativePrompt || '').trim().slice(0, 2000)
   const requestedResolution = resolveMcpGenerationResolution(payload)
@@ -1864,6 +1864,9 @@ async function handlePrepareGenerationFromTimelineContext(payload = {}) {
     ...captured,
     mode,
     workflowId,
+    // Category rides on the frame so the Generate workspace applies it even
+    // when the tab mounts after this event has already fired (#86).
+    category,
     prompt,
     negativePrompt,
     source: 'mcp',

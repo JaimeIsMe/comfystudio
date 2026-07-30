@@ -3851,13 +3851,20 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
   const showComfyGatingBanner = !isConnected && (launcherIsBooting || launcherWaitingForExternal || launcherCanAutoStart)
   const allowQueueWhileWaiting = !isConnected && (launcherIsBooting || launcherCanAutoStart || launcherWaitingForExternal)
 
-  // When opened with timeline frame, switch to video i2v and use that frame as input
+  // When opened with a timeline frame, switch to the frame's staged
+  // category/workflow and use that frame as input. MCP prepare can stage an
+  // image-category request (e.g. image-edit consuming the frame), so honor
+  // the frame's category instead of forcing video — forcing video here
+  // stomped staged image requests (#86). Frames without a category (the
+  // in-app "use frame" flows) keep the historical video default.
   useEffect(() => {
     if (frameForAI) {
-      const nextWorkflowId = String(frameForAI.workflowId || 'wan22-i2v').trim() || 'wan22-i2v'
+      const nextCategory = String(frameForAI.category || 'video').trim().toLowerCase() || 'video'
+      const nextWorkflowId = String(frameForAI.workflowId || '').trim()
+        || (nextCategory === 'image' ? 'image-edit' : 'wan22-i2v')
       const manifest = getWorkflowManifestByWorkflowId(nextWorkflowId)
       setGenerationMode('single')
-      setCategory('video')
+      setCategory(nextCategory)
       setWorkflowId(nextWorkflowId)
       if (manifest) {
         setSelectedWorkflowManifestId(manifest.id)
@@ -3865,7 +3872,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       }
       setFormError(null)
     }
-  }, [frameForAI?.blobUrl, frameForAI?.workflowId])
+  }, [frameForAI?.blobUrl, frameForAI?.workflowId, frameForAI?.category])
 
   useEffect(() => {
     const handler = (event) => {
@@ -13566,7 +13573,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       setFormError(message)
       return { success: false, message }
     }
+    // Video i2v workflows and image workflows that take an input image (e.g.
+    // image-edit) can both consume the staged timeline frame.
     const canUseTimelineFrame = isSingleVideoWorkflowId(workflowId)
+      || (category === 'image' && Boolean(selectedWorkflowManifest?.needsImage ?? currentWorkflow?.needsImage))
     const usingTimelineFrame = !!frameForAI?.file && canUseTimelineFrame
     const requiresPrimaryAsset = Boolean(primaryAssetSlot) || (currentWorkflow?.needsImage && assetInputSlots.length === 0)
     if (requiresPrimaryAsset && !selectedAsset && !usingTimelineFrame) {
@@ -13654,6 +13664,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       if (!respond) return
 
       const canUseTimelineFrame = isSingleVideoWorkflowId(workflowId)
+        || (category === 'image' && Boolean(selectedWorkflowManifest?.needsImage ?? currentWorkflow?.needsImage))
       const usingTimelineFrame = Boolean(frameForAI?.file && canUseTimelineFrame)
       const status = {
         generationMode,
@@ -13734,6 +13745,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     allowQueueWhileWaiting,
     category,
     currentWorkflow?.label,
+    currentWorkflow?.needsImage,
     duration,
     effectiveImageResolution,
     fps,
@@ -13745,6 +13757,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     negativePrompt,
     resolution,
     selectedWorkflowManifest?.title,
+    selectedWorkflowManifest?.needsImage,
     workflowId,
   ])
 
@@ -14502,9 +14515,27 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             respond({ success: false, error: `Workflow ${label} is a catalog preview and cannot be queued yet.`, status })
             return
           }
-          if (manifest.needsImage || manifest.requiresAudio) {
-            respond({ success: false, error: `Workflow ${label} is not prompt-only. Use a timeline-frame or asset-based MCP tool instead.`, status })
+          if (manifest.requiresAudio) {
+            respond({ success: false, error: `Workflow ${label} needs conditioning audio and can't be queued from prompt batches yet.`, status })
             return
+          }
+          if (manifest.needsImage) {
+            // Image-input workflows (e.g. image-edit) queue from batches when
+            // each job supplies its input via assetFieldIds.image/inputImage.
+            for (const job of requestedJobs) {
+              if (String(job?.workflowId || '').trim() !== id) continue
+              const jobAssetFields = normalizeMcpPromptAssetFieldIds(job)
+              const inputAssetId = String(jobAssetFields.image || jobAssetFields.inputImage || '').trim()
+              if (!inputAssetId) {
+                respond({ success: false, error: `Workflow ${label} needs an input image. Provide jobs[].assetFieldIds.image with a Velorn image asset id.`, status })
+                return
+              }
+              const inputAsset = assetById.get(inputAssetId)
+              if (inputAsset && String(inputAsset.type || '').toLowerCase() !== 'image') {
+                respond({ success: false, error: `Workflow ${label} input must be an image asset; ${inputAssetId} is ${inputAsset.type || 'unknown'}.`, status })
+                return
+              }
+            }
           }
           const requiredAssetFields = (manifest.fields || []).filter((field) => field?.type === 'assetSelect' && field.required)
           const missingRequiredAssetField = requestedJobs
@@ -14582,15 +14613,19 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           const promptLabel = String(request.promptLabel || '').trim()
           const outputFolderId = String(request.folderId || request.outputFolderId || detail.folderId || detail.outputFolderId || '').trim() || null
           const assetFieldIds = normalizeMcpPromptAssetFieldIds(request)
+          const primaryInputAssetId = manifest?.needsImage
+            ? String(assetFieldIds.image || assetFieldIds.inputImage || '').trim() || null
+            : null
+          const primaryInputAsset = primaryInputAssetId ? assetById.get(primaryInputAssetId) : null
 
           const jobOverrides = {
             category: jobCategory,
             workflowId: wfId,
             workflowLabel,
-            needsImage: false,
-            inputAssetType: null,
-            inputAssetId: null,
-            inputAssetName: '',
+            needsImage: Boolean(manifest?.needsImage),
+            inputAssetType: manifest?.needsImage ? 'image' : null,
+            inputAssetId: primaryInputAssetId,
+            inputAssetName: primaryInputAsset?.name || '',
             inputFromTimelineFrame: false,
             audioAssetId: null,
             audioAssetName: '',

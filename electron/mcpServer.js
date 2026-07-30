@@ -149,12 +149,25 @@ const MCP_PROMPT_BATCH_WORKFLOW_ALIASES = new Map([
   ['seedancereference', 'seedance2-r2v'],
   ['seedanceref', 'seedance2-r2v'],
   ['seedanceugc', 'seedance2-r2v'],
+  ['imageedit', 'image-edit'],
+  ['qwenimageedit', 'image-edit'],
+  ['qwenimageedit2509', 'image-edit'],
 ])
 const MCP_PROMPT_BATCH_SUPPORTED_WORKFLOWS = new Map([
   ['z-image-turbo', {
     label: 'Z Image Turbo',
     category: 'image',
     outputType: 'image',
+    defaultResolution: { width: 1280, height: 720 },
+  }],
+  ['image-edit', {
+    label: 'Image Edit (Qwen)',
+    category: 'image',
+    outputType: 'image',
+    // Needs a per-job input image, so it is only reachable via the jobs[]
+    // form with assetFieldIds.image — the workflows[] cartesian form has no
+    // way to carry per-job assets.
+    requiresInputImage: true,
     defaultResolution: { width: 1280, height: 720 },
   }],
   ['longcat-text-to-image', {
@@ -5053,6 +5066,10 @@ function resolvePromptGenerationBatchPlan(_snapshot, args = {}) {
         }
         const prompt = String(job?.prompt || '').trim().slice(0, 5000)
         if (!prompt) throw new Error(`Prompt generation job ${index + 1} is missing prompt text.`)
+        const assetFieldIds = normalizePromptBatchAssetFieldIds(job)
+        if (workflowInfo.requiresInputImage && !assetFieldIds.image && !assetFieldIds.inputImage) {
+          throw new Error(`Workflow "${workflowId}" needs an input image. Provide jobs[].assetFieldIds.image with a Velorn image asset id.`)
+        }
         return {
           workflowId,
           workflowLabel: String(job?.workflowLabel || workflowInfo.label || workflowId),
@@ -5060,7 +5077,7 @@ function resolvePromptGenerationBatchPlan(_snapshot, args = {}) {
           outputType: workflowInfo.outputType,
           prompt,
           negativePrompt: String(job?.negativePrompt || '').trim().slice(0, 2000),
-          assetFieldIds: normalizePromptBatchAssetFieldIds(job),
+          assetFieldIds,
           generateAudio: Object.prototype.hasOwnProperty.call(job || {}, 'generateAudio')
             ? Boolean(job.generateAudio)
             : undefined,
@@ -5098,6 +5115,15 @@ function resolvePromptGenerationBatchPlan(_snapshot, args = {}) {
   if (promptState.error) return { error: promptState.error }
   const workflowState = normalizePromptBatchWorkflows(args)
   if (workflowState.error) return { error: workflowState.error }
+
+  const inputImageWorkflow = workflowState.entries.find((entry) => (
+    MCP_PROMPT_BATCH_SUPPORTED_WORKFLOWS.get(entry.workflowId)?.requiresInputImage
+  ))
+  if (inputImageWorkflow) {
+    return {
+      error: `Workflow "${inputImageWorkflow.workflowId}" needs a per-job input image. Use the jobs[] form with assetFieldIds.image instead of prompts × workflows.`,
+    }
+  }
 
   const totalJobs = promptState.prompts.length * workflowState.entries.reduce((sum, entry) => sum + entry.variations, 0)
   if (totalJobs > MCP_PROMPT_BATCH_MAX_TOTAL_JOBS) {
@@ -7078,7 +7104,7 @@ function createToolDefinitions() {
     },
     {
       name: 'queue_prompt_generation_batch',
-      description: 'Preview or queue text-to-image/text-to-video generation jobs directly from written prompts. Use this for brief-to-assets workflows before assembling a sequence. Defaults to previewOnly; applying can start local/credit-backed generation, so require explicit user approval first.',
+      description: 'Preview or queue text-to-image/text-to-video generation jobs directly from written prompts, plus image-input workflows such as image-edit when each job supplies its input via jobs[].assetFieldIds.image. Use this for brief-to-assets workflows before assembling a sequence. Defaults to previewOnly; applying can start local/credit-backed generation, so require explicit user approval first.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -7132,7 +7158,7 @@ function createToolDefinitions() {
                 },
                 assetFieldIds: {
                   type: 'object',
-                  description: 'Map workflow asset-select fields to Velorn asset IDs, for example { "referenceImage1": "...", "referenceImage2": "..." } for Seedance 2.0 R2V.',
+                  description: 'Map workflow asset fields to Velorn asset IDs, for example { "referenceImage1": "...", "referenceImage2": "..." } for Seedance 2.0 R2V, or { "image": "<image asset id>" } for input-image workflows such as image-edit.',
                   additionalProperties: { type: 'string' },
                 },
                 referenceImages: {
