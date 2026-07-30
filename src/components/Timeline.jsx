@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, memo } from 'react'
 import {
   Volume2, VolumeX, Lock, Unlock, Link, Unlink, Eye, EyeOff,
   Plus, Video, Type, Image as ImageIcon,
@@ -494,6 +494,39 @@ function AudioWaveformBars({ clip, clipWidth, clipUrl, waveformInput = null, ste
     </div>
   )
 }
+
+// Ruler ticks live in their own memoized component: at frame-level zoom a
+// long timeline emits thousands of tick elements, and re-reconciling them on
+// every playhead tick during playback dwarfs the rest of the ruler. Props
+// only change on zoom/duration/fps changes, so playback skips this subtree.
+const RulerTickMarks = memo(function RulerTickMarks({ major, minor, pixelsPerSecond, timecodeFps }) {
+  return (
+    <>
+      {/* Minor ticks */}
+      {minor.map((time) => (
+        <div
+          key={`minor-${time}`}
+          className="absolute bottom-0 w-px h-1.5 bg-sf-dark-600/80 pointer-events-none"
+          style={{ left: `${time * pixelsPerSecond}px` }}
+        />
+      ))}
+
+      {/* Major ticks + timecode labels */}
+      {major.map((time) => (
+        <div
+          key={`major-${time}`}
+          className="absolute top-0 bottom-0 pointer-events-none"
+          style={{ left: `${time * pixelsPerSecond}px` }}
+        >
+          <div className="absolute bottom-0 w-px h-2.5 bg-sf-dark-500/95" />
+          <span className="absolute top-0.5 left-1 text-[9px] text-sf-text-muted font-mono tracking-tight whitespace-nowrap">
+            {formatFrameTimecode(time, timecodeFps)}
+          </span>
+        </div>
+      ))}
+    </>
+  )
+})
 
 function Timeline({ onActiveToolChange, onStatusChange }) {
   const timelineRef = useRef(null)
@@ -5551,28 +5584,12 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
               }}
               title="Double-click to add marker"
             >
-              {/* Minor ticks */}
-              {rulerTicks.minor.map((time) => (
-                <div
-                  key={`minor-${time}`}
-                  className="absolute bottom-0 w-px h-1.5 bg-sf-dark-600/80 pointer-events-none"
-                  style={{ left: `${time * pixelsPerSecond}px` }}
-                />
-              ))}
-
-              {/* Major ticks + timecode labels */}
-              {rulerTicks.major.map((time) => (
-                <div
-                  key={`major-${time}`}
-                  className="absolute top-0 bottom-0 pointer-events-none"
-                  style={{ left: `${time * pixelsPerSecond}px` }}
-                >
-                  <div className="absolute bottom-0 w-px h-2.5 bg-sf-dark-500/95" />
-                  <span className="absolute top-0.5 left-1 text-[9px] text-sf-text-muted font-mono tracking-tight whitespace-nowrap">
-                    {formatTimelineTimecode(time)}
-                  </span>
-                </div>
-              ))}
+              <RulerTickMarks
+                major={rulerTicks.major}
+                minor={rulerTicks.minor}
+                pixelsPerSecond={pixelsPerSecond}
+                timecodeFps={timecodeFps}
+              />
 
               {/* FPS indicator on far right */}
               <div className="absolute top-0.5 right-1 text-[8px] text-sf-text-muted/80 font-mono pointer-events-none">
