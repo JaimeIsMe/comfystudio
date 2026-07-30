@@ -1266,28 +1266,6 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     }
   }
 
-  // Fail loudly on sources whose containers open but whose video cannot be
-  // decoded by the renderer (ProRes, DNx, ...) — their clips would silently
-  // render black through the whole export while the audio mix still works.
-  if (failedVideoSourceNames.size > 0) {
-    const affected = []
-    for (const clip of videoClips) {
-      if (clip.type !== 'video') continue
-      const clipUrl = cachedVideoSources.get(clip.id) || resolvedAssetUrls.get(clip.assetId)
-      const failure = clipUrl ? failedVideoSourceNames.get(clipUrl) : null
-      if (failure && !affected.some((entry) => entry.name === failure.name)) {
-        affected.push(failure)
-      }
-    }
-    if (affected.length > 0) {
-      throw new Error(
-        `Cannot export — ${affected.length === 1 ? 'a source' : `${affected.length} sources`} on the timeline cannot be decoded and would render black: `
-        + affected.map((entry) => `${entry.name} (${entry.reason})`).join('; ')
-        + '. Convert to H.264, or remove/disable the affected clips.'
-      )
-    }
-  }
-
   // Long sources and clips with deep source in-points need one extra safety
   // step before the sequential decoder can use them. The main process first
   // checks whether the movie index is already at the front; when it is not,
@@ -1295,7 +1273,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   // Preparation is per source (not per clip), and any failure keeps the
   // conservative video-element path available.
   const preparedFrameSourceUrls = new Map()
-  const sourcePreparation = { candidates: 0, reused: 0, remuxed: 0, failed: 0 }
+  const sourcePreparation = { candidates: 0, reused: 0, remuxed: 0, transcoded: 0, failed: 0 }
   if (webCodecsEnabled && window.electronAPI?.prepareVideoSourceForExport) {
     const candidates = new Map()
     for (const clip of videoClips) {
@@ -1314,6 +1292,26 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         sourceUrl,
         inputPath: resolvedVideoInputPaths.get(sourceUrl) || null,
         sourceName: asset?.name || `clip ${clip.id}`,
+        mode: 'remux',
+      })
+    }
+
+    // Sources the renderer cannot decode at all (ProRes, DNx, ...) become
+    // transcode candidates: a one-time visually-transparent H.264
+    // intermediate in the export temp folder stands in for them. This
+    // overrides a long-source remux candidacy — a stream copy of an
+    // undecodable codec would still be undecodable.
+    for (const clip of videoClips) {
+      if (clip.type !== 'video' || cachedVideoSources.has(clip.id)) continue
+      const sourceUrl = resolvedAssetUrls.get(clip.assetId)
+      if (!sourceUrl || !failedVideoSourceNames.has(sourceUrl)) continue
+      if (candidates.get(sourceUrl)?.mode === 'transcode') continue
+      const asset = assetsState.getAssetById(clip.assetId)
+      candidates.set(sourceUrl, {
+        sourceUrl,
+        inputPath: resolvedVideoInputPaths.get(sourceUrl) || null,
+        sourceName: asset?.name || `clip ${clip.id}`,
+        mode: 'transcode',
       })
     }
 
@@ -1329,7 +1327,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       }
 
       onProgress({
-        status: `Preparing long source ${sourceIndex}/${candidates.size}: ${candidate.sourceName}`,
+        status: `Preparing source ${sourceIndex}/${candidates.size}: ${candidate.sourceName}`,
         progress: 3,
       })
       const preparedPath = await window.electronAPI.pathJoin(tempFolder, `prepared_source_${sourceIndex}.mp4`)
@@ -1338,6 +1336,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         result = await window.electronAPI.prepareVideoSourceForExport({
           inputPath: candidate.inputPath,
           outputPath: preparedPath,
+          mode: candidate.mode || 'remux',
         })
       } catch (err) {
         result = { success: false, error: getMediaErrorMessage(err) }
@@ -1352,6 +1351,26 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       if (result.prepared) {
         const preparedUrl = await window.electronAPI.getFileUrlDirect(result.outputPath || preparedPath)
         preparedFrameSourceUrls.set(candidate.sourceUrl, preparedUrl)
+        if (candidate.mode === 'transcode') {
+          // The original stays undecodable for the element path, so point
+          // every downstream consumer (element fallback, duration reads) at
+          // the intermediate as well; only then clear the failure record.
+          try {
+            const video = await loadVideo(preparedUrl)
+            if (!video.videoWidth || !video.videoHeight) {
+              throw new Error('Prepared intermediate has no decodable video stream')
+            }
+            videoElements.set(candidate.sourceUrl, video)
+            failedVideoSources.delete(candidate.sourceUrl)
+            failedVideoSourceNames.delete(candidate.sourceUrl)
+            sourcePreparation.transcoded += 1
+            console.log(`[Export] Prepared ${candidate.sourceName} as an H.264 intermediate (source codec is not decodable in the renderer)`)
+          } catch (err) {
+            sourcePreparation.failed += 1
+            console.warn(`[Export] Prepared intermediate for ${candidate.sourceName} did not load: ${getMediaErrorMessage(err)}`)
+          }
+          continue
+        }
         sourcePreparation.remuxed += 1
         console.log(`[Export] Prepared ${candidate.sourceName} for fast sequential decoding with a lossless stream copy`)
       } else {
@@ -1359,6 +1378,29 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         sourcePreparation.reused += 1
         console.log(`[Export] ${candidate.sourceName} is already optimized for fast sequential decoding`)
       }
+    }
+  }
+
+  // Fail loudly on any source still undecodable after preparation (or when
+  // preparation is unavailable: web build, WebCodecs kill switch, missing
+  // local path, failed transcode) — its clips would silently render black
+  // through the whole export while the audio mix still works.
+  if (failedVideoSourceNames.size > 0) {
+    const affected = []
+    for (const clip of videoClips) {
+      if (clip.type !== 'video') continue
+      const clipUrl = cachedVideoSources.get(clip.id) || resolvedAssetUrls.get(clip.assetId)
+      const failure = clipUrl ? failedVideoSourceNames.get(clipUrl) : null
+      if (failure && !affected.some((entry) => entry.name === failure.name)) {
+        affected.push(failure)
+      }
+    }
+    if (affected.length > 0) {
+      throw new Error(
+        `Cannot export — ${affected.length === 1 ? 'a source' : `${affected.length} sources`} on the timeline cannot be decoded and would render black: `
+        + affected.map((entry) => `${entry.name} (${entry.reason})`).join('; ')
+        + '. Convert to H.264, or remove/disable the affected clips.'
+      )
     }
   }
   
@@ -2909,7 +2951,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   if (webCodecsEnabled) {
     console.log(
       `[Export] Frame sources: ${webCodecsClipCount} clip(s) via WebCodecs, ${elementPathClipCount} via video element; `
-      + `long-source preparation ${sourcePreparation.remuxed} remuxed, ${sourcePreparation.reused} reused, ${sourcePreparation.failed} failed`
+      + `source preparation ${sourcePreparation.remuxed} remuxed, ${sourcePreparation.transcoded} transcoded, ${sourcePreparation.reused} reused, ${sourcePreparation.failed} failed`
     )
   }
   closeAllFrameCursors()

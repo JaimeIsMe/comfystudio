@@ -6039,6 +6039,11 @@ const appendLimitedStderr = (current, data) => {
 ipcMain.handle('export:prepareVideoSource', async (event, options = {}) => {
   const inputPath = typeof options.inputPath === 'string' ? options.inputPath.trim() : ''
   const outputPath = typeof options.outputPath === 'string' ? options.outputPath.trim() : ''
+  // 'remux' (default) stream-copies non-faststart containers for the
+  // sequential decoder. 'transcode' re-encodes sources whose codec the
+  // renderer cannot decode at all (ProRes, DNx, ...) into an H.264
+  // intermediate — reuse is never valid there, however streamable the file.
+  const mode = options.mode === 'transcode' ? 'transcode' : 'remux'
   const prepareFfmpegUnavailable = getFfmpegUnavailableError()
   if (prepareFfmpegUnavailable) {
     return { success: false, error: prepareFfmpegUnavailable }
@@ -6056,22 +6061,24 @@ ipcMain.handle('export:prepareVideoSource', async (event, options = {}) => {
   }
 
   let layout = null
-  try {
-    layout = await inspectIsoBmffLayout(inputPath)
-    if (layout.streamable) {
-      return {
-        success: true,
-        prepared: false,
-        inputPath,
-        layout: {
-          fileSize: layout.fileSize,
-          moovOffset: layout.moovOffset,
-          mdatOffset: layout.mdatOffset,
-        },
+  if (mode === 'remux') {
+    try {
+      layout = await inspectIsoBmffLayout(inputPath)
+      if (layout.streamable) {
+        return {
+          success: true,
+          prepared: false,
+          inputPath,
+          layout: {
+            fileSize: layout.fileSize,
+            moovOffset: layout.moovOffset,
+            mdatOffset: layout.mdatOffset,
+          },
+        }
       }
+    } catch (err) {
+      console.warn('[Export] Could not inspect long source container; attempting stream-copy preparation:', err.message)
     }
-  } catch (err) {
-    console.warn('[Export] Could not inspect long source container; attempting stream-copy preparation:', err.message)
   }
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true })
@@ -6079,17 +6086,35 @@ ipcMain.handle('export:prepareVideoSource', async (event, options = {}) => {
     path.dirname(outputPath),
     `.${path.basename(outputPath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp.mp4`
   )
-  const args = [
-    '-y',
-    '-i', inputPath,
-    '-map', '0:v:0',
-    '-c:v', 'copy',
-    '-an',
-    '-sn',
-    '-dn',
-    '-movflags', '+faststart',
-    tempOutputPath,
-  ]
+  const args = mode === 'transcode'
+    ? [
+      '-y',
+      '-i', inputPath,
+      '-map', '0:v:0',
+      // Visually transparent for the current pipeline: compositing and the
+      // frame pipe are 8-bit RGBA end to end, so CRF 12 4:2:0 discards
+      // nothing this export could have kept from a 10-bit 4:2:2 mezzanine.
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-crf', '12',
+      '-pix_fmt', 'yuv420p',
+      '-an',
+      '-sn',
+      '-dn',
+      '-movflags', '+faststart',
+      tempOutputPath,
+    ]
+    : [
+      '-y',
+      '-i', inputPath,
+      '-map', '0:v:0',
+      '-c:v', 'copy',
+      '-an',
+      '-sn',
+      '-dn',
+      '-movflags', '+faststart',
+      tempOutputPath,
+    ]
 
   return await new Promise((resolve) => {
     const ffmpeg = spawn(ffmpegPath, args, { windowsHide: true })

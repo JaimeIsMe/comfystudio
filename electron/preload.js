@@ -142,10 +142,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkNvenc: () => ipcRenderer.invoke('export:checkNvenc'),
 
   /**
-   * Make a long local source safe for the renderer's sequential decoder.
-   * Already-fast-start files are reused; other containers are stream-copied
-   * to a temporary video-only MP4 without re-encoding.
-   * @param {{ inputPath: string, outputPath: string }}
+   * Make a local source safe for the renderer's decoders. mode 'remux'
+   * (default): already-fast-start files are reused, other containers are
+   * stream-copied to a temporary video-only MP4 without re-encoding. mode
+   * 'transcode': sources whose codec the renderer cannot decode (ProRes,
+   * DNx, ...) are re-encoded to a visually-transparent H.264 intermediate.
+   * @param {{ inputPath: string, outputPath: string, mode?: 'remux' | 'transcode' }}
    * @returns {Promise<{ success: boolean, prepared?: boolean, outputPath?: string, error?: string }>}
    */
   prepareVideoSourceForExport: (options) => ipcRenderer.invoke('export:prepareVideoSource', options),
