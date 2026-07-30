@@ -18,6 +18,55 @@ import {
 
 // Maximum number of undo states to keep
 const MAX_HISTORY_SIZE = 50
+
+// The persist middleware fires on EVERY store write and re-serializes the
+// whole partialized state — it cannot know which field changed. During
+// playback the playhead updates ~60x/s, which meant a JSON.stringify of the
+// full clip list plus a synchronous localStorage write per animation frame
+// (roughly the entire frame budget on a 160-clip timeline). This storage
+// queues the latest snapshot and writes it at most once per second;
+// last-write-wins, flushed on window close, so session restore loses nothing.
+const PERSIST_WRITE_DELAY_MS = 1000
+const createDebouncedJSONStorage = (getStorage) => {
+  let pending = null
+  let timer = 0
+  const flush = () => {
+    if (timer) {
+      clearTimeout(timer)
+      timer = 0
+    }
+    if (!pending) return
+    const { name, value } = pending
+    pending = null
+    try {
+      getStorage().setItem(name, JSON.stringify(value))
+    } catch (error) {
+      console.warn('[timelineStore] persist write failed', error)
+    }
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', flush)
+  }
+  return {
+    getItem: (name) => {
+      try {
+        const raw = getStorage().getItem(name)
+        return raw == null ? null : JSON.parse(raw)
+      } catch (error) {
+        console.warn('[timelineStore] persist read failed', error)
+        return null
+      }
+    },
+    setItem: (name, value) => {
+      pending = { name, value }
+      if (!timer) timer = setTimeout(flush, PERSIST_WRITE_DELAY_MS)
+    },
+    removeItem: (name) => {
+      if (pending && pending.name === name) pending = null
+      getStorage().removeItem(name)
+    },
+  }
+}
 const MIN_TRANSITION_DURATION = 1 / FRAME_RATE
 const TRIM_DEBUG_KEY = 'comfystudio-debug-trim'
 const KEYFRAME_TIME_TOLERANCE = 0.05
@@ -5399,6 +5448,7 @@ export const useTimelineStore = create(
     }),
     {
       name: 'comfystudio-timeline', // localStorage key
+      storage: createDebouncedJSONStorage(() => localStorage),
       partialize: (state) => ({
         // Only persist these fields (exclude transient UI state)
         duration: state.duration,
