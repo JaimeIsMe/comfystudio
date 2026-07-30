@@ -1727,9 +1727,28 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   // Pixels per second based on zoom
   const pixelsPerSecond = zoom / 5
 
+  // The zoom floor follows the content: never above the classic floor of
+  // 20 (4 px/s), never below what frames the whole timeline — so hour-long
+  // edits can zoom out far enough to see everything. 0.5 is the absolute
+  // floor (~4 hours visible in a typical viewport).
+  const getMinZoom = useCallback(() => {
+    const visibleWidth = timelineRef.current?.clientWidth || 0
+    if (visibleWidth <= 0) return 20
+    let startTime = 0
+    let endTime = duration
+    if (clips.length > 0) {
+      startTime = Math.min(...clips.map(c => c.startTime))
+      endTime = Math.max(...clips.map(c => c.startTime + c.duration))
+    }
+    const timeSpan = Math.max(0.5, endTime - startTime)
+    const fitZoom = (5 * visibleWidth * 0.95) / timeSpan
+    return Math.max(0.5, Math.min(20, fitZoom))
+  }, [clips, duration])
+  const sliderMinZoom = Math.max(1, Math.floor(getMinZoom()))
+
   // Zoom with playhead as pivot so the timeline zooms into/out of the playhead position
   const applyZoomWithPlayheadPivot = useCallback((newZoomValue) => {
-    const clamped = Math.max(20, Math.min(2000, newZoomValue))
+    const clamped = Math.max(getMinZoom(), Math.min(2000, newZoomValue))
     if (clamped === zoom) return
     if (!timelineRef.current) {
       setZoom(clamped)
@@ -1746,7 +1765,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         el.scrollLeft = Math.max(0, Math.min(newScrollLeft, el.scrollWidth - el.clientWidth))
       }
     })
-  }, [pixelsPerSecond, playheadPosition, setZoom, zoom])
+  }, [getMinZoom, pixelsPerSecond, playheadPosition, setZoom, zoom])
 
   // Frame all: fit full timeline or all clips in view
   const handleFrameAll = () => {
@@ -1761,7 +1780,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     }
     const timeSpan = Math.max(0.5, endTime - startTime)
     const padding = 0.95
-    const newZoom = Math.max(20, Math.min(2000, (5 * visibleWidth * padding) / timeSpan))
+    const newZoom = Math.max(0.5, Math.min(2000, (5 * visibleWidth * padding) / timeSpan))
     setZoom(newZoom)
     const newPixelsPerSecond = newZoom / 5
     requestAnimationFrame(() => {
@@ -3017,7 +3036,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
       const timeAtMouse = (mouseX + scrollLeft) / pixelsPerSecond
       
       // Apply zoom
-      const newZoom = Math.max(20, Math.min(2000, zoom + zoomDelta))
+      const newZoom = Math.max(getMinZoom(), Math.min(2000, zoom + zoomDelta))
       setZoom(newZoom)
       
       // Calculate new pixels per second
@@ -3042,7 +3061,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         : e.deltaY
       timelineRef.current.scrollLeft += horizontalDelta
     }
-  }, [pixelsPerSecond, zoom, setZoom])
+  }, [getMinZoom, pixelsPerSecond, zoom, setZoom])
 
   useEffect(() => {
     const timelineEl = timelineRef.current
@@ -4697,7 +4716,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
 
   const getMajorRulerStep = (pixelsPerSec) => {
     // Keep labels readable while allowing finer granularity at high zoom.
-    const candidates = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
+    const candidates = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]
     const minSpacingPx = 95
     return candidates.find(step => step * pixelsPerSec >= minSpacingPx) || candidates[candidates.length - 1]
   }
@@ -5132,7 +5151,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
             </button>
             <input
               type="range"
-              min="20"
+              min={sliderMinZoom}
               max="2000"
               value={zoom}
               onChange={(e) => applyZoomWithPlayheadPivot(parseInt(e.target.value, 10))}

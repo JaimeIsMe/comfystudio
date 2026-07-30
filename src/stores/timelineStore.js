@@ -4680,10 +4680,11 @@ export const useTimelineStore = create(
   },
 
   /**
-   * Set zoom level (20% - 2000%)
+   * Set zoom level (0.5% - 2000%). Absolute bounds only — the timeline
+   * enforces its content-aware floor (getMinZoom) at the call sites.
    */
   setZoom: (zoom) => {
-    set({ zoom: Math.max(20, Math.min(2000, zoom)) })
+    set({ zoom: Math.max(0.5, Math.min(2000, zoom)) })
   },
 
   /**
