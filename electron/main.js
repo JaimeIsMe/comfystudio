@@ -5866,6 +5866,21 @@ function appendExportVideoEncoderArgs(args, options = {}) {
   // the export:checkNvenc IPC, mirroring the NVENC flow.
   const useVideoToolbox = useHardwareEncoder && process.platform === 'darwin'
 
+  // Color management: both export paths hand ffmpeg full-range RGB(A)
+  // frames. Left alone, swscale converts RGB->YUV with its default BT.601
+  // coefficients and writes no colour metadata — HD players assume BT.709,
+  // so exports played back slightly shifted and untagged uploads got
+  // re-guessed by every transcode. Pin the conversion matrix to BT.709 and
+  // tag the stream to match (tags without the matrix would lie about the
+  // pixels).
+  args.push(
+    '-vf', 'scale=out_color_matrix=bt709:out_range=tv',
+    '-color_primaries', 'bt709',
+    '-color_trc', 'bt709',
+    '-colorspace', 'bt709',
+    '-color_range', 'tv'
+  )
+
   let encoderUsed = null
   const isProRes = videoCodec === 'prores' || (format === 'mov' && options.proresProfile != null)
   const normalizedCodec = isProRes
@@ -6001,7 +6016,11 @@ function appendExportVideoEncoderArgs(args, options = {}) {
   }
 
   if (format === 'mp4') {
-    args.push('-movflags', '+faststart')
+    // write_colr puts the colr atom in the container as well — QuickTime
+    // and some upload pipelines trust it over the bitstream VUI.
+    args.push('-movflags', '+faststart+write_colr')
+  } else if (format === 'mov') {
+    args.push('-movflags', '+write_colr')
   }
 
   return encoderUsed
