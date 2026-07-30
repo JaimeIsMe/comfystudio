@@ -6194,6 +6194,87 @@ ipcMain.handle('export:prepareVideoSource', async (event, options = {}) => {
   })
 })
 
+// Hardware-encoder availability can't be trusted from a listing check alone:
+// ffmpeg-static builds differ per platform (the Linux build ships without
+// NVENC entirely), and a listed encoder can still fail to initialize on
+// driver/API mismatches ("Required: 13.1 Found: 13.0"). The only reliable
+// answer is a real one-frame encode, so probe with lavfi input and cache the
+// result (as a promise, so concurrent callers share one probe) per app run.
+const hardwareEncoderProbeCache = new Map()
+
+function probeHardwareEncoder(encoderName) {
+  const cached = hardwareEncoderProbeCache.get(encoderName)
+  if (cached) return cached
+  const probe = new Promise((resolve) => {
+    if (!ffmpegPath) {
+      resolve({ ok: false, error: 'FFmpeg binary not available.' })
+      return
+    }
+    const args = [
+      '-hide_banner', '-v', 'error',
+      '-f', 'lavfi', '-i', 'color=black:size=256x256:rate=30',
+      '-frames:v', '1',
+      '-c:v', encoderName,
+      '-f', 'null', '-',
+    ]
+    const child = spawn(ffmpegPath, args, { windowsHide: true })
+    let stderr = ''
+    let settled = false
+    const finish = (result) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+    // A wedged probe must not wedge the exports queued behind it.
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL') } catch { /* already gone */ }
+      finish({ ok: false, error: `Hardware encoder probe timed out (${encoderName}).` })
+    }, 15000)
+    child.stderr.on('data', (data) => {
+      stderr = appendLimitedStderr(stderr, data)
+    })
+    child.on('error', (err) => finish({ ok: false, error: err.message }))
+    child.on('close', (code) => {
+      if (code === 0) {
+        finish({ ok: true })
+      } else {
+        finish({ ok: false, error: (stderr || `FFmpeg exited with code ${code}`).trim() })
+      }
+    })
+  })
+  hardwareEncoderProbeCache.set(encoderName, probe)
+  return probe
+}
+
+// When an export requests hardware encoding, verify the encoder actually
+// initializes before ffmpeg is spawned with it; otherwise flip the request to
+// the software encoder and report what happened so callers can say so out
+// loud instead of stalling (issue #83: Linux ffmpeg-static has no NVENC, and
+// the MCP export path passes useHardwareEncoder through unchecked). Mutates
+// options — both encode handlers pass options straight through to
+// appendExportVideoEncoderArgs. Returns null when hardware is unused,
+// software-only (ProRes/VP9/alpha), or healthy.
+async function resolveHardwareEncoderDowngrade(options = {}) {
+  if (!options.useHardwareEncoder) return null
+  const isProRes = options.videoCodec === 'prores' || (options.format === 'mov' && options.proresProfile != null)
+  const isVp9 = options.format === 'webm' || options.videoCodec === 'vp9'
+  if (isProRes || isVp9 || options.alpha) return null
+  const isMac = process.platform === 'darwin'
+  const isH265 = options.videoCodec === 'h265'
+  const encoderName = isMac
+    ? (isH265 ? 'hevc_videotoolbox' : 'h264_videotoolbox')
+    : (isH265 ? 'hevc_nvenc' : 'h264_nvenc')
+  const probe = await probeHardwareEncoder(encoderName)
+  if (probe.ok) return null
+  options.useHardwareEncoder = false
+  return {
+    requestedEncoder: encoderName,
+    fallbackEncoder: isH265 ? 'libx265' : 'libx264',
+    reason: probe.error || 'Hardware encoder failed to initialize.',
+  }
+}
+
 ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
   const {
     framePattern,
@@ -6215,6 +6296,11 @@ ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
     return { success: false, error: 'Missing export inputs.' }
   }
 
+  const hardwareFallback = await resolveHardwareEncoderDowngrade(options)
+  if (hardwareFallback) {
+    console.warn(`[Export] ${hardwareFallback.requestedEncoder} unavailable (${hardwareFallback.reason}); using ${hardwareFallback.fallbackEncoder}.`)
+  }
+
   const args = ['-y', '-framerate', String(fps), '-i', framePattern]
   if (audioPath) {
     args.push('-i', audioPath)
@@ -6234,7 +6320,7 @@ ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
   }
 
   args.push(outputPath)
-  console.log(`[Export] Encoding with ${encoderUsed} (${useHardwareEncoder ? 'hardware' : 'software'})`)
+  console.log(`[Export] Encoding with ${encoderUsed} (${options.useHardwareEncoder ? 'hardware' : 'software'})`)
 
   return await new Promise((resolve) => {
     const ffmpeg = spawn(ffmpegPath, args, { windowsHide: true })
@@ -6250,9 +6336,9 @@ ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
 
     ffmpeg.on('close', (code) => {
       if (code === 0) {
-        resolve({ success: true, encoderUsed })
+        resolve({ success: true, encoderUsed, ...(hardwareFallback ? { hardwareFallback } : {}) })
       } else {
-        resolve({ success: false, error: stderr || `FFmpeg exited with code ${code}`, encoderUsed })
+        resolve({ success: false, error: stderr || `FFmpeg exited with code ${code}`, encoderUsed, ...(hardwareFallback ? { hardwareFallback } : {}) })
       }
     })
   })
@@ -6274,6 +6360,11 @@ ipcMain.handle('export:startFramePipe', async (event, options = {}) => {
   }
   if (!width || !height || !outputPath) {
     return { success: false, error: 'Missing frame pipe inputs.' }
+  }
+
+  const hardwareFallback = await resolveHardwareEncoderDowngrade(options)
+  if (hardwareFallback) {
+    console.warn(`[Export] ${hardwareFallback.requestedEncoder} unavailable (${hardwareFallback.reason}); using ${hardwareFallback.fallbackEncoder}.`)
   }
 
   const args = [
@@ -6369,7 +6460,7 @@ ipcMain.handle('export:startFramePipe', async (event, options = {}) => {
   })
 
   console.log(`[Export] Frame pipe started with ${encoderUsed} (${options.useHardwareEncoder ? 'hardware' : 'software'})`)
-  return { success: true, sessionId, encoderUsed }
+  return { success: true, sessionId, encoderUsed, ...(hardwareFallback ? { hardwareFallback } : {}) }
 })
 
 ipcMain.handle('export:writeFrameToPipe', async (event, sessionId, frameBuffer) => {
@@ -6700,7 +6791,11 @@ ipcMain.handle('export:checkNvenc', async () => {
     return { available: false, h264: false, h265: false, gpuName, kind, error: 'FFmpeg binary not available.' }
   }
 
-  return await new Promise((resolve) => {
+  // Two-stage check: the -encoders listing says whether the build contains
+  // the encoder at all (the Linux ffmpeg-static build doesn't), then a real
+  // one-frame probe catches builds where it's listed but can't initialize
+  // (driver/API-version mismatches). Only the probe result is authoritative.
+  const listing = await new Promise((resolve) => {
     const ffmpeg = spawn(ffmpegPath, ['-hide_banner', '-encoders'], { windowsHide: true })
     let output = ''
 
@@ -6712,21 +6807,44 @@ ipcMain.handle('export:checkNvenc', async () => {
     })
 
     ffmpeg.on('error', (err) => {
-      resolve({ available: false, h264: false, h265: false, gpuName, kind, error: err.message })
+      resolve({ h264: false, h265: false, error: err.message })
     })
 
     ffmpeg.on('close', () => {
-      const hasH264 = isMac ? output.includes('h264_videotoolbox') : output.includes('h264_nvenc')
-      const hasH265 = isMac ? output.includes('hevc_videotoolbox') : output.includes('hevc_nvenc')
       resolve({
-        available: hasH264 || hasH265,
-        h264: hasH264,
-        h265: hasH265,
-        gpuName,
-        kind,
+        h264: isMac ? output.includes('h264_videotoolbox') : output.includes('h264_nvenc'),
+        h265: isMac ? output.includes('hevc_videotoolbox') : output.includes('hevc_nvenc'),
+        error: null,
       })
     })
   })
+
+  if (listing.error) {
+    return { available: false, h264: false, h265: false, gpuName, kind, error: listing.error }
+  }
+
+  let h264 = false
+  let h265 = false
+  let probeError = null
+  if (listing.h264) {
+    const probe = await probeHardwareEncoder(isMac ? 'h264_videotoolbox' : 'h264_nvenc')
+    h264 = probe.ok
+    if (!probe.ok) probeError = probe.error
+  }
+  if (listing.h265) {
+    const probe = await probeHardwareEncoder(isMac ? 'hevc_videotoolbox' : 'hevc_nvenc')
+    h265 = probe.ok
+    if (!probe.ok && !probeError) probeError = probe.error
+  }
+
+  return {
+    available: h264 || h265,
+    h264,
+    h265,
+    gpuName,
+    kind,
+    ...(probeError && !h264 && !h265 ? { error: probeError } : {}),
+  }
 })
 
 // ============================================

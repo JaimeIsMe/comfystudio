@@ -1132,6 +1132,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     : outputPath
   let framePipeSessionId = null
   let framePipeEncoderUsed = null
+  let framePipeHardwareFallback = null
   
   onProgress({ status: EXPORT_STATUS.preparing, progress: 2 })
   
@@ -1577,6 +1578,14 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       framePipeSessionId = pipeStart.sessionId
       framePipeEncoderUsed = pipeStart.encoderUsed || null
       console.log(`Export frame pipe started with: ${framePipeEncoderUsed || 'unknown encoder'}`)
+      if (pipeStart.hardwareFallback) {
+        // The hardware encoder failed its runtime probe (missing from this
+        // ffmpeg build, or the driver refused it) — say so instead of
+        // silently exporting with software, and keep it for the result.
+        framePipeHardwareFallback = pipeStart.hardwareFallback
+        console.warn(`[Export] Hardware encoder unavailable (${framePipeHardwareFallback.requestedEncoder}): ${framePipeHardwareFallback.reason} — exporting with ${framePipeHardwareFallback.fallbackEncoder}.`)
+        onProgress({ status: `Hardware encoder unavailable — exporting with ${framePipeHardwareFallback.fallbackEncoder}`, progress: 4 })
+      }
     } else if (pipeStart?.code === 'ffmpeg-missing' || pipeStart?.code === 'spawn-failed') {
       // The PNG fallback needs the same FFmpeg binary for its encode step,
       // so an unstartable FFmpeg would only fail again after rendering
@@ -3590,6 +3599,10 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   return {
     outputPath,
     encoderUsed: encodeResult.encoderUsed || null,
+    // Set when a requested hardware encoder failed its runtime probe and the
+    // export fell back to software ({requestedEncoder, fallbackEncoder,
+    // reason}); surfaced in the worker-complete log and MCP export results.
+    hardwareFallback: framePipeHardwareFallback || encodeResult.hardwareFallback || null,
     // Surfaced in the main window's '[ExportPanel] Worker export complete'
     // log — the export runs in a hidden worker window whose own console
     // isn't visible in normal devtools captures.
