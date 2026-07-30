@@ -1433,7 +1433,7 @@ function PreviewPanel() {
   // playbackStatsRef on every committed frame; this side samples them on an
   // interval and writes straight to the badge DOM node — a React state update
   // per frame would cost the fps it is trying to measure.
-  const playbackStatsRef = useRef({ commits: 0, presented: 0, lastFrameIndex: -1 })
+  const playbackStatsRef = useRef({ commits: 0, presented: 0, drawMs: 0, lastFrameIndex: -1 })
   const fpsBadgeRef = useRef(null)
   const fpsSessionRef = useRef({ expected: 0, basePresented: 0, skipped: 0 })
   useEffect(() => {
@@ -1443,7 +1443,7 @@ function PreviewPanel() {
     if (isPlaying) {
       fpsSessionRef.current = { expected: 0, basePresented: stats.presented, skipped: 0 }
     }
-    let prev = { presented: stats.presented, video: null, t: performance.now() }
+    let prev = { presented: stats.presented, commits: stats.commits, drawMs: Number(stats.drawMs) || 0, video: null, t: performance.now() }
     const tick = () => {
       const el = fpsBadgeRef.current
       if (!el) return
@@ -1480,7 +1480,14 @@ function PreviewPanel() {
           session.skipped = Math.max(0, Math.round(session.expected - (stats.presented - session.basePresented)))
         }
       }
+      // Average compositor cost per committed frame this interval; the gap
+      // between this and the frame interval is time spent outside drawFrame.
+      const commitsDelta = stats.commits - prev.commits
+      const drawDelta = (Number(stats.drawMs) || 0) - (Number(prev.drawMs) || 0)
+      const drawAvgMs = commitsDelta > 0 ? Math.max(0, drawDelta) / commitsDelta : null
       prev.presented = stats.presented
+      prev.commits = stats.commits
+      prev.drawMs = Number(stats.drawMs) || 0
       prev.t = now
       // The badge shows only fps; the skipped count lives here in the
       // tooltip so diagnosis stays possible without a number on screen
@@ -1492,7 +1499,9 @@ function PreviewPanel() {
         el.textContent = '— fps'
         el.style.color = 'rgba(255,255,255,0.35)'
       } else if (measuredFps != null) {
-        el.textContent = `${measuredFps.toFixed(1)} fps`
+        el.textContent = drawAvgMs != null
+          ? `${measuredFps.toFixed(1)} fps · ${drawAvgMs.toFixed(0)}ms draw`
+          : `${measuredFps.toFixed(1)} fps`
         el.style.color = measuredFps >= targetFps * 0.97
           ? '#4ade80'
           : (measuredFps >= targetFps * 0.8 ? '#fbbf24' : '#f87171')

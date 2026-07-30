@@ -1281,6 +1281,7 @@ function CanvasPreviewRenderer({
   const drawFrame = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) return
+    const drawStartMs = getNowMs()
     const state = {
       ...latestRef.current,
       ...useTimelineStore.getState(),
@@ -1499,6 +1500,8 @@ function CanvasPreviewRenderer({
     const playbackStats = playbackStatsRef?.current
     if (playbackStats) {
       playbackStats.commits += 1
+      // (|| 0) heals a stats object born before drawMs existed (HMR keeps refs).
+      playbackStats.drawMs = (playbackStats.drawMs || 0) + (getNowMs() - drawStartMs)
       const frameIndex = Math.floor(time * fps + 0.000001)
       if (frameIndex !== playbackStats.lastFrameIndex) {
         playbackStats.lastFrameIndex = frameIndex

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, memo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import {
   Volume2, VolumeX, Lock, Unlock, Link, Unlink, Eye, EyeOff,
   Plus, Video, Type, Image as ImageIcon,
@@ -495,6 +496,40 @@ function AudioWaveformBars({ clip, clipWidth, clipUrl, waveformInput = null, ste
   )
 }
 
+// Timeline subscribes to every store field it renders EXCEPT playheadPosition:
+// that field changes every animation frame during playback and scrubbing, and
+// re-rendering the full clip area per tick is the difference between ~17 and
+// ~24 fps on a 160-clip timeline. The playhead line updates imperatively via
+// a direct store subscription; handlers read the live value from getState().
+const TIMELINE_STORE_KEYS = [
+  'duration', 'zoom', 'tracks', 'clips', 'transitions', 'selectedClipIds',
+  'selectedTransitionId', 'selectedGap', 'activeTrackId',
+  'showTimelineClipThumbnails', 'setActiveTrack', 'snappingEnabled',
+  'activeSnapTime', 'rippleEditMode', 'inPoint', 'outPoint',
+  'rangeRenderState', 'markers', 'selectedMarkerId', 'addClip', 'addTextClip',
+  'addShapeClip', 'removeClip', 'removeSelectedClips', 'rippleDeleteClipIds',
+  'rippleDeleteSelectedClips', 'rippleDeleteSelectedGap', 'moveClip',
+  'moveSelectedClips', 'setSelectedClipsStartTimes', 'setSelectedClipPositions',
+  'resizeClip', 'updateClipTrim', 'updateAudioClipProperties', 'selectClip',
+  'selectClips', 'clearSelection', 'setPlayheadPosition', 'setZoom',
+  'toggleTrackMute', 'toggleTrackLock', 'toggleTrackVisibility',
+  'setClipsEnabled', 'setClipLabelColor', 'addTrack', 'addTransition',
+  'removeTransition', 'updateTransition', 'selectTransition',
+  'getMaxTransitionDuration', 'addMaskEffect', 'addEffect', 'toggleSnapping',
+  'toggleRippleEdit', 'setActiveSnapTime', 'clearActiveSnap', 'removeTrack',
+  'renameTrack', 'reorderTrack', 'undo', 'redo', 'canUndo', 'canRedo',
+  'saveToHistory', 'clearClipCache', 'requestMaskPicker', 'requestTextEdit',
+  'copySelectedClips', 'pasteClipsAtPlayhead', 'copiedClips',
+  'getLinkedClipIds', 'linkSelectedClips', 'unlinkSelectedClips',
+  'lockSyncClips', 'unlockSyncLockedClips', 'addMarker', 'removeMarker',
+  'selectMarker', 'selectGap', 'addAdjustmentClip',
+]
+const pickTimelineStoreSlice = (state) => {
+  const slice = {}
+  for (const key of TIMELINE_STORE_KEYS) slice[key] = state[key]
+  return slice
+}
+
 // Ruler ticks live in their own memoized component: at frame-level zoom a
 // long timeline emits thousands of tick elements, and re-reconciling them on
 // every playhead tick during playback dwarfs the rest of the ruler. Props
@@ -530,6 +565,7 @@ const RulerTickMarks = memo(function RulerTickMarks({ major, minor, pixelsPerSec
 
 function Timeline({ onActiveToolChange, onStatusChange }) {
   const timelineRef = useRef(null)
+  const playheadElRef = useRef(null)
   const trackHeadersRef = useRef(null)
   const trackContentRef = useRef(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -806,7 +842,6 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   const {
     duration,
     zoom,
-    playheadPosition,
     tracks,
     clips,
     transitions,
@@ -885,7 +920,11 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     selectMarker,
     selectGap,
     addAdjustmentClip,
-  } = useTimelineStore()
+  } = useTimelineStore(useShallow(pickTimelineStoreSlice))
+
+  // Deliberately not subscribed (see TIMELINE_STORE_KEYS): read the playhead
+  // live wherever a handler or render-time expression needs the current value.
+  const getLivePlayhead = () => useTimelineStore.getState().playheadPosition
 
   // Clip/gap/selection readout for the status corner — moved out of the
   // toolbar, where it was occupying button real estate on narrow widths.
@@ -932,17 +971,17 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     const targetTrack = preferredVideoTrack
     if (!targetTrack) return null
 
-    const newClip = addTextClip(targetTrack.id, options, playheadPosition)
+    const newClip = addTextClip(targetTrack.id, options, getLivePlayhead())
     if (newClip) {
       requestTextEdit(newClip.id, { selectAll: true })
     }
     return newClip
-  }, [preferredVideoTrack, addTextClip, playheadPosition, requestTextEdit])
+  }, [preferredVideoTrack, addTextClip, requestTextEdit])
   const addShapeClipAtPlayhead = useCallback((options = {}) => {
     const targetTrack = preferredVideoTrack
     if (!targetTrack) return null
-    return addShapeClip(targetTrack.id, options, playheadPosition)
-  }, [preferredVideoTrack, addShapeClip, playheadPosition])
+    return addShapeClip(targetTrack.id, options, getLivePlayhead())
+  }, [preferredVideoTrack, addShapeClip])
   const handleUndoAction = useCallback(() => {
     if (projectCanUndo && (!canUndo() || projectHistoryLastChangedAt > timelineHistoryLastChangedAt)) {
       return undoTimelineStructureChange()
@@ -1219,12 +1258,15 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   )
   const activeTrackClipAtPlayhead = useMemo(() => {
     if (!activeTrackId) return null
+    const playheadPosition = getLivePlayhead()
     return clips.find(
       (clip) => clip.trackId === activeTrackId
         && playheadPosition > clip.startTime
         && playheadPosition < clip.startTime + clip.duration
     ) || null
-  }, [activeTrackId, clips, playheadPosition])
+    // getLivePlayhead is intentionally unreactive: this value feeds toolbar
+    // enablement, which any interaction re-render refreshes soon enough.
+  }, [activeTrackId, clips])
   const canDeleteCurrentSelection = selectedClipIds.length > 0
     || Boolean(selectedGap)
     || Boolean(selectedTransitionId)
@@ -1392,9 +1434,9 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   const [timelineCaptionWorkspaceAsset, setTimelineCaptionWorkspaceAsset] = useState(null)
   const handlePasteAtPlayhead = useCallback(() => {
     if (!activeTrackId || copiedClips.length === 0) return false
-    pasteClipsAtPlayhead(activeTrackId, playheadPosition, assets)
+    pasteClipsAtPlayhead(activeTrackId, getLivePlayhead(), assets)
     return true
-  }, [activeTrackId, assets, copiedClips, pasteClipsAtPlayhead, playheadPosition])
+  }, [activeTrackId, assets, copiedClips, pasteClipsAtPlayhead])
   const assetsById = useMemo(() => {
     const map = new Map()
     assets.forEach((asset) => {
@@ -1547,7 +1589,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     const fallbackVideoTrack = tracks.find(t => t.type === 'video' && !t.locked)
     const targetTrack = activeVideoTrack || fallbackVideoTrack
     if (!targetTrack) return
-    addAdjustmentClip(targetTrack.id, playheadPosition, { duration: 5 })
+    addAdjustmentClip(targetTrack.id, getLivePlayhead(), { duration: 5 })
   }
 
   // Compute program duration (end of latest clip on any enabled track).
@@ -1574,6 +1616,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     // background when nothing video is under the playhead.
     let bgVideoUrl = null
     let bgVideoTime = null
+    const playheadPosition = getLivePlayhead()
     for (const track of tracks.filter((t) => t.type === 'video' && t.enabled !== false)) {
       const clip = clips.find((c) => (
         c.trackId === track.id
@@ -1787,6 +1830,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
       setZoom(clamped)
       return
     }
+    const playheadPosition = getLivePlayhead()
     const scrollLeft = timelineRef.current.scrollLeft
     const playheadViewportX = playheadPosition * pixelsPerSecond - scrollLeft
     setZoom(clamped)
@@ -1798,7 +1842,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         el.scrollLeft = Math.max(0, Math.min(newScrollLeft, el.scrollWidth - el.clientWidth))
       }
     })
-  }, [getMinZoom, pixelsPerSecond, playheadPosition, setZoom, zoom])
+  }, [getMinZoom, pixelsPerSecond, setZoom, zoom])
 
   // Frame all: fit full timeline or all clips in view
   const handleFrameAll = () => {
@@ -2281,22 +2325,24 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   }, [marqueeState, clips, tracks, videoTracks, audioTracks, pixelsPerSecond, selectedClipIds, getTimelinePointerPosition])
 
   const selectClipsFromPlayheadToEnd = useCallback(() => {
+    const playheadPosition = getLivePlayhead()
     const clipsToSelect = clips
       .filter(c => (c.startTime + c.duration) > playheadPosition)
       .map(c => c.id)
 
     useTimelineStore.getState().selectClips(clipsToSelect)
     selectMarker(null)
-  }, [clips, playheadPosition, selectMarker])
+  }, [clips, selectMarker])
 
   const selectClipsFromTimelineStartToPlayhead = useCallback(() => {
+    const playheadPosition = getLivePlayhead()
     const clipsToSelect = clips
       .filter(c => c.startTime <= playheadPosition)
       .map(c => c.id)
 
     useTimelineStore.getState().selectClips(clipsToSelect)
     selectMarker(null)
-  }, [clips, playheadPosition, selectMarker])
+  }, [clips, selectMarker])
 
   const closeMoveOffsetDialog = useCallback(() => {
     setMoveOffsetDialogOpen(false)
@@ -2583,6 +2629,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   }, [assets, saveToHistory, resizeClip, addTextClip, addShapeClip, addAdjustmentClip, addClip, timelineFps, isClipEnabled])
 
   const splitAllTracksAtPlayhead = useCallback(() => {
+    const playheadPosition = getLivePlayhead()
     const clipsToSplit = clips.filter(
       c => playheadPosition > c.startTime && playheadPosition < c.startTime + c.duration
     )
@@ -2603,13 +2650,13 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
       useTimelineStore.getState().selectClips(newClipIds)
       selectMarker(null)
     }
-  }, [clips, playheadPosition, saveToHistory, splitClipAtTime, selectMarker])
+  }, [clips, saveToHistory, splitClipAtTime, selectMarker])
 
   const handleSplitClipAtPlayhead = useCallback((clip) => {
     if (!clip) return false
-    splitClipAtTime(clip, playheadPosition, { saveHistory: true })
+    splitClipAtTime(clip, getLivePlayhead(), { saveHistory: true })
     return true
-  }, [playheadPosition, splitClipAtTime])
+  }, [splitClipAtTime])
 
   const handleSplitActiveTrackAtPlayhead = useCallback(() => (
     handleSplitClipAtPlayhead(activeTrackClipAtPlayhead)
@@ -2642,6 +2689,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     const epsilon = 0.0001
     let targetTime = null
 
+    const playheadPosition = getLivePlayhead()
     if (direction > 0) {
       targetTime = visibleClipBoundaryTimes.find((time) => time > playheadPosition + epsilon) ?? null
     } else {
@@ -2657,7 +2705,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     setPlayheadPosition(targetTime, { snap: true })
     ensureTimelineTimeVisible(targetTime)
     return true
-  }, [ensureTimelineTimeVisible, playheadPosition, setPlayheadPosition, visibleClipBoundaryTimes])
+  }, [ensureTimelineTimeVisible, setPlayheadPosition, visibleClipBoundaryTimes])
 
   const jumpPlayheadToMarker = useCallback((direction) => {
     if (!Number.isFinite(direction) || direction === 0 || markerNavigationTargets.length === 0) return false
@@ -2665,6 +2713,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     const epsilon = 0.0001
     let targetMarker = null
 
+    const playheadPosition = getLivePlayhead()
     if (direction > 0) {
       targetMarker = markerNavigationTargets.find((marker) => marker.time > playheadPosition + epsilon) ?? null
     } else {
@@ -2681,7 +2730,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     ensureTimelineTimeVisible(targetMarker.time)
     selectMarker(targetMarker.id)
     return true
-  }, [ensureTimelineTimeVisible, markerNavigationTargets, playheadPosition, selectMarker, setPlayheadPosition])
+  }, [ensureTimelineTimeVisible, markerNavigationTargets, selectMarker, setPlayheadPosition])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -2827,7 +2876,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
 
       if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.ADD_MARKER])) {
         e.preventDefault()
-        addMarker(playheadPosition)
+        addMarker(getLivePlayhead())
         return
       }
 
@@ -2922,7 +2971,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedGap, selectedTransitionId, selectedMarkerId, removeSelectedClips, rippleDeleteSelectedClips, rippleDeleteSelectedGap, removeTransition, removeMarker, clearSelection, selectMarker, clips, handleUndoAction, handleRedoAction, activeTrackId, playheadPosition, saveToHistory, resizeClip, addClip, addTextClip, addShapeClip, addTextClipAtPlayhead, addShapeClipAtPlayhead, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips, selectClipsFromPlayheadToEnd, selectClipsFromTimelineStartToPlayhead, splitClipAtTime, splitAllTracksAtPlayhead, openMoveOffsetDialog, openDurationDeltaDialog, moveOffsetDialogOpen, durationDeltaDialogOpen, editorHotkeys, linkSelectedClips, unlinkSelectedClips, lockSyncClips, unlockSyncLockedClips, toggleClipSelectionEnabled, applyZoomWithPlayheadPivot, zoom, rippleEditMode, activeTrackClipAtPlayhead, canDeleteCurrentSelection, handleCopySelection, handleDeleteCurrentSelection, handlePasteAtPlayhead, handleSplitActiveTrackAtPlayhead, jumpPlayheadToClipBoundary, jumpPlayheadToMarker, clipContextSyncEligibleClips, clipContextSyncLockByClipId, clipContextAllSyncLocked])
+  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedGap, selectedTransitionId, selectedMarkerId, removeSelectedClips, rippleDeleteSelectedClips, rippleDeleteSelectedGap, removeTransition, removeMarker, clearSelection, selectMarker, clips, handleUndoAction, handleRedoAction, activeTrackId, saveToHistory, resizeClip, addClip, addTextClip, addShapeClip, addTextClipAtPlayhead, addShapeClipAtPlayhead, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips, selectClipsFromPlayheadToEnd, selectClipsFromTimelineStartToPlayhead, splitClipAtTime, splitAllTracksAtPlayhead, openMoveOffsetDialog, openDurationDeltaDialog, moveOffsetDialogOpen, durationDeltaDialogOpen, editorHotkeys, linkSelectedClips, unlinkSelectedClips, lockSyncClips, unlockSyncLockedClips, toggleClipSelectionEnabled, applyZoomWithPlayheadPivot, zoom, rippleEditMode, activeTrackClipAtPlayhead, canDeleteCurrentSelection, handleCopySelection, handleDeleteCurrentSelection, handlePasteAtPlayhead, handleSplitActiveTrackAtPlayhead, jumpPlayheadToClipBoundary, jumpPlayheadToMarker, clipContextSyncEligibleClips, clipContextSyncLockByClipId, clipContextAllSyncLocked])
 
   // Spacebar panning key state (dedicated listeners so keyup cannot get "stuck")
   useEffect(() => {
@@ -3111,11 +3160,25 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     }
   }, [handleWheel])
 
+  // Per-tick playhead updates bypass React entirely: a direct store
+  // subscription moves the playhead element and keeps it in view. This (plus
+  // the omission of playheadPosition from the store slice) is what keeps the
+  // clip area from re-rendering 24+ times a second during playback.
   useEffect(() => {
-    if (!timelineRef.current || !timelineIsPlaying) return
-
-    ensureTimelineTimeVisible(playheadPosition)
-  }, [ensureTimelineTimeVisible, playheadPosition, timelineIsPlaying])
+    const applyPlayheadLeft = (position) => {
+      const node = playheadElRef.current
+      if (node) node.style.left = `${position * pixelsPerSecond}px`
+    }
+    applyPlayheadLeft(useTimelineStore.getState().playheadPosition)
+    const unsubscribe = useTimelineStore.subscribe((state, prevState) => {
+      if (state.playheadPosition === prevState.playheadPosition) return
+      applyPlayheadLeft(state.playheadPosition)
+      if (state.isPlaying && timelineRef.current) {
+        ensureTimelineTimeVisible(state.playheadPosition)
+      }
+    })
+    return unsubscribe
+  }, [ensureTimelineTimeVisible, pixelsPerSecond])
 
   const getDraggedAssetIds = (dataTransfer) => {
     if (Array.isArray(draggedAssetIds) && draggedAssetIds.length > 0) return draggedAssetIds
@@ -4825,7 +4888,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
 
           <div className={toolbarSectionClass} aria-label="Insert timeline items">
             <button
-              onClick={() => addMarker(playheadPosition)}
+              onClick={() => addMarker(getLivePlayhead())}
               className={toolbarButtonClass}
               title={`Add timeline marker at playhead (${markerHotkeyLabel})`}
             >
@@ -6886,10 +6949,12 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
             </div>
           )}
           
-          {/* Playhead */}
+          {/* Playhead — positioned imperatively by the store subscription
+              above; the render-time left only covers the first paint. */}
           <div
+            ref={playheadElRef}
             className={`absolute top-0 bottom-0 z-10 ${isScrubbing ? 'pointer-events-none' : ''}`}
-            style={{ left: `${playheadPosition * pixelsPerSecond}px`, width: '2px' }}
+            style={{ left: `${getLivePlayhead() * pixelsPerSecond}px`, width: '2px' }}
           >
             <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-orange-400 shadow-[0_0_12px_rgba(251,146,60,0.45)]" />
             {/* Playhead handle (draggable) */}
@@ -7291,7 +7356,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
             <span className="ml-auto text-sf-text-muted text-[10px]">Ctrl+C</span>
           </button>
           <button
-            onClick={() => { pasteClipsAtPlayhead(activeTrackId, playheadPosition, assets); setClipContextMenu(null) }}
+            onClick={() => { pasteClipsAtPlayhead(activeTrackId, getLivePlayhead(), assets); setClipContextMenu(null) }}
             disabled={!activeTrackId || copiedClips.length === 0}
             className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             title="Paste at playhead on active track"
