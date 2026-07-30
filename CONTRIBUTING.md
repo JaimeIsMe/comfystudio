@@ -8,6 +8,16 @@ Thanks for contributing.
 - Review `RELEASE_CHECKLIST.md` if your change affects packaging, workflows, docs, or release behavior.
 - Keep changes focused. Small, reviewable pull requests are preferred over large mixed changes.
 
+## Proposing Changes
+
+Velorn currently has one maintainer, so coordination happens before code, not after:
+
+- Non-trivial changes start as an issue. Describe the user problem and, if you have one, your proposed approach — then wait for a maintainer go-ahead before writing code.
+- One pull request per agreed issue, scoped to what was agreed. Follow-up ideas go in new issues, not into the open PR.
+- Review latency is days, not hours. Please don't stack additional PRs while one of yours is open.
+- Unsolicited pull requests may be closed without full review.
+- Typo fixes and small documentation corrections are welcome without an issue.
+
 ## Development Setup
 
 ```bash
