@@ -114,6 +114,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Export worker (run export in separate window so main UI stays responsive)
   runExportInWorker: (payload) => ipcRenderer.invoke('export:runInWorker', payload),
+  cancelExport: () => ipcRenderer.invoke('export:cancel'),
+  onExportCancel: (cb) => {
+    ipcRenderer.on('export:cancel-job', () => cb())
+  },
   onExportProgress: (cb) => {
     ipcRenderer.on('export:progress', (_, data) => cb(data))
   },

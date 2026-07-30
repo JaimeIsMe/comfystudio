@@ -50,8 +50,13 @@ export default function ExportWorker() {
         }))
 
         console.log('[ExportWorker] Starting exportTimeline', { outputPath, width: options?.width, height: options?.height, fps: options?.fps })
+        const abortController = new AbortController()
+        window.electronAPI.onExportCancel?.(() => {
+          console.log('[ExportWorker] Cancel requested; aborting export')
+          abortController.abort()
+        })
         const result = await exportTimeline(
-          { ...options, outputPath },
+          { ...options, outputPath, signal: abortController.signal },
           (progress) => {
             if (progress?.progress % 20 < 5) console.log('[ExportWorker] Progress', progress?.progress, progress?.status)
             window.electronAPI.sendExportProgress?.(progress)

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Download, Plus, Trash2, Play, Settings, Film, Clock, RotateCcw } from 'lucide-react'
+import { Download, Plus, Trash2, Play, Settings, Film, Clock, RotateCcw, Square } from 'lucide-react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../stores/projectStore'
 import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
@@ -45,7 +45,6 @@ const XML_EXPORT_FORMATS = [
 const RANGE_PRESETS = [
   { id: 'full', label: 'Full Timeline' },
   { id: 'inout', label: 'In/Out Range' },
-  { id: 'selection', label: 'Selection' },
 ]
 
 const VIDEO_CODECS = {
@@ -292,6 +291,11 @@ function loadSavedExportSettings(storageKey, defaultSettings) {
       format: EXPORT_FORMATS.some((format) => format.id === saved.format && !format.disabled)
         ? saved.format
         : defaultSettings.format,
+      // Retired options (e.g. the old "selection" range) fall back to the
+      // default instead of leaving the dropdown on a value it no longer has.
+      range: RANGE_PRESETS.some((preset) => preset.id === saved.range)
+        ? saved.range
+        : defaultSettings.range,
       renderMode: 'single',
       useCachedRenders: false,
       fastSeek: false,
@@ -332,7 +336,7 @@ function ExportPanel() {
     currentTimelineId,
     getCurrentTimelineSettings,
   } = useProjectStore()
-  const { duration, inPoint, outPoint, getTimelineEndTime, selectedClipIds, clips, transitions, tracks } = useTimelineStore()
+  const { duration, inPoint, outPoint, getTimelineEndTime, clips, transitions, tracks } = useTimelineStore()
   const { assets } = useAssetsStore()
   
   const projectName = currentProject?.name || 'Untitled'
@@ -485,6 +489,13 @@ function ExportPanel() {
     }
     const onError = (err) => {
       const msg = typeof err === 'string' ? err : (err?.message ?? (err && typeof err === 'object' && err.constructor?.name === 'Event' ? `Export error (${err.type})` : String(err)))
+      if (/cancelled/i.test(String(msg))) {
+        console.log('[ExportPanel] Export stopped by user')
+        setExportError(null)
+        setExportStatus('Export stopped')
+        setIsExporting(false)
+        return
+      }
       console.error('[ExportPanel] Worker export error', err, '-> displayed:', msg)
       setExportError(msg || 'Export failed')
       setExportStatus('Export failed')
@@ -495,12 +506,20 @@ function ExportPanel() {
     window.electronAPI.onExportError(onError)
   }, [])
 
+  // Abort handle for exports running directly in this window (web build);
+  // worker exports are cancelled through the main process instead.
+  const exportAbortRef = useRef(null)
+  const handleStopExport = async () => {
+    setExportStatus('Stopping export...')
+    exportAbortRef.current?.abort()
+    try {
+      await window.electronAPI?.cancelExport?.()
+    } catch { /* worker already finished or gone */ }
+  }
+
   const timelineRangeLabel = useMemo(() => {
     if (settings.range === 'inout' && inPoint !== null && outPoint !== null) {
       return `${Math.max(0, inPoint).toFixed(2)}s → ${Math.max(inPoint, outPoint).toFixed(2)}s`
-    }
-    if (settings.range === 'selection') {
-      return 'Current selection'
     }
     return `0s → ${duration.toFixed(2)}s`
   }, [settings.range, inPoint, outPoint, duration])
@@ -785,12 +804,6 @@ function ExportPanel() {
     if (settings.range === 'inout' && inPoint !== null && outPoint !== null) {
       return { start: Math.min(inPoint, outPoint), end: Math.max(inPoint, outPoint) }
     }
-    if (settings.range === 'selection' && selectedClipIds.length > 0) {
-      const selected = clips.filter(c => selectedClipIds.includes(c.id))
-      const start = Math.min(...selected.map(c => c.startTime))
-      const end = Math.max(...selected.map(c => c.startTime + c.duration))
-      return { start, end }
-    }
     return { start: 0, end: getTimelineEndTime() }
   }
 
@@ -971,7 +984,22 @@ function ExportPanel() {
       }
     }
 
-    const result = await exportTimeline(options, (progress) => {
+    if (window.electronAPI) {
+      // The desktop build must never fall back to exporting inside the UI
+      // window: it bypasses the worker's crash reporting and memory
+      // headroom, and a renderer OOM there takes the whole app down.
+      setExportStatus('Export failed')
+      setIsExporting(false)
+      throw new Error(
+        window.electronAPI.runExportInWorker
+          ? 'Export worker unavailable: the project location is not a local folder path. Re-open the project from disk and try again.'
+          : 'Export worker unavailable. Restart Velorn and try again.'
+      )
+    }
+
+    const directAbortController = new AbortController()
+    exportAbortRef.current = directAbortController
+    const result = await exportTimeline({ ...options, signal: directAbortController.signal }, (progress) => {
       setExportStatus(labelOverride ? `${labelOverride} • ${progress.status || ''}`.trim() : (progress.status || ''))
       if (typeof progress.progress === 'number') {
         setExportProgress(progress.progress)
@@ -1687,6 +1715,15 @@ function ExportPanel() {
               <Play className="w-3 h-3" />
               {isExporting ? 'Exporting...' : (queueRunning ? 'Queue Running' : 'Start Export')}
             </button>
+            {isExporting && (
+              <button
+                onClick={handleStopExport}
+                className="px-3 py-1.5 text-xs rounded border border-red-500/60 text-red-400 hover:bg-red-500/10 transition-colors flex items-center gap-1.5"
+              >
+                <Square className="w-3 h-3" />
+                Stop
+              </button>
+            )}
             <div className="flex items-center">
               <select
                 value={xmlExportFormat}

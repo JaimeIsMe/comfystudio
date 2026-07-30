@@ -134,6 +134,30 @@ function getFfmpegUnavailableError() {
   return null
 }
 
+// Session-log helper shared by the export-worker and main-window mirrors:
+// runs append across sessions, the file is trimmed to a cap on session
+// start, and the trim stays aligned to a session header so the file always
+// begins at a run boundary. Returns false when the header cannot be
+// written so callers can fall back or warn.
+const CAPPED_LOG_MAX_BYTES = 2 * 1024 * 1024
+function beginCappedLogSession(logPath, marker) {
+  try {
+    try {
+      const stat = fsSync.statSync(logPath)
+      if (stat.size > CAPPED_LOG_MAX_BYTES) {
+        const existing = fsSync.readFileSync(logPath, 'utf8')
+        const keepBytes = Math.floor(CAPPED_LOG_MAX_BYTES / 2)
+        const keepFrom = existing.indexOf(marker, existing.length - keepBytes)
+        fsSync.writeFileSync(logPath, keepFrom > 0 ? existing.slice(keepFrom) : existing.slice(-keepBytes))
+      }
+    } catch { /* first run or unreadable log — the append below creates it */ }
+    fsSync.appendFileSync(logPath, `${marker} ${new Date().toISOString()}\n`)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function parseFpsRatio(value) {
   if (!value || value === '0/0') return null
   const [num, den] = String(value).split('/').map(Number)
@@ -3367,6 +3391,28 @@ async function createWindow(restoredWindowState = null) {
     }
   })
 
+  // Mirror the main window's console and crash events to userData/app.log
+  // (same append+cap pattern as export-worker.log). Failures before the
+  // export worker spawns — project open, export click, job assembly — are
+  // otherwise invisible in support logs.
+  const appLogPath = path.join(app.getPath('userData'), 'app.log')
+  if (beginCappedLogSession(appLogPath, '--- app session started')) {
+    const appLog = (line) => {
+      try { fsSync.appendFileSync(appLogPath, `${line}\n`) } catch { /* ignore */ }
+    }
+    mainWindow.webContents.on('console-message', (_event, level, message, lineNo, sourceId) => {
+      appLog(`[${new Date().toISOString().slice(11, 19)}] [${level}] ${message} (${String(sourceId).split('/').pop()}:${lineNo})`)
+    })
+    mainWindow.webContents.on('render-process-gone', (_event, details) => {
+      appLog(`!!! MAIN WINDOW RENDER PROCESS GONE: ${JSON.stringify(details)}`)
+    })
+    mainWindow.on('unresponsive', () => {
+      appLog('!!! MAIN WINDOW UNRESPONSIVE')
+    })
+  } else {
+    console.error(`[Velorn] Could not write ${appLogPath}; main-window console mirroring disabled for this session.`)
+  }
+
   // Start maximized rather than true fullscreen. Maximized uses the full
   // work area (entire screen minus the OS taskbar/dock) so the user still
   // has access to their taskbar, tray, notifications, and Alt-Tab without
@@ -5352,26 +5398,34 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
   // The export worker is a hidden window, so its console is invisible in
   // normal use. Mirror it to userData/export-worker.log so export failures
   // are diagnosable from disk — including renderer crashes, which otherwise
-  // present as a silently frozen progress line. Runs append (support needs
-  // the perf lines from the last several exports, not only the most
-  // recent); the file is trimmed to a size cap on worker start, kept
-  // aligned to a session header so it always begins at a run boundary.
-  const workerLogPath = path.join(app.getPath('userData'), 'export-worker.log')
-  const WORKER_LOG_MAX_BYTES = 2 * 1024 * 1024
-  try {
-    try {
-      const stat = fsSync.statSync(workerLogPath)
-      if (stat.size > WORKER_LOG_MAX_BYTES) {
-        const existing = fsSync.readFileSync(workerLogPath, 'utf8')
-        const keepBytes = Math.floor(WORKER_LOG_MAX_BYTES / 2)
-        const keepFrom = existing.indexOf('--- export worker started', existing.length - keepBytes)
-        fsSync.writeFileSync(workerLogPath, keepFrom > 0 ? existing.slice(keepFrom) : existing.slice(-keepBytes))
-      }
-    } catch { /* first run or unreadable log — appendFileSync creates it */ }
-    fsSync.appendFileSync(workerLogPath, `--- export worker started ${new Date().toISOString()}\n`)
-  } catch { /* logging must never block exporting */ }
+  // present as a silently frozen progress line. If the primary log cannot
+  // be written (locked file, blocked folder), logging falls back to the
+  // temp directory and says so, instead of failing silently while crash
+  // messages point at a log that never updates.
+  const workerLogPrimaryPath = path.join(app.getPath('userData'), 'export-worker.log')
+  const workerLogFallbackPath = path.join(app.getPath('temp'), 'velorn-export-worker.log')
+  let workerLogActivePath = workerLogPrimaryPath
+  let workerLogWarned = false
+  const noteWorkerLogFailure = (err) => {
+    if (workerLogWarned) return
+    workerLogWarned = true
+    console.error(`[Export] Could not write ${workerLogPrimaryPath} (${err?.message || err}); using ${workerLogFallbackPath} instead.`)
+  }
+  if (!beginCappedLogSession(workerLogActivePath, '--- export worker started')) {
+    noteWorkerLogFailure(new Error('session header write failed'))
+    workerLogActivePath = workerLogFallbackPath
+    beginCappedLogSession(workerLogActivePath, '--- export worker started')
+  }
   const workerLog = (line) => {
-    try { fsSync.appendFileSync(workerLogPath, `${line}\n`) } catch { /* ignore */ }
+    try {
+      fsSync.appendFileSync(workerLogActivePath, `${line}\n`)
+    } catch (err) {
+      if (workerLogActivePath === workerLogPrimaryPath) {
+        noteWorkerLogFailure(err)
+        workerLogActivePath = workerLogFallbackPath
+        try { fsSync.appendFileSync(workerLogActivePath, `${line}\n`) } catch { /* ignore */ }
+      }
+    }
   }
   workerContents.on('console-message', (_event, level, message, lineNo, sourceId) => {
     workerLog(`[${new Date().toISOString().slice(11, 19)}] [${level}] ${message} (${String(sourceId).split('/').pop()}:${lineNo})`)
@@ -5384,7 +5438,7 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(
         'export:error',
-        `Export process crashed (${details?.reason || 'unknown'}, code ${details?.exitCode ?? '?'}). Details in export-worker.log.`
+        `Export process crashed (${details?.reason || 'unknown'}, code ${details?.exitCode ?? '?'}). Details in ${workerLogActivePath}.`
       )
     }
     if (exportWorkerWindow && !exportWorkerWindow.isDestroyed()) {
@@ -5528,6 +5582,21 @@ const buildAudioFadeVolumeExpression = (clipDuration, fadeIn, fadeOut, clipOffse
   }
   return `${formatFilterNumber(baseGain)}*(${fadeExpr})`
 }
+
+// Ask the running export worker to cancel its job. The worker aborts its
+// export signal and reports "Export cancelled" through the normal error
+// path; if the worker is already gone this is a no-op.
+ipcMain.handle('export:cancel', async () => {
+  if (!exportWorkerWindow || exportWorkerWindow.isDestroyed()) {
+    return { success: true, cancelled: false }
+  }
+  try {
+    exportWorkerWindow.webContents.send('export:cancel-job')
+    return { success: true, cancelled: true }
+  } catch (err) {
+    return { success: false, error: err?.message || String(err) }
+  }
+})
 
 ipcMain.handle('export:mixAudio', async (event, options = {}) => {
   const mixFfmpegUnavailable = getFfmpegUnavailableError()
