@@ -1150,6 +1150,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   
   const videoElements = new Map()
   const failedVideoSources = new Set()
+  const failedVideoSourceNames = new Map()
   const imageElements = new Map()
   const maskElements = new Map()
   const maskRenderBuffers = new Map()
@@ -1251,13 +1252,39 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
           videoElements.set(sourceUrl, video)
         } catch (err) {
           failedVideoSources.add(sourceUrl)
-          console.warn('[Export] Skipping undecodable video source:', sourceUrl, getMediaErrorMessage(err))
+          failedVideoSourceNames.set(sourceUrl, {
+            name: asset?.name || sourceUrl,
+            reason: getMediaErrorMessage(err),
+          })
+          console.warn('[Export] Undecodable video source:', sourceUrl, getMediaErrorMessage(err))
         }
       }
     } else if (clip.type === 'image') {
       if (!imageElements.has(resolvedUrl)) {
         imageElements.set(resolvedUrl, await loadImage(resolvedUrl))
       }
+    }
+  }
+
+  // Fail loudly on sources whose containers open but whose video cannot be
+  // decoded by the renderer (ProRes, DNx, ...) — their clips would silently
+  // render black through the whole export while the audio mix still works.
+  if (failedVideoSourceNames.size > 0) {
+    const affected = []
+    for (const clip of videoClips) {
+      if (clip.type !== 'video') continue
+      const clipUrl = cachedVideoSources.get(clip.id) || resolvedAssetUrls.get(clip.assetId)
+      const failure = clipUrl ? failedVideoSourceNames.get(clipUrl) : null
+      if (failure && !affected.some((entry) => entry.name === failure.name)) {
+        affected.push(failure)
+      }
+    }
+    if (affected.length > 0) {
+      throw new Error(
+        `Cannot export — ${affected.length === 1 ? 'a source' : `${affected.length} sources`} on the timeline cannot be decoded and would render black: `
+        + affected.map((entry) => `${entry.name} (${entry.reason})`).join('; ')
+        + '. Convert to H.264, or remove/disable the affected clips.'
+      )
     }
   }
 
