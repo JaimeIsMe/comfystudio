@@ -2475,6 +2475,131 @@ export const useTimelineStore = create(
   },
 
   /**
+   * Spawn in-place copies of dragged clips for an Alt-drag duplicate gesture
+   * (Flame/Resolve style: the copies hold the gesture-start spot while the
+   * dragged originals keep following the pointer). Copies get fresh ids,
+   * re-linked link groups among themselves, cold render caches, and clones of
+   * transitions that live fully inside the duplicated set. Sync-locked clips
+   * are skipped: they snap back to their anchor instead of moving, so a copy
+   * would stack directly on its original.
+   * History-neutral: the drag gesture saves the undo checkpoint, so one undo
+   * removes the copies and returns the originals in a single step.
+   * @param {Array<string>} clipIds - Ids of the clips being dragged
+   * @param {Array<{id: string, startTime: number, trackId: string}>} originalPositions - Gesture-start position per clip
+   * @returns {{clipIds: Array<string>, transitionIds: Array<string>}|null} Created ids (for a mid-gesture cancel), or null
+   */
+  duplicateClipsForDrag: (clipIds = [], originalPositions = []) => {
+    const state = get()
+    const sourceIds = new Set(dedupeClipIds(clipIds))
+    const positionById = new Map((originalPositions || []).map((entry) => [entry.id, entry]))
+    const sources = state.clips.filter((clip) => sourceIds.has(clip.id) && !isSyncLockedClip(clip))
+    if (sources.length === 0) return null
+
+    let clipCounter = getNextClipCounter(state.clips, state.clipCounter || 1)
+    const duplicateLinkGroups = new Map()
+    const getDuplicateLinkGroupId = (sourceLinkGroupId) => {
+      const normalized = getNormalizedLinkGroupId(sourceLinkGroupId)
+      if (!normalized) return undefined
+      if (!duplicateLinkGroups.has(normalized)) {
+        duplicateLinkGroups.set(normalized, buildLinkGroupId(`dup-${clipCounter + duplicateLinkGroups.size}`))
+      }
+      return duplicateLinkGroups.get(normalized)
+    }
+
+    const idMap = new Map()
+    const duplicates = sources.map((clip) => {
+      const gestureStart = positionById.get(clip.id)
+      const duplicate = {
+        ...structuredClone(clip),
+        id: `clip-${clipCounter}`,
+        startTime: Number.isFinite(gestureStart?.startTime) ? gestureStart.startTime : clip.startTime,
+        trackId: gestureStart?.trackId || clip.trackId,
+        selected: false,
+        cacheStatus: 'none',
+        cacheProgress: 0,
+        cacheUrl: null,
+        cachePath: null,
+        linkGroupId: getDuplicateLinkGroupId(clip.linkGroupId),
+        lockMode: undefined,
+        syncLock: undefined,
+      }
+      idMap.set(clip.id, duplicate.id)
+      clipCounter += 1
+      return duplicate
+    })
+    const duplicatesById = new Map(duplicates.map((clip) => [clip.id, clip]))
+
+    // Transition records carry absolute clip-position bookkeeping; rebuild
+    // those fields from the copies so the clone is self-consistent at the
+    // gesture-start location instead of inheriting possibly-stale values.
+    let transitionCounter = state.transitionCounter || 1
+    const duplicatedTransitions = []
+    for (const transition of state.transitions) {
+      let cloned = null
+      if (transition.kind === 'between' && idMap.has(transition.clipAId) && idMap.has(transition.clipBId)) {
+        const copyA = duplicatesById.get(idMap.get(transition.clipAId))
+        const copyB = duplicatesById.get(idMap.get(transition.clipBId))
+        cloned = {
+          ...structuredClone(transition),
+          id: `transition-${transitionCounter}`,
+          clipAId: copyA.id,
+          clipBId: copyB.id,
+          editPoint: copyA.startTime + copyA.duration,
+          originalClipAEnd: copyA.startTime + copyA.duration,
+          originalClipADuration: copyA.duration,
+          originalClipATrimEnd: copyA.trimEnd,
+          originalClipBStart: copyB.startTime,
+          originalClipBDuration: copyB.duration,
+          originalClipBTrimStart: copyB.trimStart,
+        }
+      } else if (transition.kind === 'edge' && idMap.has(transition.clipId)) {
+        cloned = {
+          ...structuredClone(transition),
+          id: `transition-${transitionCounter}`,
+          clipId: idMap.get(transition.clipId),
+        }
+      }
+      if (cloned) {
+        transitionCounter += 1
+        duplicatedTransitions.push(cloned)
+      }
+    }
+
+    set((current) => ({
+      clips: [...current.clips, ...duplicates],
+      clipCounter: Math.max(current.clipCounter || 1, clipCounter),
+      ...(duplicatedTransitions.length > 0
+        ? {
+          transitions: [...current.transitions, ...duplicatedTransitions],
+          transitionCounter: Math.max(current.transitionCounter || 1, transitionCounter),
+        }
+        : {}),
+    }))
+
+    return {
+      clipIds: duplicates.map((clip) => clip.id),
+      transitionIds: duplicatedTransitions.map((transition) => transition.id),
+    }
+  },
+
+  /**
+   * Remove copies spawned by duplicateClipsForDrag when Alt is released
+   * mid-gesture. Removes exactly the given ids (no linked expansion) and is
+   * history-neutral, matching the spawn side.
+   * @param {{clipIds?: Array<string>, transitionIds?: Array<string>}} created - Ids returned by duplicateClipsForDrag
+   */
+  removeDragDuplicates: ({ clipIds = [], transitionIds = [] } = {}) => {
+    const clipIdSet = new Set(clipIds)
+    const transitionIdSet = new Set(transitionIds)
+    if (clipIdSet.size === 0 && transitionIdSet.size === 0) return
+    set((state) => ({
+      clips: state.clips.filter((clip) => !clipIdSet.has(clip.id)),
+      transitions: state.transitions.filter((transition) => !transitionIdSet.has(transition.id)),
+      selectedClipIds: state.selectedClipIds.filter((id) => !clipIdSet.has(id)),
+    }))
+  },
+
+  /**
    * Resize a clip
    */
   resizeClip: (clipId, newDuration) => {

@@ -7,7 +7,7 @@ import {
   Diamond, Zap, AlertTriangle, Loader2, ChevronLeft, ChevronRight, Maximize2, Flag, Scissors, Clock,
   Copy, ClipboardPaste, Trash2, Music as MusicIcon, MoreHorizontal,
 } from 'lucide-react'
-import useTimelineStore, { buildClipSyncLock, isMusicVideoSyncCapableClip, isSyncLockedClip } from '../stores/timelineStore'
+import useTimelineStore, { buildClipSyncLock, isMusicVideoSyncCapableClip, isSyncLockedClip, isCaptionsTrack, isCaptionClip } from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
 import renderCacheService from '../services/renderCache'
 import { isClipRenderable, renderClipToCache } from '../services/clipRenderCache'
@@ -510,6 +510,7 @@ const TIMELINE_STORE_KEYS = [
   'addShapeClip', 'removeClip', 'removeSelectedClips', 'rippleDeleteClipIds',
   'rippleDeleteSelectedClips', 'rippleDeleteSelectedGap', 'moveClip',
   'moveSelectedClips', 'setSelectedClipsStartTimes', 'setSelectedClipPositions',
+  'duplicateClipsForDrag', 'removeDragDuplicates',
   'resizeClip', 'updateClipTrim', 'updateAudioClipProperties', 'selectClip',
   'selectClips', 'clearSelection', 'setPlayheadPosition', 'setZoom',
   'toggleTrackMute', 'toggleTrackLock', 'toggleTrackVisibility',
@@ -717,6 +718,9 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   // Clip dragging state (moving clips within timeline)
   const [clipDragState, setClipDragState] = useState(null) // { clipId, startX, originalStartTime, originalTrackId }
   const clipDragHistorySavedRef = useRef(false)
+  // Ids spawned by the Alt-drag duplicate gesture; lives outside clipDragState
+  // because the drag effect re-runs (and would tear down state) on every move.
+  const dragDuplicatesRef = useRef(null)
   
   // Marquee selection state
   const [marqueeState, setMarqueeState] = useState(null) // { startX, startY, currentX, currentY, scrollLeft, scrollTop }
@@ -871,6 +875,8 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     moveSelectedClips,
     setSelectedClipsStartTimes,
     setSelectedClipPositions,
+    duplicateClipsForDrag,
+    removeDragDuplicates,
     resizeClip,
     updateClipTrim,
     updateAudioClipProperties,
@@ -4109,8 +4115,9 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     }
 
     const sourceDuration = getSourceDuration(clip)
+    // Alt while dragging is the duplicate gesture, so slip only engages via the Slip tool.
     const canSlip = !isSyncLockedClip(clip)
-      && (isSlipToolActive || e.altKey)
+      && isSlipToolActive
       && (clip.type === 'video' || clip.type === 'audio')
       && Number.isFinite(sourceDuration)
     if (canSlip) {
@@ -4184,7 +4191,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     }
   }
 
-  // Handle slip edit (Alt+drag on clip body)
+  // Handle slip edit (Slip tool drag on clip body)
   useEffect(() => {
     if (!slipState || trimState) return
 
@@ -4224,7 +4231,30 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   // Supports moving multiple selected clips together
   useEffect(() => {
     if (!clipDragState || trimState || slipState) return
-    
+
+    const movingClipIdsForGesture = clipDragState.movingClipIds || clipDragState.originalPositions.map(({ id }) => id)
+
+    // Alt-drag duplicate (Flame/Resolve style): while Alt is held the dragged
+    // originals keep following the pointer and spawned copies hold the
+    // gesture-start spots. Alt can engage or disengage at any point before
+    // mouse-up; the spawn waits for the drag threshold (history saved) so a
+    // plain Alt+click never duplicates. The ref is written before state so a
+    // mousemove landing between the two can't double-spawn.
+    const syncAltDuplicate = (altHeld) => {
+      if (altHeld) {
+        if (dragDuplicatesRef.current || !clipDragHistorySavedRef.current) return
+        const created = duplicateClipsForDrag(movingClipIdsForGesture, clipDragState.originalPositions)
+        if (created) {
+          dragDuplicatesRef.current = created
+          setClipDragState(prev => (prev ? { ...prev, isDuplicating: true } : prev))
+        }
+      } else if (dragDuplicatesRef.current) {
+        removeDragDuplicates(dragDuplicatesRef.current)
+        dragDuplicatesRef.current = null
+        setClipDragState(prev => (prev ? { ...prev, isDuplicating: false } : prev))
+      }
+    }
+
     const handleMouseMove = (e) => {
       const deltaX = e.clientX - clipDragState.startX
       const deltaY = e.clientY - clipDragState.startY
@@ -4242,7 +4272,9 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         saveToHistory()
         clipDragHistorySavedRef.current = true
       }
-      
+
+      syncAltDuplicate(e.altKey)
+
       setClipDragState(prev => ({ ...prev, hasMoved: true }))
       
       const clip = clips.find(c => c.id === clipDragState.clipId)
@@ -4305,6 +4337,12 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         } else {
           const hoveredTrackId = getHoveredTrackIdForFamily(relativeY, getClipTrackFamily(clip))
           if (hoveredTrackId) newTrackId = hoveredTrackId
+          // The duplicate path below bypasses moveClip, so mirror its
+          // captions-track refusal here: non-caption clips stay on their track.
+          if (dragDuplicatesRef.current && newTrackId !== clip.trackId) {
+            const destTrack = tracks.find(t => t.id === newTrackId)
+            if (isCaptionsTrack(destTrack) && !isCaptionClip(clip)) newTrackId = clip.trackId
+          }
         }
       }
       
@@ -4335,8 +4373,14 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
           pendingAutoCreateVideoTrack,
         }))
       } else {
-        // Move single clip (no overlap resolution yet)
-        moveClip(clipDragState.clipId, newTrackId, proposedStartTime, false)
+        if (dragDuplicatesRef.current) {
+          // The duplicate gesture never ripples: moveClip's live ripple would
+          // treat the just-spawned copy as a downstream clip and drag it along.
+          setSelectedClipPositions([{ id: clipDragState.clipId, startTime: proposedStartTime, trackId: newTrackId }], [clipDragState.clipId])
+        } else {
+          // Move single clip (no overlap resolution yet)
+          moveClip(clipDragState.clipId, newTrackId, proposedStartTime, false)
+        }
         setClipDragState(prev => ({
           ...prev,
           currentTrackId: newTrackId,
@@ -4418,20 +4462,48 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
       } finally {
         setClipDragState(null)
         clipDragHistorySavedRef.current = false
+        dragDuplicatesRef.current = null // any Alt-drag copies stay put — that IS the committed duplicate
         clearActiveSnap()
       }
     }
-    
+
+    // Alt can flip while the mouse is still, so track the key directly too.
+    // preventDefault keeps Alt from focusing the app menu mid-gesture.
+    const handleDragKeyDown = (e) => {
+      if (e.key === 'Alt') {
+        e.preventDefault()
+        syncAltDuplicate(true)
+      }
+    }
+    const handleDragKeyUp = (e) => {
+      if (e.key === 'Alt') {
+        e.preventDefault()
+        syncAltDuplicate(false)
+      }
+    }
+    // Focus loss (e.g. Alt+Tab) is not a deliberate drop: withdraw any
+    // Alt-drag copies, then commit the move like before.
+    const handleWindowBlur = () => {
+      syncAltDuplicate(false)
+      handleMouseUp()
+    }
+
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
-    window.addEventListener('blur', handleMouseUp)
-    
+    window.addEventListener('blur', handleWindowBlur)
+    window.addEventListener('keydown', handleDragKeyDown)
+    window.addEventListener('keyup', handleDragKeyUp)
+    if (clipDragState.isDuplicating) document.body.style.cursor = 'copy'
+
     return () => {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
-      window.removeEventListener('blur', handleMouseUp)
+      window.removeEventListener('blur', handleWindowBlur)
+      window.removeEventListener('keydown', handleDragKeyDown)
+      window.removeEventListener('keyup', handleDragKeyUp)
+      if (clipDragState.isDuplicating) document.body.style.cursor = ''
     }
-  }, [clipDragState, trimState, slipState, clips, pixelsPerSecond, moveClip, moveSelectedClips, setSelectedClipPositions, selectedClipIds, snapClipPosition, setActiveSnapTime, clearActiveSnap, saveToHistory, addTrack, getClipTrackFamily, getHoveredTrackIdForFamily, getResolvedGroupTrackDelta, getTracksForFamily, videoTracks])
+  }, [clipDragState, trimState, slipState, clips, tracks, pixelsPerSecond, moveClip, moveSelectedClips, setSelectedClipPositions, duplicateClipsForDrag, removeDragDuplicates, selectedClipIds, snapClipPosition, setActiveSnapTime, clearActiveSnap, saveToHistory, addTrack, getClipTrackFamily, getHoveredTrackIdForFamily, getResolvedGroupTrackDelta, getTracksForFamily, videoTracks])
 
   // Handle adding transition between adjacent clips - show type menu
   const handleAddTransition = (e, clipA, clipB) => {
@@ -5792,7 +5864,9 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
                         slipState?.clipId === clip.id ? 'ring-2 ring-yellow-400 cursor-ew-resize z-30' : ''
                       } ${
                         clipDragState?.movingClipIds?.includes(clip.id)
-                          ? 'ring-2 ring-sf-accent cursor-grabbing z-30' : ''
+                          ? (clipDragState?.isDuplicating
+                            ? 'ring-2 ring-emerald-400 cursor-copy z-30'
+                            : 'ring-2 ring-sf-accent cursor-grabbing z-30') : ''
                       } ${
                         clipEnabled ? '' : 'opacity-60 saturate-0'
                       }`}
@@ -6557,7 +6631,9 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
                       className={`absolute top-0 bottom-0 rounded-sm overflow-hidden ${
                         selectedClipIds.includes(clip.id) ? 'ring-2 ring-white ring-offset-1 ring-offset-sf-dark-900' : ''
                       } ${slipState?.clipId === clip.id ? 'ring-2 ring-yellow-400 cursor-ew-resize z-30' : ''} ${clipDragState?.movingClipIds?.includes(clip.id)
-                          ? 'ring-2 ring-sf-accent cursor-grabbing z-30' : ''} ${clipEnabled ? '' : 'opacity-60 saturate-0'}`}
+                          ? (clipDragState?.isDuplicating
+                            ? 'ring-2 ring-emerald-400 cursor-copy z-30'
+                            : 'ring-2 ring-sf-accent cursor-grabbing z-30') : ''} ${clipEnabled ? '' : 'opacity-60 saturate-0'}`}
                       style={{
                         left: `${interactiveClipOffset}px`,
                         width: `${renderedClipWidth}px`,
