@@ -80,6 +80,12 @@ function hasTransparentEffect(clip) {
     if (effect.type === 'cameraShake') return true
     if (effect.type === 'vignette') return true
     if (effect.type === 'letterbox') return true
+    // GLSL passes can displace pixels or carve alpha (shake, fisheye,
+    // glitch, VHS wobble, custom shaders) — treat every one as
+    // reveal-capable. The cost is only lost auto-culling on clips that
+    // carry a GLSL effect; wrongly culling shows black where a lower
+    // layer should appear.
+    if (String(effect.type || '').startsWith('glsl')) return true
     return false
   })
 }
