@@ -137,12 +137,30 @@ export const useAssetsStore = create(
   },
   
   togglePlay: () => {
-    const { videoRef, isPlaying, currentPreview } = get()
-    if (videoRef) {
+    const { videoRef, isPlaying, currentPreview, previewMode } = get()
+    let ref = videoRef
+    // Self-heal a stale registration: several navigation paths can leave the
+    // asset preview video unregistered while it is visibly mounted — e.g.
+    // re-selecting an asset that is already the current preview never
+    // re-fires the registration effect (the lone asset in a folder usually
+    // already is the preview). Without this, play silently did nothing.
+    if (
+      !ref
+      && previewMode === 'asset'
+      && currentPreview?.url
+      && currentPreview.type !== 'mask'
+      && currentPreview.type !== 'image'
+      && typeof document !== 'undefined'
+    ) {
+      const candidates = document.querySelectorAll('video[data-preview-popout-source="video"]')
+      ref = Array.from(candidates).find((el) => el.getAttribute('src') === currentPreview.url) || null
+      if (ref) set({ videoRef: ref })
+    }
+    if (ref) {
       if (isPlaying) {
-        videoRef.pause()
+        ref.pause()
       } else {
-        videoRef.play()
+        ref.play()
       }
     } else if (currentPreview?.type === 'mask') {
       // For masks (no videoRef), just toggle the isPlaying state
