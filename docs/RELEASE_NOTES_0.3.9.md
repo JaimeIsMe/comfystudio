@@ -1,10 +1,9 @@
-<!-- In progress — v0.3.9 is unreleased. Items accumulate here as they land on main. -->
-
 # Velorn v0.3.9
 
 ## Highlights
 
 - Captions no longer use ComfyUI. A one-click local transcription engine (whisper.cpp) downloads on first use and runs on the CPU, several times faster than realtime, with three accuracy tiers to choose from.
+- Large projects play dramatically faster — a real 221-clip, hour-long timeline that crawled at ~8 fps now plays at its full frame rate.
 - The Inspector now has the same full-height mode as the left panel — expand either side (or both) to span the full window height, Resolve style.
 
 ## Captions
@@ -13,11 +12,11 @@
 - Word-level caption timings now exist in both scopes. Timeline-scope transcriptions previously had no word timing at all, so the word-pop presets were interpolating between cue boundaries; they now get real per-word times.
 - Timeline captions honor mutes and solos, so for a busy mix you can solo the dialog or vocal track before transcribing — the dialog now says so.
 - Switching tiers leaves the old download on disk, so the engine row lists installed models and lets you delete any tier you're not using.
-- Windows and Linux to start; the macOS local engine needs our own CLI build and comes later.
+- Windows and Linux to start; macOS keeps captioning through ComfyUI (Qwen3-ASR) until a Mac build of the engine ships in a future release.
 
 ## Performance
 
-- Large projects play dramatically faster. On a real 221-clip, 57-minute, 288-asset project that crawled at ~8 fps, per-frame main-thread blocking dropped from ~97% to under 30%: the asset browser and the (hidden) Export tab no longer re-render on every frame of playback, and the timeline's keep-playhead-in-view check no longer forces a layout reflow of the whole clip area on every tick. Small projects never noticed; the cost scaled with clip and asset count.
+- Large projects play dramatically faster. On a real 221-clip, 57-minute, 288-asset project that crawled at ~8 fps, per-frame main-thread blocking dropped from ~97% to under 30% and playback returned to the full 25 fps: the asset browser and the (hidden) Export tab no longer re-render on every frame of playback, and the timeline's keep-playhead-in-view check no longer forces a layout reflow of the whole clip area on every tick. Small projects never noticed; the cost scaled with clip and asset count.
 
 ## Editing
 
