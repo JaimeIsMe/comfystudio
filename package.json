@@ -20,6 +20,7 @@
     "starter-pack:package": "npm run starter-pack:build && node ./scripts/package-workflow-starter-pack.mjs",
     "test:asset-relink-fallback": "node --experimental-default-type=module --test ./src/services/assetRelinkFallback.test.js",
     "test:caption-vocabulary": "node --experimental-default-type=module --test ./src/services/captionVocabulary.test.js",
+    "test:caption-word-timing": "node --experimental-default-type=module --test ./src/services/captionWordTiming.test.js",
     "test:dirty-tracker": "node --experimental-default-type=module --test ./src/services/projectDirtyTracker.test.js",
     "test:premiere-xml": "node --experimental-default-type=module --test ./src/services/premiereXmlExporter.test.js",
     "test:export-frame-source": "node --experimental-default-type=module --test ./src/services/exportFrameSource.test.js",

@@ -6,6 +6,7 @@
 // grouped here, renderer-side, so the rules stay pure and testable.
 
 import { mixTimelineAudioToWav } from './timelineAudioMix'
+import { repairSmearedWordTimings } from './captionWordTiming'
 
 // Common picker names → whisper language codes. Anything unrecognized falls
 // back to autodetect, and 2–3 letter codes pass through untouched.
@@ -240,13 +241,18 @@ async function runLocalTranscription({
     if (!result?.success) {
       throw new Error(result?.error || 'Local transcription failed.')
     }
-    const words = (Array.isArray(result.words) ? result.words : [])
-      .map((w) => ({
-        start: Number(w?.start) || 0,
-        end: Number(w?.end) || 0,
-        text: String(w?.text || '').trim(),
-      }))
-      .filter((w) => w.text)
+    // Boundary words absorb whisper's leading/trailing non-speech smear even
+    // with VAD on (laughter counts as voice activity); repair before cue
+    // grouping so captions land when speech actually starts.
+    const words = repairSmearedWordTimings(
+      (Array.isArray(result.words) ? result.words : [])
+        .map((w) => ({
+          start: Number(w?.start) || 0,
+          end: Number(w?.end) || 0,
+          text: String(w?.text || '').trim(),
+        }))
+        .filter((w) => w.text)
+    )
     return buildTranscriptionResult({
       words,
       language: result.language,
