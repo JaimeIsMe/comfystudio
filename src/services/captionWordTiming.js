@@ -11,11 +11,31 @@
 // boundary word is a caption that lands a beat late — for captions, late by
 // a hair beats early by seconds.
 
-const DEFAULT_MAX_PLAUSIBLE_SECONDS = 0.9
+const DEFAULT_PLAUSIBLE_FLOOR_SECONDS = 0.9
+const DEFAULT_PLAUSIBLE_CEILING_SECONDS = 3.0
+const DEFAULT_PLAUSIBLE_MEDIAN_FACTOR = 2.5
+// Trailing repairs demand much stronger evidence than leading ones: a held
+// sung note at a phrase END is normal (observed real holds up to ~2.1s),
+// while trailing smears run 2.8s+. A lingering caption is also the milder
+// bug — a caption arriving before speech looks broken; one letting go late
+// just reads as style.
+const DEFAULT_TRAILING_FLOOR_SECONDS = 2.5
 const DEFAULT_RELAID_SECONDS = 0.45
 const DEFAULT_MAX_UTTERANCE_GAP_SECONDS = 0.6
 
 const round2 = (value) => Math.round(value * 100) / 100
+
+// Smear is a RELATIVE judgement: spoken words run ~0.1-0.5s, but sung held
+// notes legitimately run 1-2s+ — a fixed cutoff squashes real singing. A
+// word only counts as smeared when it towers over its own utterance's
+// (lower) median duration, clamped so plain speech keeps a sane floor and
+// nothing under the ceiling is ever repaired in an utterance of uniformly
+// long words, while a lone multi-second vocalization still gets caught.
+const plausibleCapForUtterance = (utterance, floor, ceiling, factor) => {
+  const durations = utterance.map((w) => w.end - w.start).sort((a, b) => a - b)
+  const median = durations[Math.floor((durations.length - 1) / 2)] || 0
+  return Math.min(Math.max(median * factor, floor), ceiling)
+}
 
 /**
  * @param {Array<{start:number,end:number,text:string}>} words - Ordered word
@@ -23,7 +43,10 @@ const round2 = (value) => Math.round(value * 100) / 100
  * @returns {Array} New array; the input word objects are not mutated.
  */
 export function repairSmearedWordTimings(words, {
-  maxPlausibleSeconds = DEFAULT_MAX_PLAUSIBLE_SECONDS,
+  plausibleFloorSeconds = DEFAULT_PLAUSIBLE_FLOOR_SECONDS,
+  plausibleCeilingSeconds = DEFAULT_PLAUSIBLE_CEILING_SECONDS,
+  plausibleMedianFactor = DEFAULT_PLAUSIBLE_MEDIAN_FACTOR,
+  trailingFloorSeconds = DEFAULT_TRAILING_FLOOR_SECONDS,
   relaidSeconds = DEFAULT_RELAID_SECONDS,
   maxUtteranceGapSeconds = DEFAULT_MAX_UTTERANCE_GAP_SECONDS,
 } = {}) {
@@ -47,10 +70,15 @@ export function repairSmearedWordTimings(words, {
   }
   utterances.push(current)
 
-  const isPlausible = (w) => (w.end - w.start) <= maxPlausibleSeconds
-
   let previousUtteranceEnd = -Infinity
   for (const utterance of utterances) {
+    const cap = plausibleCapForUtterance(
+      utterance,
+      plausibleFloorSeconds,
+      plausibleCeilingSeconds,
+      plausibleMedianFactor
+    )
+    const isPlausible = (w) => (w.end - w.start) <= cap
     const firstPlausible = utterance.findIndex(isPlausible)
 
     if (firstPlausible === -1) {
@@ -78,10 +106,13 @@ export function repairSmearedWordTimings(words, {
       if (w.start >= w.end) w.start = round2(Math.max(w.end - 0.05, 0))
     }
 
-    // Trailing edge: mirror image after the last trustworthy word.
+    // Trailing edge: mirror image after the last trustworthy word, but with
+    // the raised trailing bar so held sung notes at phrase ends survive.
+    const trailingCap = Math.max(cap, trailingFloorSeconds)
+    const isTrailingPlausible = (w) => (w.end - w.start) <= trailingCap
     let lastPlausible = -1
     for (let i = utterance.length - 1; i >= 0; i -= 1) {
-      if (isPlausible(utterance[i])) { lastPlausible = i; break }
+      if (isTrailingPlausible(utterance[i])) { lastPlausible = i; break }
     }
     for (let i = lastPlausible + 1; i < utterance.length; i += 1) {
       const w = utterance[i]

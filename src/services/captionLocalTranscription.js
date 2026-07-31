@@ -237,6 +237,12 @@ async function runLocalTranscription({
       language: mapLanguageToWhisper(language),
       modelId,
       vocabularyHint: String(vocabularyHint || '').trim(),
+      // VAD stays off: Silero chops sung vocals (mangled and missing words on
+      // real songs — a music-video product cannot afford that), and the
+      // smear repair below handles the boundary-timing problem VAD was for.
+      // The engine keeps the model so a context-aware opt-in can flip this
+      // per call later.
+      vad: false,
     })
     if (!result?.success) {
       throw new Error(result?.error || 'Local transcription failed.')
