@@ -497,8 +497,18 @@ function MixerPanel() {
   const peakStampsRef = useRef({}) // key -> { db, at }
   const selectedStripRef = useRef(effectiveStrip)
   selectedStripRef.current = effectiveStrip
+  const isPlaying = useTimelineStore((state) => state.isPlaying)
 
+  // Meter loop, only while playing. A stopped graph decays to silence, and
+  // re-rendering every strip 20x/s to draw the floor is pure waste — one
+  // reset on pause gives the same visual.
   useEffect(() => {
+    if (!isPlaying) {
+      peakStampsRef.current = {}
+      setMeterState({ levels: {}, peaks: {}, reductions: {} })
+      return undefined
+    }
+
     const tick = () => {
       const now = performance.now()
       const levels = {}
@@ -532,7 +542,7 @@ function MixerPanel() {
     tick()
     const intervalId = setInterval(tick, METER_UPDATE_MS)
     return () => clearInterval(intervalId)
-  }, [])
+  }, [isPlaying])
 
   if (audioTracks.length === 0) {
     return (

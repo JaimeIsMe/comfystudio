@@ -28,7 +28,6 @@ function MasterAudioMeter({ height, className = '' }) {
   const [rightPeak, setRightPeak] = useState(METER_MIN_DB) // dB
 
   const peakRef = useRef({ db: METER_MIN_DB, at: 0 })
-  const isPlayingRef = useRef(false)
 
   const isPlaying = useTimelineStore(state => state.isPlaying)
 
@@ -41,24 +40,20 @@ function MasterAudioMeter({ height, className = '' }) {
     []
   )
 
-  // Keep ref in sync for the polling loop
+  // Analysis loop, only while playing — a paused meter has nothing to read,
+  // so the interval should not exist at all. setInterval rather than rAF so
+  // metering keeps running when the window is inactive.
   useEffect(() => {
-    isPlayingRef.current = isPlaying
     if (!isPlaying) {
       peakRef.current = { db: METER_MIN_DB, at: 0 }
       setLeftLevel(METER_MIN_DB)
       setRightLevel(METER_MIN_DB)
       setLeftPeak(METER_MIN_DB)
       setRightPeak(METER_MIN_DB)
+      return undefined
     }
-  }, [isPlaying])
 
-  // Analysis loop: use setInterval so it keeps running (rAF can be throttled
-  // when the tab is inactive or there is no interaction)
-  useEffect(() => {
     const analyze = () => {
-      if (!isPlayingRef.current) return
-
       const db = readAnalyserRmsDb(getMasterAnalyser(), METER_MIN_DB)
 
       // The program bus is metered mono (summed); mirror to both bars like
@@ -78,7 +73,7 @@ function MasterAudioMeter({ height, className = '' }) {
     analyze()
     const intervalId = setInterval(analyze, METER_UPDATE_MS)
     return () => clearInterval(intervalId)
-  }, [])
+  }, [isPlaying])
 
   // Get color for a given dB level
   const getColorForDb = (db) => {

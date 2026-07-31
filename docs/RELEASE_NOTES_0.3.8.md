@@ -29,6 +29,7 @@
 - The renderer bundle that loads at launch dropped from 4.4 MB to 2.6 MB. The Generate workspace now loads the first time you open the tab instead of at startup, and hidden experimental workspaces no longer load at all.
 - Autosave only runs when something actually changed. Previously the full project was re-serialized, a thumbnail captured, and both written to disk every 30 seconds even while idle — on large projects that was a periodic stutter. A backstop save still runs every few minutes as insurance.
 - ComfyUI queue polling rests at 30 seconds when nothing is generating and snaps back to 2 seconds the moment work starts, instead of polling every 2 seconds forever.
+- Audio meters (the timeline VU meter and the Mixer strips) stop polling and re-rendering while playback is stopped.
 
 ## Project
 
