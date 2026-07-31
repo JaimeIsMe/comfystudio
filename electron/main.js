@@ -4500,11 +4500,16 @@ ipcMain.handle('captions:mixTimelineAudio', async (event, options = {}) => {
 
   for (const clip of clips || []) {
     if (!clip) continue
-    if (clip.type !== 'video' && clip.type !== 'audio') { skip(clip, `type=${clip.type}`); continue }
+    // Audio-track clips only — the same audibility model as playback
+    // (AudioLayerRenderer) and export (export:mixAudio). Video clips are
+    // picture-only everywhere else in the app; captions must hear exactly
+    // the mix the user hears.
+    if (clip.type !== 'audio') { skip(clip, `type=${clip.type}`); continue }
     if (clip.enabled === false) { skip(clip, 'clip.enabled=false'); continue }
 
     const track = trackMap.get(clip.trackId)
     if (!track) { skip(clip, 'no-matching-track'); continue }
+    if (track.type !== 'audio') { skip(clip, `track.type=${track.type}`); continue }
     if (track.muted) { skip(clip, 'track.muted=true'); continue }
     if (track.visible === false) { skip(clip, 'track.visible=false'); continue }
 
@@ -4579,7 +4584,7 @@ ipcMain.handle('captions:mixTimelineAudio', async (event, options = {}) => {
   }))
 
   if (preparedInputs.length === 0) {
-    return { success: false, error: 'No audible clips on the timeline — unmute a track or enable a clip\'s audio.' }
+    return { success: false, error: 'No audible clips on audio tracks — captions transcribe the same mix you hear. Unmute or solo an audio track, or add the audio to an audio track first.' }
   }
 
   const tempDir = path.join(app.getPath('temp'), 'comfystudio-caption-audio')

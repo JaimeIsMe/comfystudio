@@ -45,14 +45,12 @@ function clamp(value, min, max) {
 }
 
 function clipHasUsableAudio(clip, asset) {
-  if (!asset) return false
-  if (clip.type === 'audio') return true
-  if (clip.type !== 'video') return false
-  if (asset.hasAudio === false) return false
-  if (asset.audioEnabled === false) return false
-  // Clip-level audio mute overrides asset level.
-  if (clip.audioEnabled === false) return false
-  return true
+  // Audio-track clips only — the same audibility model as playback
+  // (AudioLayerRenderer) and export (export:mixAudio). Video clips are
+  // picture-only everywhere else in the app, so captions must not hear
+  // audio the user cannot: video-embedded audio joins the mix by living
+  // on an audio track.
+  return Boolean(asset) && clip.type === 'audio'
 }
 
 function computeProgramDuration(clips) {
@@ -202,16 +200,15 @@ async function mixViaWebAudio({ report }) {
   const trackById = new Map(tracks.map((t) => [t.id, t]))
   const anySolo = hasAudioSolo(tracks)
   const audibleClips = enabledClips.filter((clip) => {
+    if (clip.type !== 'audio') return false
     const track = trackById.get(clip.trackId)
-    if (!track) return false
-    if (track.type === 'audio' && !isAudioTrackAudible(track, anySolo)) return false
-    if (track.type !== 'audio' && (track.muted || track.visible === false)) return false
+    if (!track || track.type !== 'audio' || !isAudioTrackAudible(track, anySolo)) return false
     const asset = assetsState.getAssetById(clip.assetId)
     return clipHasUsableAudio(clip, asset)
   })
 
   if (audibleClips.length === 0) {
-    throw new Error('No audible clips on the timeline — unmute a track or enable a clip\'s audio.')
+    throw new Error('No audible clips on audio tracks — captions transcribe the same mix you hear. Unmute or solo an audio track, or add the audio to an audio track first.')
   }
 
   const rawDuration = computeProgramDuration(enabledClips)
@@ -361,15 +358,14 @@ export async function mixTimelineAudioToWav({ onProgress } = {}) {
   const trackById = new Map(tracks.map((t) => [t.id, t]))
   const anySolo = hasAudioSolo(tracks)
   const hasAudibleClip = enabledClips.some((clip) => {
+    if (clip.type !== 'audio') return false
     const track = trackById.get(clip.trackId)
-    if (!track) return false
-    if (track.type === 'audio' && !isAudioTrackAudible(track, anySolo)) return false
-    if (track.type !== 'audio' && (track.muted || track.visible === false)) return false
+    if (!track || track.type !== 'audio' || !isAudioTrackAudible(track, anySolo)) return false
     const asset = assetsState.getAssetById(clip.assetId)
     return clipHasUsableAudio(clip, asset)
   })
   if (!hasAudibleClip) {
-    throw new Error('No audible clips on the timeline — unmute a track or enable a clip\'s audio.')
+    throw new Error('No audible clips on audio tracks — captions transcribe the same mix you hear. Unmute or solo an audio track, or add the audio to an audio track first.')
   }
 
   const rawDuration = computeProgramDuration(enabledClips)
