@@ -63,9 +63,10 @@ export function useComfyUI() {
     checkConnectionRef.current = checkConnection;
     checkConnection();
     
-    // Check HTTP connection periodically, but don't spam WebSocket attempts
-    // Use longer interval when WebSocket has failed multiple times
-    const interval = setInterval(checkConnection, wsConnected ? 10000 : 30000);
+    // Check HTTP connection periodically, but don't spam WebSocket attempts.
+    // 30s in both states: when the WebSocket is healthy its close event is the
+    // fast disconnect signal, so a quicker HTTP heartbeat adds nothing.
+    const interval = setInterval(checkConnection, 30000);
     return () => clearInterval(interval);
   }, [wsConnected]);
 
@@ -276,19 +277,54 @@ export function useComfyUI() {
     };
   }, [isGenerating, currentPromptId]);
 
-  // Update queue count periodically
+  // Update queue count with an adaptive cadence. The old fixed 2s interval
+  // polled ComfyUI forever (~43k requests/day at idle); poll fast only while
+  // work is actually queued or running, rest at 30s otherwise, and let the
+  // WebSocket status event snap us back to fast the moment the queue changes.
   useEffect(() => {
-    const updateQueue = async () => {
-      if (isConnected) {
+    if (!isConnected) return undefined;
+
+    const QUEUE_POLL_ACTIVE_MS = 2000;
+    const QUEUE_POLL_IDLE_MS = 30000;
+    let cancelled = false;
+    let timer = null;
+    let lastTickAt = 0;
+
+    const tick = async () => {
+      if (cancelled) return;
+      lastTickAt = Date.now();
+      let busy = isGenerating;
+      try {
         const status = await comfyui.getQueueStatus();
-        setQueueCount(status.queue_pending?.length || 0);
+        if (cancelled) return;
+        const pending = status?.queue_pending?.length || 0;
+        const running = status?.queue_running?.length || 0;
+        setQueueCount(pending);
+        busy = busy || pending > 0 || running > 0;
+      } catch (err) {
+        // Connection hiccup; the connection checker owns reporting it.
       }
+      if (cancelled) return;
+      timer = setTimeout(tick, busy ? QUEUE_POLL_ACTIVE_MS : QUEUE_POLL_IDLE_MS);
     };
 
-    updateQueue();
-    const interval = setInterval(updateQueue, 2000);
-    return () => clearInterval(interval);
-  }, [isConnected]);
+    // ComfyUI pushes a status event whenever the queue changes (including
+    // submissions from other clients); re-poll promptly instead of waiting
+    // out the idle interval. Guarded so a burst of events cannot stack polls.
+    const onStatus = () => {
+      if (cancelled || Date.now() - lastTickAt < QUEUE_POLL_ACTIVE_MS) return;
+      if (timer) clearTimeout(timer);
+      tick();
+    };
+    try { comfyui.on('status', onStatus); } catch (_) { /* events optional */ }
+
+    tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      try { comfyui.off('status', onStatus); } catch (_) { /* events optional */ }
+    };
+  }, [isConnected, isGenerating]);
 
   /**
    * Legacy GeneratePanel entrypoint retained for backward compatibility.

@@ -34,6 +34,7 @@ import { startComfyLauncherEventBridge } from './services/comfyLauncherEventBrid
 import { startComfyAutoImport } from './services/comfyAutoImport'
 import { startMcpSnapshotPublisher } from './services/mcpSnapshot'
 import { MCP_ACTION_BRIDGE_VERSION, startMcpActionBridge } from './services/mcpActions'
+import { attachProjectDirtyWatchers, isProjectDirty } from './services/projectDirtyTracker'
 
 function formatDownloadBytes(bytes) {
   const numeric = Math.max(0, Number(bytes) || 0)
@@ -209,6 +210,17 @@ function App() {
 
   useEffect(() => {
     const stop = startMcpSnapshotPublisher()
+    return () => { try { stop?.() } catch (_) { /* ignore */ } }
+  }, [])
+
+  // Track unsaved changes so autosave can skip the full save path (project
+  // serialization + thumbnail capture + disk writes) when nothing changed.
+  useEffect(() => {
+    const stop = attachProjectDirtyWatchers({
+      timelineStore: useTimelineStore,
+      assetsStore: useAssetsStore,
+      projectStore: useProjectStore,
+    })
     return () => { try { stop?.() } catch (_) { /* ignore */ } }
   }, [])
 
@@ -394,15 +406,24 @@ function App() {
     initialize()
   }, [initialize])
   
-  // Auto-save functionality
+  // Auto-save functionality. Saves only when something actually changed —
+  // the save path serializes the whole project and captures a playhead
+  // thumbnail, which is far too heavy to run on a fixed timer at idle. The
+  // backstop save caps worst-case loss if a mutation ever slips past the
+  // dirty tracker (e.g. an in-place edit that keeps the same reference).
   useEffect(() => {
     if (!currentProject || !autoSaveEnabled) return
-    
+
+    const AUTOSAVE_BACKSTOP_MS = 5 * 60 * 1000
     const autoSaveTimer = setInterval(() => {
+      const lastSavedAt = Date.parse(useProjectStore.getState().lastAutoSave || '') || 0
+      const overdue = Date.now() - lastSavedAt > AUTOSAVE_BACKSTOP_MS
+      const dirty = isProjectDirty()
+      if (!dirty && !overdue) return
       saveProject()
-      console.log('Auto-saved project')
+      console.log(dirty ? 'Auto-saved project' : 'Auto-saved project (backstop)')
     }, autoSaveInterval)
-    
+
     return () => clearInterval(autoSaveTimer)
   }, [currentProject, autoSaveEnabled, autoSaveInterval, saveProject])
   

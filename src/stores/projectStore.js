@@ -18,6 +18,7 @@ import {
 import { useTimelineStore } from './timelineStore'
 import { useAssetsStore } from './assetsStore'
 import { captureAndSaveProjectThumbnail } from '../utils/projectThumbnail'
+import { markProjectClean } from '../services/projectDirtyTracker'
 import {
   createDefaultFlowAiProjectData,
   normalizeFlowAiProjectData,
@@ -193,7 +194,14 @@ const hydrateOpenedProjectSession = async (projectHandleOrPath, rawProjectData, 
     error: null,
     lastFailedProjectHandle: null,
     lastFailedProjectName: null,
+    // Start the autosave backstop clock at open, so a freshly opened project
+    // is not immediately "overdue" from a previous session's timestamp.
+    lastAutoSave: new Date().toISOString(),
   }))
+
+  // Hydration replaced every watched store slice; none of it is an unsaved
+  // user change.
+  markProjectClean()
 
   return projectData
 }
@@ -642,13 +650,18 @@ export const useProjectStore = create(
           
           // Update recent projects list
           set((state) => ({
-            recentProjects: state.recentProjects.map(p => 
-              p.name === updatedProject.name 
+            recentProjects: state.recentProjects.map(p =>
+              p.name === updatedProject.name
                 ? { ...p, modified: updatedProject.modified, thumbnail: thumbnailPointer }
                 : p
             ),
           }))
-          
+
+          // After the save-induced set() calls above, so their transient
+          // dirty mark is cleared too. Everything gathered above is now on
+          // disk.
+          markProjectClean()
+
           return true
         } catch (err) {
           console.error('Error saving project:', err)
