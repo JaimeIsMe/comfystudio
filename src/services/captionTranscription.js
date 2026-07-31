@@ -24,6 +24,9 @@ import {
   canRemoveLocalCaptionModels,
   removeLocalCaptionModel,
 } from './captionLocalTranscription'
+import { buildVocabularyHint } from './captionVocabulary'
+import { useProjectStore } from '../stores/projectStore'
+import { useTimelineStore } from '../stores/timelineStore'
 
 const ENGINE_SETTING_KEY = 'velorn-caption-engine'
 const ENGINE_VALUES = ['auto', 'local', 'comfyui']
@@ -75,13 +78,56 @@ export async function resolveCaptionEngine() {
   return 'local'
 }
 
+/**
+ * Candidate vocabulary strings from the open project, most important first:
+ * project name, timeline names, marker labels, on-screen text clips.
+ */
+export function collectProjectVocabularyParts() {
+  const parts = []
+  try {
+    const project = useProjectStore.getState().currentProject
+    if (project?.name) parts.push(project.name)
+    for (const timeline of project?.timelines || []) {
+      if (timeline?.name) parts.push(timeline.name)
+    }
+  } catch { /* stores unavailable — the hint is best-effort */ }
+  try {
+    const state = useTimelineStore.getState()
+    for (const marker of Array.isArray(state.markers) ? state.markers : []) {
+      if (marker?.label) parts.push(marker.label)
+    }
+    for (const clip of Array.isArray(state.clips) ? state.clips : []) {
+      if (clip?.type === 'text' && clip.text) parts.push(clip.text)
+    }
+  } catch { /* same */ }
+  return parts
+}
+
+/**
+ * The whisper initial-prompt hint for a transcription: caller vocabulary
+ * first (budget priority), then what the project knows about itself. An
+ * explicit options.vocabularyHint (including '') skips auto-derivation.
+ */
+function resolveVocabularyHint(options = {}) {
+  if (options.vocabularyHint !== undefined) return options.vocabularyHint
+  try {
+    return buildVocabularyHint(collectProjectVocabularyParts())
+  } catch {
+    return ''
+  }
+}
+
 /** Transcribe a single source asset. Options pass through to the backend. */
 export async function transcribeAsset(asset, options = {}) {
   const engine = ENGINE_VALUES.includes(options.engine) && options.engine !== 'auto'
     ? options.engine
     : await resolveCaptionEngine()
   return engine === 'local'
-    ? transcribeAssetLocally(asset, { modelId: getCaptionModelPreference(), ...options })
+    ? transcribeAssetLocally(asset, {
+        modelId: getCaptionModelPreference(),
+        ...options,
+        vocabularyHint: resolveVocabularyHint(options),
+      })
     : transcribeWithComfyUI(asset, options)
 }
 
@@ -91,7 +137,11 @@ export async function transcribeTimelineAudio(options = {}) {
     ? options.engine
     : await resolveCaptionEngine()
   return engine === 'local'
-    ? transcribeTimelineLocally({ modelId: getCaptionModelPreference(), ...options })
+    ? transcribeTimelineLocally({
+        modelId: getCaptionModelPreference(),
+        ...options,
+        vocabularyHint: resolveVocabularyHint(options),
+      })
     : transcribeTimeline(options)
 }
 

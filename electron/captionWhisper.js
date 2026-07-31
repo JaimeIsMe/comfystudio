@@ -463,6 +463,11 @@ function createCaptionWhisperService({ app, ffmpegPath, getMainWindow }) {
 
       const language = String(options.language || 'auto').toLowerCase() || 'auto'
       const threads = Math.max(2, Math.min(8, (os.cpus()?.length || 4) - 2))
+      // Vocabulary hint: whisper's initial prompt biases decoding toward
+      // project words (brand names, people). Long form only — -p means
+      // --processors. Whisper truncates past ~224 tokens; the cap here is a
+      // guard against runaway renderer input, not the real budget.
+      const vocabularyHint = String(options.vocabularyHint || '').replace(/\s+/g, ' ').trim().slice(0, 1000)
       const args = [
         '-m', model.path,
         '-f', wavPath,
@@ -474,6 +479,9 @@ function createCaptionWhisperService({ app, ffmpegPath, getMainWindow }) {
         '-np',
         '-t', String(threads),
       ]
+      if (vocabularyHint) {
+        args.push('--prompt', vocabularyHint)
+      }
 
       sendProgress({ phase: 'transcribe', message: 'Transcribing…', percent: 0 })
       await runProcess(status.binaryPath, args, {

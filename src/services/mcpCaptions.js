@@ -173,7 +173,7 @@ function summarizeCaptionDraft(includeCues = true) {
   }
 }
 
-async function runTranscribeCaptionJob(job, { scope, language, sourceAsset }) {
+async function runTranscribeCaptionJob(job, { scope, language, sourceAsset, vocabularyHint }) {
   // transcribeTimeline reports (message, percent) from the audio mix and
   // { stage, message, progress } from the ASR leg — accept both shapes.
   const onProgress = (update, maybeProgress) => {
@@ -188,9 +188,12 @@ async function runTranscribeCaptionJob(job, { scope, language, sourceAsset }) {
   }
 
   try {
+    // vocabularyHint: undefined lets the seam auto-derive from the project;
+    // an explicit string (including '') from the MCP caller wins.
+    const hintOption = vocabularyHint !== undefined ? { vocabularyHint } : {}
     const result = scope === 'asset'
-      ? await transcribeAsset(sourceAsset, { onProgress, language })
-      : await transcribeTimelineAudio({ onProgress })
+      ? await transcribeAsset(sourceAsset, { onProgress, language, ...hintOption })
+      : await transcribeTimelineAudio({ onProgress, ...hintOption })
 
     const audioDuration = Number(result?.audioDuration) || 0
     const cues = normalizeCueOrder(result?.cues || [], audioDuration)
@@ -228,6 +231,15 @@ export function handleTranscribeCaptions(payload = {}) {
   const scope = payload.scope === 'asset' ? 'asset' : 'timeline'
   const language = String(payload.language || 'Auto').trim() || 'Auto'
 
+  // Optional caption vocabulary (brand names, people, jargon). String or
+  // array; when omitted the engine auto-derives hints from the project.
+  const rawVocabulary = payload.vocabulary ?? payload.vocabularyHint
+  const vocabularyHint = rawVocabulary === undefined
+    ? undefined
+    : Array.isArray(rawVocabulary)
+      ? rawVocabulary.map((item) => String(item || '').trim()).filter(Boolean).join(', ')
+      : String(rawVocabulary || '').trim()
+
   let sourceAsset = null
   if (scope === 'asset') {
     const assetId = String(payload.assetId || '').trim()
@@ -243,10 +255,11 @@ export function handleTranscribeCaptions(payload = {}) {
   const plan = {
     scope,
     language,
+    ...(vocabularyHint !== undefined ? { vocabularyHint } : { vocabularyHint: 'auto (derived from project name, timeline names, markers, text clips)' }),
     ...(sourceAsset
       ? { asset: { id: sourceAsset.id, name: sourceAsset.name, duration: sourceAsset.duration || null } }
       : { note: 'Timeline scope mixes the program audio (mute/enabled respected) before transcribing.' }),
-    workflow: 'ComfyUI Qwen3-ASR (local)',
+    engine: 'Local whisper engine (ComfyUI Qwen3-ASR only as configured fallback)',
     pollWith: 'get_caption_status',
   }
 
@@ -265,7 +278,7 @@ export function handleTranscribeCaptions(payload = {}) {
   }
 
   const job = createCaptionJob('transcribe', { scope, language, assetId: sourceAsset?.id || null })
-  runTranscribeCaptionJob(job, { scope, language, sourceAsset })
+  runTranscribeCaptionJob(job, { scope, language, sourceAsset, vocabularyHint })
 
   return {
     success: true,

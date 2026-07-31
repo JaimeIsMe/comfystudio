@@ -196,6 +196,7 @@ async function runLocalTranscription({
   alreadyNormalized = false,
   language = 'Auto',
   modelId,
+  vocabularyHint = '',
   onProgress,
   progressBase = 0,
   audioDuration = null,
@@ -234,6 +235,7 @@ async function runLocalTranscription({
       alreadyNormalized,
       language: mapLanguageToWhisper(language),
       modelId,
+      vocabularyHint: String(vocabularyHint || '').trim(),
     })
     if (!result?.success) {
       throw new Error(result?.error || 'Local transcription failed.')
@@ -258,7 +260,7 @@ async function runLocalTranscription({
 }
 
 /** Transcribe a single asset (video or audio) with the local engine. */
-export async function transcribeAssetLocally(asset, { onProgress, language = 'Auto', modelId } = {}) {
+export async function transcribeAssetLocally(asset, { onProgress, language = 'Auto', modelId, vocabularyHint = '' } = {}) {
   if (!asset) {
     throw new Error('A source audio or video asset is required to generate captions.')
   }
@@ -293,6 +295,7 @@ export async function transcribeAssetLocally(asset, { onProgress, language = 'Au
     mediaName,
     language,
     modelId,
+    vocabularyHint,
     onProgress,
     audioDuration,
     source: 'local',
@@ -304,7 +307,7 @@ export async function transcribeAssetLocally(asset, { onProgress, language = 'Au
  * Reuses the same pre-mixed WAV pipeline as the ComfyUI path, so cue timings
  * come back in timeline time. Unlike that path, word timings survive here.
  */
-export async function transcribeTimelineLocally({ onProgress, modelId } = {}) {
+export async function transcribeTimelineLocally({ onProgress, modelId, vocabularyHint = '' } = {}) {
   const report = (stage, message, progress) => {
     if (typeof onProgress === 'function') onProgress({ stage, message, progress })
   }
@@ -321,6 +324,7 @@ export async function transcribeTimelineLocally({ onProgress, modelId } = {}) {
     mediaName: 'timeline.wav',
     alreadyNormalized: true,
     modelId,
+    vocabularyHint,
     onProgress,
     progressBase: 40,
     audioDuration: mix.duration,
