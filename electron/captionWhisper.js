@@ -186,10 +186,20 @@ function downloadFile(url, destPath, { onProgress, redirectsLeft = 6 } = {}) {
 }
 
 // bsdtar ships with Windows 10+ and handles .zip as well as .tar.gz, which
-// keeps extraction dependency-free across platforms.
+// keeps extraction dependency-free across platforms. It must be fed paths
+// relative to a cwd: absolute Windows paths ("C:\…") read as rsync-style
+// host:path and tar tries to connect to a machine called "C".
 function extractArchive(archivePath, destDir) {
+  const cwd = path.dirname(archivePath)
+  const relArchive = path.basename(archivePath)
+  const relDest = path.relative(cwd, destDir) || '.'
+  // Pin the System32 bsdtar on Windows: a PATH `tar` may be MSYS/Git GNU tar,
+  // which cannot read zip archives.
+  const tarBinary = process.platform === 'win32'
+    ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe')
+    : 'tar'
   return new Promise((resolve, reject) => {
-    const proc = spawn('tar', ['-xf', archivePath, '-C', destDir], { windowsHide: true })
+    const proc = spawn(tarBinary, ['-xf', relArchive, '-C', relDest], { windowsHide: true, cwd })
     let stderr = ''
     proc.stderr.on('data', (chunk) => { stderr += chunk })
     proc.on('error', (err) => {
@@ -294,15 +304,26 @@ function parseWhisperJson(raw) {
   }
   const words = []
   for (const entry of Array.isArray(data?.transcription) ? data.transcription : []) {
-    const text = String(entry?.text || '').trim()
+    const rawText = String(entry?.text || '')
+    const text = rawText.trim()
     if (!text) continue
     if (/^\[.*\]$/.test(text) || /^\(.*\)$/.test(text)) continue // [BLANK_AUDIO], (music) etc.
     const from = Number(entry?.offsets?.from)
     const to = Number(entry?.offsets?.to)
     if (!Number.isFinite(from) || !Number.isFinite(to)) continue
+    const end = to > from ? to / 1000 : from / 1000 + 0.08
+    // -ml 1 emits tokens, not words. Whisper marks word starts with a leading
+    // space; a token without one continues the previous word ("Vel" + "orn"),
+    // and detached punctuation tokens ("," ".") glue onto the word they follow.
+    if (!/^\s/.test(rawText) && words.length > 0) {
+      const prev = words[words.length - 1]
+      prev.text += text
+      prev.end = Math.max(prev.end, end)
+      continue
+    }
     words.push({
       start: from / 1000,
-      end: to > from ? to / 1000 : from / 1000 + 0.08,
+      end,
       text,
     })
   }
