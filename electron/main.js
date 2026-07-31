@@ -13,6 +13,7 @@ const ffmpegStaticPath = require('ffmpeg-static')
 const ffprobeStatic = require('ffprobe-static')
 const ffprobeStaticPath = ffprobeStatic?.path || ffprobeStatic
 const { inspectIsoBmffLayout } = require('./exportSourcePreparation')
+const { registerCaptionWhisperHandlers } = require('./captionWhisper')
 const {
   ComfyLauncher,
   detectLaunchersForComfyRoot,
@@ -4451,6 +4452,14 @@ ipcMain.handle('media:extractVideoPoster', async (event, inputPath, outputPath, 
 //   2. Doing the mix in the renderer via decodeAudioData() on multi-hundred-MB
 //      mp4 files reliably OOMs Chromium (renderer goes black). FFmpeg demuxes
 //      the audio stream without decoding video, so memory stays flat.
+// Local caption engine (whisper.cpp): status / install / transcribe handlers.
+registerCaptionWhisperHandlers({
+  app,
+  ipcMain,
+  ffmpegPath,
+  getMainWindow: () => mainWindow,
+})
+
 ipcMain.handle('captions:mixTimelineAudio', async (event, options = {}) => {
   if (!ffmpegPath) {
     return { success: false, error: 'FFmpeg binary not available.' }

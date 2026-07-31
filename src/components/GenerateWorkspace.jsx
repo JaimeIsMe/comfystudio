@@ -55,7 +55,7 @@ import {
 } from '../services/fileSystem'
 import { enqueuePlaybackTranscode } from '../services/playbackCache'
 import { enqueueProxyTranscode, isProxyPlaybackEnabled } from '../services/proxyCache'
-import { formatCaptionCuesAsSrt, transcribeWithComfyUI } from '../services/captionComfyTranscription'
+import { formatCaptionCuesAsSrt, transcribeAsset } from '../services/captionTranscription'
 import {
   buildYoloPlanFromScript,
   flattenYoloPlanVariants,
@@ -6098,7 +6098,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       : 'Preparing Qwen ASR transcription...')
 
     try {
-      const result = await transcribeWithComfyUI(yoloMusicAudioAsset, {
+      const result = await transcribeAsset(yoloMusicAudioAsset, {
         language: effectiveLanguage,
         onProgress: (progress) => {
           setYoloMusicTranscriptionStatus(progress?.message || (shouldAlignProvidedLyrics

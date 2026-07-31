@@ -13,7 +13,7 @@ import {
   loadCaptionSidecar,
   saveCaptionSidecar,
 } from '../services/captionProject'
-import { transcribeWithComfyUI, transcribeTimeline } from '../services/captionComfyTranscription'
+import { transcribeAsset, transcribeTimelineAudio } from '../services/captionTranscription'
 import {
   generateCaptionVideoBlob,
   renderCaptionFrame,
@@ -1019,8 +1019,8 @@ function CaptionWorkspace({
       }
 
       const nextDraft = isTimelineScope
-        ? await transcribeTimeline({ onProgress })
-        : await transcribeWithComfyUI(asset, { onProgress })
+        ? await transcribeTimelineAudio({ onProgress })
+        : await transcribeAsset(asset, { onProgress })
 
       const normalizedDraft = {
         ...nextDraft,

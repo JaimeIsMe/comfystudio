@@ -1,7 +1,7 @@
 import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
-import { transcribeTimeline, transcribeWithComfyUI } from './captionComfyTranscription'
+import { transcribeAsset, transcribeTimelineAudio } from './captionTranscription'
 import { buildCaptionAssetName, ensureCaptionsFolder } from './captionProject'
 import { isElectron, writeGeneratedOverlayToProject } from './fileSystem'
 import { generateCaptionVideoBlob } from '../utils/captionRenderer'
@@ -189,8 +189,8 @@ async function runTranscribeCaptionJob(job, { scope, language, sourceAsset }) {
 
   try {
     const result = scope === 'asset'
-      ? await transcribeWithComfyUI(sourceAsset, { onProgress, language })
-      : await transcribeTimeline({ onProgress })
+      ? await transcribeAsset(sourceAsset, { onProgress, language })
+      : await transcribeTimelineAudio({ onProgress })
 
     const audioDuration = Number(result?.audioDuration) || 0
     const cues = normalizeCueOrder(result?.cues || [], audioDuration)

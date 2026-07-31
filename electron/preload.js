@@ -343,6 +343,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   mixTimelineAudioForCaptions: (options = {}) => ipcRenderer.invoke('captions:mixTimelineAudio', options),
 
   /**
+   * Local caption engine (whisper.cpp in the main process). Status reports
+   * binary/model availability; install downloads them into userData; the
+   * transcribe call returns word-level timings.
+   */
+  whisperEngineStatus: () => ipcRenderer.invoke('captions:whisperStatus'),
+  whisperEngineInstall: (options = {}) => ipcRenderer.invoke('captions:whisperInstall', options),
+  whisperTranscribe: (options = {}) => ipcRenderer.invoke('captions:whisperTranscribe', options),
+
+  /**
    * Get a direct file:// URL for a local file
    * @param {string} filePath 
    * @returns {Promise<string>}
@@ -415,6 +424,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_, data) => cb(data)
     ipcRenderer.on('download:progress', handler)
     return () => ipcRenderer.removeListener('download:progress', handler)
+  },
+  onCaptionEngineProgress: (cb) => {
+    const handler = (_, data) => cb(data)
+    ipcRenderer.on('captions:engineProgress', handler)
+    return () => ipcRenderer.removeListener('captions:engineProgress', handler)
   },
 
   // ============================================
