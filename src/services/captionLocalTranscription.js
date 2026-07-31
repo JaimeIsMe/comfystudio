@@ -6,7 +6,7 @@
 // grouped here, renderer-side, so the rules stay pure and testable.
 
 import { mixTimelineAudioToWav } from './timelineAudioMix'
-import { repairSmearedWordTimings, snapWordsToAudibleSpans } from './captionWordTiming'
+import { repairSmearedWordTimings, snapWordsToAudibleSpans, isNonSpeechMarker } from './captionWordTiming'
 
 // Common picker names → whisper language codes. Anything unrecognized falls
 // back to autodetect, and 2–3 letter codes pass through untouched.
@@ -260,7 +260,7 @@ async function runLocalTranscription({
         end: Number(w?.end) || 0,
         text: String(w?.text || '').trim(),
       }))
-      .filter((w) => w.text)
+      .filter((w) => w.text && !isNonSpeechMarker(w.text))
     const words = repairSmearedWordTimings(
       snapWordsToAudibleSpans(normalizedWords, audibleSpans)
     )

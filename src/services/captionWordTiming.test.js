@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { repairSmearedWordTimings, snapWordsToAudibleSpans } from './captionWordTiming.js'
+import { isNonSpeechMarker, repairSmearedWordTimings, snapWordsToAudibleSpans } from './captionWordTiming.js'
 
 // Real timings from the July 31 investigation (whisper large-v3-turbo).
 // ShrimpMan: spoken line with music/laughter intro and outro — whisper
@@ -121,6 +121,17 @@ test('leading re-lay never crosses into the previous utterance', () => {
   ])
   assert.ok(words[1].start >= words[0].end)
   assert.equal(words[1].end, 3.9)
+})
+
+test('recognizes whisper non-speech marker tokens', () => {
+  assert.equal(isNonSpeechMarker('[BLANK_AUDIO]'), true)
+  assert.equal(isNonSpeechMarker('[MUSIC]'), true)
+  assert.equal(isNonSpeechMarker('(applause)'), true)
+  assert.equal(isNonSpeechMarker('♪'), true)
+  assert.equal(isNonSpeechMarker(''), true)
+  assert.equal(isNonSpeechMarker('brie'), false)
+  assert.equal(isNonSpeechMarker('cocktail?'), false)
+  assert.equal(isNonSpeechMarker('[partial'), false)
 })
 
 test('tolerates empty and invalid input', () => {

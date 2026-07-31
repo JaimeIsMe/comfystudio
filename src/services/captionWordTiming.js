@@ -25,6 +25,19 @@ const DEFAULT_MAX_UTTERANCE_GAP_SECONDS = 0.6
 
 const round2 = (value) => Math.round(value * 100) / 100
 
+/**
+ * Whisper emits bracketed marker tokens for non-speech regions —
+ * [BLANK_AUDIO], [MUSIC], (applause), ♪ — which should never become
+ * caption text.
+ */
+export function isNonSpeechMarker(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return true
+  if (/^[[(].*[\])]$/.test(raw)) return true
+  if (/^[♪♫\s]+$/.test(raw)) return true
+  return false
+}
+
 // Smear is a RELATIVE judgement: spoken words run ~0.1-0.5s, but sung held
 // notes legitimately run 1-2s+ — a fixed cutoff squashes real singing. A
 // word only counts as smeared when it towers over its own utterance's
