@@ -3,6 +3,7 @@
 ## Highlights
 
 - Duplicate clips by holding Alt while dragging, Flame/Resolve style.
+- High-frame-rate timelines now play at full speed — 60 fps sequences that previously topped out around 50 hold a locked 60.
 - The app launches faster and stays quiet when idle — no more background saves, thumbnail captures, or constant ComfyUI polling while you're not doing anything.
 - Hardware-encode exports now probe the encoder first and fall back to software with a clear message instead of stalling — fixes exports on Linux machines without NVENC and covers driver mismatches everywhere.
 - Fixed a regression that silently broke PNG-sequence import and PNG-fallback export.
@@ -24,6 +25,7 @@
 
 ## Performance
 
+- Fixed 60 fps timelines playing at roughly 50: the timeline panel was re-rendering on every frame of playback through a snapping subscription. High-frame-rate sequences now hold their target rate, and the gain grows with timeline size.
 - The renderer bundle that loads at launch dropped from 4.4 MB to 2.6 MB. The Generate workspace now loads the first time you open the tab instead of at startup, and hidden experimental workspaces no longer load at all.
 - Autosave only runs when something actually changed. Previously the full project was re-serialized, a thumbnail captured, and both written to disk every 30 seconds even while idle — on large projects that was a periodic stutter. A backstop save still runs every few minutes as insurance.
 - ComfyUI queue polling rests at 30 seconds when nothing is generating and snaps back to 2 seconds the moment work starts, instead of polling every 2 seconds forever.

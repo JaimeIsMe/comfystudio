@@ -17,7 +17,12 @@ export const SNAP_TYPES = {
  */
 export function useSnapping() {
   const clips = useTimelineStore((state) => state.clips)
-  const playheadPosition = useTimelineStore((state) => state.playheadPosition)
+  // The playhead is deliberately NOT subscribed here. During playback it
+  // changes every frame, and a reactive subscription made Timeline (the
+  // hook's only consumer) re-render per frame — measured at ~3ms/frame, the
+  // main reason 60fps timelines played at ~50. Snapping only runs during a
+  // drag or trim, so the functions below read the live playhead at call
+  // time instead, which is also more current than a render-time value.
   const snappingEnabled = useTimelineStore((state) => state.snappingEnabled)
   const snappingThreshold = useTimelineStore((state) => state.snappingThreshold)
   const zoom = useTimelineStore((state) => state.zoom)
@@ -47,16 +52,17 @@ export function useSnapping() {
     return points
   }, [clips])
 
-  const allSnapPoints = useMemo(() => {
-    return [
-      {
-        time: playheadPosition,
-        type: SNAP_TYPES.PLAYHEAD,
-        priority: 1,
-      },
-      ...clipEdgeSnapPoints,
-    ]
-  }, [playheadPosition, clipEdgeSnapPoints])
+  // Live playhead read for snap targets — see the note above about why this
+  // is not a reactive subscription.
+  const getPlayheadSnapPoint = useCallback(() => ({
+    time: useTimelineStore.getState().playheadPosition || 0,
+    type: SNAP_TYPES.PLAYHEAD,
+    priority: 1,
+  }), [])
+
+  const getAllSnapPoints = useCallback(() => (
+    [getPlayheadSnapPoint(), ...clipEdgeSnapPoints]
+  ), [clipEdgeSnapPoints, getPlayheadSnapPoint])
 
   const getExcludedClipIdSet = useCallback((excludeClipIds = null) => {
     if (!excludeClipIds) return null
@@ -72,10 +78,11 @@ export function useSnapping() {
    * Returns array of { time, type, clipId? }
    */
   const getSnapPoints = useCallback((excludeClipIds = null) => {
+    const allSnapPoints = getAllSnapPoints()
     const excludedClipIds = getExcludedClipIdSet(excludeClipIds)
     if (!excludedClipIds) return allSnapPoints
     return allSnapPoints.filter((point) => !point.clipId || !excludedClipIds.has(point.clipId))
-  }, [allSnapPoints, getExcludedClipIdSet])
+  }, [getAllSnapPoints, getExcludedClipIdSet])
 
   /**
    * Find the nearest snap point to a given time
@@ -88,9 +95,10 @@ export function useSnapping() {
     
     const threshold = customThreshold ?? thresholdInSeconds
     const excludedClipIdSet = getExcludedClipIdSet(excludeClipIds)
+    const allSnapPoints = getAllSnapPoints()
     let nearestSnap = null
     let minDistance = Infinity
-    
+
     for (const snapPoint of allSnapPoints) {
       if (excludedClipIdSet && snapPoint.clipId && excludedClipIdSet.has(snapPoint.clipId)) continue
       const distance = Math.abs(snapPoint.time - time)
@@ -119,7 +127,7 @@ export function useSnapping() {
     }
     
     return { snapped: false, time }
-  }, [snappingEnabled, thresholdInSeconds, allSnapPoints, getExcludedClipIdSet])
+  }, [snappingEnabled, thresholdInSeconds, getAllSnapPoints, getExcludedClipIdSet])
 
   /**
    * Snap a clip's position (checks both start and end edges)
@@ -184,10 +192,11 @@ export function useSnapping() {
    */
   const getVisibleSnapLines = useCallback((activeSnapTime = null) => {
     if (!snappingEnabled) return []
-    
+
     const lines = []
-    
+
     // Always show playhead (it's always a potential snap target)
+    const playheadPosition = useTimelineStore.getState().playheadPosition || 0
     lines.push({
       time: playheadPosition,
       type: SNAP_TYPES.PLAYHEAD,
@@ -217,7 +226,7 @@ export function useSnapping() {
     }
     
     return lines
-  }, [snappingEnabled, playheadPosition, clips])
+  }, [snappingEnabled, clips])
 
   return {
     snappingEnabled,
