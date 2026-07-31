@@ -7,6 +7,9 @@ on:
 jobs:
   announce:
     name: Post Discord Announcement
+    # Only announce real app releases (v* tags, not prereleases). Tooling
+    # releases like the macOS whisper engine archive stay quiet.
+    if: ${{ !github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v') }}
     runs-on: ubuntu-latest
     steps:
       - name: Send release announcement

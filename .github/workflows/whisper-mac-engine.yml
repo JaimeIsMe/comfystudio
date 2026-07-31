@@ -1,0 +1,139 @@
+name: Build macOS Whisper Engine
+
+# Builds a static universal whisper-cli from ggml-org/whisper.cpp for the
+# local caption engine (electron/captionWhisper.js). Upstream ships prebuilt
+# CLI archives for Windows and Linux only, so macOS gets its archive from
+# here: a one-time build per pinned whisper tag, attached to a dedicated
+# prerelease whose download URL is stable across app releases.
+#
+# Pushes to ci/whisper-mac-engine build and smoke test only (the zip lands
+# in the run's artifacts). Publishing to the engine release is an explicit
+# workflow_dispatch with publish=true.
+
+on:
+  push:
+    branches:
+      - ci/whisper-mac-engine
+  workflow_dispatch:
+    inputs:
+      whisper_tag:
+        description: whisper.cpp tag to build (keep in sync with WHISPER_RELEASE_TAG in electron/captionWhisper.js)
+        required: false
+        default: v1.9.1
+        type: string
+      publish:
+        description: Attach the zip to the dedicated engine prerelease (public)
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  WHISPER_TAG: ${{ github.event.inputs.whisper_tag || 'v1.9.1' }}
+
+jobs:
+  build:
+    name: Build universal whisper-cli
+    runs-on: macos-latest
+    steps:
+      - name: Check out whisper.cpp
+        uses: actions/checkout@v6
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: ${{ env.WHISPER_TAG }}
+          path: whisper.cpp
+
+      - name: Configure and build (arm64 + x86_64, static, Metal embedded)
+        working-directory: whisper.cpp
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_METAL=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          cmake --build build --config Release --target whisper-cli -j "$(sysctl -n hw.ncpu)"
+
+      - name: Verify architectures, static linkage, and ad-hoc signature
+        working-directory: whisper.cpp
+        run: |
+          BIN=build/bin/whisper-cli
+          file "$BIN"
+          lipo -archs "$BIN"
+          lipo -archs "$BIN" | grep -q arm64
+          lipo -archs "$BIN" | grep -q x86_64
+          # Static build must not depend on whisper/ggml dylibs, only system
+          # libraries and frameworks.
+          otool -L "$BIN"
+          if otool -L "$BIN" | grep -Ei 'libwhisper|libggml'; then
+            echo "whisper-cli still links whisper/ggml dylibs; static build failed" >&2
+            exit 1
+          fi
+          codesign --force -s - "$BIN"
+          codesign -dv "$BIN"
+
+      - name: Smoke test arm64 (real transcription)
+        working-directory: whisper.cpp
+        run: |
+          curl -fsSL -o models/ggml-tiny.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+          ./build/bin/whisper-cli -m models/ggml-tiny.bin -f samples/jfk.wav -np > jfk-arm64.txt
+          cat jfk-arm64.txt
+          grep -qi "country" jfk-arm64.txt
+
+      - name: Smoke test x86_64 (via Rosetta)
+        working-directory: whisper.cpp
+        run: |
+          if ! /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+            softwareupdate --install-rosetta --agree-to-license || true
+          fi
+          if /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+            /usr/bin/arch -x86_64 ./build/bin/whisper-cli -m models/ggml-tiny.bin -f samples/jfk.wav -np > jfk-x64.txt
+            cat jfk-x64.txt
+            grep -qi "country" jfk-x64.txt
+          else
+            echo "::warning::Rosetta unavailable on this runner; x86_64 slice was not smoke tested"
+          fi
+
+      - name: Package zip
+        run: |
+          STAGE=engine-stage
+          mkdir -p "$STAGE"
+          cp whisper.cpp/build/bin/whisper-cli "$STAGE/"
+          cp whisper.cpp/LICENSE "$STAGE/whisper.cpp-LICENSE.txt"
+          {
+            printf 'whisper-cli %s for the Velorn local caption engine\n' "$WHISPER_TAG"
+            printf 'Built from https://github.com/ggml-org/whisper.cpp at tag %s\n' "$WHISPER_TAG"
+            printf 'Universal binary (arm64 + x86_64), statically linked, Metal embedded.\n'
+          } > "$STAGE/PROVENANCE.txt"
+          ZIP="whisper-cli-macos-universal-$WHISPER_TAG.zip"
+          (cd "$STAGE" && zip -X "../$ZIP" whisper-cli whisper.cpp-LICENSE.txt PROVENANCE.txt)
+          ls -l "$ZIP"
+          shasum -a 256 "$ZIP"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-cli-macos-universal-${{ env.WHISPER_TAG }}
+          path: whisper-cli-macos-universal-*.zip
+
+      - name: Publish to dedicated engine release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="whisper-cli-$WHISPER_TAG-mac"
+          ZIP="whisper-cli-macos-universal-$WHISPER_TAG.zip"
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --prerelease \
+              --title "macOS caption engine: whisper-cli $WHISPER_TAG" \
+              --notes "Static universal (arm64 + x86_64) whisper-cli built from ggml-org/whisper.cpp $WHISPER_TAG with Metal support, for Velorn's local caption engine. The app downloads this automatically on first use — it is not a Velorn app release."
+          fi
+          gh release upload "$TAG" "$ZIP" --repo "$GITHUB_REPOSITORY" --clobber
