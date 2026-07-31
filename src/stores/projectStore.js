@@ -160,7 +160,7 @@ const hydrateOpenedProjectSession = async (projectHandleOrPath, rawProjectData, 
 
   const timelineFps = currentTimeline?.fps || projectData?.settings?.fps || 24
   useTimelineStore.getState().loadFromProject(currentTimeline, projectData.assets, timelineFps)
-  await useAssetsStore.getState().loadFromProject(
+  const assetsLoadResult = await useAssetsStore.getState().loadFromProject(
     projectData.assets,
     projectHandleOrPath,
     projectData.folders,
@@ -202,6 +202,22 @@ const hydrateOpenedProjectSession = async (projectHandleOrPath, rawProjectData, 
   // Hydration replaced every watched store slice; none of it is an unsaved
   // user change.
   markProjectClean()
+
+  // Auto-relinked media means the project file on disk still holds dead
+  // old-machine paths; persist the repaired records now so the fix is
+  // durable rather than re-derived on every open. Save failures are
+  // non-fatal — the fallback simply runs again next open.
+  const autoRelinkedAssets = assetsLoadResult?.autoRelinkedAssets || []
+  if (autoRelinkedAssets.length > 0) {
+    try {
+      const saved = await useProjectStore.getState().saveProject()
+      if (!saved) {
+        console.warn('Auto-relinked media paths were not saved; they will re-resolve on next open.')
+      }
+    } catch (err) {
+      console.warn('Auto-relinked media paths were not saved; they will re-resolve on next open:', err)
+    }
+  }
 
   return projectData
 }

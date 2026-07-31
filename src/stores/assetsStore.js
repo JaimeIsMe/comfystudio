@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { PLAYBACK_CACHE_VERSION } from '../services/playbackCache'
+import { resolveMovedAssetPath } from '../services/assetRelinkFallback'
 
 const SPRITE_GENERATION_CONCURRENCY = 2
 let activeSpriteGenerationCount = 0
@@ -508,6 +509,16 @@ export const useAssetsStore = create(
     const fileSystemHelpers = await import('../services/fileSystem')
     const { getProjectFileUrl, getAbsoluteFileUrl, isElectron: isElectronMode } = fileSystemHelpers
 
+    // Auto-relink fallback for projects that moved between machines: when a
+    // recorded absolute path is dead but the media travelled inside the
+    // project's assets/ tree, repair the record instead of loading a dead
+    // URL. Electron-only (needs real path probing).
+    const projectPath = typeof projectHandle === 'string' ? projectHandle : ''
+    const localFileExists = typeof window !== 'undefined' && typeof window.electronAPI?.exists === 'function'
+      ? (candidatePath) => window.electronAPI.exists(candidatePath)
+      : null
+    const autoRelinkedAssets = []
+
     // Load assets - URLs need to be regenerated for imported assets
     const assetsWithUrls = new Array(sourceAssets.length)
     let loadedAssetCount = 0
@@ -519,26 +530,62 @@ export const useAssetsStore = create(
 
       if ((asset?.isImported || needsUrlRefresh || hasPath || hasAbsolutePath) && projectHandle) {
         try {
-          let url = null
-          if (isElectronMode() && hasAbsolutePath) {
-            url = await getAbsoluteFileUrl(asset.absolutePath)
-          } else if (hasPath) {
-            url = await getProjectFileUrl(projectHandle, asset.path)
+          let workingAsset = asset
+          if (isElectronMode() && projectPath && localFileExists) {
+            const moved = await resolveMovedAssetPath(asset, projectPath, localFileExists)
+            if (moved) {
+              // Same field shape as relink_asset: the derived artifacts
+              // (caches, proxies, sprite, poster) still point at the old
+              // machine, so drop them and let them rebuild on demand.
+              workingAsset = {
+                ...asset,
+                absolutePath: moved.toPath,
+                path: moved.toPath,
+                isImported: true,
+                playbackCachePath: undefined,
+                playbackCacheUrl: undefined,
+                playbackCacheStatus: undefined,
+                proxyPath: undefined,
+                proxyUrl: undefined,
+                proxyStatus: undefined,
+                sprite: undefined,
+                poster: undefined,
+                settings: {
+                  ...(asset.settings || {}),
+                  sourcePath: moved.toPath,
+                  autoRelinkedAt: new Date().toISOString(),
+                  autoRelinkedFromPath: moved.fromPath,
+                },
+              }
+              autoRelinkedAssets.push({
+                id: asset.id,
+                name: asset.name || asset.id,
+                fromPath: moved.fromPath,
+                toPath: moved.toPath,
+              })
+            }
           }
 
-          let playbackCachePath = asset.playbackCachePath
-          let playbackCacheStatus = asset.playbackCacheStatus
+          let url = null
+          if (isElectronMode() && workingAsset.absolutePath) {
+            url = await getAbsoluteFileUrl(workingAsset.absolutePath)
+          } else if (workingAsset.path) {
+            url = await getProjectFileUrl(projectHandle, workingAsset.path)
+          }
+
+          let playbackCachePath = workingAsset.playbackCachePath
+          let playbackCacheStatus = workingAsset.playbackCacheStatus
 
           assetsWithUrls[index] = {
-            ...asset,
+            ...workingAsset,
             url,
             playbackCachePath: playbackCachePath ?? undefined,
             playbackCacheStatus,
             playbackCacheUrl: undefined,
-            proxyPath: asset.proxyPath ?? undefined,
-            proxyStatus: asset.proxyStatus,
+            proxyPath: workingAsset.proxyPath ?? undefined,
+            proxyStatus: workingAsset.proxyStatus,
             proxyUrl: undefined,
-            poster: asset.poster || undefined,
+            poster: workingAsset.poster || undefined,
           }
         } catch (err) {
           console.warn(`Could not load asset ${asset.name}:`, err)
@@ -553,7 +600,9 @@ export const useAssetsStore = create(
         mediaPreparation: {
           active: true,
           phase: 'assets',
-          label: 'Loading project assets...',
+          label: autoRelinkedAssets.length > 0
+            ? `Relinking moved media (${autoRelinkedAssets.length})...`
+            : 'Loading project assets...',
           completed: loadedAssetCount,
           total: totalAssets,
           critical: true,
@@ -615,6 +664,14 @@ export const useAssetsStore = create(
           console.warn('Background clip render cache hydration failed:', err)
         })
     }
+
+    if (autoRelinkedAssets.length > 0) {
+      console.info(
+        `Auto-relinked ${autoRelinkedAssets.length} moved media file(s) under the project assets folder:`,
+        autoRelinkedAssets.map((entry) => `${entry.name}: ${entry.fromPath} -> ${entry.toPath}`)
+      )
+    }
+    return { autoRelinkedAssets }
   },
 
   /**
