@@ -1,12 +1,7 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, lazy, Suspense } from 'react'
 import { RefreshCw, ExternalLink, Loader2, BookmarkPlus } from 'lucide-react'
 import TitleBar from './components/TitleBar'
 import ExportPanel from './components/ExportPanel'
-import GenerateWorkspace from './components/GenerateWorkspace'
-import FlowAIWorkspace from './components/FlowAIWorkspace'
-import AgentWorkspace from './components/AgentWorkspace'
-import MOGWorkspace from './components/MOGWorkspace'
-import StockPanel from './components/StockPanel'
 import WorkspaceErrorBoundary from './components/WorkspaceErrorBoundary'
 import LeftPanel from './components/LeftPanel'
 import PreviewPanel from './components/PreviewPanel'
@@ -36,6 +31,24 @@ import { startMcpSnapshotPublisher } from './services/mcpSnapshot'
 import { MCP_ACTION_BRIDGE_VERSION, startMcpActionBridge } from './services/mcpActions'
 import { attachProjectDirtyWatchers, isProjectDirty } from './services/projectDirtyTracker'
 
+// Tab workspaces load on first visit instead of shipping in the startup
+// bundle. This keeps launch parse time down; GenerateWorkspace alone carries
+// jspdf, and FlowAI carries @xyflow/react. The editor path (Timeline,
+// PreviewPanel) and ExportPanel stay eager: the editor is the default tab,
+// and ExportPanel hosts the renderer-side export engine that MCP-driven
+// exports rely on.
+const GenerateWorkspace = lazy(() => import('./components/GenerateWorkspace'))
+const FlowAIWorkspace = lazy(() => import('./components/FlowAIWorkspace'))
+const AgentWorkspace = lazy(() => import('./components/AgentWorkspace'))
+const MOGWorkspace = lazy(() => import('./components/MOGWorkspace'))
+const StockPanel = lazy(() => import('./components/StockPanel'))
+
+const WORKSPACE_LOADING_FALLBACK = (
+  <div className="flex-1 flex items-center justify-center bg-sf-dark-950 text-xs text-sf-text-muted">
+    Loading…
+  </div>
+)
+
 function formatDownloadBytes(bytes) {
   const numeric = Math.max(0, Number(bytes) || 0)
   if (numeric < 1024) return `${numeric} B`
@@ -57,6 +70,7 @@ function App() {
   const [selectedItem, setSelectedItem] = useState({ type: 'shot', id: '2.1' })
   const [mainTab, setMainTab] = useState('editor')
   const [hasMountedFlowAi, setHasMountedFlowAi] = useState(false)
+  const [hasMountedGenerate, setHasMountedGenerate] = useState(false)
   const [bottomEditorView, setBottomEditorView] = useState('timeline')
   const [activeTimelineToolLabel, setActiveTimelineToolLabel] = useState('Move tool')
   const [timelineStatusText, setTimelineStatusText] = useState('')
@@ -308,6 +322,9 @@ function App() {
   useEffect(() => {
     if (mainTab === 'flow-ai') {
       setHasMountedFlowAi(true)
+    }
+    if (mainTab === 'generate') {
+      setHasMountedGenerate(true)
     }
   }, [mainTab])
 
@@ -703,30 +720,43 @@ function App() {
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads"
           />
         </div>
-        {/* Generate tab – keep mounted so queue/progress survives tab switches */}
-        <div
-          className="flex-1 flex flex-col min-h-0 overflow-hidden bg-sf-dark-950"
-          style={{ display: mainTab === 'generate' ? 'flex' : 'none' }}
-        >
-          <GenerateWorkspace
-            key={`generate-workspace-${projectSessionKey}`}
-            onOpenWorkflowSetup={() => openSettingsModal(WORKFLOW_SETUP_SECTION_ID)}
-          />
-        </div>
+        {/* Generate tab – mounted on first visit, then kept mounted so
+            queue/progress survives tab switches. MCP music-video tools open
+            this tab via the comfystudio-open-generate-tab event before their
+            readiness probe, so first mount happens before they need it. */}
+        {hasMountedGenerate && (
+          <div
+            className="flex-1 flex flex-col min-h-0 overflow-hidden bg-sf-dark-950"
+            style={{ display: mainTab === 'generate' ? 'flex' : 'none' }}
+          >
+            <WorkspaceErrorBoundary>
+              <Suspense fallback={WORKSPACE_LOADING_FALLBACK}>
+                <GenerateWorkspace
+                  key={`generate-workspace-${projectSessionKey}`}
+                  onOpenWorkflowSetup={() => openSettingsModal(WORKFLOW_SETUP_SECTION_ID)}
+                />
+              </Suspense>
+            </WorkspaceErrorBoundary>
+          </div>
+        )}
         {hasMountedFlowAi && (
           <div
             className="flex-1 flex flex-col min-h-0 overflow-hidden bg-sf-dark-950"
             style={{ display: mainTab === 'flow-ai' ? 'flex' : 'none' }}
           >
             <WorkspaceErrorBoundary>
-              <FlowAIWorkspace onOpenWorkflowSetup={() => openSettingsModal(WORKFLOW_SETUP_SECTION_ID)} />
+              <Suspense fallback={WORKSPACE_LOADING_FALLBACK}>
+                <FlowAIWorkspace onOpenWorkflowSetup={() => openSettingsModal(WORKFLOW_SETUP_SECTION_ID)} />
+              </Suspense>
             </WorkspaceErrorBoundary>
           </div>
         )}
         {mainTab === 'mog' && (
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-sf-dark-950">
             <WorkspaceErrorBoundary>
-              <MOGWorkspace />
+              <Suspense fallback={WORKSPACE_LOADING_FALLBACK}>
+                <MOGWorkspace />
+              </Suspense>
             </WorkspaceErrorBoundary>
           </div>
         )}
@@ -738,10 +768,18 @@ function App() {
           <ExportPanel />
         </div>
         {mainTab === "stock" && (
-          <StockPanel />
+          <WorkspaceErrorBoundary>
+            <Suspense fallback={WORKSPACE_LOADING_FALLBACK}>
+              <StockPanel />
+            </Suspense>
+          </WorkspaceErrorBoundary>
         )}
         {mainTab === "agent" && (
-          <AgentWorkspace />
+          <WorkspaceErrorBoundary>
+            <Suspense fallback={WORKSPACE_LOADING_FALLBACK}>
+              <AgentWorkspace />
+            </Suspense>
+          </WorkspaceErrorBoundary>
         )}
         {/* Editor tab: unmount when hidden so video/canvas preview resources are released before Generate opens. */}
         {mainTab === "editor" && (
