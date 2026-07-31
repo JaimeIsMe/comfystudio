@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, Copy, Loader2, Pause, Play, RefreshCw, RotateCcw, Sparkles, Wand2, X } from 'lucide-react'
+import { Check, Copy, Download, Loader2, Pause, Play, RefreshCw, RotateCcw, Sparkles, Wand2, X } from 'lucide-react'
 import {
   CAPTION_PRESETS,
   DEFAULT_CAPTION_PRESET_ID,
@@ -13,7 +13,15 @@ import {
   loadCaptionSidecar,
   saveCaptionSidecar,
 } from '../services/captionProject'
-import { transcribeAsset, transcribeTimelineAudio } from '../services/captionTranscription'
+import {
+  transcribeAsset,
+  transcribeTimelineAudio,
+  resolveCaptionEngine,
+  getCaptionEnginePreference,
+  setCaptionEnginePreference,
+  getLocalCaptionEngineStatus,
+  installLocalCaptionEngine,
+} from '../services/captionTranscription'
 import {
   generateCaptionVideoBlob,
   renderCaptionFrame,
@@ -392,6 +400,10 @@ function CaptionWorkspace({
   const [error, setError] = useState('')
   const [errorExpanded, setErrorExpanded] = useState(false)
   const [errorCopied, setErrorCopied] = useState(false)
+  const [engineStatus, setEngineStatus] = useState(null)
+  const [enginePreference, setEnginePreference] = useState(() => getCaptionEnginePreference())
+  const [isInstallingEngine, setIsInstallingEngine] = useState(false)
+  const [engineInstallProgress, setEngineInstallProgress] = useState(null)
   const [savedCaptionStyles, setSavedCaptionStyles] = useState(() => loadSavedCaptionStyles())
   const [captionStyleName, setCaptionStyleName] = useState('')
   const [activeSavedStyleId, setActiveSavedStyleId] = useState(null)
@@ -907,16 +919,48 @@ function CaptionWorkspace({
     }
   }, [captureUrl, captureTime, isOpen])
 
+  // The engine row needs to know whether the local whisper engine is
+  // installed; refresh whenever the dialog opens.
+  useEffect(() => {
+    if (!isOpen) return undefined
+    let cancelled = false
+    getLocalCaptionEngineStatus().then((status) => {
+      if (!cancelled) setEngineStatus(status)
+    })
+    return () => { cancelled = true }
+  }, [isOpen])
+
   if (!isOpen || !asset) return null
 
   const busy = isTranscribing || isGenerating
   const cueDuration = getDraftDuration(draft, asset)
+
+  const localEngineReady = Boolean(engineStatus?.available)
+  const localEngineSupported = Boolean(engineStatus?.platformSupported)
+  const showEngineInstall = localEngineSupported && !localEngineReady
+  // What a transcription would actually run on right now. 'unavailable' means
+  // the user pinned Local but the engine isn't installed.
+  const activeEngine = enginePreference === 'comfyui'
+    ? 'comfyui'
+    : enginePreference === 'local'
+      ? (localEngineReady ? 'local' : 'unavailable')
+      : (localEngineReady ? 'local' : 'comfyui')
+  const engineStatusLine = isInstallingEngine
+    ? (engineInstallProgress?.message || 'Installing caption engine…')
+    : activeEngine === 'local'
+      ? 'Local whisper on this machine — no ComfyUI needed.'
+      : activeEngine === 'unavailable'
+        ? 'Local engine selected but not installed — download it or switch engines.'
+        : localEngineSupported
+          ? 'Using ComfyUI (Qwen3-ASR). Download the local engine to skip ComfyUI.'
+          : 'Using ComfyUI (Qwen3-ASR). The local engine is not available on this platform yet.'
+
   // Timeline mode can always transcribe (the audio mixer will report no-audio
   // conditions at mix time with a clear message). Asset mode still needs a
   // video with an audio track.
-  const canTranscribe = isTimelineScope
+  const canTranscribe = activeEngine !== 'unavailable' && !isInstallingEngine && (isTimelineScope
     ? !busy
-    : (asset.type === 'video' && asset.hasAudio !== false && !busy)
+    : (asset.type === 'video' && asset.hasAudio !== false && !busy))
   const canGenerate = draft.cues.length > 0 && !busy && addAsset
 
   const updateCue = (cueId, field, value) => {
@@ -1003,19 +1047,57 @@ function CaptionWorkspace({
     })
   }
 
+  const refreshEngineStatus = async () => {
+    const status = await getLocalCaptionEngineStatus()
+    setEngineStatus(status)
+    return status
+  }
+
+  const handleEnginePreferenceChange = (value) => {
+    setCaptionEnginePreference(value)
+    setEnginePreference(value)
+  }
+
+  const handleInstallEngine = async () => {
+    setError('')
+    setErrorExpanded(false)
+    setIsInstallingEngine(true)
+    setEngineInstallProgress(null)
+    try {
+      await installLocalCaptionEngine({
+        modelId: 'base',
+        onProgress: (update) => setEngineInstallProgress(update),
+      })
+      const status = await refreshEngineStatus()
+      setStatusMessage(status?.available
+        ? 'Local caption engine installed — transcription now runs on this machine.'
+        : 'The install finished but the engine did not come up — try again or use ComfyUI.')
+    } catch (installError) {
+      setError(installError?.message || 'Caption engine install failed.')
+      await refreshEngineStatus()
+    } finally {
+      setIsInstallingEngine(false)
+      setEngineInstallProgress(null)
+    }
+  }
+
   const handleTranscribe = async () => {
     setError('')
     setErrorExpanded(false)
     setIsTranscribing(true)
     try {
+      const engine = await resolveCaptionEngine()
+      const engineLabel = engine === 'local' ? 'the local engine' : 'Qwen3-ASR (ComfyUI)'
       setStatusMessage(
         isTimelineScope
-          ? 'Mixing timeline audio for Qwen3-ASR…'
-          : 'Connecting to ComfyUI for Qwen3-ASR transcription...'
+          ? `Mixing timeline audio for ${engineLabel}…`
+          : (engine === 'local'
+            ? 'Transcribing on this machine…'
+            : 'Connecting to ComfyUI for Qwen3-ASR transcription...')
       )
 
       const onProgress = (progress) => {
-        setStatusMessage(progress?.message || 'Transcribing with Qwen3-ASR...')
+        setStatusMessage(progress?.message || 'Transcribing…')
       }
 
       const nextDraft = isTimelineScope
@@ -1029,13 +1111,13 @@ function CaptionWorkspace({
       setDraft(normalizedDraft)
       stashTimelineSession(normalizedDraft)
 
-      setStatusMessage(`Transcribed ${nextDraft.cues.length} caption cues via Qwen3-ASR (ComfyUI).`)
+      setStatusMessage(`Transcribed ${nextDraft.cues.length} caption cues with ${engineLabel}.`)
     } catch (transcriptionError) {
       setError(
         transcriptionError?.message
         || (isTimelineScope
-          ? 'Could not transcribe the timeline. Make sure ComfyUI is running with the Subtitle (QwenASR) node installed.'
-          : 'Could not transcribe this video. Make sure ComfyUI is running with the Subtitle (QwenASR) node installed.')
+          ? 'Could not transcribe the timeline audio.'
+          : 'Could not transcribe this video.')
       )
     } finally {
       setIsTranscribing(false)
@@ -1266,6 +1348,52 @@ function CaptionWorkspace({
                     : (isTimelineScope ? 'Transcribe timeline' : 'Transcribe audio')}
                 </button>
               </div>
+              {/* Transcription engine — local whisper vs ComfyUI */}
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sf-dark-700 bg-sf-dark-950/60 p-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-medium text-sf-text-primary">Transcription engine</div>
+                  <div className="text-[11px] text-sf-text-muted">{engineStatusLine}</div>
+                  {isInstallingEngine && Number.isFinite(Number(engineInstallProgress?.percent)) && (
+                    <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-sf-dark-700">
+                      <div
+                        className="h-full rounded-full bg-sf-accent transition-[width] duration-300"
+                        style={{ width: `${Math.max(2, Number(engineInstallProgress.percent))}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={enginePreference}
+                    onChange={(event) => handleEnginePreferenceChange(event.target.value)}
+                    disabled={busy || isInstallingEngine}
+                    className="rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-2 py-1.5 text-xs text-sf-text-primary focus:border-sf-accent focus:outline-none"
+                  >
+                    <option value="auto">Auto</option>
+                    <option value="local">Local (no ComfyUI)</option>
+                    <option value="comfyui">ComfyUI (Qwen3-ASR)</option>
+                  </select>
+                  {showEngineInstall && (
+                    <button
+                      type="button"
+                      onClick={handleInstallEngine}
+                      disabled={isInstallingEngine || busy}
+                      className="inline-flex items-center gap-2 rounded-lg border border-sf-accent/50 bg-sf-accent/10 px-3 py-1.5 text-xs font-medium text-sf-accent hover:bg-sf-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isInstallingEngine ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Download className="w-3.5 h-3.5" />
+                      )}
+                      {isInstallingEngine
+                        ? (Number.isFinite(Number(engineInstallProgress?.percent))
+                          ? `Downloading… ${engineInstallProgress.percent}%`
+                          : 'Installing…')
+                        : 'Download engine (~150 MB)'}
+                    </button>
+                  )}
+                </div>
+              </div>
               {isTimelineScope ? (
                 <div className="flex items-center gap-3 rounded-xl border border-sf-dark-700 bg-sf-dark-950/60 p-3">
                   <div className="min-w-0">
@@ -1273,7 +1401,7 @@ function CaptionWorkspace({
                     <div className="text-[11px] text-sf-text-muted truncate">
                       {draft.cues.length > 0
                         ? `${draft.cues.length} cues transcribed`
-                        : 'Mixed program audio, transcribed with Qwen3-ASR'}
+                        : 'Mixed program audio, transcribed to caption cues'}
                     </div>
                   </div>
                   {asset?.duration ? (
