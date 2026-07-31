@@ -9,7 +9,7 @@ import {
   Diamond, ChevronFirst, ChevronLast,
   FileVideo, FileImage, FileAudio, HardDrive, Calendar, Info,
   Wand2, Trash2, EyeOff, Plus, Play, Loader2, Check, AlertTriangle, X,
-  Copy, ClipboardPaste, Square
+  Copy, ClipboardPaste, Square, PanelRight, PanelRightClose
 } from 'lucide-react'
 import useTimelineStore, { buildClipSyncLock, isMusicVideoSyncCapableClip, isSyncLockedClip } from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
@@ -493,7 +493,7 @@ function KeyframeButton({ clipId, property, clip, playheadPosition }) {
   )
 }
 
-function InspectorPanel({ isExpanded, onToggleExpanded }) {
+function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, onToggleFullHeight, fullHeightDisabled = false }) {
   const [expandedSections, setExpandedSections] = useState(() => {
     try {
       const raw = localStorage.getItem(INSPECTOR_EXPANDED_SECTIONS_KEY)
@@ -6093,8 +6093,31 @@ function InspectorPanel({ isExpanded, onToggleExpanded }) {
           </button>
         </div>
         
-        {/* Collapse/Expand Button */}
+        {/* Bottom buttons */}
         <div className="border-t border-sf-dark-700">
+          {/* Full Height Toggle Button */}
+          <button
+            onClick={onToggleFullHeight}
+            disabled={fullHeightDisabled}
+            className={`w-full h-10 flex items-center justify-center transition-colors ${
+              fullHeightDisabled
+                ? 'text-sf-text-muted opacity-40 cursor-default'
+                : isFullHeight
+                  ? 'text-sf-accent bg-sf-dark-800'
+                  : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-800/50'
+            }`}
+            title={fullHeightDisabled
+              ? 'Unavailable while the left panel is full height'
+              : isFullHeight ? 'Contract panel (exit full height)' : 'Expand panel (full height)'}
+          >
+            {isFullHeight ? (
+              <PanelRightClose className="w-4 h-4" />
+            ) : (
+              <PanelRight className="w-4 h-4" />
+            )}
+          </button>
+
+          {/* Collapse/Expand Button */}
           <button
             onClick={onToggleExpanded}
             className="w-full h-10 flex items-center justify-center text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-800/50 transition-colors"

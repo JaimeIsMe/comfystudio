@@ -85,6 +85,7 @@ function App() {
   
   // Right panel (Inspector) state
   const [inspectorExpanded, setInspectorExpanded] = useState(true)
+  const [inspectorFullHeight, setInspectorFullHeight] = useState(false) // Resolve-style full height mode
   
   // Panel sizes (in pixels)
   const [leftPanelWidth, setLeftPanelWidth] = useState(280) // Content panel width (icon bar is 48px additional)
@@ -369,6 +370,8 @@ function App() {
         }
         if (typeof saved.leftPanelExpanded === 'boolean') setLeftPanelExpanded(saved.leftPanelExpanded)
         if (typeof saved.inspectorExpanded === 'boolean') setInspectorExpanded(saved.inspectorExpanded)
+        if (typeof saved.leftPanelFullHeight === 'boolean') setLeftPanelFullHeight(saved.leftPanelFullHeight)
+        if (typeof saved.inspectorFullHeight === 'boolean') setInspectorFullHeight(saved.inspectorFullHeight)
         if (saved.editorLayout === 'default' || saved.editorLayout === 'vertical') {
           setEditorLayout(saved.editorLayout)
         }
@@ -507,6 +510,27 @@ function App() {
       return next
     })
   }, [persistLayout])
+
+  const handleToggleLeftPanelFullHeight = useCallback(() => {
+    setLeftPanelFullHeight(prev => {
+      const next = !prev
+      persistLayout({ leftPanelFullHeight: next })
+      return next
+    })
+  }, [persistLayout])
+
+  const handleToggleInspectorFullHeight = useCallback(() => {
+    setInspectorFullHeight(prev => {
+      const next = !prev
+      persistLayout({ inspectorFullHeight: next })
+      return next
+    })
+  }, [persistLayout])
+
+  // Both sides full height can't coexist in the vertical layout (the center
+  // column would be dead space above the timeline) — the left panel wins and
+  // the inspector regains full height when the left panel drops it.
+  const inspectorFullHeightActive = inspectorFullHeight && !(editorLayout === 'vertical' && leftPanelFullHeight)
 
   const handleActiveTimelineToolChange = useCallback((label) => {
     setActiveTimelineToolLabel(label || 'Move tool')
@@ -819,7 +843,7 @@ function App() {
                     activeTab={leftPanelTab}
                     onTabChange={setLeftPanelTab}
                     isFullHeight={true}
-                    onToggleFullHeight={() => setLeftPanelFullHeight(false)}
+                    onToggleFullHeight={handleToggleLeftPanelFullHeight}
                     onSettingsClick={() => setSettingsModalOpen(true)}
                   />
                 </div>
@@ -855,7 +879,7 @@ function App() {
                         activeTab={leftPanelTab}
                         onTabChange={setLeftPanelTab}
                         isFullHeight={false}
-                        onToggleFullHeight={() => setLeftPanelFullHeight(true)}
+                        onToggleFullHeight={handleToggleLeftPanelFullHeight}
                         onSettingsClick={() => setSettingsModalOpen(true)}
                       />
                     </div>
@@ -885,25 +909,33 @@ function App() {
                   <div className="flex-1 min-w-0" />
                 )}
 
-                {/* Resize Handle - Inspector (only when expanded) */}
-                {inspectorExpanded && (
-                  <ResizeHandle
-                    direction="horizontal"
-                    onResize={handleInspectorResize}
-                  />
+                {/* Inspector - Normal Mode (only in upper area) */}
+                {!inspectorFullHeightActive && (
+                  <>
+                    {/* Resize Handle - Inspector (only when expanded) */}
+                    {inspectorExpanded && (
+                      <ResizeHandle
+                        direction="horizontal"
+                        onResize={handleInspectorResize}
+                      />
+                    )}
+
+                    {/* Right Sidebar - Inspector with Icon Toolbar */}
+                    <div
+                      style={{ width: inspectorExpanded ? inspectorWidth + ICON_BAR_WIDTH : ICON_BAR_WIDTH }}
+                      className="flex-shrink-0 transition-[width] duration-200 ease-out"
+                    >
+                      <InspectorPanel
+                        selectedItem={selectedItem}
+                        isExpanded={inspectorExpanded}
+                        onToggleExpanded={handleToggleInspectorExpanded}
+                        isFullHeight={false}
+                        onToggleFullHeight={handleToggleInspectorFullHeight}
+                        fullHeightDisabled={editorLayout === 'vertical' && leftPanelFullHeight}
+                      />
+                    </div>
+                  </>
                 )}
-                
-                {/* Right Sidebar - Inspector with Icon Toolbar */}
-                <div 
-                  style={{ width: inspectorExpanded ? inspectorWidth + ICON_BAR_WIDTH : ICON_BAR_WIDTH }} 
-                  className="flex-shrink-0 transition-[width] duration-200 ease-out"
-                >
-                  <InspectorPanel 
-                    selectedItem={selectedItem}
-                    isExpanded={inspectorExpanded}
-                    onToggleExpanded={handleToggleInspectorExpanded}
-                  />
-                </div>
               </div>
               
               {/* Resize Handle - Timeline */}
@@ -929,11 +961,13 @@ function App() {
                   <div className="flex-1 min-w-0 flex items-center justify-center">
                     <TransportControls />
                   </div>
-                  <div
-                    style={{ width: inspectorExpanded ? inspectorWidth + ICON_BAR_WIDTH : ICON_BAR_WIDTH }}
-                    className="flex-shrink-0 transition-[width] duration-200 ease-out"
-                    aria-hidden
-                  />
+                  {!inspectorFullHeightActive && (
+                    <div
+                      style={{ width: inspectorExpanded ? inspectorWidth + ICON_BAR_WIDTH : ICON_BAR_WIDTH }}
+                      className="flex-shrink-0 transition-[width] duration-200 ease-out"
+                      aria-hidden
+                    />
+                  )}
                 </div>
                 )}
                 {/* Bottom editor view switcher */}
@@ -996,6 +1030,31 @@ function App() {
                 </div>
               </div>
             </div>
+
+            {/* Inspector - Full Height Mode (spans entire right side) */}
+            {inspectorFullHeightActive && (
+              <>
+                {/* Resize Handle for full-height inspector */}
+                {inspectorExpanded && (
+                  <ResizeHandle
+                    direction="horizontal"
+                    onResize={handleInspectorResize}
+                  />
+                )}
+                <div
+                  style={{ width: inspectorExpanded ? inspectorWidth + ICON_BAR_WIDTH : ICON_BAR_WIDTH }}
+                  className="flex-shrink-0 transition-[width] duration-200 ease-out h-full"
+                >
+                  <InspectorPanel
+                    selectedItem={selectedItem}
+                    isExpanded={inspectorExpanded}
+                    onToggleExpanded={handleToggleInspectorExpanded}
+                    isFullHeight={true}
+                    onToggleFullHeight={handleToggleInspectorFullHeight}
+                  />
+                </div>
+              </>
+            )}
           </>
         </div>
         )}
