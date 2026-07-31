@@ -45,19 +45,48 @@ jobs:
           ref: ${{ env.WHISPER_TAG }}
           path: whisper.cpp
 
-      - name: Configure and build (arm64 + x86_64, static, Metal embedded)
+      # Two separate per-arch builds joined with lipo, NOT one universal
+      # cmake pass: ggml selects its SIMD/CPU source paths from the host
+      # processor at configure time, so a single "arm64;x86_64" build ships
+      # a miscompiled x86 slice (observed: garbage transcriptions under
+      # Rosetta). Metal is arm64-only — ggml's Metal path needs Apple
+      # Silicon; the Intel slice runs CPU with Accelerate.
+      - name: Build arm64 (static, Metal embedded)
         working-directory: whisper.cpp
         run: |
-          cmake -B build \
+          cmake -B build-arm64 \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_NATIVE=OFF \
             -DGGML_METAL=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DWHISPER_BUILD_TESTS=OFF \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
-          cmake --build build --config Release --target whisper-cli -j "$(sysctl -n hw.ncpu)"
+          cmake --build build-arm64 --config Release --target whisper-cli -j "$(sysctl -n hw.ncpu)"
+
+      - name: Build x86_64 (static, CPU + Accelerate)
+        working-directory: whisper.cpp
+        run: |
+          cmake -B build-x86_64 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_METAL=OFF \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          cmake --build build-x86_64 --config Release --target whisper-cli -j "$(sysctl -n hw.ncpu)"
+
+      - name: Join slices with lipo
+        working-directory: whisper.cpp
+        run: |
+          mkdir -p build/bin
+          lipo -create \
+            build-arm64/bin/whisper-cli \
+            build-x86_64/bin/whisper-cli \
+            -output build/bin/whisper-cli
+          chmod +x build/bin/whisper-cli
 
       - name: Verify architectures, static linkage, and ad-hoc signature
         working-directory: whisper.cpp
