@@ -63,9 +63,16 @@ export function setCaptionModelPreference(value) {
   } catch { /* ignore */ }
 }
 
-/** Resolve which backend a transcription will actually use right now. */
+/**
+ * Resolve which backend a transcription will actually use right now.
+ * Platforms without a whisper build (macOS until our release CI produces
+ * one) fall back to ComfyUI rather than losing captions.
+ */
 export async function resolveCaptionEngine() {
-  return getCaptionEnginePreference() === 'comfyui' ? 'comfyui' : 'local'
+  if (getCaptionEnginePreference() === 'comfyui') return 'comfyui'
+  const status = await getLocalCaptionEngineStatus()
+  if (status && status.platformSupported === false) return 'comfyui'
+  return 'local'
 }
 
 /** Transcribe a single source asset. Options pass through to the backend. */

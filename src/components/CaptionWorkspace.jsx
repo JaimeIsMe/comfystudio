@@ -943,7 +943,11 @@ function CaptionWorkspace({
     { id: 'small', label: 'Accurate', size: '466 MB' },
     { id: 'large-v3-turbo', label: 'Best', size: '1.6 GB' },
   ]
+  const engineStatusLoaded = Boolean(engineStatus)
   const localEngineSupported = Boolean(engineStatus?.platformSupported)
+  // Platforms without a whisper build (macOS until our CI produces one) keep
+  // captions on ComfyUI instead of losing them outright.
+  const platformUsesComfy = engineStatusLoaded && !localEngineSupported
   const hasEngineBinary = Boolean(engineStatus?.binaryPath)
   const installedModelIds = new Set((engineStatus?.models || []).map((m) => m.id))
   const selectedTier = CAPTION_MODEL_TIERS.find((tier) => tier.id === modelPreference) || CAPTION_MODEL_TIERS[0]
@@ -954,15 +958,15 @@ function CaptionWorkspace({
   )
   // The retired ComfyUI path stays reachable through a localStorage escape
   // hatch only ('velorn-caption-engine' = 'comfyui') — no UI for it.
-  const captionsUseComfy = getCaptionEnginePreference() === 'comfyui'
+  const captionsUseComfy = getCaptionEnginePreference() === 'comfyui' || platformUsesComfy
   const engineReady = captionsUseComfy || selectedTierInstalled
   const showEngineInstall = !captionsUseComfy && localEngineSupported && !selectedTierInstalled
-  const engineStatusLine = captionsUseComfy
-    ? 'Using ComfyUI (Qwen3-ASR) — legacy override.'
-    : isInstallingEngine
-      ? (engineInstallProgress?.message || 'Installing caption engine…')
-      : !localEngineSupported
-        ? 'Local captions are not available on this platform yet.'
+  const engineStatusLine = platformUsesComfy
+    ? 'Local captions are not available on this platform yet — using ComfyUI (Qwen3-ASR).'
+    : captionsUseComfy
+      ? 'Using ComfyUI (Qwen3-ASR) — legacy override.'
+      : isInstallingEngine
+        ? (engineInstallProgress?.message || 'Installing caption engine…')
         : selectedTierInstalled
           ? (selectedTier.id === 'large-v3-turbo'
             ? 'Runs on this machine — top accuracy, roughly realtime on CPU.'
