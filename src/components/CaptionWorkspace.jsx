@@ -7,6 +7,7 @@ import {
 } from '../config/captionPresets'
 import { DEFAULT_KINETIC_ACCENT_COLOR, buildKineticStyleWithColors } from '../utils/kineticCaptionRenderer'
 import { isElectron, writeGeneratedOverlayToProject } from '../services/fileSystem'
+import { useProjectStore } from '../stores/projectStore'
 import {
   buildCaptionAssetName,
   ensureCaptionsFolder,
@@ -382,6 +383,10 @@ function CaptionWorkspace({
   // Timeline scope only: whether a caption track already exists on the timeline,
   // so generating can warn that it will be replaced.
   hasExistingTimelineCaptions = false,
+  // Timeline scope only: sidecar path saved by the last generated timeline
+  // overlay, used to restore cues/style after an app restart when the
+  // in-memory session cache is cold.
+  timelineCaptionSidecarPath = null,
   currentProjectHandle,
   timelineSize,
   folders,
@@ -405,6 +410,9 @@ function CaptionWorkspace({
   const [errorCopied, setErrorCopied] = useState(false)
   const [engineStatus, setEngineStatus] = useState(null)
   const [modelPreference, setModelPreference] = useState(() => getCaptionModelPreference())
+  // Project-stored extra vocabulary for transcription hints; the transcription
+  // seam gives it budget priority over the auto-derived project words.
+  const captionVocabulary = useProjectStore((s) => s.currentProject?.settings?.captionVocabulary || '')
   const [isInstallingEngine, setIsInstallingEngine] = useState(false)
   const [engineInstallProgress, setEngineInstallProgress] = useState(null)
   const [savedCaptionStyles, setSavedCaptionStyles] = useState(() => loadSavedCaptionStyles())
@@ -785,8 +793,40 @@ function CaptionWorkspace({
     setScrubDisplay(1.2)
     setDraft(createEmptyDraft(asset))
 
-    // Timeline scope has no per-asset sidecar. Restore the session cache so the
-    // transcription and style choices survive a reopen (re-transcribe is manual).
+    // Hydrate a previously saved draft (cues + style) from a caption sidecar.
+    // Shared by asset scope and the timeline cold-start path.
+    const applySidecarDraft = (existingDraft) => {
+      setDraft({
+        modelId: existingDraft.modelId || null,
+        transcriptText: String(existingDraft.transcriptText || ''),
+        words: Array.isArray(existingDraft.words) ? existingDraft.words : [],
+        cues: normalizeCueOrder(existingDraft.cues, existingDraft.audioDuration || asset?.duration),
+        audioDuration: existingDraft.audioDuration || Number(asset?.duration) || null,
+      })
+      setSelectedPresetId(existingDraft.presetId || asset?.settings?.lastCaptionPresetId || DEFAULT_CAPTION_PRESET_ID)
+      if (existingDraft.accentColor) setAccentColor(existingDraft.accentColor)
+      setTextColor(existingDraft.textColor ?? null)
+      if (existingDraft.textStyle) setGlobalTextStyle(existingDraft.textStyle)
+      if (existingDraft.subtitlePosition) setSubtitlePosition(existingDraft.subtitlePosition)
+      const existingStyleControls = existingDraft.styleControls && typeof existingDraft.styleControls === 'object'
+        ? existingDraft.styleControls
+        : {}
+      if (existingStyleControls.fontFamily) setGlobalFontFamily(existingStyleControls.fontFamily)
+      if (existingStyleControls.backgroundColor) setBackgroundColor(existingStyleControls.backgroundColor)
+      if (typeof existingStyleControls.backgroundOpacity === 'number') setBackgroundOpacity(existingStyleControls.backgroundOpacity)
+      if (typeof existingStyleControls.backgroundPadding === 'number') setBackgroundPadding(existingStyleControls.backgroundPadding)
+      if (typeof existingStyleControls.backgroundRadius === 'number') setBackgroundRadius(existingStyleControls.backgroundRadius)
+      if (existingStyleControls.outlineColor) setOutlineColor(existingStyleControls.outlineColor)
+      if (typeof existingStyleControls.outlineThickness === 'number') setOutlineThickness(existingStyleControls.outlineThickness)
+      if (existingStyleControls.shadowColor) setShadowColor(existingStyleControls.shadowColor)
+      if (typeof existingStyleControls.shadowOpacity === 'number') setShadowOpacity(existingStyleControls.shadowOpacity)
+      if (typeof existingStyleControls.shadowBlur === 'number') setShadowBlur(existingStyleControls.shadowBlur)
+      if (typeof existingStyleControls.shadowDistance === 'number') setShadowDistance(existingStyleControls.shadowDistance)
+    }
+
+    // Timeline scope restores the in-memory session cache first (survives a
+    // reopen), then falls back to the sidecar saved by the last generated
+    // timeline overlay (survives an app restart).
     if (isTimelineScope) {
       const cached = currentProjectHandle ? timelineCaptionSessionCache.get(currentProjectHandle) : null
       if (cached?.draft) {
@@ -813,8 +853,23 @@ function CaptionWorkspace({
         if (typeof cached.globalSizeScale === 'number') setGlobalSizeScale(cached.globalSizeScale)
         if (typeof cached.globalVerticalOffset === 'number') setGlobalVerticalOffset(cached.globalVerticalOffset)
         setStatusMessage('Restored your last timeline captions — re-transcribe if the audio changed.')
+      } else if (currentProjectHandle && timelineCaptionSidecarPath) {
+        ;(async () => {
+          try {
+            const existingDraft = await loadCaptionSidecar(currentProjectHandle, timelineCaptionSidecarPath)
+            if (!existingDraft || cancelled) return
+            applySidecarDraft(existingDraft)
+            setStatusMessage('Restored your last timeline captions — re-transcribe if the audio changed.')
+          } catch (loadError) {
+            if (!cancelled) {
+              console.warn('Could not load the timeline caption draft:', loadError)
+            }
+          }
+        })()
       }
-      return undefined
+      return () => {
+        cancelled = true
+      }
     }
 
     const transcriptPath = asset?.settings?.captionTranscriptPath
@@ -824,33 +879,7 @@ function CaptionWorkspace({
       try {
         const existingDraft = await loadCaptionSidecar(currentProjectHandle, transcriptPath)
         if (!existingDraft || cancelled) return
-
-        setDraft({
-          modelId: existingDraft.modelId || null,
-          transcriptText: String(existingDraft.transcriptText || ''),
-          words: Array.isArray(existingDraft.words) ? existingDraft.words : [],
-          cues: normalizeCueOrder(existingDraft.cues, existingDraft.audioDuration || asset?.duration),
-          audioDuration: existingDraft.audioDuration || Number(asset?.duration) || null,
-        })
-        setSelectedPresetId(existingDraft.presetId || asset?.settings?.lastCaptionPresetId || DEFAULT_CAPTION_PRESET_ID)
-        if (existingDraft.accentColor) setAccentColor(existingDraft.accentColor)
-        setTextColor(existingDraft.textColor ?? null)
-        if (existingDraft.textStyle) setGlobalTextStyle(existingDraft.textStyle)
-        if (existingDraft.subtitlePosition) setSubtitlePosition(existingDraft.subtitlePosition)
-        const existingStyleControls = existingDraft.styleControls && typeof existingDraft.styleControls === 'object'
-          ? existingDraft.styleControls
-          : {}
-        if (existingStyleControls.fontFamily) setGlobalFontFamily(existingStyleControls.fontFamily)
-        if (existingStyleControls.backgroundColor) setBackgroundColor(existingStyleControls.backgroundColor)
-        if (typeof existingStyleControls.backgroundOpacity === 'number') setBackgroundOpacity(existingStyleControls.backgroundOpacity)
-        if (typeof existingStyleControls.backgroundPadding === 'number') setBackgroundPadding(existingStyleControls.backgroundPadding)
-        if (typeof existingStyleControls.backgroundRadius === 'number') setBackgroundRadius(existingStyleControls.backgroundRadius)
-        if (existingStyleControls.outlineColor) setOutlineColor(existingStyleControls.outlineColor)
-        if (typeof existingStyleControls.outlineThickness === 'number') setOutlineThickness(existingStyleControls.outlineThickness)
-        if (existingStyleControls.shadowColor) setShadowColor(existingStyleControls.shadowColor)
-        if (typeof existingStyleControls.shadowOpacity === 'number') setShadowOpacity(existingStyleControls.shadowOpacity)
-        if (typeof existingStyleControls.shadowBlur === 'number') setShadowBlur(existingStyleControls.shadowBlur)
-        if (typeof existingStyleControls.shadowDistance === 'number') setShadowDistance(existingStyleControls.shadowDistance)
+        applySidecarDraft(existingDraft)
         setStatusMessage('Loaded the last saved caption draft for this video.')
       } catch (loadError) {
         if (!cancelled) {
@@ -862,7 +891,7 @@ function CaptionWorkspace({
     return () => {
       cancelled = true
     }
-  }, [asset, currentProjectHandle, isOpen])
+  }, [asset, scope, currentProjectHandle, timelineCaptionSidecarPath, isOpen])
 
   // Grab a representative still for the positioning preview. Asset scope uses
   // the source clip (mid-point); timeline scope uses the frame under the
@@ -1183,43 +1212,55 @@ function CaptionWorkspace({
       // Keep the timeline setup so reopening to tweak doesn't lose the transcription.
       stashTimelineSession({ ...draft, cues: normalizedCues })
 
-      // Timeline captions aren't tied to a single source asset, so we skip the
-      // per-source sidecar & per-source `updateAsset` bookkeeping.
-      let sidecar = null
-      if (!isTimelineScope) {
-        const sidecarPayload = {
-          version: 1,
+      // Save the editable draft as a sidecar for BOTH scopes so the rendered
+      // overlay is self-describing: cues + style survive an app restart and
+      // power the Edit Captions round-trip from the timeline clip. Asset
+      // scope additionally bookmarks the sidecar on the source asset. Web
+      // mode has no sidecars — the overlay still renders.
+      const sidecarPayload = {
+        version: 1,
+        scope: isTimelineScope ? 'timeline' : 'asset',
+        ...(isTimelineScope ? {} : {
           sourceAssetId: asset.id,
           sourceAssetName: asset.name,
           sourceAssetPath: asset.path || null,
-          presetId: selectedPreset.id,
-          accentColor,
-          textColor,
-          textStyle: globalTextStyle,
-          subtitlePosition,
-          styleControls: captionStyleControls,
-          modelId: draft.modelId,
-          transcriptText: cuesToTranscript(normalizedCues),
-          words: draft.words,
-          cues: normalizedCues,
-          audioDuration: draft.audioDuration || cueDuration,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        }
+        }),
+        presetId: selectedPreset.id,
+        accentColor,
+        textColor,
+        textStyle: globalTextStyle,
+        subtitlePosition,
+        styleControls: captionStyleControls,
+        modelId: draft.modelId,
+        transcriptText: cuesToTranscript(normalizedCues),
+        words: draft.words,
+        cues: normalizedCues,
+        audioDuration: draft.audioDuration || cueDuration,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }
 
+      let sidecar = null
+      try {
         setStatusMessage('Saving editable caption draft...')
-        sidecar = await saveCaptionSidecar(currentProjectHandle, asset, sidecarPayload)
+        sidecar = await saveCaptionSidecar(
+          currentProjectHandle,
+          isTimelineScope ? { name: 'timeline' } : asset,
+          sidecarPayload
+        )
+      } catch (sidecarError) {
+        console.warn('Could not save the caption sidecar:', sidecarError)
+      }
 
-        if (typeof updateAsset === 'function') {
-          updateAsset(asset.id, {
-            settings: {
-              ...(asset.settings || {}),
-              captionTranscriptPath: sidecar.path,
-              lastCaptionPresetId: selectedPreset.id,
-              lastCaptionUpdatedAt: timestamp,
-            },
-          })
-        }
+      if (!isTimelineScope && sidecar && typeof updateAsset === 'function') {
+        updateAsset(asset.id, {
+          settings: {
+            ...(asset.settings || {}),
+            captionTranscriptPath: sidecar.path,
+            lastCaptionPresetId: selectedPreset.id,
+            lastCaptionUpdatedAt: timestamp,
+          },
+        })
       }
 
       setStatusMessage('Rendering animated caption overlay...')
@@ -1453,6 +1494,23 @@ function CaptionWorkspace({
                   </div>
                 )}
               </div>
+              {!captionsUseComfy && (
+                <div className="mb-3 rounded-xl border border-sf-dark-700 bg-sf-dark-950/60 p-3">
+                  <div className="text-xs font-medium text-sf-text-primary">Vocabulary</div>
+                  <div className="text-[11px] text-sf-text-muted">
+                    Brand names, people, jargon — helps transcription spell them right.
+                    Your project name, timeline names, markers, and text clips are included automatically.
+                  </div>
+                  <input
+                    type="text"
+                    value={captionVocabulary}
+                    onChange={(event) => useProjectStore.getState().updateProjectSettings({ captionVocabulary: event.target.value })}
+                    placeholder="e.g. Velorn, Seedance, ComfyUI"
+                    disabled={busy}
+                    className="mt-2 w-full rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-2 py-1.5 text-xs text-sf-text-primary placeholder:text-sf-text-muted/60 focus:border-sf-accent focus:outline-none disabled:opacity-50"
+                  />
+                </div>
+              )}
               {isTimelineScope ? (
                 <div className="flex items-center gap-3 rounded-xl border border-sf-dark-700 bg-sf-dark-950/60 p-3">
                   <div className="min-w-0">

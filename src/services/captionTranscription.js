@@ -86,6 +86,10 @@ export function collectProjectVocabularyParts() {
   const parts = []
   try {
     const project = useProjectStore.getState().currentProject
+    // User-entered vocabulary (the caption workspace's Vocabulary field)
+    // goes first so it wins the hint budget over auto-derived words.
+    const extraVocabulary = String(project?.settings?.captionVocabulary || '').trim()
+    if (extraVocabulary) parts.push(extraVocabulary)
     if (project?.name) parts.push(project.name)
     for (const timeline of project?.timelines || []) {
       if (timeline?.name) parts.push(timeline.name)

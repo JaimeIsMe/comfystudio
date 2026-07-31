@@ -2,7 +2,7 @@ import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 import { transcribeAsset, transcribeTimelineAudio } from './captionTranscription'
-import { buildCaptionAssetName, ensureCaptionsFolder } from './captionProject'
+import { buildCaptionAssetName, ensureCaptionsFolder, saveCaptionSidecar } from './captionProject'
 import { isElectron, writeGeneratedOverlayToProject } from './fileSystem'
 import { generateCaptionVideoBlob } from '../utils/captionRenderer'
 import { buildKineticStyleWithColors } from '../utils/kineticCaptionRenderer'
@@ -482,6 +482,35 @@ async function runGenerateCaptionJob(job, ctx) {
       ? (assetsState.getAssetById?.(ctx.sourceAssetId) || { name: 'source_video' })
       : { name: 'timeline' }
     const assetName = buildCaptionAssetName(sourceForName, preset)
+    const projectHandle = useProjectStore.getState().currentProjectHandle
+
+    // Sidecar parity with CaptionWorkspace: agent-generated overlays are
+    // self-describing too, so Edit Captions on their clips hydrates cues and
+    // style. Non-fatal — web mode has no sidecars.
+    let sidecar = null
+    try {
+      const timestamp = new Date().toISOString()
+      sidecar = await saveCaptionSidecar(projectHandle, sourceForName, {
+        version: 1,
+        scope: ctx.scope,
+        ...(ctx.scope === 'asset' && ctx.sourceAssetId ? { sourceAssetId: ctx.sourceAssetId } : {}),
+        presetId: preset.id,
+        accentColor: ctx.accentColor || null,
+        textColor: ctx.textColor || null,
+        textStyle: globalOverrides.textStyle,
+        subtitlePosition: globalOverrides.subtitlePosition,
+        styleControls: globalOverrides,
+        modelId: ctx.modelId || null,
+        transcriptText: cuesToTranscript(ctx.cues),
+        cues: ctx.cues,
+        audioDuration: ctx.duration,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      })
+    } catch (sidecarError) {
+      console.warn('Could not save the MCP caption sidecar:', sidecarError)
+    }
+
     const captionSettings = {
       width: ctx.width,
       height: ctx.height,
@@ -493,12 +522,11 @@ async function runGenerateCaptionJob(job, ctx) {
       captionScope: ctx.scope,
       ...(ctx.scope === 'asset' && ctx.sourceAssetId ? { sourceAssetId: ctx.sourceAssetId } : {}),
       captionPresetId: preset.id,
+      ...(sidecar?.path ? { captionTranscriptPath: sidecar.path } : {}),
       captionCueCount: ctx.cues.length,
       captionModelId: ctx.modelId || '',
       generatedBy: 'mcp',
     }
-
-    const projectHandle = useProjectStore.getState().currentProjectHandle
     let createdAsset
     if (isElectron() && typeof projectHandle === 'string' && projectHandle) {
       const persisted = await writeGeneratedOverlayToProject(

@@ -1432,12 +1432,12 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   // Snapping hook
   const { snapClipPosition, snapTrim, pixelsPerSecond: snapPixelsPerSecond } = useSnapping()
 
-  // Timeline-wide caption workspace state. We mount CaptionWorkspace at the
-  // timeline level (rather than per-asset in AssetsPanel) so captions can span
-  // the whole edited program. The `virtualTimelineAsset` is a lightweight
-  // stand-in that gives CaptionWorkspace enough shape (id/name/duration) to
-  // render without tying the overlay to any single source clip.
-  const [timelineCaptionWorkspaceAsset, setTimelineCaptionWorkspaceAsset] = useState(null)
+  // Caption workspace state. We mount CaptionWorkspace at the timeline level
+  // so captions can span the whole edited program. The session carries the
+  // workspace input asset (a lightweight stand-in for timeline scope), which
+  // scope to open in, and — for the Edit Captions round-trip — the overlay
+  // clip the workspace should replace in place on Generate.
+  const [captionWorkspaceSession, setCaptionWorkspaceSession] = useState(null) // { asset, scope, replaceClipId }
   const handlePasteAtPlayhead = useCallback(() => {
     if (!activeTrackId || copiedClips.length === 0) return false
     pasteClipsAtPlayhead(activeTrackId, getLivePlayhead(), assets)
@@ -1651,14 +1651,18 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     // track stays put. The replace confirmation now lives at generate time
     // (in CaptionWorkspace), since that's when the old track is actually
     // swapped out inside handlePlaceTimelineCaptionOnTimeline.
-    setTimelineCaptionWorkspaceAsset({
-      id: `timeline-mix-${Date.now()}`,
-      name: 'Timeline',
-      type: 'timeline',
-      duration: programDuration,
-      hasAudio: true,
-      bgVideoUrl,
-      bgVideoTime,
+    setCaptionWorkspaceSession({
+      scope: 'timeline',
+      replaceClipId: null,
+      asset: {
+        id: `timeline-mix-${Date.now()}`,
+        name: 'Timeline',
+        type: 'timeline',
+        duration: programDuration,
+        hasAudio: true,
+        bgVideoUrl,
+        bgVideoTime,
+      },
     })
   }
 
@@ -1711,6 +1715,109 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
       trimEnd: programDuration,
       metadata: { captionScope: 'timeline' },
     })
+  }
+
+  // Edit Captions round-trip: reopen the caption workspace hydrated from the
+  // overlay clip that was right-clicked. Timeline-scope overlays reopen the
+  // timeline workspace (its restore path hydrates cues + style); asset-scope
+  // overlays reopen with their source asset and remember which clip to
+  // replace in place on Generate.
+  const handleEditCaptionsFromClip = (clip) => {
+    setClipContextMenu(null)
+    if (!clip?.assetId) return
+    const overlayAsset = getAssetById(clip.assetId)
+    const overlaySettings = overlayAsset?.settings || {}
+
+    if (overlaySettings.captionScope === 'timeline') {
+      handleOpenTimelineCaptions()
+      return
+    }
+
+    const source = overlaySettings.sourceAssetId ? getAssetById(overlaySettings.sourceAssetId) : null
+    const transcriptPath = source?.settings?.captionTranscriptPath
+      || overlaySettings.captionTranscriptPath
+      || null
+    const workspaceAsset = source
+      ? {
+          ...source,
+          settings: {
+            ...(source.settings || {}),
+            ...(transcriptPath ? { captionTranscriptPath: transcriptPath } : {}),
+          },
+        }
+      : {
+          // Source asset no longer in the project: a stand-in can still
+          // hydrate the cues from the overlay's own sidecar; re-transcribing
+          // just won't be possible.
+          id: overlayAsset?.id || clip.assetId,
+          name: overlayAsset?.name || clip.name || 'Captions',
+          type: 'video',
+          duration: Number(overlayAsset?.duration) || Number(clip.duration) || null,
+          hasAudio: false,
+          settings: transcriptPath ? { captionTranscriptPath: transcriptPath } : {},
+        }
+
+    setCaptionWorkspaceSession({ scope: 'asset', asset: workspaceAsset, replaceClipId: clip.id })
+  }
+
+  // Swap a re-generated asset-scope caption overlay into the clip it was
+  // opened from: same track, position, and trims. The superseded overlay
+  // asset is removed once no timeline references it.
+  const handlePlaceAssetCaptionOnTimeline = (captionAsset, replaceClipId) => {
+    if (!captionAsset) return
+    const state = useTimelineStore.getState()
+    const targetClip = replaceClipId ? state.clips.find((c) => c.id === replaceClipId) : null
+
+    if (!targetClip) {
+      // The originating clip vanished mid-edit; place like a fresh overlay
+      // on the captions track without disturbing anything else.
+      let captionsTrack = state.tracks.find((t) => t.role === 'captions')
+      if (!captionsTrack) {
+        captionsTrack = state.addTrack('video', { role: 'captions', name: 'Captions' })
+      }
+      if (!captionsTrack) return
+      const overlayDuration = Math.max(Number(captionAsset.duration) || 0, 1)
+      useTimelineStore.getState().addClip(captionsTrack.id, captionAsset, 0, useTimelineStore.getState().timelineFps, {
+        duration: overlayDuration,
+        trimStart: 0,
+        trimEnd: overlayDuration,
+        metadata: { captionScope: 'asset' },
+      })
+      return
+    }
+
+    state.saveToHistory?.()
+    const oldAssetId = targetClip.assetId
+    const newSourceDuration = Number(captionAsset.duration) || targetClip.sourceDuration
+    useTimelineStore.setState((currentState) => ({
+      clips: (currentState.clips || []).map((c) => (
+        c.id !== targetClip.id ? c : {
+          ...c,
+          assetId: captionAsset.id,
+          name: captionAsset.name,
+          url: captionAsset.url,
+          thumbnail: captionAsset.url,
+          sourceDuration: newSourceDuration,
+          trimEnd: Math.min(Number(c.trimEnd) || newSourceDuration, newSourceDuration),
+          cacheStatus: c.cacheStatus === 'cached' ? 'invalid' : c.cacheStatus,
+          cacheProgress: 0,
+          cacheUrl: null,
+          cachePath: null,
+        }
+      )),
+    }))
+
+    if (oldAssetId && oldAssetId !== captionAsset.id) {
+      const stillOnTimeline = useTimelineStore.getState().clips.some((c) => c.assetId === oldAssetId)
+      const projectState = useProjectStore.getState()
+      const usedElsewhere = (projectState.currentProject?.timelines || []).some((timeline) => (
+        timeline.id !== projectState.currentTimelineId
+        && (timeline.clips || []).some((c) => c?.assetId === oldAssetId)
+      ))
+      if (!stillOnTimeline && !usedElsewhere) {
+        try { useAssetsStore.getState().removeAsset(oldAssetId) } catch (_) { /* best-effort cleanup */ }
+      }
+    }
   }
 
   // Resolve-like transition pane preview (left/right clip contributions).
@@ -7201,6 +7308,25 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         >
           {(() => {
             const contextClip = clips.find(c => c.id === clipContextMenu.clipId)
+            const contextAsset = contextClip?.assetId ? getAssetById(contextClip.assetId) : null
+            const isCaptionOverlay = Boolean(
+              contextAsset?.settings?.overlayKind === 'captions' || contextAsset?.settings?.captionScope
+            )
+            if (!isCaptionOverlay) return null
+            return (
+              <>
+                <button
+                  onClick={() => handleEditCaptionsFromClip(contextClip)}
+                  className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
+                >
+                  <span>Edit Captions…</span>
+                </button>
+                <div className="h-px bg-sf-dark-600 my-1" />
+              </>
+            )
+          })()}
+          {(() => {
+            const contextClip = clips.find(c => c.id === clipContextMenu.clipId)
             const canUseMask = contextClip?.type === 'video' || contextClip?.type === 'image'
             if (!canUseMask) return null
             
@@ -7743,13 +7869,23 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
       )}
 
       <CaptionWorkspace
-        isOpen={Boolean(timelineCaptionWorkspaceAsset)}
-        asset={timelineCaptionWorkspaceAsset}
-        scope="timeline"
+        isOpen={Boolean(captionWorkspaceSession)}
+        asset={captionWorkspaceSession?.asset || null}
+        scope={captionWorkspaceSession?.scope || 'timeline'}
         hasExistingTimelineCaptions={clips.some((clip) => {
           if (!clip || !clip.assetId) return false
           return getAssetById(clip.assetId)?.settings?.captionScope === 'timeline'
         })}
+        timelineCaptionSidecarPath={(() => {
+          for (const clip of clips) {
+            if (!clip?.assetId) continue
+            const clipAsset = getAssetById(clip.assetId)
+            if (clipAsset?.settings?.captionScope === 'timeline' && clipAsset.settings.captionTranscriptPath) {
+              return clipAsset.settings.captionTranscriptPath
+            }
+          }
+          return null
+        })()}
         currentProjectHandle={currentProjectHandle}
         timelineSize={(() => {
           const s = useProjectStore.getState().getCurrentTimelineSettings?.()
@@ -7761,8 +7897,12 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         addFolder={addFolder}
         addAsset={addAsset}
         updateAsset={updateAsset}
-        onPlaceOnTimeline={handlePlaceTimelineCaptionOnTimeline}
-        onClose={() => setTimelineCaptionWorkspaceAsset(null)}
+        onPlaceOnTimeline={(captionAsset) => (
+          captionWorkspaceSession?.scope === 'asset'
+            ? handlePlaceAssetCaptionOnTimeline(captionAsset, captionWorkspaceSession?.replaceClipId)
+            : handlePlaceTimelineCaptionOnTimeline(captionAsset)
+        )}
+        onClose={() => setCaptionWorkspaceSession(null)}
       />
     </div>
   )
