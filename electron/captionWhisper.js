@@ -19,9 +19,10 @@ const WHISPER_RELEASE_TAG = 'v1.9.1'
 const PROGRESS_CHANNEL = 'captions:engineProgress'
 const ENGINE_DIR_NAME = 'caption-engine'
 
-// Upstream ships prebuilt CLI archives for Windows and Linux only. macOS gets
-// engine support once we build whisper-cli in our own release CI (the upstream
-// xcframework is a library, not a CLI).
+// Upstream ships prebuilt CLI archives for Windows and Linux only. The macOS
+// build comes from our own CI (.github/workflows/whisper-mac-engine.yml): a
+// static universal whisper-cli (arm64 Metal + x86_64 CPU) attached to a
+// dedicated prerelease whose tag tracks WHISPER_RELEASE_TAG.
 const ENGINE_BINARY_DOWNLOADS = {
   win32: {
     url: `https://github.com/ggml-org/whisper.cpp/releases/download/${WHISPER_RELEASE_TAG}/whisper-bin-x64.zip`,
@@ -32,6 +33,11 @@ const ENGINE_BINARY_DOWNLOADS = {
     url: `https://github.com/ggml-org/whisper.cpp/releases/download/${WHISPER_RELEASE_TAG}/whisper-bin-ubuntu-x64.tar.gz`,
     archiveName: `whisper-bin-ubuntu-x64-${WHISPER_RELEASE_TAG}.tar.gz`,
     approxBytes: 9379235,
+  },
+  darwin: {
+    url: `https://github.com/VelornLabs/velorn/releases/download/whisper-cli-${WHISPER_RELEASE_TAG}-mac/whisper-cli-macos-universal-${WHISPER_RELEASE_TAG}.zip`,
+    archiveName: `whisper-cli-macos-universal-${WHISPER_RELEASE_TAG}.zip`,
+    approxBytes: 2451938,
   },
 }
 
@@ -103,8 +109,11 @@ function listInstalledModels(app) {
 }
 
 function buildEngineStatus(app) {
-  const platformSupported = Boolean(ENGINE_BINARY_DOWNLOADS[process.platform])
   const binaryPath = findBinaryIn(engineBinDir(app))
+  // A hand-installed binary counts as platform support even when we have no
+  // download for this platform — power users can drop a whisper-cli build
+  // into the engine dir and the app honors it.
+  const platformSupported = Boolean(ENGINE_BINARY_DOWNLOADS[process.platform]) || Boolean(binaryPath)
   const models = listInstalledModels(app)
   return {
     success: true,
@@ -386,6 +395,10 @@ function createCaptionWhisperService({ app, ffmpegPath, getMainWindow }) {
         binaryPath = findBinaryIn(binDir)
         if (!binaryPath) {
           return { success: false, error: 'The caption engine archive did not contain a whisper binary.' }
+        }
+        if (process.platform !== 'win32') {
+          // Zip extraction does not always preserve the executable bit.
+          await fsp.chmod(binaryPath, 0o755).catch(() => {})
         }
       }
 
