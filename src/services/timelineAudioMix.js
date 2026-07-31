@@ -357,14 +357,14 @@ export async function mixTimelineAudioToWav({ onProgress } = {}) {
   }
   const trackById = new Map(tracks.map((t) => [t.id, t]))
   const anySolo = hasAudioSolo(tracks)
-  const hasAudibleClip = enabledClips.some((clip) => {
+  const audibleClips = enabledClips.filter((clip) => {
     if (clip.type !== 'audio') return false
     const track = trackById.get(clip.trackId)
     if (!track || track.type !== 'audio' || !isAudioTrackAudible(track, anySolo)) return false
     const asset = assetsState.getAssetById(clip.assetId)
     return clipHasUsableAudio(clip, asset)
   })
-  if (!hasAudibleClip) {
+  if (audibleClips.length === 0) {
     throw new Error('No audible clips on audio tracks — captions transcribe the same mix you hear. Unmute or solo an audio track, or add the audio to an audio track first.')
   }
 
@@ -377,8 +377,35 @@ export async function mixTimelineAudioToWav({ onProgress } = {}) {
     console.warn(`[timelineAudioMix] Truncating transcription to ${MAX_TRANSCRIBE_SECONDS}s (timeline is ${rawDuration.toFixed(1)}s)`)
   }
 
-  const ffmpegResult = await mixViaFFmpeg({ duration, report })
-  if (ffmpegResult) return ffmpegResult
+  // Timeline ranges that structurally contain audio. The transcription
+  // pipeline snaps whisper's words into these — generated silence between
+  // and around clips cannot contain words, no matter what the engine's
+  // timestamps claim.
+  const audibleSpans = computeAudibleSpans(audibleClips, duration)
 
-  return mixViaWebAudio({ report })
+  const ffmpegResult = await mixViaFFmpeg({ duration, report })
+  if (ffmpegResult) return { ...ffmpegResult, audibleSpans }
+
+  return { ...(await mixViaWebAudio({ report })), audibleSpans }
+}
+
+function computeAudibleSpans(clips, programDuration) {
+  const spans = clips
+    .map((clip) => {
+      const start = Math.max(0, Number(clip.startTime) || 0)
+      const end = Math.min(programDuration, start + Math.max(0, Number(clip.duration) || 0))
+      return { start, end }
+    })
+    .filter((span) => span.end > span.start)
+    .sort((a, b) => a.start - b.start)
+  const merged = []
+  for (const span of spans) {
+    const last = merged[merged.length - 1]
+    if (last && span.start <= last.end) {
+      last.end = Math.max(last.end, span.end)
+    } else {
+      merged.push(span)
+    }
+  }
+  return merged
 }

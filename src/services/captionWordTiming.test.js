@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { repairSmearedWordTimings } from './captionWordTiming.js'
+import { repairSmearedWordTimings, snapWordsToAudibleSpans } from './captionWordTiming.js'
 
 // Real timings from the July 31 investigation (whisper large-v3-turbo).
 // ShrimpMan: spoken line with music/laughter intro and outro — whisper
@@ -127,4 +127,83 @@ test('tolerates empty and invalid input', () => {
   assert.deepEqual(repairSmearedWordTimings([]), [])
   assert.deepEqual(repairSmearedWordTimings(null), [])
   assert.deepEqual(repairSmearedWordTimings([{ text: 'no-times' }]), [])
+})
+
+// The trimmed-clip smear (July 31): a 3.75s song clip at 8.0–11.75 on an
+// otherwise silent timeline. Whisper anchored the phrase at zero and spread
+// nine words uniformly across the leading silence — durations so consistent
+// the median-based repair correctly refuses to touch them. The audible span
+// is structural truth the duration heuristic doesn't have.
+const TRIMMED_CLIP_SMEAR = [
+  { start: 0.0, end: 0.94, text: '"He' },
+  { start: 0.94, end: 2.2, text: 'says' },
+  { start: 2.2, end: 3.46, text: 'your' },
+  { start: 3.46, end: 4.72, text: 'eyes' },
+  { start: 4.72, end: 5.67, text: 'are' },
+  { start: 5.67, end: 7.25, text: 'pools' },
+  { start: 7.25, end: 8.08, text: 'of' },
+  { start: 8.08, end: 10.08, text: 'moonlit' },
+  { start: 10.08, end: 11.72, text: 'brie"' },
+]
+
+test('snaps a silence-smeared utterance into its audible span', () => {
+  const words = snapWordsToAudibleSpans(TRIMMED_CLIP_SMEAR, [{ start: 8.0, end: 11.75 }])
+  assert.equal(words[0].start, 8.0)          // first word waits for the clip
+  assert.equal(words[words.length - 1].end, 11.72) // last word keeps its true end
+  for (const w of words) {
+    assert.ok(w.start >= 8.0 && w.end <= 11.75)
+  }
+  // Order and relative pacing survive the rescale.
+  for (let i = 1; i < words.length; i += 1) {
+    assert.ok(words[i].start >= words[i - 1].start)
+  }
+})
+
+test('words already inside a span are byte-identical after snapping', () => {
+  const input = [
+    { start: 19.36, end: 20.24, text: 'Perfect!' },
+    { start: 20.24, end: 20.42, text: 'We' },
+    { start: 24.96, end: 26.82, text: 'Through' },
+    { start: 26.82, end: 28.96, text: 'knees.' },
+  ]
+  const words = snapWordsToAudibleSpans(input, [{ start: 0, end: 28.96 }])
+  assert.deepEqual(
+    words.map(({ start, end, text }) => ({ start, end, text })),
+    input
+  )
+})
+
+test('an utterance with no span overlap is left alone', () => {
+  const input = [{ start: 1.0, end: 2.0, text: 'ghost' }]
+  const words = snapWordsToAudibleSpans(input, [{ start: 10, end: 15 }])
+  assert.deepEqual(words.map(({ start, end }) => ({ start, end })), [{ start: 1.0, end: 2.0 }])
+})
+
+test('missing or invalid spans leave words untouched', () => {
+  const input = [{ start: 0.5, end: 1.0, text: 'word' }]
+  assert.deepEqual(snapWordsToAudibleSpans(input, []), input)
+  assert.deepEqual(snapWordsToAudibleSpans(input, null), input)
+  assert.deepEqual(snapWordsToAudibleSpans(input, [{ start: 5, end: 5 }]), input)
+})
+
+test('snap then repair — the full pipeline on the trimmed-clip case', () => {
+  const words = repairSmearedWordTimings(
+    snapWordsToAudibleSpans(TRIMMED_CLIP_SMEAR, [{ start: 8.0, end: 11.75 }])
+  )
+  assert.equal(words[0].start, 8.0)
+  assert.equal(words[words.length - 1].end, 11.72)
+  // The snapped durations are natural, so the statistical repair must not
+  // second-guess the structural truth.
+  for (const w of words) {
+    assert.ok(w.start >= 8.0 && w.end <= 11.75)
+  }
+})
+
+test('overlapping spans merge before snapping', () => {
+  const words = snapWordsToAudibleSpans(
+    [{ start: 0.0, end: 4.0, text: 'early' }],
+    [{ start: 2.0, end: 3.0 }, { start: 2.5, end: 4.5 }]
+  )
+  assert.equal(words[0].start, 2.0)
+  assert.equal(words[0].end, 4.0)
 })

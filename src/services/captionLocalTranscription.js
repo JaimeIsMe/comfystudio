@@ -6,7 +6,7 @@
 // grouped here, renderer-side, so the rules stay pure and testable.
 
 import { mixTimelineAudioToWav } from './timelineAudioMix'
-import { repairSmearedWordTimings } from './captionWordTiming'
+import { repairSmearedWordTimings, snapWordsToAudibleSpans } from './captionWordTiming'
 
 // Common picker names → whisper language codes. Anything unrecognized falls
 // back to autodetect, and 2–3 letter codes pass through untouched.
@@ -198,6 +198,7 @@ async function runLocalTranscription({
   language = 'Auto',
   modelId,
   vocabularyHint = '',
+  audibleSpans = null,
   onProgress,
   progressBase = 0,
   audioDuration = null,
@@ -247,17 +248,21 @@ async function runLocalTranscription({
     if (!result?.success) {
       throw new Error(result?.error || 'Local transcription failed.')
     }
-    // Boundary words absorb whisper's leading/trailing non-speech smear even
-    // with VAD on (laughter counts as voice activity); repair before cue
-    // grouping so captions land when speech actually starts.
+    // Two timing repairs before cue grouping, structural first:
+    // 1. Snap words into the timeline's audible spans — whisper spreads
+    //    words across generated silence, and the spans are ground truth the
+    //    engine doesn't have (timeline scope only; single assets are
+    //    audible end to end).
+    // 2. Statistical smear repair for boundary words inside real audio.
+    const normalizedWords = (Array.isArray(result.words) ? result.words : [])
+      .map((w) => ({
+        start: Number(w?.start) || 0,
+        end: Number(w?.end) || 0,
+        text: String(w?.text || '').trim(),
+      }))
+      .filter((w) => w.text)
     const words = repairSmearedWordTimings(
-      (Array.isArray(result.words) ? result.words : [])
-        .map((w) => ({
-          start: Number(w?.start) || 0,
-          end: Number(w?.end) || 0,
-          text: String(w?.text || '').trim(),
-        }))
-        .filter((w) => w.text)
+      snapWordsToAudibleSpans(normalizedWords, audibleSpans)
     )
     return buildTranscriptionResult({
       words,
@@ -337,6 +342,7 @@ export async function transcribeTimelineLocally({ onProgress, modelId, vocabular
     alreadyNormalized: true,
     modelId,
     vocabularyHint,
+    audibleSpans: mix.audibleSpans || null,
     onProgress,
     progressBase: 40,
     audioDuration: mix.duration,

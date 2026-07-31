@@ -38,6 +38,85 @@ const plausibleCapForUtterance = (utterance, floor, ceiling, factor) => {
 }
 
 /**
+ * Snap transcribed words into the timeline regions that actually contain
+ * audio clips ("audible spans", from the caption mixer's own clip list).
+ *
+ * Whisper anchors utterances at the start of a decoded window and will
+ * spread words uniformly across leading silence — a smear that duration
+ * statistics cannot distinguish from slow singing. But the timeline knows
+ * structurally where sound exists: generated silence cannot contain words.
+ * Utterances that lie entirely inside the spans are never touched (which is
+ * what keeps this safe for held sung notes and slow speech alike); an
+ * utterance that starts or ends in generated silence is linearly rescaled
+ * into the portion of its span it overlaps, preserving word order and
+ * relative pacing. Utterances with no span overlap at all are left alone —
+ * a span-computation bug must degrade to today's behavior, not eat captions.
+ *
+ * @param {Array<{start:number,end:number,text:string}>} words
+ * @param {Array<{start:number,end:number}>} spans - Timeline ranges covered
+ *   by audible audio clips. Unsorted/overlapping input is normalized.
+ * @returns {Array} New array; the input word objects are not mutated.
+ */
+export function snapWordsToAudibleSpans(words, spans, {
+  maxUtteranceGapSeconds = DEFAULT_MAX_UTTERANCE_GAP_SECONDS,
+} = {}) {
+  const source = (Array.isArray(words) ? words : [])
+    .filter((w) => w && Number.isFinite(Number(w.start)) && Number.isFinite(Number(w.end)))
+    .map((w) => ({ ...w, start: Number(w.start), end: Number(w.end) }))
+  if (source.length === 0) return source
+
+  const normalizedSpans = (Array.isArray(spans) ? spans : [])
+    .map((s) => ({ start: Number(s?.start), end: Number(s?.end) }))
+    .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start)
+    .sort((a, b) => a.start - b.start)
+  const merged = []
+  for (const span of normalizedSpans) {
+    const last = merged[merged.length - 1]
+    if (last && span.start <= last.end) {
+      last.end = Math.max(last.end, span.end)
+    } else {
+      merged.push({ ...span })
+    }
+  }
+  if (merged.length === 0) return source
+
+  const utterances = []
+  let current = [source[0]]
+  for (let i = 1; i < source.length; i += 1) {
+    if (source[i].start - source[i - 1].end > maxUtteranceGapSeconds) {
+      utterances.push(current)
+      current = [source[i]]
+    } else {
+      current.push(source[i])
+    }
+  }
+  utterances.push(current)
+
+  for (const utterance of utterances) {
+    const uStart = utterance[0].start
+    const uEnd = utterance[utterance.length - 1].end
+    const overlapping = merged.filter((s) => s.end > uStart && s.start < uEnd)
+    if (overlapping.length === 0) continue
+
+    const tStart = Math.max(uStart, overlapping[0].start)
+    const tEnd = Math.min(uEnd, overlapping[overlapping.length - 1].end)
+    if (tStart <= uStart + 0.001 && tEnd >= uEnd - 0.001) continue // already inside
+
+    const uLength = uEnd - uStart
+    const tLength = tEnd - tStart
+    if (uLength <= 0.001 || tLength <= 0.001) continue
+    const scale = tLength / uLength
+    for (const w of utterance) {
+      w.start = round2(tStart + (w.start - uStart) * scale)
+      w.end = round2(tStart + (w.end - uStart) * scale)
+      if (w.end <= w.start) w.end = round2(w.start + 0.05)
+    }
+  }
+
+  return utterances.flat()
+}
+
+/**
  * @param {Array<{start:number,end:number,text:string}>} words - Ordered word
  *   timings from the engine.
  * @returns {Array} New array; the input word objects are not mutated.
