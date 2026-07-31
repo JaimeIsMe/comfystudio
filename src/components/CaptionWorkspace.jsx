@@ -18,7 +18,8 @@ import {
   transcribeTimelineAudio,
   resolveCaptionEngine,
   getCaptionEnginePreference,
-  setCaptionEnginePreference,
+  getCaptionModelPreference,
+  setCaptionModelPreference,
   getLocalCaptionEngineStatus,
   installLocalCaptionEngine,
 } from '../services/captionTranscription'
@@ -401,7 +402,7 @@ function CaptionWorkspace({
   const [errorExpanded, setErrorExpanded] = useState(false)
   const [errorCopied, setErrorCopied] = useState(false)
   const [engineStatus, setEngineStatus] = useState(null)
-  const [enginePreference, setEnginePreference] = useState(() => getCaptionEnginePreference())
+  const [modelPreference, setModelPreference] = useState(() => getCaptionModelPreference())
   const [isInstallingEngine, setIsInstallingEngine] = useState(false)
   const [engineInstallProgress, setEngineInstallProgress] = useState(null)
   const [savedCaptionStyles, setSavedCaptionStyles] = useState(() => loadSavedCaptionStyles())
@@ -935,30 +936,37 @@ function CaptionWorkspace({
   const busy = isTranscribing || isGenerating
   const cueDuration = getDraftDuration(draft, asset)
 
-  const localEngineReady = Boolean(engineStatus?.available)
+  const CAPTION_MODEL_TIERS = [
+    { id: 'base', label: 'Fast', size: '142 MB' },
+    { id: 'small', label: 'Accurate', size: '466 MB' },
+    { id: 'large-v3-turbo', label: 'Best', size: '1.6 GB' },
+  ]
   const localEngineSupported = Boolean(engineStatus?.platformSupported)
-  const showEngineInstall = localEngineSupported && !localEngineReady
-  // What a transcription would actually run on right now. 'unavailable' means
-  // the user pinned Local but the engine isn't installed.
-  const activeEngine = enginePreference === 'comfyui'
-    ? 'comfyui'
-    : enginePreference === 'local'
-      ? (localEngineReady ? 'local' : 'unavailable')
-      : (localEngineReady ? 'local' : 'comfyui')
-  const engineStatusLine = isInstallingEngine
-    ? (engineInstallProgress?.message || 'Installing caption engine…')
-    : activeEngine === 'local'
-      ? 'Local whisper on this machine — no ComfyUI needed.'
-      : activeEngine === 'unavailable'
-        ? 'Local engine selected but not installed — download it or switch engines.'
-        : localEngineSupported
-          ? 'Using ComfyUI (Qwen3-ASR). Download the local engine to skip ComfyUI.'
-          : 'Using ComfyUI (Qwen3-ASR). The local engine is not available on this platform yet.'
+  const hasEngineBinary = Boolean(engineStatus?.binaryPath)
+  const installedModelIds = new Set((engineStatus?.models || []).map((m) => m.id))
+  const selectedTier = CAPTION_MODEL_TIERS.find((tier) => tier.id === modelPreference) || CAPTION_MODEL_TIERS[0]
+  const selectedTierInstalled = hasEngineBinary && installedModelIds.has(selectedTier.id)
+  // The retired ComfyUI path stays reachable through a localStorage escape
+  // hatch only ('velorn-caption-engine' = 'comfyui') — no UI for it.
+  const captionsUseComfy = getCaptionEnginePreference() === 'comfyui'
+  const engineReady = captionsUseComfy || selectedTierInstalled
+  const showEngineInstall = !captionsUseComfy && localEngineSupported && !selectedTierInstalled
+  const engineStatusLine = captionsUseComfy
+    ? 'Using ComfyUI (Qwen3-ASR) — legacy override.'
+    : isInstallingEngine
+      ? (engineInstallProgress?.message || 'Installing caption engine…')
+      : !localEngineSupported
+        ? 'Local captions are not available on this platform yet.'
+        : selectedTierInstalled
+          ? (selectedTier.id === 'large-v3-turbo'
+            ? 'Runs on this machine — top accuracy, roughly realtime on CPU.'
+            : 'Runs on this machine — no ComfyUI needed.')
+          : 'One-time download — captions run on this machine, no ComfyUI needed.'
 
   // Timeline mode can always transcribe (the audio mixer will report no-audio
   // conditions at mix time with a clear message). Asset mode still needs a
   // video with an audio track.
-  const canTranscribe = activeEngine !== 'unavailable' && !isInstallingEngine && (isTimelineScope
+  const canTranscribe = engineReady && !isInstallingEngine && (isTimelineScope
     ? !busy
     : (asset.type === 'video' && asset.hasAudio !== false && !busy))
   const canGenerate = draft.cues.length > 0 && !busy && addAsset
@@ -1053,9 +1061,9 @@ function CaptionWorkspace({
     return status
   }
 
-  const handleEnginePreferenceChange = (value) => {
-    setCaptionEnginePreference(value)
-    setEnginePreference(value)
+  const handleModelPreferenceChange = (value) => {
+    setCaptionModelPreference(value)
+    setModelPreference(value)
   }
 
   const handleInstallEngine = async () => {
@@ -1065,7 +1073,7 @@ function CaptionWorkspace({
     setEngineInstallProgress(null)
     try {
       await installLocalCaptionEngine({
-        modelId: 'base',
+        modelId: modelPreference,
         onProgress: (update) => setEngineInstallProgress(update),
       })
       const status = await refreshEngineStatus()
@@ -1328,7 +1336,7 @@ function CaptionWorkspace({
                   </div>
                   <div className="text-xs text-sf-text-muted mt-1">
                     {isTimelineScope
-                      ? 'Captions follow the edited program audio — trims, gaps, and mutes all honored.'
+                      ? 'Captions follow the edited program audio — trims, gaps, mutes, and solos all honored. Busy mix? Solo the dialog or vocal track before transcribing for a much cleaner read.'
                       : 'Select a preset, edit the cues, then save a transparent caption overlay.'}
                   </div>
                 </div>
@@ -1348,10 +1356,10 @@ function CaptionWorkspace({
                     : (isTimelineScope ? 'Transcribe timeline' : 'Transcribe audio')}
                 </button>
               </div>
-              {/* Transcription engine — local whisper vs ComfyUI */}
+              {/* Transcription model — local whisper, tiered by accuracy */}
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sf-dark-700 bg-sf-dark-950/60 p-3">
                 <div className="min-w-0 flex-1">
-                  <div className="text-xs font-medium text-sf-text-primary">Transcription engine</div>
+                  <div className="text-xs font-medium text-sf-text-primary">Transcription model</div>
                   <div className="text-[11px] text-sf-text-muted">{engineStatusLine}</div>
                   {isInstallingEngine && Number.isFinite(Number(engineInstallProgress?.percent)) && (
                     <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-sf-dark-700">
@@ -1362,37 +1370,41 @@ function CaptionWorkspace({
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
-                  <select
-                    value={enginePreference}
-                    onChange={(event) => handleEnginePreferenceChange(event.target.value)}
-                    disabled={busy || isInstallingEngine}
-                    className="rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-2 py-1.5 text-xs text-sf-text-primary focus:border-sf-accent focus:outline-none"
-                  >
-                    <option value="auto">Auto</option>
-                    <option value="local">Local (no ComfyUI)</option>
-                    <option value="comfyui">ComfyUI (Qwen3-ASR)</option>
-                  </select>
-                  {showEngineInstall && (
-                    <button
-                      type="button"
-                      onClick={handleInstallEngine}
-                      disabled={isInstallingEngine || busy}
-                      className="inline-flex items-center gap-2 rounded-lg border border-sf-accent/50 bg-sf-accent/10 px-3 py-1.5 text-xs font-medium text-sf-accent hover:bg-sf-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                {!captionsUseComfy && (
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={modelPreference}
+                      onChange={(event) => handleModelPreferenceChange(event.target.value)}
+                      disabled={busy || isInstallingEngine}
+                      className="rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-2 py-1.5 text-xs text-sf-text-primary focus:border-sf-accent focus:outline-none"
                     >
-                      {isInstallingEngine ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        <Download className="w-3.5 h-3.5" />
-                      )}
-                      {isInstallingEngine
-                        ? (Number.isFinite(Number(engineInstallProgress?.percent))
-                          ? `Downloading… ${engineInstallProgress.percent}%`
-                          : 'Installing…')
-                        : 'Download engine (~150 MB)'}
-                    </button>
-                  )}
-                </div>
+                      {CAPTION_MODEL_TIERS.map((tier) => (
+                        <option key={tier.id} value={tier.id}>
+                          {`${tier.label} (${tier.size})${installedModelIds.has(tier.id) ? ' ✓' : ''}`}
+                        </option>
+                      ))}
+                    </select>
+                    {showEngineInstall && (
+                      <button
+                        type="button"
+                        onClick={handleInstallEngine}
+                        disabled={isInstallingEngine || busy}
+                        className="inline-flex items-center gap-2 rounded-lg border border-sf-accent/50 bg-sf-accent/10 px-3 py-1.5 text-xs font-medium text-sf-accent hover:bg-sf-accent/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isInstallingEngine ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Download className="w-3.5 h-3.5" />
+                        )}
+                        {isInstallingEngine
+                          ? (Number.isFinite(Number(engineInstallProgress?.percent))
+                            ? `Downloading… ${engineInstallProgress.percent}%`
+                            : 'Installing…')
+                          : `Download ${selectedTier.label} (${selectedTier.size})`}
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
               {isTimelineScope ? (
                 <div className="flex items-center gap-3 rounded-xl border border-sf-dark-700 bg-sf-dark-950/60 p-3">

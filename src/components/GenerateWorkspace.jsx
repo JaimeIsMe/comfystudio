@@ -6099,6 +6099,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
     try {
       const result = await transcribeAsset(yoloMusicAudioAsset, {
+        // Pinned to Qwen3-ASR: proven on sung vocals over instrumentals.
+        // Unpin once whisper has been A/B'd on a real song.
+        engine: 'comfyui',
         language: effectiveLanguage,
         onProgress: (progress) => {
           setYoloMusicTranscriptionStatus(progress?.message || (shouldAlignProvidedLyrics

@@ -2,11 +2,13 @@
 //
 // Two backends implement the same contract:
 //   'local'   — whisper.cpp in the main process (no ComfyUI needed)
-//   'comfyui' — the original Qwen3-ASR workflow
-// 'auto' prefers the local engine when it's installed and falls back to
-// ComfyUI otherwise, which keeps behavior identical for existing users until
-// they install the local engine. Callers (CaptionWorkspace, GenerateWorkspace,
-// mcpCaptions) import from here, never from a backend directly.
+//   'comfyui' — the Qwen3-ASR workflow, retired from the captions UI
+// Whisper is THE caption engine. The ComfyUI backend survives for two callers
+// only: the music-video lyric pass (pinned via options.engine until whisper is
+// A/B'd on sung vocals) and an undocumented localStorage escape hatch
+// ('velorn-caption-engine' = 'comfyui'). Callers (CaptionWorkspace,
+// GenerateWorkspace, mcpCaptions) import from here, never from a backend
+// directly.
 
 import {
   transcribeWithComfyUI,
@@ -15,7 +17,6 @@ import {
   parseCaptionSubtitles,
 } from './captionComfyTranscription'
 import {
-  isLocalCaptionEngineAvailable,
   transcribeAssetLocally,
   transcribeTimelineLocally,
   getLocalCaptionEngineStatus,
@@ -41,11 +42,28 @@ export function setCaptionEnginePreference(value) {
   } catch { /* ignore */ }
 }
 
+const MODEL_SETTING_KEY = 'velorn-caption-model'
+const MODEL_TIER_IDS = ['base', 'small', 'large-v3-turbo']
+
+export function getCaptionModelPreference() {
+  try {
+    const value = localStorage.getItem(MODEL_SETTING_KEY)
+    return MODEL_TIER_IDS.includes(value) ? value : 'base'
+  } catch {
+    return 'base'
+  }
+}
+
+export function setCaptionModelPreference(value) {
+  if (!MODEL_TIER_IDS.includes(value)) return
+  try {
+    localStorage.setItem(MODEL_SETTING_KEY, value)
+  } catch { /* ignore */ }
+}
+
 /** Resolve which backend a transcription will actually use right now. */
 export async function resolveCaptionEngine() {
-  const preference = getCaptionEnginePreference()
-  if (preference === 'local' || preference === 'comfyui') return preference
-  return (await isLocalCaptionEngineAvailable()) ? 'local' : 'comfyui'
+  return getCaptionEnginePreference() === 'comfyui' ? 'comfyui' : 'local'
 }
 
 /** Transcribe a single source asset. Options pass through to the backend. */
@@ -54,7 +72,7 @@ export async function transcribeAsset(asset, options = {}) {
     ? options.engine
     : await resolveCaptionEngine()
   return engine === 'local'
-    ? transcribeAssetLocally(asset, options)
+    ? transcribeAssetLocally(asset, { modelId: getCaptionModelPreference(), ...options })
     : transcribeWithComfyUI(asset, options)
 }
 
@@ -64,7 +82,7 @@ export async function transcribeTimelineAudio(options = {}) {
     ? options.engine
     : await resolveCaptionEngine()
   return engine === 'local'
-    ? transcribeTimelineLocally(options)
+    ? transcribeTimelineLocally({ modelId: getCaptionModelPreference(), ...options })
     : transcribeTimeline(options)
 }
 
