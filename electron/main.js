@@ -4603,10 +4603,13 @@ ipcMain.handle('captions:mixTimelineAudio', async (event, options = {}) => {
   const inputFilters = []
   const mixLabels = []
   preparedInputs.forEach((entry, index) => {
+    // No atempo at unity rate: ffmpeg 6.1.1 amix silently truncates the whole
+    // mix at input 0's delay when that input's chain has atempo before adelay
+    // (same defect the export mixer works around — keep the graphs in parity).
     const filters = [
       `atrim=start=${formatFilterNumber(entry.sourceOffsetSec)}:duration=${formatFilterNumber(entry.sourceDurationSec)}`,
       'asetpts=PTS-STARTPTS',
-      ...buildAtempoFilterChain(entry.timeScale),
+      ...(Math.abs(entry.timeScale - 1) > 0.000001 ? buildAtempoFilterChain(entry.timeScale) : []),
       // Force each input to mono before mixing so inputs with different channel
       // layouts combine cleanly.
       'aformat=channel_layouts=mono',
@@ -4619,10 +4622,18 @@ ipcMain.handle('captions:mixTimelineAudio', async (event, options = {}) => {
     mixLabels.push(`[${label}]`)
   })
 
-  const durationClip = `atrim=duration=${formatFilterNumber(programDuration)},asetpts=PTS-STARTPTS`
-  const finalFilter = mixLabels.length === 1
-    ? `${mixLabels[0]}${durationClip}[outa]`
-    : `${mixLabels.join('')}amix=inputs=${mixLabels.length}:duration=longest:dropout_transition=0:normalize=0,${durationClip}[outa]`
+  // Silence bed as amix input 0 (parity with the export mixer): it never
+  // carries atempo or adelay, so the truncation bug cannot key off the first
+  // input — this also shields speed-ramped clips, which legitimately keep
+  // atempo — and apad makes the output span the full program even when every
+  // real input ends early or starts late.
+  const padAndTrim = `apad=whole_dur=${formatFilterNumber(programDuration)},atrim=duration=${formatFilterNumber(programDuration)},asetpts=PTS-STARTPTS`
+  const silenceLabel = 'mixsilence'
+  inputFilters.push(
+    `anullsrc=r=${normalizedSampleRate}:cl=mono:d=${formatFilterNumber(programDuration)}[${silenceLabel}]`
+  )
+  const allMixLabels = [`[${silenceLabel}]`, ...mixLabels]
+  const finalFilter = `${allMixLabels.join('')}amix=inputs=${allMixLabels.length}:duration=longest:dropout_transition=0:normalize=0,${padAndTrim}[outa]`
 
   args.push(
     '-filter_complex', `${inputFilters.join(';')};${finalFilter}`,
