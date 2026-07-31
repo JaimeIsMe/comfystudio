@@ -30,6 +30,7 @@
 - Autosave only runs when something actually changed. Previously the full project was re-serialized, a thumbnail captured, and both written to disk every 30 seconds even while idle — on large projects that was a periodic stutter. A backstop save still runs every few minutes as insurance.
 - ComfyUI queue polling rests at 30 seconds when nothing is generating and snaps back to 2 seconds the moment work starts, instead of polling every 2 seconds forever.
 - Audio meters (the timeline VU meter and the Mixer strips) stop polling and re-rendering while playback is stopped.
+- The Dope Sheet no longer re-renders all its keyframe lanes on every frame of playback — only the playhead line and value readouts update, so previewing animation with the Dope Sheet open now plays as smoothly as the timeline view.
 
 ## Project
 

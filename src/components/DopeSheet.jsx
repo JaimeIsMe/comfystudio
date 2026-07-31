@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { ClipboardPaste, Clock3, Copy, Diamond, Magnet, Spline, Trash2 } from 'lucide-react'
 import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
@@ -8,6 +9,79 @@ import { getSpriteFramePosition } from '../services/thumbnailSprites'
 
 const LEFT_COLUMN_WIDTH = 148
 const RULER_HEIGHT = 32
+
+const formatSeconds = (seconds) => {
+  if (!Number.isFinite(seconds)) return '0.00s'
+  return `${seconds.toFixed(2)}s`
+}
+
+// The dope sheet's expensive body (lanes, keyframe dots, rows) deliberately
+// does NOT subscribe to playheadPosition — during playback it changes every
+// frame and re-rendered the entire sheet (same cost class as the Timeline
+// fix). Keep new store fields in BOTH this list and the destructure below.
+const DOPE_SHEET_STORE_KEYS = [
+  'selectedClipIds',
+  'clips',
+  'setPlayheadPosition',
+  'saveToHistory',
+  'moveKeyframeTime',
+  'moveKeyframesAtTime',
+  'setKeyframe',
+  'removeKeyframe',
+  'keyframeClipboard',
+  'copyKeyframesToClipboard',
+  'pasteKeyframesFromClipboard',
+  'timelineFps',
+  'zoom',
+  'undo',
+  'redo',
+]
+const pickDopeSheetStoreSlice = (state) => {
+  const slice = {}
+  for (const key of DOPE_SHEET_STORE_KEYS) slice[key] = state[key]
+  return slice
+}
+
+// The only parts that need per-frame playhead updates subscribe on their own,
+// so 20-60 store writes a second re-render a handful of one-element
+// components instead of the whole sheet.
+function useClipLocalPlayhead(clipStartTime, clipDuration) {
+  const playheadPosition = useTimelineStore((state) => state.playheadPosition)
+  const local = (Number(playheadPosition) || 0) - (Number(clipStartTime) || 0)
+  return Math.max(0, Math.min(Math.max(0.001, clipDuration), local))
+}
+
+function DopeSheetPlayheadReadout({ clipStartTime, clipDuration }) {
+  const time = useClipLocalPlayhead(clipStartTime, clipDuration)
+  return (
+    <div className="text-sf-text-muted">
+      Playhead: <span className="text-sf-text-secondary">{formatSeconds(time)}</span>
+    </div>
+  )
+}
+
+function DopeSheetPlayheadLine({ clipStartTime, clipDuration, pixelsPerSecond, className, style }) {
+  const time = useClipLocalPlayhead(clipStartTime, clipDuration)
+  return (
+    <div
+      className={className}
+      style={{ ...style, left: `${time * pixelsPerSecond}px` }}
+    />
+  )
+}
+
+function DopeSheetRowValueLabel({ keyframes, clipStartTime, clipDuration, unit }) {
+  const time = useClipLocalPlayhead(clipStartTime, clipDuration)
+  const rowValue = getValueAtTime(keyframes, time, keyframes[0]?.value)
+  return (
+    <span
+      className="text-[9px] font-mono text-amber-200/90"
+      title={`Value at playhead: ${rowValue}`}
+    >
+      {formatRowValue(rowValue)}{unit}
+    </span>
+  )
+}
 const DEFAULT_CUSTOM_EASING = 'cubic-bezier(0.25, 0.1, 0.25, 1)'
 const GRAPH_HEIGHT = 200
 const GRAPH_PADDING_Y = 18
@@ -33,7 +107,6 @@ function DopeSheet() {
   const {
     selectedClipIds,
     clips,
-    playheadPosition,
     setPlayheadPosition,
     saveToHistory,
     moveKeyframeTime,
@@ -47,7 +120,7 @@ function DopeSheet() {
     zoom,
     undo,
     redo,
-  } = useTimelineStore()
+  } = useTimelineStore(useShallow(pickDopeSheetStoreSlice))
   const [frameSnapEnabled, setFrameSnapEnabled] = useState(true)
   const [isEasingEditorOpen, setIsEasingEditorOpen] = useState(false)
   const [graphPropertyId, setGraphPropertyId] = useState(null)
@@ -72,10 +145,15 @@ function DopeSheet() {
   const clipDuration = Math.max(0.001, Number(selectedClip?.duration) || 0.001)
   const laneWidth = Math.max(1, clipDuration * pixelsPerSecond)
 
-  const clipLocalPlayheadTime = selectedClip
-    ? playheadPosition - selectedClip.startTime
-    : 0
   const safeFps = Number.isFinite(Number(timelineFps)) && Number(timelineFps) > 0 ? Number(timelineFps) : 24
+
+  // Live playhead in clip-local time, read at call time so interaction
+  // handlers stay accurate without a per-frame reactive subscription.
+  const getClipLocalPlayheadTime = useCallback(() => {
+    if (!selectedClip) return 0
+    const playheadPosition = useTimelineStore.getState().playheadPosition || 0
+    return playheadPosition - selectedClip.startTime
+  }, [selectedClip])
 
   const propertyRows = useMemo(() => {
     if (!selectedClip) return []
@@ -111,11 +189,6 @@ function DopeSheet() {
 
     return { major, minor }
   }, [clipDuration, pixelsPerSecond, selectedClip])
-
-  const formatSeconds = (seconds) => {
-    if (!Number.isFinite(seconds)) return '0.00s'
-    return `${seconds.toFixed(2)}s`
-  }
 
   const clampToClipRange = useCallback(
     (time) => Math.max(0, Math.min(clipDuration, time)),
@@ -279,7 +352,7 @@ function DopeSheet() {
   const addKeyframeAtPlayhead = useCallback((propertyId) => {
     if (!selectedClip) return
 
-    const targetTime = normalizeEditableTime(clipLocalPlayheadTime)
+    const targetTime = normalizeEditableTime(getClipLocalPlayheadTime())
     const animatedTransform = getAnimatedTransform(selectedClip, targetTime) || selectedClip.transform || {}
     const animatedAdjustments = selectedClip.type === 'adjustment'
       ? (getAnimatedAdjustmentSettings(selectedClip, targetTime) || selectedClip.adjustments || {})
@@ -296,7 +369,7 @@ function DopeSheet() {
     setKeyframe(selectedClip.id, propertyId, targetTime, value, 'easeInOut', { saveHistory: true })
     setSelectedKeyframe({ propertyId, time: targetTime })
     setSelectedKeyframes([{ propertyId, time: targetTime }])
-  }, [clipLocalPlayheadTime, normalizeEditableTime, selectedClip, setKeyframe])
+  }, [getClipLocalPlayheadTime, normalizeEditableTime, selectedClip, setKeyframe])
 
   const deleteSelectedKeyframes = useCallback(() => {
     if (!selectedClip) return
@@ -456,13 +529,13 @@ function DopeSheet() {
 
   const pasteKeyframesAtPlayhead = useCallback(() => {
     if (!selectedClip) return
-    const atTime = normalizeEditableTime(clipLocalPlayheadTime)
+    const atTime = normalizeEditableTime(getClipLocalPlayheadTime())
     const pasted = pasteKeyframesFromClipboard(selectedClip.id, atTime)
     if (pasted.length > 0) {
       setSelectedKeyframes(pasted)
       setSelectedKeyframe(pasted[0])
     }
-  }, [clipLocalPlayheadTime, normalizeEditableTime, pasteKeyframesFromClipboard, selectedClip])
+  }, [getClipLocalPlayheadTime, normalizeEditableTime, pasteKeyframesFromClipboard, selectedClip])
 
   const startKeyframeDrag = (event, propertyId, keyframeTime) => {
     if (event.altKey) {
@@ -1159,9 +1232,10 @@ function DopeSheet() {
             </button>
           )}
         </div>
-        <div className="text-sf-text-muted">
-          Playhead: <span className="text-sf-text-secondary">{formatSeconds(clampToClipRange(clipLocalPlayheadTime))}</span>
-        </div>
+        <DopeSheetPlayheadReadout
+          clipStartTime={selectedClip.startTime}
+          clipDuration={clipDuration}
+        />
       </div>
 
       <div ref={lanesScrollRef} className="flex-1 min-h-0 overflow-auto">
@@ -1238,12 +1312,12 @@ function DopeSheet() {
                 </div>
               ))}
 
-              <div
+              <DopeSheetPlayheadLine
+                clipStartTime={selectedClip.startTime}
+                clipDuration={clipDuration}
+                pixelsPerSecond={pixelsPerSecond}
                 className="absolute top-0 bottom-0 w-px bg-yellow-500/80 pointer-events-none z-20"
-                style={{
-                  left: `${clampToClipRange(clipLocalPlayheadTime) * pixelsPerSecond}px`,
-                  boxShadow: '0 0 8px rgba(250, 204, 21, 0.28)',
-                }}
+                style={{ boxShadow: '0 0 8px rgba(250, 204, 21, 0.28)' }}
               />
             </div>
           </div>
@@ -1333,11 +1407,11 @@ function DopeSheet() {
                       )
                     })}
                   </svg>
-                  <div
+                  <DopeSheetPlayheadLine
+                    clipStartTime={selectedClip.startTime}
+                    clipDuration={clipDuration}
+                    pixelsPerSecond={pixelsPerSecond}
                     className="absolute top-0 bottom-0 w-px bg-yellow-500/80 pointer-events-none"
-                    style={{
-                      left: `${clampToClipRange(clipLocalPlayheadTime) * pixelsPerSecond}px`,
-                    }}
                   />
                 </div>
               </div>
@@ -1346,9 +1420,6 @@ function DopeSheet() {
 
           {!graphPropertyId && propertyRows.map((property) => {
             const keyframes = selectedClip.keyframes?.[property.id] || []
-            const rowValue = keyframes.length > 0
-              ? getValueAtTime(keyframes, clampToClipRange(clipLocalPlayheadTime), keyframes[0]?.value)
-              : null
 
             return (
               <div key={property.id} className="flex h-9 border-b border-sf-dark-800">
@@ -1358,13 +1429,13 @@ function DopeSheet() {
                 >
                   <span className="text-sf-text-secondary">{property.label}</span>
                   <span className="flex items-center gap-1">
-                    {rowValue !== null ? (
-                      <span
-                        className="text-[9px] font-mono text-amber-200/90"
-                        title={`Value at playhead: ${rowValue}`}
-                      >
-                        {formatRowValue(rowValue)}{property.unit}
-                      </span>
+                    {keyframes.length > 0 ? (
+                      <DopeSheetRowValueLabel
+                        keyframes={keyframes}
+                        clipStartTime={selectedClip.startTime}
+                        clipDuration={clipDuration}
+                        unit={property.unit}
+                      />
                     ) : (
                       <span className="text-[9px] text-sf-text-muted">{property.unit}</span>
                     )}
@@ -1388,11 +1459,11 @@ function DopeSheet() {
                   onMouseDown={handleLaneMouseDown}
                   onDoubleClick={() => addKeyframeAtPlayhead(property.id)}
                 >
-                  <div
+                  <DopeSheetPlayheadLine
+                    clipStartTime={selectedClip.startTime}
+                    clipDuration={clipDuration}
+                    pixelsPerSecond={pixelsPerSecond}
                     className="absolute top-0 bottom-0 w-px bg-yellow-500/80 pointer-events-none"
-                    style={{
-                      left: `${clampToClipRange(clipLocalPlayheadTime) * pixelsPerSecond}px`,
-                    }}
                   />
 
                   {selectedKeyframeColumns.map((time) => (
