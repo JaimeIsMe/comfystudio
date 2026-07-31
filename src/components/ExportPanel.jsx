@@ -336,7 +336,16 @@ function ExportPanel() {
     currentTimelineId,
     getCurrentTimelineSettings,
   } = useProjectStore()
-  const { duration, inPoint, outPoint, getTimelineEndTime, clips, transitions, tracks } = useTimelineStore()
+  // Narrow selectors, not a bare useTimelineStore(): this panel stays mounted
+  // (lazily) once visited, and a bare subscription re-rendered it on every
+  // per-frame playhead write during playback.
+  const duration = useTimelineStore((s) => s.duration)
+  const inPoint = useTimelineStore((s) => s.inPoint)
+  const outPoint = useTimelineStore((s) => s.outPoint)
+  const getTimelineEndTime = useTimelineStore((s) => s.getTimelineEndTime)
+  const clips = useTimelineStore((s) => s.clips)
+  const transitions = useTimelineStore((s) => s.transitions)
+  const tracks = useTimelineStore((s) => s.tracks)
   const { assets } = useAssetsStore()
   
   const projectName = currentProject?.name || 'Untitled'

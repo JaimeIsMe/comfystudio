@@ -3176,15 +3176,56 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
       if (node) node.style.left = `${position * pixelsPerSecond}px`
     }
     applyPlayheadLeft(useTimelineStore.getState().playheadPosition)
+
+    // The keep-in-view check must not read layout per tick: the style.left
+    // write above plus a scrollLeft/clientWidth read is a forced synchronous
+    // reflow of the whole clip area — at hundreds of clips that read was the
+    // single biggest per-frame cost during playback. Viewport metrics are
+    // cached (scroll listener + ResizeObserver) so the hot path is pure
+    // arithmetic; layout is only touched when an auto-scroll jump fires.
+    const el = timelineRef.current
+    let cachedScrollLeft = el ? el.scrollLeft : 0
+    let cachedClientWidth = el ? el.clientWidth : 0
+    const handleScroll = () => { cachedScrollLeft = el.scrollLeft }
+    let resizeObserver = null
+    if (el) {
+      el.addEventListener('scroll', handleScroll, { passive: true })
+      if (typeof ResizeObserver !== 'undefined') {
+        resizeObserver = new ResizeObserver(() => { cachedClientWidth = el.clientWidth })
+        resizeObserver.observe(el)
+      }
+    }
+
+    const followPlayhead = (time) => {
+      if (!el || !Number.isFinite(Number(time))) return
+      const targetX = Number(time) * pixelsPerSecond
+      const padding = Math.max(80, cachedClientWidth * 0.18)
+      if (targetX > cachedScrollLeft + cachedClientWidth - padding) {
+        const maxScrollLeft = Math.max(0, el.scrollWidth - el.clientWidth)
+        const next = Math.min(Math.max(0, targetX - (cachedClientWidth * 0.35)), maxScrollLeft)
+        el.scrollLeft = next
+        cachedScrollLeft = next
+      } else if (targetX < cachedScrollLeft + padding) {
+        const maxScrollLeft = Math.max(0, el.scrollWidth - el.clientWidth)
+        const next = Math.max(0, Math.min(targetX - padding, maxScrollLeft))
+        el.scrollLeft = next
+        cachedScrollLeft = next
+      }
+    }
+
     const unsubscribe = useTimelineStore.subscribe((state, prevState) => {
       if (state.playheadPosition === prevState.playheadPosition) return
       applyPlayheadLeft(state.playheadPosition)
-      if (state.isPlaying && timelineRef.current) {
-        ensureTimelineTimeVisible(state.playheadPosition)
+      if (state.isPlaying) {
+        followPlayhead(state.playheadPosition)
       }
     })
-    return unsubscribe
-  }, [ensureTimelineTimeVisible, pixelsPerSecond])
+    return () => {
+      unsubscribe()
+      if (el) el.removeEventListener('scroll', handleScroll)
+      if (resizeObserver) resizeObserver.disconnect()
+    }
+  }, [pixelsPerSecond])
 
   const getDraggedAssetIds = (dataTransfer) => {
     if (Array.isArray(draggedAssetIds) && draggedAssetIds.length > 0) return draggedAssetIds

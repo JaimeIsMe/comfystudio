@@ -342,7 +342,14 @@ function AssetsPanel({ isActive = true }) {
     setAssetAudioEnabled,
   } = useAssetsStore()
   const { currentProject, currentProjectHandle, currentTimelineId, createTimeline, switchTimeline, saveProject, renameTimeline, setTimelineColor, moveTimelineToFolder, duplicateTimeline, deleteTimeline, getCurrentTimelineSettings } = useProjectStore()
-  const { isPlaying: timelineIsPlaying, togglePlay: timelineTogglePlay, removeAudioClipsForAsset, clearSelection: clearTimelineSelection } = useTimelineStore()
+  // Narrow selectors, not a bare useTimelineStore(): the bare subscription
+  // re-rendered this entire panel on every store write — including per-frame
+  // playhead writes during playback, which at hundreds of assets was a real
+  // per-frame cost (profiled at ~13% of playback CPU on a 288-asset project).
+  const timelineIsPlaying = useTimelineStore((s) => s.isPlaying)
+  const timelineTogglePlay = useTimelineStore((s) => s.togglePlay)
+  const removeAudioClipsForAsset = useTimelineStore((s) => s.removeAudioClipsForAsset)
+  const clearTimelineSelection = useTimelineStore((s) => s.clearSelection)
   
   // Load thumbnail size from localStorage
   useEffect(() => {

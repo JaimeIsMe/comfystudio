@@ -16,6 +16,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Allow the JS Self-Profiling API in dev builds so playback performance
+    // can be profiled from the console (new Profiler(...)).
+    headers: {
+      'Document-Policy': 'js-profiling',
+    },
     // Proxy requests to ComfyUI to avoid CORS issues
     proxy: {
       '/system_stats': {

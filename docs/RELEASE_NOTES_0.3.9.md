@@ -15,6 +15,10 @@
 - Switching tiers leaves the old download on disk, so the engine row lists installed models and lets you delete any tier you're not using.
 - Windows and Linux to start; the macOS local engine needs our own CLI build and comes later.
 
+## Performance
+
+- Large projects play dramatically faster. On a real 221-clip, 57-minute, 288-asset project that crawled at ~8 fps, per-frame main-thread blocking dropped from ~97% to under 30%: the asset browser and the (hidden) Export tab no longer re-render on every frame of playback, and the timeline's keep-playhead-in-view check no longer forces a layout reflow of the whole clip area on every tick. Small projects never noticed; the cost scaled with clip and asset count.
+
 ## Editing
 
 - New full-height toggle at the bottom of the Inspector's icon bar, mirroring the left panel's. The Inspector spans preview + timeline; the resize handle works in both modes.
