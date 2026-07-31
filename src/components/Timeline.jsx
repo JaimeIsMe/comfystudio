@@ -1760,6 +1760,21 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     setCaptionWorkspaceSession({ scope: 'asset', asset: workspaceAsset, replaceClipId: clip.id })
   }
 
+  // Double-click a caption overlay clip = Edit Captions (the CapCut reflex).
+  // The caption check runs inside the handler, not at render time, so the
+  // per-clip render path stays free of asset lookups. Other clip types keep
+  // double-click unbound.
+  const handleClipDoubleClick = (e, clip) => {
+    const clipAsset = clip?.assetId ? getAssetById(clip.assetId) : null
+    const isCaptionOverlay = Boolean(
+      clipAsset?.settings?.overlayKind === 'captions' || clipAsset?.settings?.captionScope
+    )
+    if (!isCaptionOverlay) return
+    e.preventDefault()
+    e.stopPropagation()
+    handleEditCaptionsFromClip(clip)
+  }
+
   // Swap a re-generated asset-scope caption overlay into the clip it was
   // opened from: same track, position, and trims. The superseded overlay
   // asset is removed once no timeline references it.
@@ -5965,7 +5980,9 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
                     data-clip="true"
                     onMouseDown={(e) => handleClipDragStart(e, clip)}
                     onClick={(e) => handleClipClick(e, clip)}
-                    onDoubleClick={isTextClip ? (e) => handleTextClipDoubleClick(e, clip) : undefined}
+                    onDoubleClick={isTextClip
+                      ? (e) => handleTextClipDoubleClick(e, clip)
+                      : (e) => handleClipDoubleClick(e, clip)}
                     onContextMenu={(e) => handleClipContextMenu(e, clip)}
                     onDragOver={(e) => {
                       if (parseEffectDrop(e)) {
