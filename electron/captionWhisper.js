@@ -52,6 +52,13 @@ const WHISPER_MODELS = {
 const DEFAULT_MODEL_ID = 'base'
 const MODEL_BASE_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/'
 
+// Silero VAD model: keeps whisper from smearing boundary-word timestamps
+// across leading/trailing music or silence (captions used to start at frame
+// one of an edit whose dialog begins seconds in). Downloaded best-effort;
+// deleting the file reverts to VAD-free transcription.
+const VAD_MODEL_FILE = 'ggml-silero-v5.1.2.bin'
+const VAD_MODEL_URL = `https://huggingface.co/ggml-org/whisper-vad/resolve/main/${VAD_MODEL_FILE}`
+
 const BINARY_CANDIDATE_NAMES = process.platform === 'win32'
   ? ['whisper-cli.exe', 'main.exe']
   : ['whisper-cli', 'main']
@@ -93,6 +100,29 @@ function findBinaryIn(dir, depth = 3) {
   return null
 }
 
+function vadModelPath(app) {
+  return path.join(engineModelsDir(app), VAD_MODEL_FILE)
+}
+
+// Fetch the VAD model if it is not on disk yet. Best-effort: offline or a
+// failed download just means transcription proceeds without VAD, exactly as
+// it did before the model existed.
+async function ensureVadModel(app, sendProgress) {
+  const dest = vadModelPath(app)
+  if (fs.existsSync(dest)) return dest
+  try {
+    await ensureDir(engineModelsDir(app))
+    if (typeof sendProgress === 'function') {
+      sendProgress({ phase: 'download-vad', message: 'Downloading speech detector…', percent: null })
+    }
+    await downloadFile(VAD_MODEL_URL, dest, {})
+    return fs.existsSync(dest) ? dest : null
+  } catch (err) {
+    console.warn('[captions] Could not download the VAD model (continuing without it):', err?.message || err)
+    return null
+  }
+}
+
 function listInstalledModels(app) {
   const dir = engineModelsDir(app)
   const models = []
@@ -121,6 +151,7 @@ function buildEngineStatus(app) {
     platformSupported,
     releaseTag: WHISPER_RELEASE_TAG,
     binaryPath: binaryPath || null,
+    vadModelInstalled: fs.existsSync(vadModelPath(app)),
     modelsDir: engineModelsDir(app),
     models,
     availableModels: Object.entries(WHISPER_MODELS).map(([id, spec]) => ({
@@ -419,6 +450,10 @@ function createCaptionWhisperService({ app, ffmpegPath, getMainWindow }) {
         })
       }
 
+      // Fetch the VAD model as part of install so first transcriptions get
+      // accurate boundary timings without a mid-transcribe download.
+      await ensureVadModel(app, sendProgress)
+
       sendProgress({ phase: 'done', message: 'Caption engine ready.', percent: 100 })
       return { success: true, ...buildEngineStatus(app) }
     } catch (err) {
@@ -476,6 +511,11 @@ function createCaptionWhisperService({ app, ffmpegPath, getMainWindow }) {
 
       const language = String(options.language || 'auto').toLowerCase() || 'auto'
       const threads = Math.max(2, Math.min(8, (os.cpus()?.length || 4) - 2))
+      // Voice-activity detection: without it, whisper pins the first word at
+      // ~0s and stretches boundary words across leading/trailing music, so
+      // captions appear before anyone speaks. Auto-heals older installs by
+      // fetching the 0.9MB model on first use.
+      const vadPath = options.vad === false ? null : await ensureVadModel(app, sendProgress)
       // Vocabulary hint: whisper's initial prompt biases decoding toward
       // project words (brand names, people). Long form only — -p means
       // --processors. Whisper truncates past ~224 tokens; the cap here is a
@@ -494,6 +534,10 @@ function createCaptionWhisperService({ app, ffmpegPath, getMainWindow }) {
       ]
       if (vocabularyHint) {
         args.push('--prompt', vocabularyHint)
+      }
+      if (vadPath) {
+        // Generous speech padding so word onsets survive the VAD boundary.
+        args.push('--vad', '--vad-model', vadPath, '--vad-speech-pad-ms', '120')
       }
 
       sendProgress({ phase: 'transcribe', message: 'Transcribing…', percent: 0 })
