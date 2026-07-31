@@ -40,5 +40,9 @@ export function buildVocabularyHint(parts, {
     totalChars = nextTotal
   }
 
-  return kept.join(', ')
+  // Whisper mimics the prompt's writing style, and an unpunctuated word
+  // list nudges it toward dropping punctuation — which coarsens cue
+  // grouping (sentence punctuation is a cue-break rule). Terminate the
+  // hint like a sentence so the output keeps its punctuation habits.
+  return kept.length > 0 ? `${kept.join(', ')}.` : ''
 }
