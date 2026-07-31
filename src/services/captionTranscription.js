@@ -21,6 +21,8 @@ import {
   transcribeTimelineLocally,
   getLocalCaptionEngineStatus,
   installLocalCaptionEngine,
+  canRemoveLocalCaptionModels,
+  removeLocalCaptionModel,
 } from './captionLocalTranscription'
 
 const ENGINE_SETTING_KEY = 'velorn-caption-engine'
@@ -93,4 +95,6 @@ export {
   parseCaptionSubtitles,
   getLocalCaptionEngineStatus,
   installLocalCaptionEngine,
+  canRemoveLocalCaptionModels,
+  removeLocalCaptionModel,
 }

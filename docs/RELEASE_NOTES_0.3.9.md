@@ -12,6 +12,7 @@
 - Transcription now runs on your machine — no ComfyUI, no setup. Pick an accuracy tier in Add Captions: Fast (142 MB), Accurate (466 MB), or Best (1.6 GB); each is a one-click download the first time you use it. The ComfyUI Qwen3-ASR path is retired from the captions UI (the music-video lyric pass still uses it for now).
 - Word-level caption timings now exist in both scopes. Timeline-scope transcriptions previously had no word timing at all, so the word-pop presets were interpolating between cue boundaries; they now get real per-word times.
 - Timeline captions honor mutes and solos, so for a busy mix you can solo the dialog or vocal track before transcribing — the dialog now says so.
+- Switching tiers leaves the old download on disk, so the engine row lists installed models and lets you delete any tier you're not using.
 - Windows and Linux to start; the macOS local engine needs our own CLI build and comes later.
 
 ## Editing

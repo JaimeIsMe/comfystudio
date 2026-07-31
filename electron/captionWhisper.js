@@ -510,10 +510,33 @@ function createCaptionWhisperService({ app, ffmpegPath, getMainWindow }) {
     }
   }
 
+  async function removeModel(options = {}) {
+    const modelId = String(options.modelId || '')
+    const spec = WHISPER_MODELS[modelId]
+    if (!spec) {
+      return { success: false, error: `Unknown caption model: ${modelId}` }
+    }
+    if (installInFlight || transcribeInFlight) {
+      return { success: false, error: 'The caption engine is busy — try again in a moment.' }
+    }
+    try {
+      const modelPath = path.join(engineModelsDir(app), spec.file)
+      if (!fs.existsSync(modelPath)) {
+        return { success: false, error: 'That model is not installed.' }
+      }
+      const sizeBytes = fs.statSync(modelPath).size
+      await fsp.unlink(modelPath)
+      return { success: true, modelId, freedBytes: sizeBytes, ...buildEngineStatus(app) }
+    } catch (err) {
+      return { success: false, error: String(err?.message || err) }
+    }
+  }
+
   return {
     getStatus: () => buildEngineStatus(app),
     install,
     transcribe,
+    removeModel,
   }
 }
 
@@ -530,6 +553,7 @@ function registerCaptionWhisperHandlers({ app, ipcMain, ffmpegPath, getMainWindo
 
   ipcMain.handle('captions:whisperInstall', (event, options = {}) => service.install(options))
   ipcMain.handle('captions:whisperTranscribe', (event, options = {}) => service.transcribe(options))
+  ipcMain.handle('captions:whisperRemoveModel', (event, options = {}) => service.removeModel(options))
 
   return service
 }

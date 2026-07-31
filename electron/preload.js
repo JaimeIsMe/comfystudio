@@ -350,6 +350,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   whisperEngineStatus: () => ipcRenderer.invoke('captions:whisperStatus'),
   whisperEngineInstall: (options = {}) => ipcRenderer.invoke('captions:whisperInstall', options),
   whisperTranscribe: (options = {}) => ipcRenderer.invoke('captions:whisperTranscribe', options),
+  whisperRemoveModel: (options = {}) => ipcRenderer.invoke('captions:whisperRemoveModel', options),
 
   /**
    * Get a direct file:// URL for a local file

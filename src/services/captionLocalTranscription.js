@@ -150,6 +150,28 @@ export async function installLocalCaptionEngine({ modelId = 'base', onProgress }
   }
 }
 
+/**
+ * Whether this build can delete downloaded caption models. False until the
+ * app restarts into a build whose preload exposes the handler.
+ */
+export function canRemoveLocalCaptionModels() {
+  const api = typeof window !== 'undefined' ? window.electronAPI : null
+  return typeof api?.whisperRemoveModel === 'function'
+}
+
+/** Delete a downloaded model from disk. Returns the refreshed engine status. */
+export async function removeLocalCaptionModel(modelId) {
+  const api = typeof window !== 'undefined' ? window.electronAPI : null
+  if (!api?.whisperRemoveModel) {
+    throw new Error('Removing caption models needs an app restart to activate.')
+  }
+  const result = await api.whisperRemoveModel({ modelId })
+  if (!result?.success) {
+    throw new Error(result?.error || 'Could not remove the caption model.')
+  }
+  return result
+}
+
 function buildTranscriptionResult({ words, language, audioDuration, modelId, source }) {
   const cues = groupWordsIntoCues(words)
   if (cues.length === 0) {

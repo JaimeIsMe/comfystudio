@@ -22,6 +22,8 @@ import {
   setCaptionModelPreference,
   getLocalCaptionEngineStatus,
   installLocalCaptionEngine,
+  canRemoveLocalCaptionModels,
+  removeLocalCaptionModel,
 } from '../services/captionTranscription'
 import {
   generateCaptionVideoBlob,
@@ -946,6 +948,10 @@ function CaptionWorkspace({
   const installedModelIds = new Set((engineStatus?.models || []).map((m) => m.id))
   const selectedTier = CAPTION_MODEL_TIERS.find((tier) => tier.id === modelPreference) || CAPTION_MODEL_TIERS[0]
   const selectedTierInstalled = hasEngineBinary && installedModelIds.has(selectedTier.id)
+  const canRemoveModels = canRemoveLocalCaptionModels()
+  const removableTiers = CAPTION_MODEL_TIERS.filter(
+    (tier) => installedModelIds.has(tier.id) && tier.id !== selectedTier.id
+  )
   // The retired ComfyUI path stays reachable through a localStorage escape
   // hatch only ('velorn-caption-engine' = 'comfyui') — no UI for it.
   const captionsUseComfy = getCaptionEnginePreference() === 'comfyui'
@@ -1086,6 +1092,21 @@ function CaptionWorkspace({
     } finally {
       setIsInstallingEngine(false)
       setEngineInstallProgress(null)
+    }
+  }
+
+  const handleRemoveModel = async (modelId) => {
+    setError('')
+    setErrorExpanded(false)
+    try {
+      const result = await removeLocalCaptionModel(modelId)
+      await refreshEngineStatus()
+      const tier = CAPTION_MODEL_TIERS.find((t) => t.id === modelId)
+      const freedMB = Math.round((Number(result?.freedBytes) || 0) / 1e6)
+      setStatusMessage(`Removed the ${tier?.label || modelId} model${freedMB ? ` — freed ${freedMB} MB` : ''}.`)
+    } catch (removeError) {
+      setError(removeError?.message || 'Could not remove the caption model.')
+      await refreshEngineStatus()
     }
   }
 
@@ -1367,6 +1388,28 @@ function CaptionWorkspace({
                         className="h-full rounded-full bg-sf-accent transition-[width] duration-300"
                         style={{ width: `${Math.max(2, Number(engineInstallProgress.percent))}%` }}
                       />
+                    </div>
+                  )}
+                  {canRemoveModels && removableTiers.length > 0 && !isInstallingEngine && (
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] uppercase tracking-[0.12em] text-sf-text-muted">Also on disk</span>
+                      {removableTiers.map((tier) => (
+                        <span
+                          key={tier.id}
+                          className="inline-flex items-center gap-1 rounded-full border border-sf-dark-600 bg-sf-dark-900 px-2 py-0.5 text-[10px] text-sf-text-muted"
+                        >
+                          {tier.label} ({tier.size})
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveModel(tier.id)}
+                            disabled={busy}
+                            title={`Delete the ${tier.label} model from disk`}
+                            className="text-sf-text-muted hover:text-red-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
                     </div>
                   )}
                 </div>
