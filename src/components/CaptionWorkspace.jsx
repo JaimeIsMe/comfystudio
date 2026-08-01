@@ -410,15 +410,9 @@ function CaptionWorkspace({
   // strip once cues exist.
   const [selectedCueId, setSelectedCueId] = useState(null)
   const [cueSearch, setCueSearch] = useState('')
-  // Collapsed by default: right after transcription the job is fixing words,
-  // not watching the render. Sticky per user via localStorage.
-  const [previewCollapsed, setPreviewCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem('velorn-caption-preview-collapsed') !== '0'
-    } catch {
-      return true
-    }
-  })
+  // The preview is always visible: style controls (size, nudge, colors) are
+  // meaningless without live feedback. A collapsible preview shipped briefly
+  // and died the same night — collapsed, dragging Size showed nothing.
   const [transcribeDetailsOpen, setTranscribeDetailsOpen] = useState(false)
   const [statusMessage, setStatusMessage] = useState('')
   const [error, setError] = useState('')
@@ -1643,7 +1637,7 @@ function CaptionWorkspace({
                           previewTimeRef.current = t
                           setScrubDisplay(t)
                           if (isPreviewPlaying) setIsPreviewPlaying(false)
-                          else if (!previewCollapsed) drawPreview(t, true)
+                          else drawPreview(t, true)
                         }}
                         className={`grid w-full cursor-pointer grid-cols-[28px_64px_1fr_auto] items-center gap-2 rounded-lg border-l-2 px-2.5 py-1.5 ${
                           selected
@@ -1703,33 +1697,14 @@ function CaptionWorkspace({
                   <div className="text-[11px] text-sf-text-muted">
                     {renderSettings.width}×{renderSettings.height}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = !previewCollapsed
-                      setPreviewCollapsed(next)
-                      try {
-                        localStorage.setItem('velorn-caption-preview-collapsed', next ? '1' : '0')
-                      } catch { /* ignore */ }
-                      if (!next) {
-                        // The canvas was display:none while collapsed — repaint
-                        // immediately so expanding never shows a stale frame.
-                        requestAnimationFrame(() => drawPreview(previewTimeRef.current, true))
-                      }
-                    }}
-                    className="rounded-lg border border-sf-dark-600 bg-sf-dark-900 p-1.5 text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-800"
-                    title={previewCollapsed ? 'Expand the preview' : 'Collapse the preview to give the style controls more room'}
-                  >
-                    <ChevronDown className={`w-3.5 h-3.5 transition-transform ${previewCollapsed ? '' : 'rotate-180'}`} />
-                  </button>
                 </div>
               </div>
-              <div className={`${previewCollapsed ? 'hidden ' : ''}flex items-center justify-center rounded-xl bg-black border border-sf-dark-700 overflow-hidden`} style={{ maxHeight: 380 }}>
-                <div className="relative" style={{ maxHeight: 380, maxWidth: '100%' }}>
+              <div className="flex items-center justify-center rounded-xl bg-black border border-sf-dark-700 overflow-hidden" style={{ maxHeight: 300 }}>
+                <div className="relative" style={{ maxHeight: 300, maxWidth: '100%' }}>
                   <canvas
                     ref={previewCanvasRef}
                     className="block"
-                    style={{ maxHeight: 380, maxWidth: '100%' }}
+                    style={{ maxHeight: 300, maxWidth: '100%' }}
                   />
                   {showTikTokOverlay && (
                     <TikTokGuideOverlay w={renderSettings.width} h={renderSettings.height} />
@@ -1738,7 +1713,7 @@ function CaptionWorkspace({
               </div>
 
               {/* Play / scrub controls for the live animated preview */}
-              <div className={`mt-3 flex items-center gap-3${previewCollapsed ? ' hidden' : ''}`}>
+              <div className="mt-3 flex items-center gap-3">
                 <button
                   type="button"
                   onClick={() => {
@@ -1777,7 +1752,7 @@ function CaptionWorkspace({
                   {scrubDisplay.toFixed(1)}s / {previewDuration.toFixed(1)}s
                 </span>
               </div>
-              {showTikTokOverlay && !previewCollapsed && (
+              {showTikTokOverlay && (
                 <div className="mt-2 text-[10px] text-sf-text-muted">
                   Approximate TikTok layout — keep key text inside the dashed safe area.
                 </div>
