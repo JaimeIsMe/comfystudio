@@ -62,8 +62,11 @@ const plausibleCapForUtterance = (utterance, floor, ceiling, factor) => {
  * what keeps this safe for held sung notes and slow speech alike); an
  * utterance that starts or ends in generated silence is linearly rescaled
  * into the portion of its span it overlaps, preserving word order and
- * relative pacing. Utterances with no span overlap at all are left alone —
- * a span-computation bug must degrade to today's behavior, not eat captions.
+ * relative pacing. Utterances with NO span overlap at all are dropped:
+ * there is nothing there to transcribe, so whatever whisper produced is a
+ * hallucination — prompt echo of the vocabulary hint, phantom phrases over
+ * silence, non-speech markers. (When no spans are provided at all, words
+ * pass through untouched — absence of information never deletes captions.)
  *
  * @param {Array<{start:number,end:number,text:string}>} words
  * @param {Array<{start:number,end:number}>} spans - Timeline ranges covered
@@ -105,11 +108,13 @@ export function snapWordsToAudibleSpans(words, spans, {
   }
   utterances.push(current)
 
+  const kept = []
   for (const utterance of utterances) {
     const uStart = utterance[0].start
     const uEnd = utterance[utterance.length - 1].end
     const overlapping = merged.filter((s) => s.end > uStart && s.start < uEnd)
-    if (overlapping.length === 0) continue
+    if (overlapping.length === 0) continue // hallucination in generated silence
+    kept.push(utterance)
 
     const tStart = Math.max(uStart, overlapping[0].start)
     const tEnd = Math.min(uEnd, overlapping[overlapping.length - 1].end)
@@ -126,7 +131,7 @@ export function snapWordsToAudibleSpans(words, spans, {
     }
   }
 
-  return utterances.flat()
+  return kept.flat()
 }
 
 /**

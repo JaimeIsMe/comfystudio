@@ -1499,7 +1499,7 @@ function CaptionWorkspace({
                   <div className="text-xs font-medium text-sf-text-primary">Vocabulary</div>
                   <div className="text-[11px] text-sf-text-muted">
                     Brand names, people, jargon — helps transcription spell them right.
-                    Your project name, timeline names, markers, and text clips are included automatically.
+                    Your project name, timeline names, and on-screen text clips are included automatically.
                   </div>
                   <input
                     type="text"

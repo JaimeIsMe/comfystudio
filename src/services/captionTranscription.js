@@ -80,7 +80,10 @@ export async function resolveCaptionEngine() {
 
 /**
  * Candidate vocabulary strings from the open project, most important first:
- * project name, timeline names, marker labels, on-screen text clips.
+ * project name, timeline names, on-screen text clips. Marker labels are
+ * deliberately excluded — they are workflow paperwork ("S4 - Moonlit brie",
+ * "R3 Chaos build"), and whisper's prompt-echo hallucination can transcribe
+ * the hint itself back over low-speech audio, turning markers into captions.
  */
 export function collectProjectVocabularyParts() {
   const parts = []
@@ -97,9 +100,6 @@ export function collectProjectVocabularyParts() {
   } catch { /* stores unavailable — the hint is best-effort */ }
   try {
     const state = useTimelineStore.getState()
-    for (const marker of Array.isArray(state.markers) ? state.markers : []) {
-      if (marker?.label) parts.push(marker.label)
-    }
     for (const clip of Array.isArray(state.clips) ? state.clips : []) {
       if (clip?.type === 'text' && clip.text) parts.push(clip.text)
     }

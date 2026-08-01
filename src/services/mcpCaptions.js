@@ -255,7 +255,7 @@ export function handleTranscribeCaptions(payload = {}) {
   const plan = {
     scope,
     language,
-    ...(vocabularyHint !== undefined ? { vocabularyHint } : { vocabularyHint: 'auto (derived from project name, timeline names, markers, text clips)' }),
+    ...(vocabularyHint !== undefined ? { vocabularyHint } : { vocabularyHint: 'auto (derived from project name, timeline names, text clips)' }),
     ...(sourceAsset
       ? { asset: { id: sourceAsset.id, name: sourceAsset.name, duration: sourceAsset.duration || null } }
       : { note: 'Timeline scope mixes the program audio (mute/enabled respected) before transcribing.' }),

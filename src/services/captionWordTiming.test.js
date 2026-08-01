@@ -184,10 +184,19 @@ test('words already inside a span are byte-identical after snapping', () => {
   )
 })
 
-test('an utterance with no span overlap is left alone', () => {
-  const input = [{ start: 1.0, end: 2.0, text: 'ghost' }]
-  const words = snapWordsToAudibleSpans(input, [{ start: 10, end: 15 }])
-  assert.deepEqual(words.map(({ start, end }) => ({ start, end })), [{ start: 1.0, end: 2.0 }])
+test('an utterance entirely in generated silence is dropped as hallucination', () => {
+  // Prompt echo, [BLANK_AUDIO] phrases, phantom "I don't know" — anything
+  // whisper claims to hear where no audio clip exists is not real.
+  const words = snapWordsToAudibleSpans(
+    [
+      { start: 1.0, end: 2.0, text: 'ghost' },
+      { start: 12.0, end: 12.4, text: 'real' },
+    ],
+    [{ start: 10, end: 15 }]
+  )
+  assert.deepEqual(words.map(({ start, end, text }) => ({ start, end, text })), [
+    { start: 12.0, end: 12.4, text: 'real' },
+  ])
 })
 
 test('missing or invalid spans leave words untouched', () => {

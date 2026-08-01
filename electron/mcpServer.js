@@ -7497,7 +7497,7 @@ function createToolDefinitions() {
           scope: { type: 'string', enum: ['timeline', 'asset'], description: 'Transcribe the mixed timeline program audio or a single source asset. Defaults to timeline.' },
           assetId: { type: 'string', description: 'Source asset ID from get_assets. Required when scope is asset.' },
           language: { type: 'string', description: 'ASR language hint such as English or Auto. Defaults to Auto.' },
-          vocabulary: { type: 'string', description: 'Optional comma-separated vocabulary (brand names, people, jargon) to bias recognition. Omit to auto-derive from the project (name, timelines, markers, text clips); pass an empty string to disable hints.' },
+          vocabulary: { type: 'string', description: 'Optional comma-separated vocabulary (brand names, people, jargon) to bias recognition. Omit to auto-derive from the project (name, timelines, text clips); pass an empty string to disable hints.' },
           previewOnly: { type: 'boolean', description: 'When true, returns the transcription plan without starting a job. Defaults to true.' },
         },
       },
