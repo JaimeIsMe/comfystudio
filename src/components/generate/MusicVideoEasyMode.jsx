@@ -1786,10 +1786,19 @@ export default function MusicVideoEasyMode({
     const baseAssetId = baseAsset?.id || peopleWizard?.assetId || ''
     if (!baseAssetId) return
     const prompt = `${peopleWizard?.name || 'Character'} character sheet with front, side, 3/4, expressions, and wardrobe consistency.`
-    const inheritedAssetPrefix = inferPeopleWizardAssetPrefix(
-      baseAsset,
-      peopleWizard?.assetPrefix || peopleWizard?.slug || peopleWizard?.name || 'person'
-    ) || 'person'
+    // The typed ASSET PREFIX always wins — the People step promises "Used
+    // for the generated image and sheet file names". Inferring from the
+    // base asset is only a fallback for an empty field: a portrait
+    // generated before the prefix was typed carries stale "person"
+    // metadata, and every cast member inheriting it collides as
+    // person_sheet (issue #90).
+    const typedAssetPrefix = normalizeCastSlug(peopleWizard?.assetPrefix || '') || ''
+    const inheritedAssetPrefix = typedAssetPrefix
+      || inferPeopleWizardAssetPrefix(
+        baseAsset,
+        peopleWizard?.slug || peopleWizard?.name || 'person'
+      )
+      || 'person'
     const job = queuePeopleWizardJob({
       workflowId: 'multi-angles',
       workflowLabel: 'Multiple Angles (Characters)',
