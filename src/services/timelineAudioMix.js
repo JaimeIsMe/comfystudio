@@ -50,7 +50,19 @@ function clipHasUsableAudio(clip, asset) {
   // picture-only everywhere else in the app, so captions must not hear
   // audio the user cannot: video-embedded audio joins the mix by living
   // on an audio track.
-  return Boolean(asset) && clip.type === 'audio'
+  //
+  // The remaining checks must stay in EXACT parity with the main-process
+  // mixer's filter (captions:mixTimelineAudio): if this preflight says
+  // "audible" while the main mixer says "nothing to mix", the FFmpeg path
+  // errors and the Web Audio fallback tries to decode whole media files in
+  // renderer memory — which crashes the renderer on video-backed clips.
+  if (!asset) return false
+  if (clip.type !== 'audio') return false
+  if (asset.hasAudio === false) return false
+  if (asset.audioEnabled === false) return false
+  if (clip.audioEnabled === false) return false
+  if (clip.reverse) return false
+  return true
 }
 
 function computeProgramDuration(clips) {
@@ -172,6 +184,13 @@ async function mixViaFFmpeg({ duration, report }) {
     }
   } catch (err) {
     if (heartbeat) clearInterval(heartbeat)
+    // "No audible clips" is a verdict about the timeline, not an FFmpeg
+    // infrastructure failure — retrying in the Web Audio fallback would just
+    // second-guess the mixer (and decoding whole media files in renderer
+    // memory can crash the renderer). Let it surface to the user as-is.
+    if (/no audible clips/i.test(String(err?.message || ''))) {
+      throw err
+    }
     console.warn('[timelineAudioMix] FFmpeg path failed, falling back to Web Audio:', err)
     return null
   }
