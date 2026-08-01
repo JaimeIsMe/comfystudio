@@ -513,7 +513,7 @@ const TIMELINE_STORE_KEYS = [
   'duplicateClipsForDrag', 'removeDragDuplicates',
   'resizeClip', 'updateClipTrim', 'updateAudioClipProperties', 'selectClip',
   'selectClips', 'clearSelection', 'setPlayheadPosition', 'setZoom',
-  'toggleTrackMute', 'toggleTrackLock', 'toggleTrackVisibility',
+  'toggleTrackMute', 'toggleTrackSolo', 'toggleTrackLock', 'toggleTrackVisibility',
   'setClipsEnabled', 'setClipLabelColor', 'addTrack', 'addTransition',
   'removeTransition', 'updateTransition', 'selectTransition',
   'getMaxTransitionDuration', 'addMaskEffect', 'addEffect', 'toggleSnapping',
@@ -886,6 +886,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     setPlayheadPosition,
     setZoom,
     toggleTrackMute,
+    toggleTrackSolo,
     toggleTrackLock,
     toggleTrackVisibility,
     setClipsEnabled,
@@ -5800,7 +5801,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
                 >
                   <Pencil className="w-3 h-3 text-sf-text-muted" />
                 </button>
-                <button 
+                <button
                   onClick={(e) => { e.stopPropagation(); toggleTrackMute(track.id) }}
                   className="p-0.5 hover:bg-sf-dark-600 rounded"
                 >
@@ -5810,7 +5811,23 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
                     <Volume2 className="w-3 h-3 text-sf-text-muted" />
                   )}
                 </button>
-                <button 
+                {/* Solo — same track.solo state the Mixer's S button toggles,
+                    so soloing the dialog track for captions never requires
+                    leaving the editor. */}
+                {track.type === 'audio' && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); toggleTrackSolo(track.id) }}
+                    className={`min-w-[18px] h-[18px] flex items-center justify-center rounded text-[10px] font-bold transition-colors ${
+                      track.solo
+                        ? 'bg-yellow-500/80 text-black'
+                        : 'bg-sf-dark-600 text-sf-text-muted hover:bg-sf-dark-500 hover:text-sf-text-secondary'
+                    }`}
+                    title={track.solo ? 'Unsolo track' : 'Solo track (only soloed audio tracks play)'}
+                  >
+                    S
+                  </button>
+                )}
+                <button
                   onClick={(e) => { e.stopPropagation(); toggleTrackLock(track.id) }}
                   className="p-0.5 hover:bg-sf-dark-600 rounded"
                 >
