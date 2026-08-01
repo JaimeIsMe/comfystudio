@@ -4524,7 +4524,10 @@ ipcMain.handle('captions:mixTimelineAudio', async (event, options = {}) => {
 
     let inputPath = null
     if (asset.path && projectPath) {
-      inputPath = path.join(projectPath, asset.path)
+      // Relinked assets (manual or auto-relink) store an ABSOLUTE path;
+      // joining it onto the project folder makes garbage and the clip gets
+      // silently dropped from the mix. Only project-relative paths join.
+      inputPath = path.isAbsolute(asset.path) ? asset.path : path.join(projectPath, asset.path)
     }
     if (!inputPath && asset.absolutePath) {
       inputPath = asset.absolutePath
@@ -5673,7 +5676,10 @@ ipcMain.handle('export:mixAudio', async (event, options = {}) => {
 
     let inputPath = null
     if (asset.path && projectPath) {
-      inputPath = path.join(projectPath, asset.path)
+      // Relinked assets (manual or auto-relink) store an ABSOLUTE path;
+      // joining it onto the project folder makes garbage and the clip gets
+      // silently dropped from the mix. Only project-relative paths join.
+      inputPath = path.isAbsolute(asset.path) ? asset.path : path.join(projectPath, asset.path)
     }
     if (!inputPath && asset.url) {
       inputPath = resolveMediaInputPath(asset.url)
