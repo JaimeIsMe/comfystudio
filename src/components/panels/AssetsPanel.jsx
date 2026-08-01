@@ -13,6 +13,7 @@ import { deleteVideoPosterFromProject } from '../../services/thumbnailPosters'
 import MaskGenerationDialog from '../MaskGenerationDialog'
 import OverlayGeneratorModal from '../OverlayGeneratorModal'
 import TopazVideoUpscaleDialog from '../TopazVideoUpscaleDialog'
+import SourcePlayerModal from '../SourcePlayerModal'
 import ConfirmDialog from '../ConfirmDialog'
 import NewTimelineDialog from '../NewTimelineDialog'
 // Thumbnail size presets (xs = extra small for denser grid)
@@ -165,6 +166,7 @@ function AssetsPanel({ isActive = true }) {
   const [showNewFolderInput, setShowNewFolderInput] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const [contextMenu, setContextMenu] = useState(null) // { x, y, assetId?, folderId?, sequenceId? }
+  const [sourcePlayerAsset, setSourcePlayerAsset] = useState(null) // Source Player modal (issue #89)
   const newFolderInputRef = useRef(null)
   
   // Mask generation state
@@ -1112,12 +1114,16 @@ function AssetsPanel({ isActive = true }) {
     })
   }
 
-  // Handle double-click to preview
+  // Handle double-click: video/audio open in the Source Player (mark In/Out,
+  // insert the range — issue #89); everything else previews as before.
   const handleDoubleClick = (asset) => {
     if (timelineIsPlaying) {
       timelineTogglePlay()
     }
     setPreview(asset)
+    if (asset?.type === 'video' || asset?.type === 'audio') {
+      setSourcePlayerAsset(asset)
+    }
   }
   
   // Handle single-click to select and preview (with multi-select: Ctrl/Cmd toggle, Shift range)
@@ -2789,6 +2795,23 @@ function AssetsPanel({ isActive = true }) {
                   </button>
                 )}
 
+                {(() => {
+                  const menuAsset = assets.find((candidate) => candidate.id === contextMenu.assetId)
+                  if (!menuAsset || (menuAsset.type !== 'video' && menuAsset.type !== 'audio')) return null
+                  return (
+                    <button
+                      onClick={() => {
+                        setSourcePlayerAsset(menuAsset)
+                        setContextMenu(null)
+                      }}
+                      className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+                    >
+                      <Play className="w-3 h-3 text-sf-accent" />
+                      Open in Source Player...
+                    </button>
+                  )
+                })()}
+
                 {showUpscale && (
                   <button
                     onClick={() => handleOpenTopazUpscaleDialog(contextMenu.assetId)}
@@ -2939,6 +2962,13 @@ function AssetsPanel({ isActive = true }) {
         <TopazVideoUpscaleDialog
           asset={topazUpscaleAsset}
           onClose={() => setTopazUpscaleAsset(null)}
+        />
+      )}
+
+      {sourcePlayerAsset && (
+        <SourcePlayerModal
+          asset={sourcePlayerAsset}
+          onClose={() => setSourcePlayerAsset(null)}
         />
       )}
 

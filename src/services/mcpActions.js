@@ -5452,10 +5452,27 @@ function handleAddAssetToTimeline(payload = {}) {
   const startTime = resolveMcpAssetPlacementStart(initialState, target.track?.id || '', payload)
   const fps = Number(initialState.timelineFps) || 24
   const duration = Number(payload.durationSeconds ?? payload.duration)
+  // Source in/out range (issue #89): the clip is born pre-trimmed and, when
+  // no explicit duration is given, sized to the marked range.
+  const sourceIn = Number(payload.sourceInSeconds ?? payload.sourceIn)
+  const sourceOut = Number(payload.sourceOutSeconds ?? payload.sourceOut)
+  const hasSourceIn = Number.isFinite(sourceIn) && sourceIn > 0
+  const assetSourceDuration = Number(asset.duration ?? asset.settings?.duration) || 0
+  const sourceRangeDuration = (() => {
+    const start = hasSourceIn ? sourceIn : 0
+    const end = Number.isFinite(sourceOut) && sourceOut > start
+      ? sourceOut
+      : (hasSourceIn && assetSourceDuration > start ? assetSourceDuration : NaN)
+    return Number.isFinite(end) ? end - start : NaN
+  })()
+  const effectiveDuration = Number.isFinite(duration) && duration > 0
+    ? duration
+    : (Number.isFinite(sourceRangeDuration) && sourceRangeDuration > 0 ? sourceRangeDuration : NaN)
   const options = {
     selectAfterAdd: payload.selectAfterAdd !== false,
     resolveOverlaps: payload.resolveOverlaps !== false,
-    ...(Number.isFinite(duration) && duration > 0 ? { duration: roundToTimelineFrame(duration, fps) } : {}),
+    ...(hasSourceIn ? { trimStart: sourceIn } : {}),
+    ...(Number.isFinite(effectiveDuration) && effectiveDuration > 0 ? { duration: roundToTimelineFrame(effectiveDuration, fps) } : {}),
     ...(payload.transform && typeof payload.transform === 'object' ? { transform: safeClone(payload.transform) } : {}),
     metadata: {
       addedByMcp: true,
@@ -5470,6 +5487,7 @@ function handleAddAssetToTimeline(payload = {}) {
     createTrack: target.createTrack,
     startSeconds: startTime,
     durationSeconds: options.duration || (asset.type === 'image' ? 5 : (Number(asset.duration ?? asset.settings?.duration) || 5)),
+    sourceInSeconds: hasSourceIn ? sourceIn : null,
     resolveOverlaps: options.resolveOverlaps,
     selectAfterAdd: options.selectAfterAdd,
     placement: normalizeAssetTimelinePlacement(payload.at || payload.placement || payload.position),
@@ -5532,6 +5550,9 @@ function handleAddAssetToTimeline(payload = {}) {
       selectAfterAdd: false,
       resolveOverlaps: options.resolveOverlaps,
       duration: clip.duration,
+      // Mirror the source trim so picture and embedded audio stay in sync
+      // on a partial (in/out) insert.
+      ...(options.trimStart != null ? { trimStart: options.trimStart } : {}),
       metadata: {
         addedByMcp: true,
         addedAt: new Date().toISOString(),

@@ -1226,9 +1226,24 @@ function resolveAssetTimelinePlacementPlan(snapshot, args = {}) {
   const startSeconds = resolveAssetPlacementStart(timeline, resolvedTrack.track?.id || '', args)
   const requestedDuration = Number(args.durationSeconds ?? args.duration)
   const assetDuration = toFiniteNumber(asset.duration, 0)
+  // Source in/out range (issue #89): when no explicit duration is given, the
+  // clip duration derives from the marked range so partial inserts land at
+  // the right length instead of the full source duration.
+  const sourceInSeconds = Number(args.sourceInSeconds ?? args.sourceIn)
+  const sourceOutSeconds = Number(args.sourceOutSeconds ?? args.sourceOut)
+  const hasSourceIn = Number.isFinite(sourceInSeconds) && sourceInSeconds > 0
+  const sourceRangeDuration = (() => {
+    const start = hasSourceIn ? sourceInSeconds : 0
+    const end = Number.isFinite(sourceOutSeconds) && sourceOutSeconds > start
+      ? sourceOutSeconds
+      : (hasSourceIn && assetDuration > start ? assetDuration : NaN)
+    return Number.isFinite(end) ? end - start : NaN
+  })()
   const durationSeconds = Number.isFinite(requestedDuration) && requestedDuration > 0
     ? roundTime(requestedDuration)
-    : (asset.type === 'image' ? 5 : roundTime(assetDuration || 5))
+    : (Number.isFinite(sourceRangeDuration) && sourceRangeDuration > 0
+      ? roundTime(sourceRangeDuration)
+      : (asset.type === 'image' ? 5 : roundTime(assetDuration || 5)))
   const linkedAudio = buildLinkedAudioPlacementPlan(timeline, asset, args)
 
   return {
@@ -1247,6 +1262,7 @@ function resolveAssetTimelinePlacementPlan(snapshot, args = {}) {
     trackType: resolvedTrack.targetType,
     startSeconds,
     durationSeconds,
+    sourceInSeconds: hasSourceIn ? roundTime(sourceInSeconds) : null,
     linkedAudio: linkedAudio ? {
       ...linkedAudio,
       startSeconds,
@@ -9148,6 +9164,14 @@ function createToolDefinitions() {
           duration: {
             type: 'number',
             description: 'Alias for durationSeconds.',
+          },
+          sourceInSeconds: {
+            type: 'number',
+            description: 'Source-media in point in seconds (video/audio). The clip is born pre-trimmed from here — timeline trim handles can still reveal the rest of the source later.',
+          },
+          sourceOutSeconds: {
+            type: 'number',
+            description: 'Source-media out point in seconds. With sourceInSeconds it defines the inserted range; when durationSeconds is omitted, the clip duration derives from the range.',
           },
           resolveOverlaps: {
             type: 'boolean',
