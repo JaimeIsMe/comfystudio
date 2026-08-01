@@ -4516,7 +4516,9 @@ ipcMain.handle('captions:mixTimelineAudio', async (event, options = {}) => {
     const asset = assetMap.get(clip.assetId)
     if (!asset) { skip(clip, 'no-matching-asset'); continue }
     if (asset.hasAudio === false) { skip(clip, 'asset.hasAudio=false'); continue }
-    if (asset.audioEnabled === false) { skip(clip, 'asset.audioEnabled=false'); continue }
+    // asset.audioEnabled is deliberately NOT checked: it is the video-clip
+    // embedded-audio toggle, and playback ignores it for audio-track clips —
+    // dropping a file onto an audio track is an explicit request to hear it.
     if (clip.audioEnabled === false) { skip(clip, 'clip.audioEnabled=false'); continue }
     if (clip.reverse) { skip(clip, 'clip.reverse=true'); continue }
 

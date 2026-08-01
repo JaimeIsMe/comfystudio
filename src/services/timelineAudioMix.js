@@ -56,10 +56,14 @@ function clipHasUsableAudio(clip, asset) {
   // "audible" while the main mixer says "nothing to mix", the FFmpeg path
   // errors and the Web Audio fallback tries to decode whole media files in
   // renderer memory — which crashes the renderer on video-backed clips.
+  // asset.audioEnabled is deliberately NOT checked: it is the video-clip
+  // embedded-audio toggle, and playback (AudioLayerRenderer) ignores it for
+  // audio-track clips — dropping a file onto an audio track is an explicit
+  // request to hear it. hasAudio === false stays (the file factually has no
+  // audio stream), as do clip-level mute and reverse.
   if (!asset) return false
   if (clip.type !== 'audio') return false
   if (asset.hasAudio === false) return false
-  if (asset.audioEnabled === false) return false
   if (clip.audioEnabled === false) return false
   if (clip.reverse) return false
   return true
