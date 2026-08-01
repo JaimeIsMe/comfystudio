@@ -5646,9 +5646,14 @@ ipcMain.handle('export:mixAudio', async (event, options = {}) => {
     tracks = [],
     assets = [],
     timeoutMs = 180000,
+    // Dry run: apply the exact per-clip filter below and report the ledger
+    // without touching FFmpeg. The exporter calls this before rendering a
+    // single frame so a doomed mix fails in seconds, not after an hour of
+    // frame encoding (the "38 of 50 clips after 95 minutes" incident).
+    validateOnly = false,
   } = options
 
-  if (!outputPath) {
+  if (!outputPath && !validateOnly) {
     return { success: false, error: 'Missing output path for audio mix.' }
   }
 
@@ -5665,14 +5670,44 @@ ipcMain.handle('export:mixAudio', async (event, options = {}) => {
   const assetMap = new Map((assets || []).map((asset) => [asset.id, asset]))
   const preparedInputs = []
 
+  // Skip ledger (the captions mixer's mold): every excluded clip gets a
+  // reason. `problem: true` marks exclusions the exporter's strict
+  // clip-count check should surface BY NAME — a reversed or out-of-range
+  // clip is expected to be absent; a clip whose file can't be found is a
+  // broken export the user needs file names to fix.
+  const skipped = []
+  const describeClipAsset = (clip) => {
+    const asset = assetMap.get(clip?.assetId)
+    return asset?.name
+      || (asset?.path ? String(asset.path).split(/[\\/]/).pop() : null)
+      || (clip?.url ? String(clip.url).split(/[\\/]/).pop() : null)
+      || clip?.assetId
+      || clip?.id
+      || 'unknown clip'
+  }
+  const skip = (clip, reason, problem = false, attemptedPath = null) => {
+    skipped.push({
+      clipId: clip?.id,
+      assetName: describeClipAsset(clip),
+      reason,
+      problem,
+      path: attemptedPath,
+    })
+  }
+
   for (const clip of clips || []) {
-    if (!clip || clip.type !== 'audio') continue
+    if (!clip || clip.type !== 'audio') { if (clip) skip(clip, 'not-an-audio-clip'); continue }
     const track = trackMap.get(clip.trackId)
-    if (!track || track.type !== 'audio' || track.muted || track.visible === false) continue
-    if (clip.reverse) continue // Matches timeline preview behavior (reverse audio is silent).
+    if (!track || track.type !== 'audio' || track.muted || track.visible === false) {
+      // The renderer only sends clips on audible audio tracks, so landing
+      // here means renderer/main disagree — count it as a problem.
+      skip(clip, 'track-not-audible', true)
+      continue
+    }
+    if (clip.reverse) { skip(clip, 'reverse'); continue } // Matches timeline preview behavior (reverse audio is silent).
 
     const asset = assetMap.get(clip.assetId)
-    if (!asset) continue
+    if (!asset) { skip(clip, 'missing-asset-record', true); continue }
 
     let inputPath = null
     if (asset.path && projectPath) {
@@ -5687,26 +5722,29 @@ ipcMain.handle('export:mixAudio', async (event, options = {}) => {
     if (!inputPath && clip.url) {
       inputPath = resolveMediaInputPath(clip.url)
     }
-    if (!inputPath || !fsSync.existsSync(inputPath)) continue
+    if (!inputPath || !fsSync.existsSync(inputPath)) {
+      skip(clip, 'file-not-found', true, inputPath || asset.path || null)
+      continue
+    }
 
     const clipStart = Number(clip.startTime) || 0
     const clipDuration = Math.max(0, Number(clip.duration) || 0)
-    if (clipDuration <= 0.000001) continue
+    if (clipDuration <= 0.000001) { skip(clip, 'zero-duration'); continue }
     const clipEnd = clipStart + clipDuration
 
     const visibleStart = Math.max(rangeStartSec, clipStart)
     const visibleEnd = Math.min(rangeEndSec, clipEnd)
-    if (visibleEnd <= visibleStart) continue
+    if (visibleEnd <= visibleStart) { skip(clip, 'outside-range'); continue }
 
     const clipOffsetOnTimeline = visibleStart - clipStart
     const timeScale = getExportClipTimeScale(clip)
-    if (!Number.isFinite(timeScale) || timeScale <= 0) continue
+    if (!Number.isFinite(timeScale) || timeScale <= 0) { skip(clip, 'invalid-time-scale', true); continue }
 
     const trimStart = Math.max(0, Number(clip.trimStart) || 0)
     const sourceOffsetSec = Math.max(0, trimStart + clipOffsetOnTimeline * timeScale)
     const timelineVisibleSec = visibleEnd - visibleStart
     const sourceDurationSec = Math.max(0, timelineVisibleSec * timeScale)
-    if (sourceDurationSec <= 0.000001) continue
+    if (sourceDurationSec <= 0.000001) { skip(clip, 'zero-source-duration', true); continue }
 
     const delayMs = Math.max(0, Math.round((visibleStart - rangeStartSec) * 1000))
     preparedInputs.push({
@@ -5726,8 +5764,12 @@ ipcMain.handle('export:mixAudio', async (event, options = {}) => {
     })
   }
 
+  if (validateOnly) {
+    return { success: true, validateOnly: true, clipCount: preparedInputs.length, skipped }
+  }
+
   if (preparedInputs.length === 0) {
-    return { success: false, error: 'No eligible audio clips for mix.' }
+    return { success: false, error: 'No eligible audio clips for mix.', skipped }
   }
 
   try {
@@ -5864,7 +5906,93 @@ ipcMain.handle('export:mixAudio', async (event, options = {}) => {
           clipCount: preparedInputs.length,
           outputDuration,
           expectedDuration: totalDuration,
+          skipped,
         })
+        return
+      }
+      resolve({ success: false, error: stderr || `FFmpeg exited with code ${code}` })
+    })
+  })
+})
+
+// Encode a mixed WAV into a delivery audio format (the audio-only export).
+// Deliberately separate from export:mixAudio so the mix graph stays byte-
+// identical between video and audio-only exports; this is a plain
+// single-input encode.
+ipcMain.handle('export:encodeAudioFile', async (event, options = {}) => {
+  const encodeFfmpegUnavailable = getFfmpegUnavailableError()
+  if (encodeFfmpegUnavailable) {
+    return { success: false, error: encodeFfmpegUnavailable }
+  }
+
+  const {
+    inputPath,
+    outputPath,
+    audioCodec = 'aac', // 'aac' | 'mp3' — WAV deliveries never reach this handler
+    audioBitrateKbps = 192,
+    audioSampleRate = 44100,
+    audioChannels = 2,
+    normalizeAudio = false,
+    loudnessTarget = -14,
+    timeoutMs = 180000,
+  } = options
+
+  if (!inputPath || !outputPath) {
+    return { success: false, error: 'Missing input or output path for audio encode.' }
+  }
+  if (!fsSync.existsSync(inputPath)) {
+    return { success: false, error: `Mixed audio file not found: ${inputPath}` }
+  }
+  try {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true })
+  } catch (err) {
+    return { success: false, error: err.message || 'Failed to prepare audio output folder.' }
+  }
+
+  const args = ['-y', '-i', inputPath]
+  if (normalizeAudio) {
+    const target = Math.max(-30, Math.min(-9, Math.round(Number(loudnessTarget) || -14)))
+    args.push('-af', `loudnorm=I=${target}:TP=-1.5:LRA=11`)
+  }
+  if (audioCodec === 'wav') {
+    // Lossless delivery — reached only when loudness normalization runs on
+    // a WAV target (otherwise the mix writes the WAV directly).
+    args.push('-c:a', 'pcm_s16le')
+  } else {
+    args.push('-c:a', audioCodec === 'mp3' ? 'libmp3lame' : 'aac')
+    args.push('-b:a', `${Math.max(64, Math.min(320, Math.round(Number(audioBitrateKbps) || 192)))}k`)
+  }
+  args.push('-ar', String(Math.max(8000, Math.min(192000, Math.round(Number(audioSampleRate) || 44100)))))
+  args.push('-ac', String(Math.max(1, Math.min(2, Math.round(Number(audioChannels) || 2)))))
+  args.push(outputPath)
+
+  const normalizedEncodeTimeout = Math.max(30000, Math.round(Number(timeoutMs) || 180000))
+  return await new Promise((resolve) => {
+    const ffmpeg = spawn(ffmpegPath, args, { windowsHide: true })
+    let stderr = ''
+    let killedByTimeout = false
+    const timeoutHandle = setTimeout(() => {
+      killedByTimeout = true
+      ffmpeg.kill('SIGKILL')
+    }, normalizedEncodeTimeout)
+
+    ffmpeg.stderr.on('data', (data) => {
+      stderr += data.toString()
+    })
+
+    ffmpeg.on('error', (err) => {
+      clearTimeout(timeoutHandle)
+      resolve({ success: false, error: err.message })
+    })
+
+    ffmpeg.on('close', (code) => {
+      clearTimeout(timeoutHandle)
+      if (killedByTimeout) {
+        resolve({ success: false, error: `Audio encode timed out after ${Math.round(normalizedEncodeTimeout / 1000)}s` })
+        return
+      }
+      if (code === 0) {
+        resolve({ success: true, outputPath })
         return
       }
       resolve({ success: false, error: stderr || `FFmpeg exited with code ${code}` })

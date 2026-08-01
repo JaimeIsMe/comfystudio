@@ -999,6 +999,93 @@ const getPreSeekSourceTime = (clip, timelineTime, usingCached) => {
   return Math.max(0, Math.min(rawSourceTime, Math.max(0, maxSourceTime - 0.001)))
 }
 
+// ---------------------------------------------------------------------------
+// Audio mix payload builders — shared by the audio-only export, the
+// pre-render audio validation, and the full export's mix call. One source of
+// truth on purpose: if the payload the validator checks ever drifted from the
+// payload the mix receives, the fail-fast would approve exports the real mix
+// then breaks.
+const serializeAudioClipForMix = (clip) => ({
+  id: clip.id,
+  assetId: clip.assetId,
+  trackId: clip.trackId,
+  type: clip.type,
+  startTime: clip.startTime,
+  duration: clip.duration,
+  trimStart: clip.trimStart || 0,
+  sourceTimeScale: clip.sourceTimeScale,
+  timelineFps: clip.timelineFps,
+  sourceFps: clip.sourceFps,
+  speed: clip.speed,
+  reverse: clip.reverse,
+  gainDb: normalizeAudioClipGainDb(clip.gainDb),
+  fadeIn: clip.fadeIn ?? 0,
+  fadeOut: clip.fadeOut ?? 0,
+  url: clip.url || null,
+})
+
+const serializeAudioAssetsForMix = (assets) => (assets || []).map(asset => ({
+  id: asset.id,
+  type: asset.type,
+  name: asset.name || null,
+  path: asset.path || null,
+  url: asset.url || null,
+}))
+
+const serializeAudioTracksForMix = (tracks) => (tracks || [])
+  .filter(track => track.type === 'audio')
+  .map(track => ({
+    id: track.id,
+    type: track.type,
+    muted: !!track.muted,
+    visible: track.visible !== false,
+    channels: track.channels || 'stereo',
+    volume: track.volume ?? 100,
+    pan: track.pan ?? 0,
+  }))
+
+const countExpectedAudioMixClips = (clips, rangeStart, rangeEnd) => clips.filter((clip) => {
+  if (clip.reverse) return false // Reverse audio is intentionally silent.
+  const clipStart = Number(clip.startTime) || 0
+  const clipDuration = Math.max(0, Number(clip.duration) || 0)
+  return clipDuration > 0 && clipStart < rangeEnd && clipStart + clipDuration > rangeStart
+}).length
+
+const collectEligibleAudioMix = (timelineState) => {
+  const audioClips = timelineState.clips.filter(clip => clip.type === 'audio' && clip.enabled !== false)
+  const anyAudioSolo = hasAudioSolo(timelineState.tracks)
+  const activeTracks = timelineState.tracks.filter(t => t.type === 'audio' && isAudioTrackAudible(t, anyAudioSolo))
+  const activeTrackIds = new Set(activeTracks.map(track => track.id))
+  const eligibleAudioClips = audioClips.filter(clip => activeTrackIds.has(clip.trackId))
+  return { audioClips, activeTracks, eligibleAudioClips }
+}
+
+// Human-readable verdict for clips the FFmpeg mix dropped. Only `problem`
+// skips are listed — a reversed or out-of-range clip is expected to be
+// absent. "Audio mix included 38 of 50 clips" cost a real user a support
+// session; file names make the fix self-serve.
+const AUDIO_MIX_SKIP_LABELS = {
+  'file-not-found': 'file not found — relink or restore it',
+  'missing-asset-record': 'asset record missing from the project',
+  'track-not-audible': 'track state disagreement',
+  'invalid-time-scale': 'invalid speed/time scale',
+  'zero-source-duration': 'no source audio in range',
+}
+const formatAudioMixDropError = (skipped, includedCount, expectedCount) => {
+  const problems = (Array.isArray(skipped) ? skipped : []).filter(entry => entry?.problem)
+  const grouped = new Map()
+  for (const entry of problems) {
+    const label = AUDIO_MIX_SKIP_LABELS[entry.reason] || entry.reason
+    const key = `${entry.assetName || 'unknown clip'} (${label})`
+    grouped.set(key, (grouped.get(key) || 0) + 1)
+  }
+  const details = Array.from(grouped.entries())
+    .map(([key, count]) => (count > 1 ? `${count} clips of ${key}` : key))
+  const head = `Audio mix included ${includedCount} of ${expectedCount} clips.`
+  if (details.length === 0) return head
+  return `${head} Dropped: ${details.join('; ')}`
+}
+
 export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   const timelineState = useTimelineStore.getState()
   const assetsState = useAssetsStore.getState()
@@ -1099,7 +1186,10 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   const framesFolder = await window.electronAPI.pathJoin(tempFolder, 'frames')
   await window.electronAPI.createDirectory(framesFolder)
   
-  const outputExtension = format === 'webm' ? 'webm' : (format === 'prores' ? 'mov' : 'mp4')
+  const audioOnlyExport = format === 'audio'
+  const outputExtension = audioOnlyExport
+    ? (audioCodec === 'mp3' ? 'mp3' : (audioCodec === 'wav' ? 'wav' : 'm4a'))
+    : (format === 'webm' ? 'webm' : (format === 'prores' ? 'mov' : 'mp4'))
   let outputPath = options.outputPath
   if (!outputPath) {
     const defaultOutputPath = await window.electronAPI.pathJoin(
@@ -1120,6 +1210,95 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   }
   const framePattern = await window.electronAPI.pathJoin(framesFolder, 'frame_%06d.png')
   const audioPath = await window.electronAPI.pathJoin(tempFolder, 'audio.wav')
+
+  // ---- Audio-only export: the exact program mix a video export bakes in,
+  // written straight to an audio file. No canvas, no frame pipe — a timeline
+  // whose video takes an hour to render delivers its audio in about a minute.
+  if (audioOnlyExport) {
+    const audioStartTime = Date.now()
+    const updateAudioStatus = (message, progress) => {
+      const elapsed = ((Date.now() - audioStartTime) / 1000).toFixed(1)
+      onProgress({ status: `Mixing audio (${elapsed}s) • ${message}`, progress })
+    }
+    try {
+      if (!window.electronAPI?.mixAudio) {
+        throw new Error('Audio-only export requires the desktop app.')
+      }
+      const { audioClips, activeTracks, eligibleAudioClips } = collectEligibleAudioMix(timelineState)
+      if (audioClips.length === 0 || activeTracks.length === 0 || eligibleAudioClips.length === 0) {
+        throw new Error('No audible audio clips to export — unmute or solo an audio track first.')
+      }
+      const expectedMixClipCount = countExpectedAudioMixClips(eligibleAudioClips, rangeStart, rangeEnd)
+      if (expectedMixClipCount === 0) {
+        throw new Error('No audio clips inside the export range.')
+      }
+      // Mixer insert effects (EQ etc.) run through the stem path, which is
+      // not wired into this branch yet. Refuse loudly rather than deliver
+      // audio that does not match playback.
+      const enabledMasterInserts = getEnabledAudioInserts(timelineState.masterAudioInserts)
+      const anyInsertEffects = enabledMasterInserts.length > 0
+        || activeTracks.some(track => hasEnabledAudioInserts(track.inserts))
+      if (anyInsertEffects) {
+        throw new Error('Audio-only export does not support mixer insert effects yet — bypass them or use a video export.')
+      }
+
+      const masterAudioGain = clampTrackVolume(timelineState.masterAudioVolume) / 100
+      const wavIsFinal = outputExtension === 'wav' && !normalizeAudio
+      const mixTarget = wavIsFinal ? outputPath : audioPath
+      updateAudioStatus('Preparing FFmpeg audio mix…', 10)
+      const mixResult = await window.electronAPI.mixAudio({
+        projectPath: projectState.currentProjectHandle,
+        outputPath: mixTarget,
+        rangeStart,
+        rangeEnd,
+        sampleRate: audioSampleRate || DEFAULT_SAMPLE_RATE,
+        channels: audioChannels || 2,
+        masterVolume: masterAudioGain * 100,
+        timeoutMs: AUDIO_MIX_TIMEOUT_MS,
+        clips: eligibleAudioClips.map(serializeAudioClipForMix),
+        tracks: serializeAudioTracksForMix(timelineState.tracks),
+        assets: serializeAudioAssetsForMix(assetsState.assets),
+      })
+      console.log('[audio-mix] FFmpeg result', JSON.stringify(mixResult))
+      if (!mixResult?.success) {
+        throw new Error(mixResult?.error || 'FFmpeg audio mix failed')
+      }
+      if (mixResult.clipCount !== expectedMixClipCount) {
+        throw new Error(formatAudioMixDropError(mixResult.skipped, mixResult.clipCount || 0, expectedMixClipCount))
+      }
+      if (!wavIsFinal) {
+        updateAudioStatus(`Encoding ${outputExtension.toUpperCase()}…`, 80)
+        const encodeResult = await window.electronAPI.encodeAudioFile({
+          inputPath: mixTarget,
+          outputPath,
+          audioCodec: outputExtension === 'mp3' ? 'mp3' : (outputExtension === 'wav' ? 'wav' : 'aac'),
+          audioBitrateKbps,
+          audioSampleRate: audioSampleRate || DEFAULT_SAMPLE_RATE,
+          audioChannels: audioChannels || 2,
+          normalizeAudio,
+          loudnessTarget,
+        })
+        if (!encodeResult?.success) {
+          throw new Error(encodeResult?.error || 'Audio encode failed')
+        }
+      }
+      onProgress({ status: EXPORT_STATUS.done, progress: 100 })
+      return {
+        outputPath,
+        encoderUsed: outputExtension,
+        hardwareFallback: false,
+        frameSources: null,
+        perf: null,
+      }
+    } finally {
+      try {
+        await window.electronAPI.deleteDirectory(tempFolder, { recursive: true })
+      } catch (err) {
+        console.warn('Failed to clean export temp folder:', err)
+      }
+    }
+  }
+
   const canUseDirectFramePipe = Boolean(
     useDirectFramePipe
     && window.electronAPI?.startFramePipe
@@ -1130,6 +1309,37 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   const pipedVideoPath = canUseDirectFramePipe && includeAudio
     ? await window.electronAPI.pathJoin(tempFolder, `video_only.${outputExtension}`)
     : outputPath
+
+  // Fail fast: validate the audio mix inputs BEFORE rendering any frames.
+  // The dropped-clip class of failure (missing or unlinked files) is
+  // knowable in milliseconds; discovering it after the frame render wasted
+  // 95 minutes on a real user's hour-long timeline. validateOnly runs the
+  // mixer's exact per-clip filter without touching FFmpeg.
+  if (includeAudio && window.electronAPI?.mixAudio) {
+    const { audioClips, activeTracks, eligibleAudioClips } = collectEligibleAudioMix(timelineState)
+    if (audioClips.length > 0 && activeTracks.length > 0 && eligibleAudioClips.length > 0) {
+      const expectedMixClipCount = countExpectedAudioMixClips(eligibleAudioClips, rangeStart, rangeEnd)
+      if (expectedMixClipCount > 0) {
+        onProgress({ status: 'Checking audio sources...', progress: 3 })
+        const audioCheck = await window.electronAPI.mixAudio({
+          validateOnly: true,
+          projectPath: projectState.currentProjectHandle,
+          rangeStart,
+          rangeEnd,
+          clips: eligibleAudioClips.map(serializeAudioClipForMix),
+          tracks: serializeAudioTracksForMix(timelineState.tracks),
+          assets: serializeAudioAssetsForMix(assetsState.assets),
+        })
+        // An older main process without validateOnly answers with a mix
+        // error about the missing output path — only act on a clean
+        // validation verdict and let the real mix decide otherwise.
+        if (audioCheck?.success && audioCheck.validateOnly && audioCheck.clipCount !== expectedMixClipCount) {
+          throw new Error(formatAudioMixDropError(audioCheck.skipped, audioCheck.clipCount || 0, expectedMixClipCount))
+        }
+      }
+    }
+  }
+
   let framePipeSessionId = null
   let framePipeEncoderUsed = null
   let framePipeHardwareFallback = null
@@ -3024,36 +3234,12 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       const activeTrackIds = new Set(activeTracks.map(track => track.id))
       const eligibleAudioClips = audioClips.filter(clip => activeTrackIds.has(clip.trackId))
 
-      const serializeClipForMix = (clip) => ({
-        id: clip.id,
-        assetId: clip.assetId,
-        trackId: clip.trackId,
-        type: clip.type,
-        startTime: clip.startTime,
-        duration: clip.duration,
-        trimStart: clip.trimStart || 0,
-        sourceTimeScale: clip.sourceTimeScale,
-        timelineFps: clip.timelineFps,
-        sourceFps: clip.sourceFps,
-        speed: clip.speed,
-        reverse: clip.reverse,
-        gainDb: normalizeAudioClipGainDb(clip.gainDb),
-        fadeIn: clip.fadeIn ?? 0,
-        fadeOut: clip.fadeOut ?? 0,
-        url: clip.url || null,
-      })
-      const serializeAssetsForMix = () => assetsState.assets.map(asset => ({
-        id: asset.id,
-        type: asset.type,
-        path: asset.path || null,
-        url: asset.url || null,
-      }))
-      const countExpectedMixClips = (clips) => clips.filter((clip) => {
-        if (clip.reverse) return false // Reverse audio is intentionally silent.
-        const clipStart = Number(clip.startTime) || 0
-        const clipDuration = Math.max(0, Number(clip.duration) || 0)
-        return clipDuration > 0 && clipStart < rangeEnd && clipStart + clipDuration > rangeStart
-      }).length
+      // Shared module-level builders (see above exportTimeline) so the
+      // pre-render validation, the audio-only export, and this mix can
+      // never drift apart.
+      const serializeClipForMix = serializeAudioClipForMix
+      const serializeAssetsForMix = () => serializeAudioAssetsForMix(assetsState.assets)
+      const countExpectedMixClips = (clips) => countExpectedAudioMixClips(clips, rangeStart, rangeEnd)
       console.log('[audio-mix] export payload', JSON.stringify({
         rangeStart,
         rangeEnd,
@@ -3299,17 +3485,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
             masterVolume: masterAudioGain * 100,
             timeoutMs: AUDIO_MIX_TIMEOUT_MS,
             clips: eligibleAudioClips.map(serializeClipForMix),
-            tracks: timelineState.tracks
-              .filter(track => track.type === 'audio')
-              .map(track => ({
-                id: track.id,
-                type: track.type,
-                muted: !!track.muted,
-                visible: track.visible !== false,
-                channels: track.channels || 'stereo',
-                volume: track.volume ?? 100,
-                pan: track.pan ?? 0,
-              })),
+            tracks: serializeAudioTracksForMix(timelineState.tracks),
             assets: serializeAssetsForMix(),
           })
           console.log('[audio-mix] FFmpeg result', JSON.stringify(mixResult))
@@ -3318,7 +3494,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
             const expectedMixClipCount = countExpectedMixClips(eligibleAudioClips)
             if (mixResult.clipCount !== expectedMixClipCount) {
               throw new Error(
-                `Audio mix included ${mixResult.clipCount || 0} of ${expectedMixClipCount} clips`
+                formatAudioMixDropError(mixResult.skipped, mixResult.clipCount || 0, expectedMixClipCount)
               )
             }
             audioFilePath = audioPath

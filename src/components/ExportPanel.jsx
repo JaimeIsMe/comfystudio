@@ -15,6 +15,7 @@ const EXPORT_FORMATS = [
   { id: 'mp4', label: 'MP4 (H.264/H.265)' },
   { id: 'webm', label: 'WebM (VP9)' },
   { id: 'prores', label: 'MOV (ProRes)' },
+  { id: 'audio', label: 'Audio Only (WAV/MP3/M4A)' },
   { id: 'gif', label: 'GIF (Preview - Soon)', disabled: true },
   { id: 'png-seq', label: 'PNG Sequence - Soon', disabled: true },
 ]
@@ -58,6 +59,9 @@ const VIDEO_CODECS = {
   prores: [
     { id: 'prores', label: 'ProRes' },
   ],
+  // Audio-only export renders no video; the empty list keeps the format
+  // switcher's codec reset from inventing one.
+  audio: [],
 }
 
 const AUDIO_CODECS = {
@@ -69,6 +73,11 @@ const AUDIO_CODECS = {
   ],
   prores: [
     { id: 'aac', label: 'AAC' },
+  ],
+  audio: [
+    { id: 'wav', label: 'WAV (lossless)' },
+    { id: 'mp3', label: 'MP3' },
+    { id: 'aac', label: 'M4A (AAC)' },
   ],
 }
 
@@ -545,8 +554,12 @@ function ExportPanel() {
         if (next.videoCodec && DEFAULT_CRF[next.videoCodec]) {
           next.crf = DEFAULT_CRF[next.videoCodec]
         }
-        if (value === 'webm' || value === 'prores') {
+        if (value === 'webm' || value === 'prores' || value === 'audio') {
           next.useHardwareEncoder = false
+        }
+        if (value === 'audio') {
+          // The whole export IS the audio — the include toggle is moot.
+          next.includeAudio = true
         }
       }
       
@@ -940,7 +953,7 @@ function ExportPanel() {
       audioBitrateKbps: Number(jobSettings.audioBitrateKbps),
       audioSampleRate: Number(jobSettings.audioSampleRate),
       audioChannels: Number(jobSettings.audioChannels),
-      normalizeAudio: jobSettings.includeAudio && !!jobSettings.normalizeAudio,
+      normalizeAudio: (jobSettings.includeAudio || jobSettings.format === 'audio') && !!jobSettings.normalizeAudio,
       loudnessTarget: Number(jobSettings.loudnessTarget) || -14,
       useCachedRenders: false,
       useProxyMedia: jobSettings.useProxyMedia,
@@ -950,7 +963,9 @@ function ExportPanel() {
 
     if (window.electronAPI?.runExportInWorker && typeof currentProjectHandle === 'string') {
       try {
-        const outputExtension = jobSettings.format === 'webm' ? 'webm' : (jobSettings.format === 'prores' ? 'mov' : 'mp4')
+        const outputExtension = jobSettings.format === 'audio'
+          ? (jobSettings.audioCodec === 'mp3' ? 'mp3' : (jobSettings.audioCodec === 'wav' ? 'wav' : 'm4a'))
+          : (jobSettings.format === 'webm' ? 'webm' : (jobSettings.format === 'prores' ? 'mov' : 'mp4'))
         const outputFolder = await window.electronAPI.pathJoin(currentProjectHandle, 'renders')
         await window.electronAPI.createDirectory(outputFolder)
         const defaultPath = await window.electronAPI.pathJoin(outputFolder, `${options.filename}.${outputExtension}`)
@@ -1281,7 +1296,8 @@ function ExportPanel() {
           </div>
           
           <div className="mt-3 border-t border-sf-dark-700 pt-2 flex-1 min-h-0 overflow-y-auto pr-1 space-y-4">
-            {/* Video */}
+            {/* Video — the whole section is moot for an audio-only export */}
+            {settings.format !== 'audio' && (
             <div>
               <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">Video</div>
               <div className="grid grid-cols-2 gap-3">
@@ -1565,12 +1581,18 @@ function ExportPanel() {
                 </div>
               </div>
             </div>
-            
+            )}
+
             {/* Audio */}
             <div>
               <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">Audio</div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
+                  {settings.format === 'audio' ? (
+                    <div className="text-xs text-sf-text-muted">
+                      Exports the program mix on its own — every track volume, pan, fade, and solo included. No video is rendered.
+                    </div>
+                  ) : (
                   <button
                     onClick={() => handleSettingChange('includeAudio', !settings.includeAudio)}
                     className={`px-2 py-1 text-xs rounded border transition-colors ${
@@ -1581,9 +1603,10 @@ function ExportPanel() {
                   >
                     Include Audio
                   </button>
+                  )}
                 </div>
-                
-                {settings.includeAudio ? (
+
+                {(settings.includeAudio || settings.format === 'audio') ? (
                   <>
                     <div>
                       <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Audio Codec</label>
@@ -1598,6 +1621,7 @@ function ExportPanel() {
                       </select>
                     </div>
                     
+                    {!(settings.format === 'audio' && settings.audioCodec === 'wav') && (
                     <div>
                       <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Audio Bitrate (kbps)</label>
                       <input
@@ -1609,6 +1633,7 @@ function ExportPanel() {
                         className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
                       />
                     </div>
+                    )}
                     
                     <div>
                       <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Sample Rate</label>

@@ -112,6 +112,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   mixAudio: (options) => ipcRenderer.invoke('export:mixAudio', options),
 
+  /**
+   * Encode a mixed WAV into a delivery audio format (audio-only export)
+   * @param {Object} options - { inputPath, outputPath, audioCodec, audioBitrateKbps, audioSampleRate, audioChannels, normalizeAudio, loudnessTarget }
+   */
+  encodeAudioFile: (options) => ipcRenderer.invoke('export:encodeAudioFile', options),
+
   // Export worker (run export in separate window so main UI stays responsive)
   runExportInWorker: (payload) => ipcRenderer.invoke('export:runInWorker', payload),
   cancelExport: () => ipcRenderer.invoke('export:cancel'),
