@@ -35,7 +35,6 @@
 - `Mac (Intel)`: for older Intel-based Macs
 - `Linux AppImage`: portable Linux build
 - `Linux deb`: Debian/Ubuntu package
-- `Workflow Starter Pack` (optional): advanced ComfyUI setup aid for users who want to inspect workflows manually
 
 Ignore the auto-generated source-code archives unless you plan to build Velorn from source.
 
