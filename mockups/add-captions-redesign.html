@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Velorn — Add Captions Redesign Mockup</title>
+<style>
+  :root {
+    --bg-950: #07080f;
+    --bg-900: #0d0f18;
+    --bg-850: #12141f;
+    --bg-800: #171a28;
+    --bg-750: #1d2132;
+    --border: #232739;
+    --border-strong: #333a52;
+    --text: #e9eaf2;
+    --text-soft: #b9bdcf;
+    --text-muted: #8b8fa3;
+    --text-dim: #5d6175;
+    --gold: #d9a53f;
+    --gold-strong: #e6b44e;
+    --gold-soft: rgba(217, 165, 63, 0.12);
+    --green: #4cba79;
+    --green-soft: rgba(76, 186, 121, 0.14);
+    --radius: 10px;
+    --radius-sm: 7px;
+    --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; min-height: 100vh; background: var(--bg-950); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Arial, sans-serif;
+    font-size: 13.5px; -webkit-font-smoothing: antialiased;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  h1, h2, h3, p { margin: 0; }
+
+  .page { max-width: 1340px; margin: 0 auto; padding: 22px 26px 60px; }
+
+  /* ---- mockup chrome (not part of the design) ---- */
+  .mock-bar {
+    display: flex; align-items: center; gap: 14px; margin-bottom: 16px; flex-wrap: wrap;
+  }
+  .mock-bar .label { color: var(--text-muted); font-size: 12.5px; }
+  .seg {
+    display: inline-flex; background: var(--bg-850); border: 1px solid var(--border);
+    border-radius: 999px; padding: 3px;
+  }
+  .seg button {
+    border: 0; background: transparent; color: var(--text-muted);
+    padding: 6px 16px; border-radius: 999px; font-size: 12.5px;
+  }
+  .seg button.on { background: var(--bg-750); color: var(--text); }
+  .mock-note { color: var(--text-dim); font-size: 12px; margin-left: auto; }
+
+  /* ---- the window ---- */
+  .modal {
+    background: var(--bg-900); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: 0 24px 80px rgba(0,0,0,.55); overflow: hidden;
+    display: flex; flex-direction: column; min-height: 780px;
+  }
+  .modal-head {
+    display: flex; align-items: baseline; gap: 12px; padding: 16px 20px 12px;
+  }
+  .modal-head h1 { font-size: 16.5px; font-weight: 650; }
+  .modal-head .sub { color: var(--text-muted); font-size: 12.5px; }
+  .modal-head .close {
+    margin-left: auto; width: 30px; height: 30px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg-850); color: var(--text-soft);
+    align-self: center;
+  }
+
+  /* transcribe strip (post-transcription) */
+  .strip {
+    margin: 0 20px 14px; border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg-850);
+  }
+  .strip-row { display: flex; align-items: center; gap: 12px; padding: 9px 14px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex: none; }
+  .strip-row .main { font-size: 13px; }
+  .strip-row .meta { color: var(--text-muted); font-size: 12.5px; }
+  .strip-row .spacer { flex: 1; }
+  .btn {
+    border: 1px solid var(--border-strong); background: var(--bg-750); color: var(--text);
+    border-radius: 8px; padding: 6px 14px; font-size: 12.5px;
+  }
+  .btn:hover { border-color: var(--gold); }
+  .btn.gold {
+    background: var(--gold); border-color: var(--gold); color: #17130a; font-weight: 650;
+  }
+  .btn.gold:hover { background: var(--gold-strong); }
+  .chev {
+    border: 0; background: transparent; color: var(--text-muted); font-size: 12px;
+    padding: 4px 6px; transition: transform .15s;
+  }
+  .strip.open .chev { transform: rotate(180deg); }
+  .strip-details {
+    display: none; border-top: 1px solid var(--border); padding: 12px 14px;
+    grid-template-columns: auto 1fr auto; gap: 12px; align-items: center;
+  }
+  .strip.open .strip-details { display: grid; }
+  .pill-select {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--border-strong); background: var(--bg-800);
+    border-radius: 8px; padding: 6px 12px; font-size: 12.5px;
+  }
+  .pill-select .rec { color: var(--gold); font-size: 11px; font-weight: 650; }
+  .vocab {
+    border: 1px solid var(--border); background: var(--bg-800); border-radius: 8px;
+    padding: 7px 12px; width: 100%; color: var(--text); font-size: 12.5px;
+  }
+  .vocab::placeholder { color: var(--text-dim); }
+  .link { color: var(--text-muted); font-size: 12px; text-decoration: none; white-space: nowrap; }
+  .link:hover { color: var(--gold); }
+  .hint-i {
+    display: inline-flex; width: 16px; height: 16px; border-radius: 50%;
+    border: 1px solid var(--border-strong); color: var(--text-muted); font-size: 10.5px;
+    align-items: center; justify-content: center; cursor: help; position: relative;
+  }
+  .hint-i .tip {
+    display: none; position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+    width: 240px; background: var(--bg-750); border: 1px solid var(--border-strong);
+    border-radius: 8px; padding: 9px 11px; font-size: 12px; color: var(--text-soft);
+    z-index: 10; line-height: 1.45;
+  }
+  .hint-i:hover .tip { display: block; }
+
+  /* body grid */
+  .body {
+    flex: 1; display: grid; grid-template-columns: 1fr 400px; gap: 14px;
+    padding: 0 20px 14px; min-height: 0;
+  }
+
+  /* cue list */
+  .cues {
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-850);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .cues-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
+  .cues-head h2 { font-size: 13.5px; font-weight: 650; }
+  .cues-head .count { color: var(--text-muted); font-size: 12px; }
+  .search {
+    margin-left: auto; border: 1px solid var(--border); background: var(--bg-800);
+    border-radius: 8px; padding: 6px 12px; color: var(--text); font-size: 12.5px; width: 190px;
+  }
+  .search::placeholder { color: var(--text-dim); }
+  .cue-rows { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+  .cue {
+    display: grid; grid-template-columns: 26px 74px 1fr auto auto; gap: 10px;
+    align-items: center; padding: 9px 10px; border-radius: 8px; cursor: pointer;
+    border-left: 3px solid transparent;
+  }
+  .cue:hover { background: var(--bg-800); }
+  .cue.active { background: var(--bg-800); border-left-color: var(--gold); }
+  .cue .n { color: var(--text-dim); font-size: 11.5px; text-align: right; }
+  .cue .t { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); }
+  .cue .txt { font-size: 13.5px; color: var(--text); }
+  .cue.active .txt { color: #fff; }
+  .cue .dur { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
+  .cue .kebab {
+    border: 0; background: transparent; color: var(--text-dim); font-size: 15px;
+    padding: 2px 6px; border-radius: 6px; opacity: 0; transition: opacity .1s;
+  }
+  .cue:hover .kebab, .cue.active .kebab { opacity: 1; }
+  .cue .kebab:hover { background: var(--bg-750); color: var(--text); }
+  .cues-foot {
+    border-top: 1px solid var(--border); padding: 8px 14px; color: var(--text-dim);
+    font-size: 11.5px;
+  }
+
+  /* right rail */
+  .rail { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  .card {
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-850);
+  }
+  .card-head { display: flex; align-items: center; gap: 10px; padding: 11px 14px; }
+  .card-head h2 { font-size: 13.5px; font-weight: 650; }
+  .card-head .tag {
+    font-size: 11px; color: var(--text-muted); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 9px;
+  }
+  .card-head .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+  /* preview */
+  .preview-body { padding: 0 14px 12px; }
+  .frame {
+    background: #000; border-radius: 8px; height: 300px; display: flex;
+    align-items: center; justify-content: center; position: relative; overflow: hidden;
+  }
+  .frame .vid {
+    width: 152px; height: 270px; border-radius: 4px;
+    background: linear-gradient(160deg, #2b2436 0%, #171320 55%, #0d0b13 100%);
+    position: relative;
+  }
+  .frame .cap {
+    position: absolute; bottom: 34px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,.72); color: #fff; font-size: 10.5px; font-weight: 600;
+    padding: 4px 9px; border-radius: 6px; white-space: nowrap;
+  }
+  .frame .cap b { color: var(--gold-strong); }
+  .transport { display: flex; align-items: center; gap: 10px; padding-top: 10px; }
+  .transport .time { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); margin-left: auto; }
+  .scrub { flex: 1; height: 4px; border-radius: 2px; background: var(--bg-750); position: relative; }
+  .scrub::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 22%;
+    background: var(--gold); border-radius: 2px;
+  }
+  .preview.collapsed .preview-body { display: none; }
+  .preview.collapsed .card-head { padding: 9px 14px; }
+  .mini { display: none; align-items: center; gap: 10px; }
+  .preview.collapsed .mini { display: flex; }
+  .mini .thumb {
+    width: 22px; height: 38px; border-radius: 3px;
+    background: linear-gradient(160deg, #2b2436, #0d0b13);
+  }
+
+  /* style card */
+  .style-card { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .presets {
+    display: flex; gap: 8px; overflow-x: auto; padding: 2px 14px 12px;
+  }
+  .preset {
+    flex: none; width: 86px; border: 1.5px solid var(--border); border-radius: 8px;
+    background: var(--bg-800); padding: 6px; text-align: center;
+  }
+  .preset .swatch {
+    height: 44px; border-radius: 5px; background: #0a0a10; display: flex;
+    align-items: center; justify-content: center; font-size: 9px; font-weight: 700;
+    margin-bottom: 6px; line-height: 1.25; padding: 2px;
+  }
+  .preset .name { font-size: 11px; color: var(--text-soft); }
+  .preset.on { border-color: var(--gold); }
+  .preset.on .name { color: var(--text); }
+  .style-rows { padding: 4px 14px 10px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+  .srow { display: flex; align-items: center; gap: 10px; }
+  .srow .lbl { font-size: 12.5px; color: var(--text-soft); width: 84px; flex: none; }
+  .swatch-btn {
+    width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--border-strong);
+    background: #fff;
+  }
+  .srow .hex { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); }
+  .slider { flex: 1; height: 4px; border-radius: 2px; background: var(--bg-750); position: relative; }
+  .slider::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 50%;
+    background: var(--gold); border-radius: 2px;
+  }
+  .slider::after {
+    content: ''; position: absolute; left: calc(50% - 6px); top: -4px; width: 12px; height: 12px;
+    border-radius: 50%; background: #fff;
+  }
+  .mini-select {
+    border: 1px solid var(--border); background: var(--bg-800); border-radius: 7px;
+    padding: 5px 10px; font-size: 12px; color: var(--text-soft);
+  }
+  .style-foot {
+    border-top: 1px solid var(--border); padding: 10px 14px; display: flex; gap: 10px;
+    align-items: center;
+  }
+  .style-foot input {
+    flex: 1; border: 1px solid var(--border); background: var(--bg-800); border-radius: 8px;
+    padding: 6px 11px; font-size: 12.5px; color: var(--text);
+  }
+  .style-foot input::placeholder { color: var(--text-dim); }
+
+  /* footer */
+  .modal-foot {
+    border-top: 1px solid var(--border); padding: 12px 20px; display: flex;
+    align-items: center; gap: 12px; background: var(--bg-900);
+  }
+  .status { color: var(--text-muted); font-size: 12.5px; display: flex; align-items: center; gap: 8px; }
+  .status .dot { background: var(--green); }
+  .modal-foot .spacer { flex: 1; }
+
+  /* ---------- first-run state ---------- */
+  .first-run-card {
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-850);
+    padding: 34px 38px; max-width: 520px; margin: 40px auto; text-align: left;
+  }
+  .first-run-card h2 { font-size: 16px; margin-bottom: 6px; }
+  .first-run-card .sub { color: var(--text-muted); font-size: 12.5px; margin-bottom: 22px; }
+  .fr-row { margin-bottom: 16px; }
+  .fr-row .lbl { font-size: 12.5px; color: var(--text-soft); margin-bottom: 7px; display: flex; gap: 7px; align-items: center; }
+  .fr-cta { width: 100%; padding: 11px; font-size: 14px; margin-top: 6px; }
+  .fr-ghost { text-align: center; color: var(--text-dim); font-size: 12px; margin-top: 14px; }
+
+  .state-first .strip, .state-first .body > .cues, .state-first .rail .style-card { display: none; }
+  .state-first .rail .preview .cap { display: none; }
+  .state-after .first-run-wrap { display: none; }
+  .state-first .body { grid-template-columns: 1fr 400px; }
+  .rail-note {
+    display: none; border: 1px dashed var(--border-strong); border-radius: var(--radius);
+    color: var(--text-dim); font-size: 12px; padding: 18px 16px; text-align: center;
+  }
+  .state-first .rail-note { display: block; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="mock-bar">
+    <span class="label">Mockup state:</span>
+    <div class="seg">
+      <button id="segFirst" onclick="setState('first')">First run</button>
+      <button id="segAfter" class="on" onclick="setState('after')">After transcription</button>
+    </div>
+    <span class="mock-note">Everything gold-bordered is clickable · preview header collapses it · strip chevron expands transcription settings</span>
+  </div>
+
+  <div class="modal state-after" id="modal">
+
+    <div class="modal-head">
+      <h1>Add Captions</h1>
+      <span class="sub">Timeline program audio · places captions on a new top track</span>
+      <button class="close">✕</button>
+    </div>
+
+    <!-- FIRST RUN: one job on screen -->
+    <div class="first-run-wrap">
+      <div class="first-run-card">
+        <h2>Transcribe your timeline</h2>
+        <p class="sub">Runs on this machine — no ComfyUI needed.</p>
+        <div class="fr-row">
+          <div class="lbl">Transcription model
+            <span class="hint-i">i<span class="tip">Best hears word timing most accurately. You can switch models any time and re-transcribe.</span></span>
+          </div>
+          <span class="pill-select">Best (1.6 GB) <span class="rec">RECOMMENDED</span> ▾</span>
+          <a class="link" style="margin-left:10px" href="#">Manage models…</a>
+        </div>
+        <div class="fr-row">
+          <div class="lbl">Vocabulary
+            <span class="hint-i">i<span class="tip">Brand names, people, jargon — helps spelling. Your project name, timeline names, and on-screen text are included automatically.</span></span>
+          </div>
+          <input class="vocab" placeholder="e.g. Velorn, Seedance, ComfyUI" />
+        </div>
+        <button class="btn gold fr-cta">✦ Transcribe timeline</button>
+        <p class="fr-ghost">Busy mix? Solo the dialog track first for a cleaner read.</p>
+      </div>
+    </div>
+
+    <div class="strip" id="strip">
+      <div class="strip-row">
+        <span class="dot"></span>
+        <span class="main">Transcribed with <b>Accurate</b></span>
+        <span class="meta">10 cues · 00:34.75</span>
+        <span class="spacer"></span>
+        <button class="btn">⟳ Re-transcribe</button>
+        <button class="chev" onclick="document.getElementById('strip').classList.toggle('open')">▾</button>
+      </div>
+      <div class="strip-details">
+        <span class="pill-select">Accurate (466 MB) ▾</span>
+        <input class="vocab" placeholder="Vocabulary — e.g. Velorn, Seedance, ComfyUI" />
+        <a class="link" href="#">Manage models…</a>
+      </div>
+    </div>
+
+    <div class="body">
+
+      <!-- THE HERO: the cues themselves -->
+      <div class="cues">
+        <div class="cues-head">
+          <h2>Captions</h2>
+          <span class="count">10 cues</span>
+          <input class="search" placeholder="Find in captions…" />
+        </div>
+        <div class="cue-rows" id="cueRows"></div>
+        <div class="cues-foot">Click a cue to seek the preview · double-click text to edit · ⌘F find &amp; replace</div>
+      </div>
+
+      <div class="rail">
+
+        <!-- collapsible preview -->
+        <div class="card preview" id="preview">
+          <div class="card-head" style="cursor:pointer" onclick="document.getElementById('preview').classList.toggle('collapsed')">
+            <h2>Preview</h2>
+            <span class="tag">TikTok overlay</span>
+            <span class="tag">1080×1920</span>
+            <div class="mini">
+              <span class="thumb"></span>
+              <button class="btn" style="padding:3px 10px" onclick="event.stopPropagation()">▶</button>
+            </div>
+            <div class="right"><span class="chev">▾</span></div>
+          </div>
+          <div class="preview-body">
+            <div class="frame">
+              <div class="vid"></div>
+              <div class="cap">The soup was a <b>misunderstanding.</b></div>
+            </div>
+            <div class="transport">
+              <button class="btn gold" style="padding:5px 14px">▶ Play</button>
+              <div class="scrub"></div>
+              <span class="time">7.9 / 34.7s</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="rail-note">Style unlocks after transcription — one job at a time.</div>
+
+        <!-- style -->
+        <div class="card style-card">
+          <div class="card-head">
+            <h2>Style</h2>
+            <span class="tag">applies to all cues</span>
+          </div>
+          <div class="presets" id="presets">
+            <button class="preset" data-name="Kinetic"><span class="swatch" style="color:#4cba79">this is your<br/>moment</span><span class="name">Kinetic</span></button>
+            <button class="preset on" data-name="Subtitles"><span class="swatch" style="color:#dfe3ee">Simple readable<br/>subtitles.</span><span class="name">Subtitles</span></button>
+            <button class="preset" data-name="Neon"><span class="swatch" style="color:#59d7ff">feel the<br/>energy</span><span class="name">Neon</span></button>
+            <button class="preset" data-name="Bold Dark"><span class="swatch" style="color:#f2f2f2">bold<br/>statement</span><span class="name">Bold Dark</span></button>
+            <button class="preset" data-name="Punch"><span class="swatch" style="color:#ffd166">one word<br/>at a time</span><span class="name">Punch</span></button>
+          </div>
+          <div class="style-rows">
+            <div class="srow"><span class="lbl">Text color</span><button class="swatch-btn"></button><span class="hex">#FFFFFF</span></div>
+            <div class="srow"><span class="lbl">Size</span><div class="slider"></div></div>
+            <div class="srow"><span class="lbl">Motion</span><select class="mini-select"><option>Tamed</option><option>Excited</option><option>Frenetic</option></select>
+                              <span class="lbl" style="width:auto">Position</span><select class="mini-select"><option>Bottom</option><option>Middle</option><option>Top</option></select></div>
+            <div class="srow"><a class="link" href="#">More — background, outline, shadow…</a></div>
+          </div>
+          <div class="style-foot">
+            <input placeholder="Save this look as…" />
+            <button class="btn">Save Style</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="modal-foot">
+      <span class="status"><span class="dot"></span>Restored your last timeline captions — re-transcribe any time.</span>
+      <span class="spacer"></span>
+      <button class="btn">Cancel</button>
+      <button class="btn gold">✦ Generate captions</button>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const CUES = [
+    ['00:00.5', 'Can you imagine if there were', '1.9s'],
+    ['00:02.4', 'such things as shrimp cocktail?', '1.7s'],
+    ['00:05.0', 'At this table? Tonight?', '2.2s'],
+    ['00:07.9', 'We are civilized creatures, Gerald.', '2.4s'],
+    ['00:11.0', 'The chandelier says otherwise.', '2.8s'],
+    ['00:14.6', 'One course. That’s all I ask.', '2.5s'],
+    ['00:18.0', 'You said that about the soup.', '2.9s'],
+    ['00:21.7', 'The soup was a misunderstanding.', '2.9s'],
+    ['00:25.4', 'Waiter! More bread for the bird.', '3.5s'],
+    ['00:29.8', 'This is why we can’t have nice dinners.', '4.1s'],
+  ]
+  const rows = document.getElementById('cueRows')
+  CUES.forEach((c, i) => {
+    const el = document.createElement('div')
+    el.className = 'cue' + (i === 7 ? ' active' : '')
+    el.innerHTML = `<span class="n">${i + 1}</span><span class="t">${c[0]}</span>` +
+      `<span class="txt">${c[1]}</span><span class="dur">${c[2]}</span>` +
+      `<button class="kebab" title="Per-cue overrides">⋯</button>`
+    el.onclick = () => {
+      rows.querySelectorAll('.cue').forEach((r) => r.classList.remove('active'))
+      el.classList.add('active')
+      document.querySelector('.frame .cap').innerHTML = c[1].replace(/(\S+)$/, '<b>$1</b>')
+    }
+    rows.appendChild(el)
+  })
+
+  document.getElementById('presets').addEventListener('click', (e) => {
+    const p = e.target.closest('.preset')
+    if (!p) return
+    document.querySelectorAll('.preset').forEach((x) => x.classList.remove('on'))
+    p.classList.add('on')
+  })
+
+  function setState(s) {
+    const m = document.getElementById('modal')
+    m.classList.toggle('state-first', s === 'first')
+    m.classList.toggle('state-after', s === 'after')
+    document.getElementById('segFirst').classList.toggle('on', s === 'first')
+    document.getElementById('segAfter').classList.toggle('on', s === 'after')
+  }
+</script>
+</body>
+</html>
