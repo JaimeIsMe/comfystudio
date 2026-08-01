@@ -61,6 +61,7 @@ import {
   flattenYoloPlanVariants,
   parseStructuredDirectorScript,
 } from '../utils/yoloPlanning'
+import { extractVisualStyleNotes } from '../utils/musicVisualStyle'
 import { checkWorkflowDependencies, buildMissingDependencyClipboardText } from '../services/workflowDependencies'
 import { openApiWorkflowInComfyUi, openBundledWorkflowInComfyUi } from '../services/workflowSetupManager'
 import { useWorkflowSetupFlow } from '../hooks/useWorkflowSetupFlow'
@@ -1376,7 +1377,10 @@ function composeMusicShotVideoPrompt({
     .slice(0, 240) : ''
   const motion = String(motionPromptRaw || '').trim()
   const conceptLine = String(concept || '').trim()
-  const styleLine = String(styleNotes || '').trim()
+  // Music-audio vocabulary never reaches generation prompts (issue #91):
+  // "rap, 90 BPM, male vocal" in a motion prompt invents rapper/DJ visuals
+  // in b-roll. The director-LLM brief still receives the raw field.
+  const styleLine = extractVisualStyleNotes(styleNotes)
   const cameraLine = String(cameraDirection || '').trim()
   const shotSuffix = String(shotTypeOption?.promptSuffix || '').trim()
 
@@ -1412,7 +1416,9 @@ function composeMusicShotReferencePrompt({
 }) {
   const keyframe = String(keyframePromptRaw || '').trim()
   const conceptLine = String(concept || '').trim()
-  const styleLine = String(styleNotes || '').trim()
+  // Same guard as the motion composer: only VISUAL style survives into the
+  // still-image prompt (issue #91).
+  const styleLine = extractVisualStyleNotes(styleNotes)
   const cameraLine = String(cameraDirection || '').trim()
   const shotFocus = shotTypeOption?.id === 'b_roll'
     ? 'Environment-focused cinematic cutaway.'
