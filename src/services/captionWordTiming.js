@@ -22,6 +22,11 @@ const DEFAULT_PLAUSIBLE_MEDIAN_FACTOR = 2.5
 const DEFAULT_TRAILING_FLOOR_SECONDS = 2.5
 const DEFAULT_RELAID_SECONDS = 0.45
 const DEFAULT_MAX_UTTERANCE_GAP_SECONDS = 0.6
+// When at least this fraction of an utterance's words already overlap audible
+// spans, whisper's interior wall-clock timing is trustworthy and only the
+// edge words that claim speech in generated silence get moved. Below it, the
+// utterance was spread across silence and is re-laid proportionally instead.
+const DEFAULT_IN_SPAN_TRUST_FRACTION = 0.5
 
 const round2 = (value) => Math.round(value * 100) / 100
 
@@ -59,10 +64,20 @@ const plausibleCapForUtterance = (utterance, floor, ceiling, factor) => {
  * statistics cannot distinguish from slow singing. But the timeline knows
  * structurally where sound exists: generated silence cannot contain words.
  * Utterances that lie entirely inside the spans are never touched (which is
- * what keeps this safe for held sung notes and slow speech alike); an
- * utterance that starts or ends in generated silence is linearly rescaled
- * into the portion of its span it overlaps, preserving word order and
- * relative pacing. Utterances with NO span overlap at all are dropped:
+ * what keeps this safe for held sung notes and slow speech alike). For an
+ * utterance that starts or ends in generated silence, the correction depends
+ * on how much of it the spans vouch for: when most of its words already sit
+ * in audible spans (a long program transcript whose interior tracks the real
+ * clips — only the head/tail smeared into silence), only those edge words
+ * are squeezed into the span boundary and every interior word passes through
+ * byte-identical. A whole-utterance linear rescale here would shift minutes
+ * of accurate words by the length of the leading silence — that was the
+ * planets-project bug, where all 123 words came back up to 7s late. When
+ * most of its words lie in silence (a short phrase spread across a mostly
+ * silent timeline), whisper's wall-clock claims are globally wrong and the
+ * utterance is linearly rescaled into the portion of its span it overlaps,
+ * preserving word order and relative pacing. Utterances with NO span
+ * overlap at all are dropped:
  * there is nothing there to transcribe, so whatever whisper produced is a
  * hallucination — prompt echo of the vocabulary hint, phantom phrases over
  * silence, non-speech markers. (When no spans are provided at all, words
@@ -75,6 +90,7 @@ const plausibleCapForUtterance = (utterance, floor, ceiling, factor) => {
  */
 export function snapWordsToAudibleSpans(words, spans, {
   maxUtteranceGapSeconds = DEFAULT_MAX_UTTERANCE_GAP_SECONDS,
+  inSpanTrustFraction = DEFAULT_IN_SPAN_TRUST_FRACTION,
 } = {}) {
   const source = (Array.isArray(words) ? words : [])
     .filter((w) => w && Number.isFinite(Number(w.start)) && Number.isFinite(Number(w.end)))
@@ -123,6 +139,53 @@ export function snapWordsToAudibleSpans(words, spans, {
     const uLength = uEnd - uStart
     const tLength = tEnd - tStart
     if (uLength <= 0.001 || tLength <= 0.001) continue
+
+    const inSpanCount = utterance.filter(
+      (w) => merged.some((s) => w.end > s.start && w.start < s.end)
+    ).length
+    // The edge fix needs trustworthy interior anchors: the first word whose
+    // start the spans can vouch for, and the last word whose end they can.
+    const firstAnchor = utterance.findIndex((w) => w.start >= tStart - 0.001)
+    let lastAnchor = -1
+    for (let i = utterance.length - 1; i >= 0; i -= 1) {
+      if (utterance[i].end <= tEnd + 0.001) { lastAnchor = i; break }
+    }
+
+    if (
+      inSpanCount / utterance.length >= inSpanTrustFraction
+      && firstAnchor !== -1 && lastAnchor !== -1 && firstAnchor <= lastAnchor
+    ) {
+      // Mostly in-span: whisper's interior words already track the real
+      // clips in wall time, so they must not move. Only the edge words that
+      // structurally sit in generated silence are squeezed into the gap
+      // between the span boundary and their anchor, keeping their relative
+      // pacing inside that window.
+      const anchorStart = utterance[firstAnchor].start
+      if (firstAnchor > 0 && anchorStart > uStart + 0.001) {
+        const scale = Math.max(0, (anchorStart - tStart) / (anchorStart - uStart))
+        for (let i = 0; i < firstAnchor; i += 1) {
+          const w = utterance[i]
+          w.start = round2(tStart + (w.start - uStart) * scale)
+          w.end = round2(tStart + (w.end - uStart) * scale)
+          if (w.end <= w.start) w.end = round2(w.start + 0.05)
+        }
+      }
+      const anchorEnd = utterance[lastAnchor].end
+      if (lastAnchor < utterance.length - 1 && uEnd > anchorEnd + 0.001) {
+        const scale = Math.max(0, (tEnd - anchorEnd) / (uEnd - anchorEnd))
+        for (let i = lastAnchor + 1; i < utterance.length; i += 1) {
+          const w = utterance[i]
+          w.start = round2(anchorEnd + (w.start - anchorEnd) * scale)
+          w.end = round2(anchorEnd + (w.end - anchorEnd) * scale)
+          if (w.end <= w.start) w.end = round2(w.start + 0.05)
+        }
+      }
+      continue
+    }
+
+    // Mostly in silence: the utterance was spread across the quiet timeline,
+    // so its wall-clock claims carry no trustworthy anchors — re-lay the
+    // whole thing proportionally into the audible window.
     const scale = tLength / uLength
     for (const w of utterance) {
       w.start = round2(tStart + (w.start - uStart) * scale)

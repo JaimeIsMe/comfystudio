@@ -227,3 +227,67 @@ test('overlapping spans merge before snapping', () => {
   assert.equal(words[0].start, 2.0)
   assert.equal(words[0].end, 4.0)
 })
+
+// The planets-project bug (Aug 1): ten narration clips across a 67s program,
+// music muted. Whisper anchored the head at 0 and smeared the first two words
+// across 7.9s of generated silence, but every interior word tracked its real
+// clip in wall time — and -ml 1 output never leaves gaps, so all 123 words
+// formed ONE utterance. The old whole-utterance rescale shifted every word up
+// to 7s late (decaying to zero at the end). Timings below are the real repro
+// values; the spans are the first two narration clips.
+const PLANETS_SPANS = [
+  { start: 7.875, end: 11.833 },
+  { start: 12.708, end: 17.708 },
+]
+const PLANETS_HEAD_SMEAR = [
+  { start: 0.0, end: 2.65, text: '1' },        // smeared across leading silence
+  { start: 2.65, end: 8.92, text: 'star.' },   // smeared
+  { start: 8.92, end: 9.18, text: '8' },
+  { start: 9.18, end: 10.16, text: 'worlds.' },
+  { start: 10.16, end: 10.54, text: 'This' },
+  { start: 10.54, end: 11.46, text: 'solar' },
+  { start: 11.46, end: 12.74, text: 'system.' },
+  { start: 12.74, end: 13.3, text: 'Mercury,' },
+  { start: 13.3, end: 13.45, text: 'the' },
+  { start: 16.9, end: 17.2, text: 'days.' },
+]
+
+test('a mostly in-span utterance keeps its interior words byte-identical', () => {
+  const words = snapWordsToAudibleSpans(PLANETS_HEAD_SMEAR, PLANETS_SPANS)
+  // The smeared head is squeezed between the first span's start and the
+  // first structurally plausible word.
+  assert.equal(words[0].start, 7.88)
+  assert.equal(words[0].end, 8.19)
+  assert.equal(words[1].start, 8.19)
+  assert.equal(words[1].end, 8.92)
+  // Every interior word is untouched — the old global rescale moved
+  // "Mercury," from 12.74 to 14.78, seven seconds after the clip started.
+  assert.deepEqual(
+    words.slice(2).map(({ start, end, text }) => ({ start, end, text })),
+    PLANETS_HEAD_SMEAR.slice(2)
+  )
+})
+
+test('a mostly in-span utterance squeezes a trailing smear to the span end', () => {
+  const words = snapWordsToAudibleSpans(
+    [
+      { start: 13.0, end: 13.4, text: 'silent' },
+      { start: 13.4, end: 13.9, text: 'orbit' },
+      { start: 13.9, end: 14.5, text: 'holds' },
+      { start: 14.5, end: 17.0, text: 'true' },
+      { start: 17.0, end: 25.0, text: 'forever.' }, // smeared past the program
+    ],
+    PLANETS_SPANS
+  )
+  assert.deepEqual(words[4], { start: 17.0, end: 17.71, text: 'forever.' })
+  assert.equal(words[3].end, 17.0) // its anchor did not move
+})
+
+test('snap then repair — the planets head smear survives the full pipeline', () => {
+  const words = repairSmearedWordTimings(
+    snapWordsToAudibleSpans(PLANETS_HEAD_SMEAR, PLANETS_SPANS)
+  )
+  assert.equal(words[0].start, 7.88) // captions start with the audio
+  const mercury = words.find((w) => w.text === 'Mercury,')
+  assert.equal(mercury.start, 12.74) // exactly where whisper heard it
+})
