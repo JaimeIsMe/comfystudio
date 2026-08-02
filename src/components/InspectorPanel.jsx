@@ -1486,6 +1486,10 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     const animatedMask = activeMask
       ? (normalizeShapeMask(getAnimatedShapeMask(selectedClip, clipTime)) || activeMask)
       : null
+    // AI/raster masks are mask-type effects; the section is their one home
+    // now, but the data model is untouched — a shape mask still wins in the
+    // renderers, so the chips keep the two mutually exclusive.
+    const maskEffect = (selectedClip.effects || []).find((effect) => effect?.type === 'mask') || null
     const maskValue = (key) => (animatedMask?.[key] ?? activeMask?.[key] ?? DEFAULT_SHAPE_MASK[key])
     const applyMaskSliderValue = (key, value, keepSessionOpen = false) => {
       applyShapeMaskWithHistory({ [key]: value }, keepSessionOpen)
@@ -1500,12 +1504,25 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
       { id: 'ellipse', label: 'Ellipse' },
       { id: 'rounded', label: 'Round' },
       { id: 'spline', label: 'Spline' },
+      { id: 'image', label: 'Image' },
     ]
     const pickShape = (shapeId) => {
-      if (!shapeId) {
-        applyShapeMaskWithHistory(null)
+      if (shapeId === 'image') {
+        if (activeMask) applyShapeMaskWithHistory(null)
+        if (maskEffect) {
+          if (maskEffect.enabled === false) toggleEffect(selectedClip.id, maskEffect.id)
+        } else {
+          setShowMaskPicker(true)
+        }
         return
       }
+      if (!shapeId) {
+        if (activeMask) applyShapeMaskWithHistory(null)
+        if (maskEffect && maskEffect.enabled !== false) toggleEffect(selectedClip.id, maskEffect.id)
+        setShowMaskPicker(false)
+        return
+      }
+      if (maskEffect && maskEffect.enabled !== false) toggleEffect(selectedClip.id, maskEffect.id)
       const updates = activeMask ? { shape: shapeId } : { ...DEFAULT_SHAPE_MASK, shape: shapeId }
       if (shapeId === 'spline' && !(selectedClip.shapeMask?.points?.length >= 3)) {
         updates.points = DEFAULT_SPLINE_POINTS.map((p) => ({ x: p.x, y: p.y, hIn: { ...p.hIn }, hOut: { ...p.hOut } }))
@@ -1526,19 +1543,26 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
 
     return (
       <>
-        {renderSectionHeader('mask', 'Mask', CircleDot, activeMask ? {
+        {renderSectionHeader('mask', 'Mask', CircleDot, (activeMask || maskEffect) ? {
           actions: renderHeaderActionButton({
             icon: RotateCcw,
             label: 'Remove Mask',
-            onClick: () => applyShapeMaskWithHistory(null),
-            title: 'Remove the shape mask',
+            onClick: () => {
+              if (activeMask) applyShapeMaskWithHistory(null)
+              if (maskEffect) removeEffect(selectedClip.id, maskEffect.id)
+            },
+            title: 'Remove the mask',
           }),
         } : {})}
         {expandedSections.includes('mask') && (
           <div className="p-3 space-y-3 border-b border-sf-dark-700">
             <div className="flex gap-1.5">
               {shapeChoices.map((choice) => {
-                const isActive = choice.id === (activeMask?.shape ?? null)
+                const isActive = choice.id === 'image'
+                  ? (!activeMask && !!maskEffect)
+                  : choice.id === null
+                    ? (!activeMask && !maskEffect)
+                    : choice.id === (activeMask?.shape ?? undefined)
                 return (
                   <button
                     key={choice.label}
@@ -1570,10 +1594,88 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
                 ? 'Drawing — click points on the monitor…'
                 : (activeMask ? 'Draw New Spline' : 'Draw a Spline (pen)')}
             </button>
-            {!activeMask && (
+            {!activeMask && !maskEffect && !showMaskPicker && (
               <p className="text-[10px] text-sf-text-muted">
-                Pick a shape to cut this clip out — or draw one point by point. Soften the edge with Feather, flip it with Invert.
+                Pick a shape to cut this clip out, draw one point by point, or use an AI mask image. Soften shapes with Feather, flip with Invert.
               </p>
+            )}
+            {!activeMask && (maskEffect || showMaskPicker) && (
+              <div className="space-y-2">
+                {maskEffect && (() => {
+                  const maskAsset = getAssetById(maskEffect.maskAssetId)
+                  return (
+                    <div className="flex items-center gap-2 p-2 bg-sf-dark-900 rounded">
+                      <Wand2 className="w-3.5 h-3.5 text-purple-400" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] text-sf-text-primary truncate">{maskAsset?.name || 'Mask asset not found'}</p>
+                        <p className="text-[9px] text-sf-text-muted">
+                          {maskAsset
+                            ? (maskAsset.frameCount > 1 ? `${maskAsset.frameCount} frames` : 'Single frame')
+                            : 'Relink or pick another mask image'}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => toggleEffect(selectedClip.id, maskEffect.id)}
+                        className={`p-1 rounded transition-colors ${maskEffect.enabled !== false ? 'text-purple-400' : 'text-sf-text-muted'}`}
+                        title={maskEffect.enabled !== false ? 'Bypass the image mask' : 'Enable the image mask'}
+                      >
+                        {maskEffect.enabled !== false ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                      </button>
+                    </div>
+                  )
+                })()}
+                {maskEffect && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-sf-text-secondary">Invert (cut a hole instead)</span>
+                    <button
+                      onClick={() => updateEffect(selectedClip.id, maskEffect.id, { invertMask: !maskEffect.invertMask }, true)}
+                      className={`w-8 h-4 rounded-full transition-colors ${maskEffect.invertMask ? 'bg-purple-500' : 'bg-sf-dark-600'}`}
+                    >
+                      <div className={`w-3 h-3 rounded-full bg-white transition-transform ${maskEffect.invertMask ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                    </button>
+                  </div>
+                )}
+                {availableMasks.length > 0 && (
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowMaskPicker(!showMaskPicker)}
+                      className="w-full flex items-center justify-center gap-2 py-1.5 border border-dashed border-purple-500/50 rounded text-[10px] text-purple-400 hover:border-purple-500 hover:bg-purple-500/10 transition-colors"
+                    >
+                      <Wand2 className="w-3 h-3" />
+                      {maskEffect ? 'Swap Mask Image' : 'Pick a Mask Image'}
+                    </button>
+                    {showMaskPicker && (
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-sf-dark-800 border border-sf-dark-600 rounded-lg shadow-xl z-10 max-h-48 overflow-auto">
+                        {availableMasks.map((mask) => (
+                          <button
+                            key={mask.id}
+                            onClick={() => {
+                              if (maskEffect) {
+                                updateEffect(selectedClip.id, maskEffect.id, { maskAssetId: mask.id }, true)
+                              } else {
+                                addMaskEffect(selectedClip.id, mask.id)
+                              }
+                              setShowMaskPicker(false)
+                            }}
+                            className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 transition-colors"
+                          >
+                            <Layers className="w-3.5 h-3.5 text-purple-400" />
+                            <div className="flex-1 min-w-0">
+                              <p className="truncate">{mask.name}</p>
+                              <p className="text-[9px] text-sf-text-muted">{mask.prompt ? `"${mask.prompt}"` : 'No prompt'}</p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {availableMasks.length === 0 && !maskEffect && (
+                  <p className="text-[10px] text-sf-text-muted">
+                    No mask images yet — generate one with AI segmentation from the Assets panel.
+                  </p>
+                )}
+              </div>
             )}
             {activeMask && (
               <>
@@ -3930,8 +4032,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
               goToPrevKeyframe={goToPrevKeyframe}
             />
 
-            {/* Render mask effects inline (managed effects handled by EffectsStack above) */}
-            {(selectedClip.effects || []).filter((e) => !isManagedEffectType(e?.type)).map((effect, index) => (
+            {/* Non-managed effects inline (managed effects handled by EffectsStack
+                above; mask effects live in the Mask section now) */}
+            {(selectedClip.effects || []).filter((e) => !isManagedEffectType(e?.type) && e?.type !== 'mask').map((effect, index) => (
               <div key={effect.id} className="bg-sf-dark-800 rounded overflow-hidden">
                 {/* Effect Header */}
                 <div className="flex items-center gap-2 px-2 py-1.5 bg-sf-dark-700">
@@ -3956,58 +4059,6 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
                   </button>
                 </div>
                 
-                {/* Mask Effect Controls */}
-                {effect.type === 'mask' && effect.enabled && (
-                  <div className="p-2 space-y-2">
-                    {/* Mask Asset Info */}
-                    {(() => {
-                      const maskAsset = getAssetById(effect.maskAssetId)
-                      return maskAsset ? (
-                        <div className="flex items-center gap-2 p-2 bg-sf-dark-900 rounded">
-                          <Wand2 className="w-3.5 h-3.5 text-purple-400" />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[10px] text-sf-text-primary truncate">{maskAsset.name}</p>
-                            <p className="text-[9px] text-sf-text-muted">
-                              {maskAsset.frameCount > 1 ? `${maskAsset.frameCount} frames` : 'Single frame'}
-                            </p>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="text-[10px] text-sf-text-muted p-2 bg-sf-dark-900 rounded">
-                          Mask asset not found
-                        </div>
-                      )
-                    })()}
-                    
-                    {/* Invert Toggle */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] text-sf-text-secondary">Invert Mask</span>
-                      <button
-                        onClick={() => updateEffect(selectedClip.id, effect.id, { invertMask: !effect.invertMask }, true)}
-                        className={`w-8 h-4 rounded-full transition-colors ${
-                          effect.invertMask ? 'bg-purple-500' : 'bg-sf-dark-600'
-                        }`}
-                      >
-                        <div className={`w-3 h-3 rounded-full bg-white transition-transform ${
-                          effect.invertMask ? 'translate-x-4' : 'translate-x-0.5'
-                        }`} />
-                      </button>
-                    </div>
-                    
-                    {/* Feather (future implementation) */}
-                    {/* <div className="flex items-center justify-between">
-                      <span className="text-[10px] text-sf-text-secondary">Feather</span>
-                      <input
-                        type="range"
-                        min="0"
-                        max="20"
-                        value={effect.feather || 0}
-                        onChange={(e) => updateEffect(selectedClip.id, effect.id, { feather: parseInt(e.target.value) })}
-                        className="w-20 h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-purple-500"
-                      />
-                    </div> */}
-                  </div>
-                )}
               </div>
             ))}
             
@@ -4103,57 +4154,6 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
               </div>
             )}
             
-            {/* Add Mask Effect Button */}
-            {availableMasks.length > 0 && (
-              <div className="relative">
-                <button
-                  onClick={() => setShowMaskPicker(!showMaskPicker)}
-                  className="w-full flex items-center justify-center gap-2 py-2 border border-dashed border-purple-500/50 rounded text-xs text-purple-400 hover:border-purple-500 hover:bg-purple-500/10 transition-colors"
-                >
-                  <Wand2 className="w-3 h-3" />
-                  Add Mask Effect
-                </button>
-                
-                {/* Mask Picker Dropdown */}
-                {showMaskPicker && (
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-sf-dark-800 border border-sf-dark-600 rounded-lg shadow-xl z-10 max-h-48 overflow-auto">
-                    <div className="p-2 border-b border-sf-dark-600">
-                      <span className="text-[10px] text-sf-text-muted uppercase tracking-wider">Select Mask</span>
-                    </div>
-                    {availableMasks.map(mask => (
-                      <button
-                        key={mask.id}
-                        onClick={() => {
-                          addMaskEffect(selectedClip.id, mask.id)
-                          setShowMaskPicker(false)
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 transition-colors"
-                      >
-                        <Layers className="w-3.5 h-3.5 text-purple-400" />
-                        <div className="flex-1 min-w-0">
-                          <p className="truncate">{mask.name}</p>
-                          <p className="text-[9px] text-sf-text-muted">
-                            {mask.prompt ? `"${mask.prompt}"` : 'No prompt'}
-                          </p>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            
-            {/* No masks available message */}
-            {availableMasks.length === 0 && (selectedClip.effects || []).filter((e) => !isManagedEffectType(e?.type)).length === 0 && (
-              <div className="text-center py-3">
-                <Wand2 className="w-6 h-6 text-sf-text-muted mx-auto mb-2 opacity-50" />
-                <p className="text-[10px] text-sf-text-muted">No mask effects applied</p>
-                <p className="text-[9px] text-sf-text-muted mt-1">
-                  Generate masks from the Assets panel
-                </p>
-              </div>
-            )}
-
           </div>
         )}
         </>)}
