@@ -1411,7 +1411,10 @@ function CaptionWorkspace({
         if (!liveClip) {
           throw new Error('Could not place the captions clip on the timeline.')
         }
-        setStatusMessage(`Live captions placed — ${renderCues.length} cues, instantly editable.`)
+        // Done — close like the baked path does. The captions appearing on
+        // the timeline (clip selected, cues live in the preview) are the
+        // confirmation; a status line in a dialog we're leaving is not.
+        onClose?.()
         return
       }
 
