@@ -27,6 +27,9 @@ import {
   COLOR_ADJUSTMENT_KEYS,
   DEFAULT_ADJUSTMENT_SETTINGS,
   getAdjustmentValue,
+  hasAdjustmentGroupEffect,
+  hasLutEffect,
+  hasTonalAdjustmentEffect,
   mergeAdjustmentSettings,
   normalizeAdjustmentSettings,
   setAdjustmentValue,
@@ -74,6 +77,7 @@ import { DEFAULT_LINE_THICKNESS, DEFAULT_POLYGON_SIDES, DEFAULT_SHAPE_PROPERTIES
 
 const TRANSITION_DEFAULT_DURATION_KEY = 'comfystudio-transition-default-duration-frames'
 const INSPECTOR_EXPANDED_SECTIONS_KEY = 'comfystudio-inspector-expanded-sections-v1'
+const INSPECTOR_ACTIVE_TAB_KEY = 'comfystudio-inspector-active-tab-v1'
 const INSPECTOR_EXPANDED_ADJUSTMENT_GROUPS_KEY = 'comfystudio-inspector-expanded-adjustment-groups-v1'
 const DEFAULT_INSPECTOR_EXPANDED_SECTIONS = ['clipInfo', 'transform', 'compositing', 'crop', 'mask', 'timing', 'effects', 'text', 'style', 'shape', 'animation', 'adjustments', 'commit']
 const DEFAULT_EXPANDED_ADJUSTMENT_GROUPS = ['global']
@@ -2806,6 +2810,87 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
   }
 
   // Render Video Clip Inspector (with 2D transforms)
+  // ---- Inspector tabs (reorg Stage A) -----------------------------------
+  // Task tabs cap how much any one view shows; gold dots mark tabs holding
+  // non-default values so edits are visible without opening anything.
+  // Section bodies are unmoved — tabs only gate which ones render.
+  const [activeInspectorTabByKind, setActiveInspectorTabByKind] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(INSPECTOR_ACTIVE_TAB_KEY)) || {}
+    } catch (_) {
+      return {}
+    }
+  })
+  const inspectorTabKind = selectedClip?.type || 'none'
+  const setActiveInspectorTab = useCallback((tabId) => {
+    setActiveInspectorTabByKind((prev) => {
+      const next = { ...prev, [inspectorTabKind]: tabId }
+      try {
+        localStorage.setItem(INSPECTOR_ACTIVE_TAB_KEY, JSON.stringify(next))
+      } catch (_) { /* ignore */ }
+      return next
+    })
+  }, [inspectorTabKind])
+  const resolveActiveInspectorTab = (tabs) => {
+    const stored = activeInspectorTabByKind[inspectorTabKind]
+    return tabs.some((tab) => tab.id === stored) ? stored : tabs[0]?.id
+  }
+
+  const renderInspectorTabBar = (tabs, activeTabId) => (
+    <div className="sticky top-0 z-20 flex border-b border-sf-dark-700 bg-sf-dark-800">
+      {tabs.map((tab) => {
+        const isActive = tab.id === activeTabId
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveInspectorTab(tab.id)}
+            title={tab.title || tab.label}
+            className={`relative flex-1 min-w-0 px-0.5 py-1.5 text-[10px] transition-colors border-r border-sf-dark-700 last:border-r-0 ${
+              isActive
+                ? 'text-sf-accent bg-sf-accent/10 shadow-[inset_0_-2px_0_0] shadow-sf-accent'
+                : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700/60'
+            }`}
+          >
+            {tab.label}
+            {tab.dot && (
+              <span className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-sf-accent" title="Has non-default settings" />
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+
+  // Non-default detection per tab. Cheap comparisons against known defaults;
+  // anything more exotic (keyframes on a property) also counts because the
+  // animated values drift from defaults while the playhead moves.
+  const transformHasEdits = (t) => {
+    if (!t) return false
+    const near = (value, def) => Math.abs((Number(value) ?? def) - def) > 0.001
+    return near(t.positionX, 0) || near(t.positionY, 0) || near(t.positionZ, 0)
+      || near(t.scaleX, 100) || near(t.scaleY, 100)
+      || near(t.rotation, 0) || near(t.rotationX, 0) || near(t.rotationY, 0)
+      || !!t.flipH || !!t.flipV
+      || near(t.cropTop, 0) || near(t.cropBottom, 0) || near(t.cropLeft, 0) || near(t.cropRight, 0)
+      || !!t.cornerPinEnabled || !!t.motionBlurEnabled
+  }
+  const mixHasEdits = (t, clip) => {
+    if (!t && !clip) return false
+    const opacity = Number(t?.opacity)
+    return (Number.isFinite(opacity) && Math.abs(opacity - 100) > 0.001)
+      || (t?.blendMode && t.blendMode !== 'normal')
+      || !!normalizeTrackMatte(clip?.trackMatte)?.enabled
+  }
+  const colorHasEdits = (settings) => hasAdjustmentGroupEffect(settings)
+    || hasTonalAdjustmentEffect(settings)
+    || hasLutEffect(settings)
+  const effectsHaveEdits = (clip, settings) => (Number(settings?.blur) || 0) > 0
+    || (clip?.effects || []).some((effect) => effect?.enabled && effect.type !== 'mask')
+  const motionHasEdits = (clip) => (Number(clip?.speed) || 1) !== 1 || !!clip?.reverse
+  const maskHasEdits = (clip) => !!normalizeShapeMask(clip?.shapeMask)
+    || (clip?.effects || []).some((effect) => effect?.enabled && effect.type === 'mask')
+
   const renderVideoClipInspector = () => {
     if (!selectedClip || !transform) return null
     const isShapeInspector = selectedClip.type === 'shape'
@@ -2818,6 +2903,20 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     const typeBadgeClassName = isShapeInspector
       ? 'bg-cyan-500/15 text-cyan-300'
       : (isImageInspector ? 'bg-emerald-500/15 text-emerald-300' : 'bg-blue-500/15 text-blue-300')
+
+    const dotSettings = animatedAdjustments || baseAdjustments || {}
+    const dotTransform = animatedTransform || transform || {}
+    const videoTabs = [
+      ...(isShapeInspector ? [{ id: 'shape', label: 'Shape', title: 'Shape geometry and fill' }] : []),
+      { id: 'transform', label: 'Transform', title: 'Position, scale, rotation, crop', dot: transformHasEdits(dotTransform) },
+      ...(!isShapeInspector ? [{ id: 'mask', label: 'Mask', title: 'Shape and image masks', dot: maskHasEdits(selectedClip) }] : []),
+      { id: 'color', label: 'Color', title: 'Grade and Look (LUT)', dot: colorHasEdits(dotSettings) },
+      { id: 'effects', label: 'Effects', title: 'Blur and GLSL effects', dot: effectsHaveEdits(selectedClip, dotSettings) },
+      { id: 'motion', label: 'Motion', title: 'Speed, reverse, duration', dot: motionHasEdits(selectedClip) },
+      { id: 'mix', label: 'Mix', title: 'Track matte compositing', dot: mixHasEdits(dotTransform, selectedClip) },
+    ]
+    const activeTab = resolveActiveInspectorTab(videoTabs)
+    const showTab = (id) => activeTab === id
 
     return (
       <>
@@ -2840,8 +2939,11 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
           ],
         })}
 
-        {renderShapeControlsSection()}
+        {renderInspectorTabBar(videoTabs, activeTab)}
 
+        {showTab('shape') && renderShapeControlsSection()}
+
+        {showTab('transform') && (<>
         {/* Transform Section */}
         {renderSectionHeader('transform', 'Transform', Move, {
           actions: renderInspectorClipboardButtons({
@@ -3441,9 +3543,11 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
             </div>
           </div>
         )}
+        </>)}
 
-        {renderCompositingSection()}
+        {showTab('mix') && renderCompositingSection()}
 
+        {showTab('transform') && (<>
         {/* Crop Section */}
         {renderSectionHeader('crop', 'Crop', Crop, {
           actions: renderInspectorClipboardButtons({
@@ -3549,11 +3653,13 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
 
           </div>
         )}
+        </>)}
 
-        {renderMaskSection()}
+        {showTab('mask') && renderMaskSection()}
 
-        {renderStandardClipAdjustmentsSection()}
+        {showTab('color') && renderStandardClipAdjustmentsSection()}
 
+        {showTab('motion') && (<>
         {/* Timing Section */}
         {renderSectionHeader('timing', 'Timing', Clock, {
           actions: renderInspectorClipboardButtons({
@@ -3717,7 +3823,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
             </div>
           </div>
         )}
+        </>)}
 
+        {showTab('effects') && (<>
         {/* Effects Section */}
         {renderSectionHeader('effects', 'Effects', Zap)}
         {expandedSections.includes('effects') && (
@@ -3963,9 +4071,10 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
                 </p>
               </div>
             )}
-            
+
           </div>
         )}
+        </>)}
       </>
     )
   }
@@ -4021,6 +4130,16 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
           : null
     const commitDisabled = commitRenderState.busy || !!commitDisabledReason
 
+    const adjDotTransform = animatedTransform || transform || {}
+    const adjTabs = [
+      { id: 'color', label: 'Color', title: 'Grade and Look for the layers below', dot: colorHasEdits(adjustments || {}) },
+      { id: 'effects', label: 'Effects', title: 'Blur and GLSL effects for the layers below', dot: effectsHaveEdits(selectedClip, adjustments || {}) },
+      { id: 'transform', label: 'Transform', title: 'Transform the stage copy', dot: transformHasEdits(adjDotTransform) },
+      { id: 'motion', label: 'Motion', title: 'Timing', dot: motionHasEdits(selectedClip) },
+    ]
+    const activeAdjTab = resolveActiveInspectorTab(adjTabs)
+    const showAdjTab = (id) => activeAdjTab === id
+
     return (
       <>
         {renderClipSummaryHeader({
@@ -4042,6 +4161,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
           ],
         })}
 
+        {renderInspectorTabBar(adjTabs, activeAdjTab)}
+
+        {showAdjTab('transform') && (<>
         {renderSectionHeader('transform', 'Transform', Move, {
           actions: renderInspectorClipboardButtons({
             scope: INSPECTOR_SETTINGS_SCOPE.TRANSFORM,
@@ -4455,9 +4577,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
 
           </div>
         )}
+        </>)}
 
-        {renderMaskSection()}
-
+        {showAdjTab('effects') && (<>
         {renderSectionHeader('effects', 'Effects', Zap)}
         {expandedSections.includes('effects') && (
           <div className="p-3 space-y-2 border-b border-sf-dark-700">
@@ -4479,7 +4601,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
             />
           </div>
         )}
+        </>)}
 
+        {showAdjTab('color') && (<>
         {renderSectionHeader('adjustments', 'Color', Sparkles, {
           actions: renderInspectorClipboardButtons({
             scope: INSPECTOR_SETTINGS_SCOPE.ADJUSTMENTS,
@@ -4494,7 +4618,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
         {expandedSections.includes('adjustments') && (
           renderSharedAdjustmentsContent(adjustments, 'Applies color controls to clips below this layer.')
         )}
+        </>)}
 
+        {showAdjTab('motion') && (<>
         {renderSectionHeader('timing', 'Timing', Clock, {
           actions: renderInspectorClipboardButtons({
             scope: INSPECTOR_SETTINGS_SCOPE.TIMING,
@@ -4544,6 +4670,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
             </div>
           </div>
         )}
+        </>)}
 
         {renderSectionHeader('commit', 'Commit Render', HardDrive)}
         {expandedSections.includes('commit') && (
@@ -4733,7 +4860,19 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     const textProps = getTextProps()
     if (!textProps) return null
     const activeAnimationPresetId = selectedClip?.titleAnimation?.presetId || 'none'
-    
+    const textDotSettings = animatedAdjustments || baseAdjustments || {}
+    const textDotTransform = animatedTransform || transform || {}
+    const textTabs = [
+      { id: 'text', label: 'Text', title: 'Content, style, title animation', dot: activeAnimationPresetId !== 'none' },
+      { id: 'transform', label: 'Transform', title: 'Position, scale, rotation', dot: transformHasEdits(textDotTransform) },
+      { id: 'color', label: 'Color', title: 'Grade', dot: colorHasEdits(textDotSettings) },
+      { id: 'effects', label: 'Effects', title: 'Blur and GLSL effects', dot: effectsHaveEdits(selectedClip, textDotSettings) },
+      { id: 'motion', label: 'Motion', title: 'Timing', dot: motionHasEdits(selectedClip) },
+      { id: 'mix', label: 'Mix', title: 'Track matte compositing', dot: mixHasEdits(textDotTransform, selectedClip) },
+    ]
+    const activeTextTab = resolveActiveInspectorTab(textTabs)
+    const showTextTab = (id) => activeTextTab === id
+
     return (
       <>
         {renderClipSummaryHeader({
@@ -4755,6 +4894,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
           ],
         })}
 
+        {renderInspectorTabBar(textTabs, activeTextTab)}
+
+        {showTextTab('text') && (<>
         {/* Text Content Section */}
         {renderSectionHeader('text', 'Text Content', Type)}
         {expandedSections.includes('text') && (
@@ -5021,7 +5163,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
             </p>
           </div>
         )}
+        </>)}
 
+        {showTextTab('effects') && (<>
         {renderSectionHeader('effects', 'Effects', Zap)}
         {expandedSections.includes('effects') && (
           <div className="p-3 space-y-2 border-b border-sf-dark-700">
@@ -5042,7 +5186,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
             />
           </div>
         )}
+        </>)}
 
+        {showTextTab('transform') && (<>
         {/* Transform Section (shared with video) */}
         {renderSectionHeader('transform', 'Transform', Move, {
           actions: renderInspectorClipboardButtons({
@@ -5213,11 +5359,13 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
             </div>
           </div>
         )}
+        </>)}
 
-        {renderCompositingSection()}
+        {showTextTab('mix') && renderCompositingSection()}
 
-        {renderStandardClipAdjustmentsSection()}
+        {showTextTab('color') && renderStandardClipAdjustmentsSection()}
 
+        {showTextTab('motion') && (<>
         {/* Timing Section */}
         {renderSectionHeader('timing', 'Timing', Clock, {
           actions: renderInspectorClipboardButtons({
@@ -5261,6 +5409,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
             </div>
           </div>
         )}
+        </>)}
       </>
     )
   }
