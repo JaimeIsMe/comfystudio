@@ -11,7 +11,7 @@
 // exactly like AI mask assets do. Feather is percent of frame height —
 // resolution-independent softness.
 
-export const SHAPE_MASK_TYPES = Object.freeze(['rectangle', 'ellipse', 'rounded'])
+export const SHAPE_MASK_TYPES = Object.freeze(['rectangle', 'ellipse', 'rounded', 'spline'])
 
 const RASTER_W = 1280
 const RASTER_H = 720
@@ -35,11 +35,46 @@ const clampNumber = (value, min, max, fallback) => {
   return Math.max(min, Math.min(max, parsed))
 }
 
+// Spline anchors live in the mask's unit box space: x/y in [-0.5, 0.5] spans
+// the width/height box, so center/size/rotation — and their shapeMask.*
+// keyframes — move the whole path rigidly without touching the points.
+// hIn/hOut are bezier control offsets FROM their anchor.
+const SPLINE_CIRCLE_K = 0.276142 // (4/3)·tan(π/8) · 0.5 — circle-approximation handle length for r=0.5
+export const DEFAULT_SPLINE_POINTS = Object.freeze([
+  { x: 0, y: -0.5, hIn: { x: -SPLINE_CIRCLE_K, y: 0 }, hOut: { x: SPLINE_CIRCLE_K, y: 0 } },
+  { x: 0.5, y: 0, hIn: { x: 0, y: -SPLINE_CIRCLE_K }, hOut: { x: 0, y: SPLINE_CIRCLE_K } },
+  { x: 0, y: 0.5, hIn: { x: SPLINE_CIRCLE_K, y: 0 }, hOut: { x: -SPLINE_CIRCLE_K, y: 0 } },
+  { x: -0.5, y: 0, hIn: { x: 0, y: SPLINE_CIRCLE_K }, hOut: { x: 0, y: -SPLINE_CIRCLE_K } },
+])
+
+const roundUnit = (value) => Math.round(value * 10000) / 10000
+
+const normalizeSplineHandle = (handle) => ({
+  x: roundUnit(clampNumber(handle?.x, -1.5, 1.5, 0)),
+  y: roundUnit(clampNumber(handle?.y, -1.5, 1.5, 0)),
+})
+
+/** Null unless there are at least 3 usable anchors (a closed path needs 3). */
+export function normalizeSplinePoints(points) {
+  if (!Array.isArray(points)) return null
+  const normalized = points
+    .filter((point) => point && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y)))
+    .map((point) => ({
+      x: roundUnit(clampNumber(point.x, -1.5, 1.5, 0)),
+      y: roundUnit(clampNumber(point.y, -1.5, 1.5, 0)),
+      hIn: normalizeSplineHandle(point.hIn),
+      hOut: normalizeSplineHandle(point.hOut),
+    }))
+  return normalized.length >= 3 ? normalized : null
+}
+
 /** Null when there is no usable mask (no shape / disabled). */
 export function normalizeShapeMask(mask) {
   if (!mask || typeof mask !== 'object') return null
   const shape = SHAPE_MASK_TYPES.includes(mask.shape) ? mask.shape : null
   if (!shape) return null
+  const points = shape === 'spline' ? normalizeSplinePoints(mask.points) : null
+  if (shape === 'spline' && !points) return null
   return {
     shape,
     centerX: clampNumber(mask.centerX, -50, 150, DEFAULT_SHAPE_MASK.centerX),
@@ -50,6 +85,7 @@ export function normalizeShapeMask(mask) {
     cornerRadius: clampNumber(mask.cornerRadius, 0, 100, DEFAULT_SHAPE_MASK.cornerRadius),
     feather: clampNumber(mask.feather, 0, 50, DEFAULT_SHAPE_MASK.feather),
     invert: !!mask.invert,
+    ...(points ? { points } : {}),
   }
 }
 
@@ -66,7 +102,22 @@ const traceShapePath = (ctx, normalized) => {
   ctx.translate(cx, cy)
   ctx.rotate((normalized.rotation * Math.PI) / 180)
   ctx.beginPath()
-  if (normalized.shape === 'ellipse') {
+  if (normalized.shape === 'spline' && normalized.points) {
+    const sx = halfW * 2
+    const sy = halfH * 2
+    const pts = normalized.points
+    ctx.moveTo(pts[0].x * sx, pts[0].y * sy)
+    for (let i = 0; i < pts.length; i += 1) {
+      const from = pts[i]
+      const to = pts[(i + 1) % pts.length]
+      ctx.bezierCurveTo(
+        (from.x + from.hOut.x) * sx, (from.y + from.hOut.y) * sy,
+        (to.x + to.hIn.x) * sx, (to.y + to.hIn.y) * sy,
+        to.x * sx, to.y * sy,
+      )
+    }
+    ctx.closePath()
+  } else if (normalized.shape === 'ellipse') {
     ctx.ellipse(0, 0, halfW, halfH, 0, 0, Math.PI * 2)
   } else if (normalized.shape === 'rounded') {
     const radius = Math.min(halfW, halfH) * (normalized.cornerRadius / 100)

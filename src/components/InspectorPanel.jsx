@@ -17,7 +17,7 @@ import useProjectStore from '../stores/projectStore'
 import renderCacheService from '../services/renderCache'
 import { commitAdjustmentRender } from '../services/commitRender'
 import { LUTS_CHANGED_EVENT, importCubeLutFile, listLoadedLuts, loadLutLibrary } from '../services/lutLibrary'
-import { DEFAULT_SHAPE_MASK, normalizeShapeMask } from '../utils/shapeMask'
+import { DEFAULT_SHAPE_MASK, DEFAULT_SPLINE_POINTS, normalizeShapeMask } from '../utils/shapeMask'
 import { saveRenderCache, deleteRenderCache, writeGeneratedOverlayToProject, isElectron } from '../services/fileSystem'
 import { getKeyframeAtTime, getKeyframeTimeTolerance, getAnimatedTransform, getAnimatedAdjustmentSettings, getAnimatedShapeProperties, getAnimatedShapeMask, EASING_OPTIONS } from '../utils/keyframes'
 import { TRACK_MATTE_OPTIONS, normalizeTrackMatte } from '../utils/trackMatte'
@@ -1497,13 +1497,18 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
       { id: 'rectangle', label: 'Rect' },
       { id: 'ellipse', label: 'Ellipse' },
       { id: 'rounded', label: 'Round' },
+      { id: 'spline', label: 'Spline' },
     ]
     const pickShape = (shapeId) => {
       if (!shapeId) {
         applyShapeMaskWithHistory(null)
         return
       }
-      applyShapeMaskWithHistory(activeMask ? { shape: shapeId } : { ...DEFAULT_SHAPE_MASK, shape: shapeId })
+      const updates = activeMask ? { shape: shapeId } : { ...DEFAULT_SHAPE_MASK, shape: shapeId }
+      if (shapeId === 'spline' && !(selectedClip.shapeMask?.points?.length >= 3)) {
+        updates.points = DEFAULT_SPLINE_POINTS.map((p) => ({ x: p.x, y: p.y, hIn: { ...p.hIn }, hOut: { ...p.hOut } }))
+      }
+      applyShapeMaskWithHistory(updates)
     }
     const sliders = [
       { key: 'centerX', label: 'Center X', min: -50, max: 150, unit: '%' },
