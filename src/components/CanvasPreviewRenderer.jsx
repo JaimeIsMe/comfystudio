@@ -10,9 +10,11 @@ import {
   hasAdjustmentEffect,
   hasTonalAdjustmentEffect,
   hasTransformingAdjustmentTransform,
+  needsAdvancedColorPass,
   normalizeAdjustmentSettings,
 } from '../utils/adjustments'
 import { applyAdjustmentSettingsToCanvasGpu } from '../utils/adjustmentsGpu'
+import { LUTS_CHANGED_EVENT } from '../services/lutLibrary'
 import {
   applyBlurPassesToCanvas,
   applyEffectsToTransform,
@@ -804,7 +806,7 @@ function CanvasPreviewRenderer({
     const adjustmentSettings = normalizeAdjustmentSettings(
       isFullBake ? {} : (getAnimatedAdjustmentSettings(clip, clipTime) || clip.adjustments || {})
     )
-    const usesTonalAdjustments = hasTonalAdjustmentEffect(adjustmentSettings)
+    const usesTonalAdjustments = needsAdvancedColorPass(adjustmentSettings)
     const adjustmentFilter = buildCssFilterFromAdjustments(adjustmentSettings)
     const clipAdjustmentFilterValue = adjustmentFilter !== 'none' ? adjustmentFilter : null
     const usesManagedEffects = !isFullBake && hasManagedCanvasEffect(clip, clipTime)
@@ -1204,7 +1206,7 @@ function CanvasPreviewRenderer({
     adjustmentCtx.drawImage(ctx.canvas, 0, 0)
 
     let outputCanvas = buffers.adjustmentCanvas
-    if (hasTonalAdjustmentEffect(adjustmentSettings)) {
+    if (needsAdvancedColorPass(adjustmentSettings)) {
       outputCanvas = applyAdvancedAdjustmentsToCanvas(buffers.adjustmentCanvas, adjustmentSettings, width, height)
     } else if (adjustmentIsActive) {
       const filter = buildCssFilterFromAdjustments(adjustmentSettings)
@@ -1647,6 +1649,17 @@ function CanvasPreviewRenderer({
       window.clearTimeout(scrubSettleTimerRef.current)
       scrubSettleTimerRef.current = 0
     }
+  }, [])
+
+  // LUT library changes (import finishing, boot load completing) alter what
+  // runColorPass can resolve — repaint the paused frame so a newly imported
+  // LUT shows up without a nudge.
+  useEffect(() => {
+    const handleLutsChanged = () => {
+      if (!useTimelineStore.getState().isPlaying) drawFrameRef.current?.()
+    }
+    window.addEventListener(LUTS_CHANGED_EVENT, handleLutsChanged)
+    return () => window.removeEventListener(LUTS_CHANGED_EVENT, handleLutsChanged)
   }, [])
 
   useEffect(() => {

@@ -1,3 +1,6 @@
+import { getLoadedLut } from '../services/lutLibrary'
+import { normalizeLutSettings } from './adjustments'
+
 /**
  * GPU color grade shared by the export compositor and the live preview.
  *
@@ -70,9 +73,21 @@ vec3 applyGroupStages(vec3 c, float p[7]) {
 // mirror getTonalWeight; each active group grades the globally-adjusted
 // color and lerps into the running result by its luminance weight, in
 // shadows→midtones→highlights order like the JS pixel loop.
+//
+// The 3D LUT is the LAST color stage: correct/balance with the stages
+// above, then apply the look — the order every grading tool teaches.
+// u_lut lives on texture unit 1 (unit 0 holds the sampler2D; two sampler
+// TYPES sharing one unit is a draw-time error on many drivers, so hosts
+// keep a 1³ dummy bound there whenever no LUT is active). The coordinate
+// scale/offset samples texel CENTERS so input 0 hits the first table entry
+// and input 1 the last, with trilinear filtering between.
 export const ADJUSTMENT_COLOR_PASS_FS = `#version 300 es
 precision highp float;
+precision highp sampler3D;
 uniform sampler2D u_texture;
+uniform sampler3D u_lut;
+uniform float u_lutSize;
+uniform float u_lutAmount;
 uniform float u_global[7];
 uniform float u_shadows[7];
 uniform float u_midtones[7];
@@ -100,6 +115,10 @@ void main() {
       float weight = smoothstep(0.45, 0.82, lum);
       if (weight > 0.0) result = mix(result, applyGroupStages(global, u_highlights), weight);
     }
+  }
+  if (u_lutSize > 0.5 && u_lutAmount > 0.0) {
+    vec3 lutCoord = clamp(result, 0.0, 1.0) * ((u_lutSize - 1.0) / u_lutSize) + 0.5 / u_lutSize;
+    result = mix(result, texture(u_lut, lutCoord).rgb, clamp(u_lutAmount, 0.0, 1.0));
   }
   outColor = vec4(result * texel.a, texel.a);
 }
@@ -146,7 +165,47 @@ export function buildAdjustmentUniformValues(settings = {}) {
   }
 }
 
-const UNIFORM_NAMES = ['u_texture', 'u_global', 'u_shadows', 'u_midtones', 'u_highlights', 'u_groupActive']
+/**
+ * Resolve a settings object's LUT reference against the in-memory LUT
+ * library. Both GPU hosts (the export compositor's color pass and the
+ * standalone preview grade below) resolve through here so a clip's
+ * { lutId, amount } means the same table everywhere. Null when there is no
+ * LUT, its amount is 0, or the library hasn't loaded that id (render
+ * degrades to no-LUT for that frame rather than failing).
+ */
+export function resolveLutForSettings(settings) {
+  const lut = normalizeLutSettings(settings?.lut)
+  if (!lut || lut.amount <= 0) return null
+  const entry = getLoadedLut(lut.lutId)
+  if (!entry) return null
+  return { entry, amount: lut.amount / 100 }
+}
+
+/**
+ * Upload a LUT library entry as a filterable RGBA8 3D texture. Premultiply
+ * and flip are forced off — hosts toggle those for 2D source uploads and
+ * the pixel-store state is global to the context.
+ */
+export function createLut3DTexture(gl, entry) {
+  const texture = gl.createTexture()
+  gl.bindTexture(gl.TEXTURE_3D, texture)
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE)
+  gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, entry.size, entry.size, entry.size, 0, gl.RGBA, gl.UNSIGNED_BYTE, entry.rgba8)
+  return texture
+}
+
+/** 1×1×1 identity stand-in so unit 1 always holds a valid sampler3D binding. */
+export function createDummyLut3DTexture(gl) {
+  return createLut3DTexture(gl, { size: 1, rgba8: new Uint8Array([0, 0, 0, 255]) })
+}
+
+const UNIFORM_NAMES = ['u_texture', 'u_lut', 'u_lutSize', 'u_lutAmount', 'u_global', 'u_shadows', 'u_midtones', 'u_highlights', 'u_groupActive']
 
 function createGradeRenderer(width, height) {
   const canvas = document.createElement('canvas')
@@ -206,6 +265,9 @@ function createGradeRenderer(width, height) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
 
+  const dummyLutTexture = createDummyLut3DTexture(gl)
+  const lutTextures = new Map() // lutId -> WebGLTexture (entries are immutable per id)
+
   gl.disable(gl.BLEND)
   gl.disable(gl.DEPTH_TEST)
 
@@ -213,6 +275,24 @@ function createGradeRenderer(width, height) {
     if (gl.isContextLost()) return false
     gl.viewport(0, 0, width, height)
     gl.useProgram(program)
+
+    // LUT on unit 1 first: its upload must not inherit the premultiply/flip
+    // pixel-store state the 2D source upload sets below.
+    const resolvedLut = resolveLutForSettings(settings)
+    let lutTexture = dummyLutTexture
+    if (resolvedLut) {
+      lutTexture = lutTextures.get(resolvedLut.entry.id)
+      if (!lutTexture) {
+        lutTexture = createLut3DTexture(gl, resolvedLut.entry)
+        lutTextures.set(resolvedLut.entry.id, lutTexture)
+      }
+    }
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_3D, lutTexture)
+    gl.uniform1i(uniforms.u_lut, 1)
+    gl.uniform1f(uniforms.u_lutSize, resolvedLut ? resolvedLut.entry.size : 0)
+    gl.uniform1f(uniforms.u_lutAmount, resolvedLut ? resolvedLut.amount : 0)
+
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, texture)
     // The shader unpremultiplies/premultiplies internally, matching the JS

@@ -8,8 +8,10 @@ import {
   hasAdjustmentEffect,
   hasTonalAdjustmentEffect,
   hasTransformingAdjustmentTransform,
+  needsAdvancedColorPass,
   normalizeAdjustmentSettings,
 } from '../utils/adjustments'
+import { loadLutLibrary } from './lutLibrary'
 import { getAudioClipFadeGain, getAudioClipFadeValues } from '../utils/audioClipFades'
 import { getAudioClipLinearGain, normalizeAudioClipGainDb } from '../utils/audioClipGain'
 import { clampTrackVolume, hasAudioSolo, isAudioTrackAudible, trackPanToStereoPosition, trackVolumeToLinearGain } from '../utils/audioTrackAudibility'
@@ -1090,6 +1092,9 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   const timelineState = useTimelineStore.getState()
   const assetsState = useAssetsStore.getState()
   const projectState = useProjectStore.getState()
+  // LUT grades read the in-memory library synchronously mid-frame; make sure
+  // it is primed before the first frame composites (no-op after first load).
+  await loadLutLibrary()
   
   const {
     fps = 24,
@@ -2097,7 +2102,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         }
 
         if (adjustmentCtx && (adjustmentIsActive || usesManagedPixelEffects || transformIsActive)) {
-          const usesTonalAdjustments = hasTonalAdjustmentEffect(adjustmentSettings)
+          const usesTonalAdjustments = needsAdvancedColorPass(adjustmentSettings)
           let adjustmentOutputCanvas = null
 
           if (usesTonalAdjustments) {
@@ -2203,7 +2208,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       const clipAdjustmentSettings = normalizeAdjustmentSettings(
         isFullBake ? {} : (getAnimatedAdjustmentSettings(clip, clipTime) || clip.adjustments || {})
       )
-      const usesTonalAdjustments = hasTonalAdjustmentEffect(clipAdjustmentSettings)
+      const usesTonalAdjustments = needsAdvancedColorPass(clipAdjustmentSettings)
       const clipAdjustmentFilter = buildCssFilterFromAdjustments(clipAdjustmentSettings)
       const clipAdjustmentFilterValue = clipAdjustmentFilter !== 'none' ? clipAdjustmentFilter : null
       const usesManagedPixelEffects = !isFullBake && hasManagedPixelOrVignetteEffect(clip, clipTime)

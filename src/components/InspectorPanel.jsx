@@ -16,6 +16,7 @@ import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 import renderCacheService from '../services/renderCache'
 import { commitAdjustmentRender } from '../services/commitRender'
+import { LUTS_CHANGED_EVENT, importCubeLutFile, listLoadedLuts, loadLutLibrary } from '../services/lutLibrary'
 import { saveRenderCache, deleteRenderCache, writeGeneratedOverlayToProject, isElectron } from '../services/fileSystem'
 import { getKeyframeAtTime, getKeyframeTimeTolerance, getAnimatedTransform, getAnimatedAdjustmentSettings, getAnimatedShapeProperties, EASING_OPTIONS } from '../utils/keyframes'
 import { TRACK_MATTE_OPTIONS, normalizeTrackMatte } from '../utils/trackMatte'
@@ -1100,6 +1101,43 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     adjustmentHistorySessionClipRef.current = keepSessionOpen ? selectedClip.id : null
     return true
   }, [selectedClip, hasAdjustmentChanges, saveToHistory, updateClipAdjustments])
+
+  // LUT library (app-level, IndexedDB) for the Look control: primed on
+  // mount, refreshed whenever an import or delete lands.
+  const [lutOptions, setLutOptions] = useState([])
+  const [lutImportError, setLutImportError] = useState('')
+  const lutFileInputRef = useRef(null)
+  useEffect(() => {
+    let cancelled = false
+    loadLutLibrary().then(() => {
+      if (!cancelled) setLutOptions(listLoadedLuts())
+    })
+    const handleChanged = () => setLutOptions(listLoadedLuts())
+    window.addEventListener(LUTS_CHANGED_EVENT, handleChanged)
+    return () => {
+      cancelled = true
+      window.removeEventListener(LUTS_CHANGED_EVENT, handleChanged)
+    }
+  }, [])
+
+  const applyLutUpdate = useCallback((lut, keepSessionOpen = false) => {
+    setLutImportError('')
+    applyAdjustmentUpdatesWithHistory({ lut }, keepSessionOpen)
+  }, [applyAdjustmentUpdatesWithHistory])
+
+  const handleLutFileSelected = useCallback(async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    try {
+      const imported = await importCubeLutFile(file)
+      // Importing from the clip's Look row is intent to use it — apply now.
+      applyLutUpdate({ lutId: imported.id, amount: 100 })
+    } catch (err) {
+      console.warn('[lut-import] failed:', err?.message || err)
+      setLutImportError(err?.message || 'Could not import that .cube file.')
+    }
+  }, [applyLutUpdate])
   
   // Update transform handler (doesn't save to history for realtime sliders)
   // Also adds/updates keyframe if property is keyframed
@@ -1366,6 +1404,83 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     )
   }
 
+  // Look (3D LUT): last stage of the grade — correct with the groups above,
+  // then apply the look. LUTs come from the app-level library (import a
+  // .cube once, use it in every project).
+  const renderLutControl = (values) => {
+    const currentLut = values?.lut || null
+    const currentLutId = currentLut?.lutId || ''
+    const currentAmount = Number.isFinite(Number(currentLut?.amount)) ? Number(currentLut.amount) : 100
+    const lutIsMissing = Boolean(currentLutId) && !lutOptions.some((option) => option.id === currentLutId)
+
+    return (
+      <div className="rounded-md border border-sf-dark-700 bg-sf-dark-800/50 p-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-[11px] font-medium text-sf-text-primary">Look (LUT)</div>
+            <div className="text-[10px] text-sf-text-muted">Applied after color and tonal controls</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => lutFileInputRef.current?.click()}
+            className="shrink-0 rounded border border-sf-dark-600 bg-sf-dark-900 px-2 py-1 text-[10px] text-sf-text-primary hover:bg-sf-dark-700"
+            title="Import a .cube 3D LUT into the app library"
+          >
+            Import .cube…
+          </button>
+          <input
+            ref={lutFileInputRef}
+            type="file"
+            accept=".cube"
+            className="hidden"
+            onChange={handleLutFileSelected}
+          />
+        </div>
+        <select
+          value={lutIsMissing ? '' : currentLutId}
+          onChange={(e) => {
+            const id = e.target.value
+            applyLutUpdate(id ? { lutId: id, amount: currentAmount } : null)
+          }}
+          className="w-full rounded border border-sf-dark-600 bg-sf-dark-900 px-2 py-1.5 text-[11px] text-sf-text-primary"
+        >
+          <option value="">None</option>
+          {lutOptions.map((option) => (
+            <option key={option.id} value={option.id}>{option.name}</option>
+          ))}
+        </select>
+        {lutIsMissing && (
+          <p className="text-[10px] text-sf-error">
+            This clip references a LUT that is not in this machine's library — it renders without it. Pick another or re-import the .cube.
+          </p>
+        )}
+        {lutImportError && (
+          <p className="text-[10px] text-sf-error">{lutImportError}</p>
+        )}
+        {currentLutId && !lutIsMissing && (
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <label className="text-[10px] text-sf-text-muted">Intensity</label>
+              <span className="text-[10px] text-sf-text-secondary">{Math.round(currentAmount)}%</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={currentAmount}
+              onChange={(e) => applyLutUpdate({ lutId: currentLutId, amount: Number(e.target.value) }, true)}
+              onMouseUp={(e) => applyLutUpdate({ lutId: currentLutId, amount: Number(e.target.value) })}
+              onDoubleClick={() => applyLutUpdate({ lutId: currentLutId, amount: 100 })}
+              title="Double-click to reset to 100%"
+              className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+            />
+          </div>
+        )}
+      </div>
+    )
+  }
+
   const renderSharedAdjustmentsContent = (values, description) => (
     <div className="p-3 space-y-3 border-b border-sf-dark-700">
       <p className="text-[10px] text-sf-text-muted">
@@ -1380,6 +1495,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
         values,
         groupKey,
       }))}
+      {renderLutControl(values)}
     </div>
   )
 

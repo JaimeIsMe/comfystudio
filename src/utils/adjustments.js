@@ -42,10 +42,22 @@ export const DEFAULT_ADJUSTMENT_SETTINGS = Object.freeze({
   offset: 0,     // -100..100 (%)
   hue: 0,        // -180..180 (deg)
   blur: 0,       // 0..50 (px)
+  lut: null,     // { lutId, amount 0..100 } — 3D LUT from the app LUT library
   shadows: DEFAULT_TONAL_ADJUSTMENT_GROUP,
   midtones: DEFAULT_TONAL_ADJUSTMENT_GROUP,
   highlights: DEFAULT_TONAL_ADJUSTMENT_GROUP,
 })
+
+// LUT reference: only an id + strength live on the clip; the table itself
+// stays in the app-level LUT library (services/lutLibrary.js).
+export function normalizeLutSettings(lut) {
+  const lutId = typeof lut?.lutId === 'string' ? lut.lutId.trim() : ''
+  if (!lutId) return null
+  return {
+    lutId,
+    amount: clampNumber(lut?.amount, 0, 100, 100),
+  }
+}
 
 const createDefaultTonalGroup = () => ({ ...DEFAULT_TONAL_ADJUSTMENT_GROUP })
 
@@ -78,6 +90,7 @@ export function normalizeAdjustmentSettings(settings = {}) {
     offset: clampNumber(settings?.offset, -100, 100, DEFAULT_ADJUSTMENT_SETTINGS.offset),
     hue: normalizeHue(settings?.hue, DEFAULT_ADJUSTMENT_SETTINGS.hue),
     blur: clampNumber(settings?.blur, 0, 50, DEFAULT_ADJUSTMENT_SETTINGS.blur),
+    lut: normalizeLutSettings(settings?.lut),
     shadows: normalizeAdjustmentGroup(settings?.shadows || {}),
     midtones: normalizeAdjustmentGroup(settings?.midtones || {}),
     highlights: normalizeAdjustmentGroup(settings?.highlights || {}),
@@ -193,11 +206,27 @@ export function hasTonalAdjustmentEffect(settings = {}) {
   return TONAL_ADJUSTMENT_GROUP_KEYS.some((groupKey) => hasAdjustmentGroupEffect(normalized[groupKey]))
 }
 
+export function hasLutEffect(settings = {}) {
+  const lut = normalizeLutSettings(settings?.lut)
+  return Boolean(lut && lut.amount > 0)
+}
+
 export function hasAdjustmentEffect(settings = {}) {
   const normalized = normalizeAdjustmentSettings(settings)
   return normalized.blur > 0
     || hasAdjustmentGroupEffect(normalized)
     || hasTonalAdjustmentEffect(normalized)
+    || hasLutEffect(normalized)
+}
+
+// Routes a clip through the full-frame color pass (ADJUSTMENT_COLOR_PASS_FS)
+// instead of the cheap per-sample inline grade: tonal groups need the
+// luminance-weighted lerp, and LUTs need the 3D texture tap that only the
+// full pass carries. The CPU pixel loop keeps using hasTonalAdjustmentEffect
+// directly — it has no LUT stage (no-WebGL2 machines skip LUTs end-to-end,
+// preview and export alike).
+export function needsAdvancedColorPass(settings = {}) {
+  return hasTonalAdjustmentEffect(settings) || hasLutEffect(settings)
 }
 
 // True when an adjustment clip's transform would visibly change the layers

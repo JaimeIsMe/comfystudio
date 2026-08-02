@@ -31,6 +31,9 @@ import {
   ADJUSTMENT_STAGES_GLSL,
   ADJUSTMENT_COLOR_PASS_FS,
   buildAdjustmentUniformValues,
+  createDummyLut3DTexture,
+  createLut3DTexture,
+  resolveLutForSettings,
 } from '../utils/adjustmentsGpu'
 import {
   VELOCITY_BLUR_VERTEX_SOURCE,
@@ -643,7 +646,7 @@ export const createGpuCompositor = ({ width, height, transparent = false } = {})
     layer: getUniforms(gl, programs.layer, [
       'u_resolution', 'u_texture', 'u_alpha', 'u_inputPremultiplied', 'u_applyColor', ...COLOR_UNIFORM_NAMES,
     ]),
-    colorPass: getUniforms(gl, programs.colorPass, ['u_texture', 'u_global', 'u_shadows', 'u_midtones', 'u_highlights', 'u_groupActive']),
+    colorPass: getUniforms(gl, programs.colorPass, ['u_texture', 'u_lut', 'u_lutSize', 'u_lutAmount', 'u_global', 'u_shadows', 'u_midtones', 'u_highlights', 'u_groupActive']),
     blit: getUniforms(gl, programs.blit, ['u_texture', 'u_opacity']),
     fill: getUniforms(gl, programs.fill, ['u_color']),
     blur: getUniforms(gl, programs.blur, ['u_texture', 'u_direction', 'u_sigma', 'u_taps']),
@@ -730,6 +733,8 @@ export const createGpuCompositor = ({ width, height, transparent = false } = {})
   }
 
   const sourceTextures = new Map() // key -> { texture, version }
+  const lutTextures = new Map() // lutId -> WebGLTexture (immutable per id)
+  let dummyLutTexture = null // lazy: only clips that grade with a LUT pay for it
 
   // Double-buffered readback so the frame in flight to the FFmpeg pipe is
   // never overwritten by the next frame's readPixels.
@@ -1139,10 +1144,30 @@ export const createGpuCompositor = ({ width, height, transparent = false } = {})
   }
 
   // Global + tonal color grade of `cur` into `other` (premultiplied in/out).
+  // The pass's sampler3D (LUT) always needs a valid unit-1 binding — two
+  // sampler types on one unit is a draw-time error on many drivers — so the
+  // dummy 1³ texture rides along whenever no LUT is active.
   const runColorPass = (settings, cur, other) => {
     bindTarget(other)
     gl.disable(gl.BLEND)
     gl.useProgram(programs.colorPass)
+
+    const resolvedLut = resolveLutForSettings(settings)
+    if (!dummyLutTexture) dummyLutTexture = createDummyLut3DTexture(gl)
+    let lutTexture = dummyLutTexture
+    if (resolvedLut) {
+      lutTexture = lutTextures.get(resolvedLut.entry.id)
+      if (!lutTexture) {
+        lutTexture = createLut3DTexture(gl, resolvedLut.entry)
+        lutTextures.set(resolvedLut.entry.id, lutTexture)
+      }
+    }
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_3D, lutTexture)
+    gl.uniform1i(uniforms.colorPass.u_lut, 1)
+    gl.uniform1f(uniforms.colorPass.u_lutSize, resolvedLut ? resolvedLut.entry.size : 0)
+    gl.uniform1f(uniforms.colorPass.u_lutAmount, resolvedLut ? resolvedLut.amount : 0)
+
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, cur.texture)
     gl.uniform1i(uniforms.colorPass.u_texture, 0)
@@ -1575,6 +1600,14 @@ export const createGpuCompositor = ({ width, height, transparent = false } = {})
         gl.deleteTexture(entry.texture)
       }
       sourceTextures.clear()
+      for (const texture of lutTextures.values()) {
+        gl.deleteTexture(texture)
+      }
+      lutTextures.clear()
+      if (dummyLutTexture) {
+        gl.deleteTexture(dummyLutTexture)
+        dummyLutTexture = null
+      }
       if (asyncReadbackSlots) {
         for (const slot of asyncReadbackSlots) {
           if (slot.fence) gl.deleteSync(slot.fence)
