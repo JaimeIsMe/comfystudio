@@ -13,6 +13,7 @@ import VideoLayerRenderer from './VideoLayerRenderer'
 import CanvasPreviewRenderer from './CanvasPreviewRenderer'
 import AudioLayerRenderer from './AudioLayerRenderer'
 import PreviewTransformGizmo from './PreviewTransformGizmo'
+import MaskShapeGizmo from './MaskShapeGizmo'
 import PreviewSourceControls from './PreviewSourceControls'
 import {
   computePreviewSignature,
@@ -378,6 +379,7 @@ function PreviewPanel() {
     inPoint,
     outPoint,
     rangeRenderState,
+    maskEditActive,
   } = useTimelineStore()
   
   // Use timeline playback hook
@@ -2944,7 +2946,29 @@ function PreviewPanel() {
             )}
           </div>
 
-          {showPreviewTransformControls && selectedPreviewClip && selectedPreviewTransform && (
+          {/* Mask gizmo takes over while the Inspector's Mask section is
+              open on a masked clip — two gizmos at once is handle soup. */}
+          {maskEditActive && selectedPreviewClip?.shapeMask && selectedPreviewTransform && (
+            <div
+              className="absolute inset-0 overflow-visible pointer-events-none"
+              style={previewStageStyle}
+            >
+              <MaskShapeGizmo
+                clip={selectedPreviewClip}
+                mask={selectedPreviewClip.shapeMask}
+                transform={selectedPreviewTransform}
+                buildVideoTransform={buildVideoTransform}
+                frameRect={selectedPreviewFrameRect}
+                disabled={isSpaceHeld || isPanning || isZooming}
+                onInteractionStart={() => useTimelineStore.getState().saveToHistory()}
+                onMaskChange={(updates) => {
+                  useTimelineStore.getState().updateClipShapeMask(selectedPreviewClip.id, updates, false)
+                }}
+              />
+            </div>
+          )}
+
+          {showPreviewTransformControls && !(maskEditActive && selectedPreviewClip?.shapeMask) && selectedPreviewClip && selectedPreviewTransform && (
             <div
               className="absolute inset-0 overflow-visible pointer-events-none"
               style={previewStageStyle}

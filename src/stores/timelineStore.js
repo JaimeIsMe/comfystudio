@@ -780,6 +780,15 @@ export const useTimelineStore = create(
   
   // Ripple edit mode - when enabled, moving/trimming clips shifts subsequent clips
   rippleEditMode: false,
+
+  // Mask edit mode (transient, not persisted): true while the Inspector's
+  // Mask section is open on a masked clip, so the preview shows the mask
+  // gizmo instead of the transform gizmo.
+  maskEditActive: false,
+  setMaskEditActive: (active) => {
+    if (get().maskEditActive === !!active) return
+    set({ maskEditActive: !!active })
+  },
   
   // In/Out points for three-point editing
   inPoint: null, // Timeline in-point (seconds)

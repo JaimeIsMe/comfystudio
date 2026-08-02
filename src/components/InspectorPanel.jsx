@@ -1107,6 +1107,21 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
   // Shape mask (Step 1 of vector masking): rect/ellipse/rounded on the clip,
   // feather + invert baked into the matte raster. Slider drags share one
   // history entry per gesture, same session pattern as transforms.
+  //
+  // While this section is open on a masked clip, the preview swaps its
+  // transform gizmo for the mask gizmo (drag to move/resize on the monitor).
+  const maskSectionOpen = expandedSections.includes('mask')
+  const maskEditEligible = Boolean(
+    maskSectionOpen
+    && selectedClip
+    && (selectedClip.type === 'video' || selectedClip.type === 'image')
+    && normalizeShapeMask(selectedClip.shapeMask)
+  )
+  useEffect(() => {
+    useTimelineStore.getState().setMaskEditActive?.(maskEditEligible)
+    return () => useTimelineStore.getState().setMaskEditActive?.(false)
+  }, [maskEditEligible])
+
   const shapeMaskHistorySessionClipRef = useRef(null)
   const applyShapeMaskWithHistory = useCallback((updates, keepSessionOpen = false) => {
     if (!selectedClip) return false
