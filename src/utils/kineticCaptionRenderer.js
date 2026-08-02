@@ -1154,7 +1154,7 @@ export function renderKineticPreviewDataUrl(styleOrId, width = 240, height = 140
 // Public: record transparent WebM
 // ---------------------------------------------------------------------------
 
-export async function generateKineticCaptionVideoBlob({ style, cues, width, height, duration, fps }) {
+export async function generateKineticCaptionVideoBlob({ style, cues, width, height, duration, fps, onProgress }) {
   if (typeof MediaRecorder === 'undefined') {
     throw new Error('Kinetic caption export requires MediaRecorder support.')
   }
@@ -1216,13 +1216,25 @@ export async function generateKineticCaptionVideoBlob({ style, cues, width, heig
       resolve(blob)
     }
 
+    let lastReportedPercent = -1
+    const reportProgress = () => {
+      if (typeof onProgress !== 'function') return
+      const percent = Math.min(99, Math.floor((frame / totalFrames) * 100))
+      if (percent > lastReportedPercent) {
+        lastReportedPercent = percent
+        onProgress(percent)
+      }
+    }
+
     drawFrame()
     recorder.start()
+    reportProgress()
     if (totalFrames <= 1) { recorder.stop(); return }
 
     timer = setInterval(() => {
       frame += 1
       drawFrame()
+      reportProgress()
       if (frame >= totalFrames - 1) { clearInterval(timer); timer = null; recorder.stop() }
     }, frameIntervalMs)
   })

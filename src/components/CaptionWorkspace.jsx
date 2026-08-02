@@ -418,6 +418,9 @@ function CaptionWorkspace({
   // 0–100 while a transcription reports real progress (mix ≈ 0–40, whisper
   // decode ≈ 40–100); null = indeterminate, spinner only.
   const [transcribeProgress, setTranscribeProgress] = useState(null)
+  // 0–100 while the animated overlay records (real-time render, one percent
+  // per elapsed hundredth of the timeline); null = indeterminate.
+  const [generateProgress, setGenerateProgress] = useState(null)
   const [error, setError] = useState('')
   const [errorExpanded, setErrorExpanded] = useState(false)
   const [errorCopied, setErrorCopied] = useState(false)
@@ -1301,7 +1304,12 @@ function CaptionWorkspace({
         height: renderSettings.height,
         duration: cueDuration,
         fps: renderSettings.fps,
+        onProgress: (percent) => {
+          setGenerateProgress(percent)
+          setStatusMessage(`Rendering animated caption overlay… ${percent}%`)
+        },
       })
+      setGenerateProgress(null)
 
       const folderId = ensureCaptionsFolder(folders, addFolder)
       const assetName = buildCaptionAssetName(asset, selectedPreset)
@@ -1381,6 +1389,7 @@ function CaptionWorkspace({
       setError(generationError?.message || 'Could not generate animated captions.')
     } finally {
       setIsGenerating(false)
+      setGenerateProgress(null)
     }
   }
 
@@ -2346,14 +2355,26 @@ function CaptionWorkspace({
                 type="button"
                 onClick={handleGenerate}
                 disabled={!canGenerate}
-                className="inline-flex items-center gap-2 rounded-xl bg-sf-accent px-4 py-2 text-sm font-medium text-white hover:bg-sf-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="relative overflow-hidden inline-flex items-center gap-2 rounded-xl bg-sf-accent px-4 py-2 text-sm font-medium text-white hover:bg-sf-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isGenerating ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Sparkles className="w-4 h-4" />
+                {isGenerating && Number.isFinite(generateProgress) && (
+                  <span
+                    className="absolute inset-y-0 left-0 bg-white/25 transition-[width] duration-300 ease-out"
+                    style={{ width: `${generateProgress}%` }}
+                  />
                 )}
-                Generate captions
+                <span className="relative inline-flex items-center gap-2">
+                  {isGenerating ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-4 h-4" />
+                  )}
+                  {isGenerating
+                    ? (Number.isFinite(generateProgress)
+                      ? `Rendering… ${Math.round(generateProgress)}%`
+                      : 'Generating…')
+                    : 'Generate captions'}
+                </span>
               </button>
             </div>
           </div>

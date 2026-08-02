@@ -222,6 +222,7 @@ export async function generateCaptionVideoBlob({
   height,
   duration,
   fps,
+  onProgress,
 }) {
   if (typeof MediaRecorder === 'undefined') {
     throw new Error('Transparent caption export is not supported in this runtime.')
@@ -237,6 +238,7 @@ export async function generateCaptionVideoBlob({
       height,
       duration,
       fps,
+      onProgress,
     })
   }
   const canvas = document.createElement('canvas')
@@ -317,8 +319,21 @@ export async function generateCaptionVideoBlob({
       resolve(blob)
     }
 
+    // The recorder runs at real time (captureStream), so a long timeline
+    // renders for its own duration — frame count is honest progress.
+    let lastReportedPercent = -1
+    const reportProgress = () => {
+      if (typeof onProgress !== 'function') return
+      const percent = Math.min(99, Math.floor((frame / totalFrames) * 100))
+      if (percent > lastReportedPercent) {
+        lastReportedPercent = percent
+        onProgress(percent)
+      }
+    }
+
     drawFrame()
     recorder.start()
+    reportProgress()
 
     if (totalFrames <= 1) {
       recorder.stop()
@@ -328,6 +343,7 @@ export async function generateCaptionVideoBlob({
     timer = setInterval(() => {
       frame += 1
       drawFrame()
+      reportProgress()
       if (frame >= totalFrames - 1) {
         clearInterval(timer)
         timer = null
