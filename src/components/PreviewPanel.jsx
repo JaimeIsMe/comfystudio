@@ -13,6 +13,7 @@ import VideoLayerRenderer from './VideoLayerRenderer'
 import CanvasPreviewRenderer from './CanvasPreviewRenderer'
 import AudioLayerRenderer from './AudioLayerRenderer'
 import PreviewTransformGizmo from './PreviewTransformGizmo'
+import PreviewSourceControls from './PreviewSourceControls'
 import {
   computePreviewSignature,
   renderPreviewChunk,
@@ -1403,6 +1404,14 @@ function PreviewPanel() {
   const currentTime = previewMode === 'timeline' ? playheadPosition : assetCurrentTime
   const duration = previewMode === 'timeline' ? endTime : assetDuration
   const togglePlay = previewMode === 'timeline' ? timelineTogglePlay : assetTogglePlay
+
+  // Asset mode on a video/audio asset gets the source controls (mark In/Out,
+  // insert range — issue #89) under the monitor instead of the plain scrubber.
+  // Same predicate as the asset <video> render/registration branches.
+  const isSourceAssetMode = previewMode === 'asset'
+    && !!currentPreview
+    && currentPreview.type !== 'mask'
+    && currentPreview.type !== 'image'
   const seekTo = previewMode === 'timeline'
     ? (time) => setPlayheadPosition(Math.max(0, Math.min(endTime, time)), { snap: true })
     : assetSeekTo
@@ -2969,8 +2978,15 @@ function PreviewPanel() {
         </div>
       </div>
       
+      {/* Source controls (asset mode, video/audio): range scrubber + In/Out
+          marks + insert buttons. Replaces the plain scrubber so there is one
+          bar; the timeline below stays visible while inserting. */}
+      {isSourceAssetMode && !isFullscreen && (
+        <PreviewSourceControls asset={currentPreview} />
+      )}
+
       {/* Preview Scrubber Bar - Like DaVinci Resolve's viewer scrubber */}
-      {hasContent && !isFullscreen && (
+      {hasContent && !isFullscreen && !isSourceAssetMode && (
         <div className="h-7 bg-sf-dark-900 border-t border-sf-dark-700 flex items-center px-3 gap-2 flex-shrink-0">
           {/* Timecode - Current */}
           <span className="text-[10px] text-sf-text-secondary font-mono w-12 text-right">
