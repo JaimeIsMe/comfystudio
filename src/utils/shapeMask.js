@@ -89,6 +89,40 @@ export function normalizeShapeMask(mask) {
   }
 }
 
+/**
+ * De Casteljau split of the segment after `index` at t=0.5 — preserves the
+ * drawn curve exactly. Returns a new array; used by the gizmo AND applied to
+ * every shape keyframe so point counts stay matched for interpolation.
+ */
+export function insertSplinePointAfter(points, index) {
+  if (!Array.isArray(points) || !points[index]) return points
+  const from = points[index]
+  const to = points[(index + 1) % points.length]
+  const mid = (m, n) => ({ x: (m.x + n.x) / 2, y: (m.y + n.y) / 2 })
+  const p0 = { x: from.x, y: from.y }
+  const c1 = { x: from.x + from.hOut.x, y: from.y + from.hOut.y }
+  const c2 = { x: to.x + to.hIn.x, y: to.y + to.hIn.y }
+  const p3 = { x: to.x, y: to.y }
+  const m1 = mid(p0, c1)
+  const m2 = mid(c1, c2)
+  const m3 = mid(c2, p3)
+  const q1 = mid(m1, m2)
+  const q2 = mid(m2, m3)
+  const b = mid(q1, q2)
+  const next = points.map((p) => ({ x: p.x, y: p.y, hIn: { ...p.hIn }, hOut: { ...p.hOut } }))
+  next[index].hOut = { x: m1.x - p0.x, y: m1.y - p0.y }
+  next[(index + 1) % points.length].hIn = { x: m3.x - p3.x, y: m3.y - p3.y }
+  next.splice(index + 1, 0, { x: b.x, y: b.y, hIn: { x: q1.x - b.x, y: q1.y - b.y }, hOut: { x: q2.x - b.x, y: q2.y - b.y } })
+  return next
+}
+
+export function removeSplinePointAt(points, index) {
+  if (!Array.isArray(points) || points.length <= 3) return points
+  return points
+    .filter((_, i) => i !== index)
+    .map((p) => ({ x: p.x, y: p.y, hIn: { ...p.hIn }, hOut: { ...p.hOut } }))
+}
+
 export function getShapeMaskSignature(mask) {
   const normalized = normalizeShapeMask(mask)
   return normalized ? JSON.stringify(normalized) : ''

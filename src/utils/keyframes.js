@@ -410,6 +410,46 @@ export function getAnimatedShapeProperties(clip, clipTime) {
 
 export const SHAPE_MASK_KEYFRAME_KEYS = ['centerX', 'centerY', 'width', 'height', 'rotation', 'cornerRadius', 'feather']
 
+const lerpSplinePoints = (fromPoints, toPoints, t) => fromPoints.map((from, i) => {
+  const to = toPoints[i]
+  return {
+    x: from.x + (to.x - from.x) * t,
+    y: from.y + (to.y - from.y) * t,
+    hIn: { x: from.hIn.x + (to.hIn.x - from.hIn.x) * t, y: from.hIn.y + (to.hIn.y - from.hIn.y) * t },
+    hOut: { x: from.hOut.x + (to.hOut.x - from.hOut.x) * t, y: from.hOut.y + (to.hOut.y - from.hOut.y) * t },
+  }
+})
+
+/**
+ * Shape keyframes for spline masks: each keyframe's value is a WHOLE points
+ * array; interpolation is pairwise per anchor and handle (the Flame/AE
+ * model). Keyframes with mismatched point counts hold the earlier shape
+ * until the next keyframe.
+ */
+export function getSplinePointsAtTime(keyframes, time, defaultPoints) {
+  if (!keyframes || keyframes.length === 0) return defaultPoints
+  const sorted = [...keyframes]
+    .filter((kf) => Number.isFinite(Number(kf?.time)) && Array.isArray(kf?.value) && kf.value.length >= 3)
+    .sort((a, b) => a.time - b.time)
+  if (sorted.length === 0) return defaultPoints
+  if (sorted.length === 1 || time <= sorted[0].time) return sorted[0].value
+  if (time >= sorted[sorted.length - 1].time) return sorted[sorted.length - 1].value
+  let prev = sorted[0]
+  let next = sorted[1]
+  for (let i = 0; i < sorted.length - 1; i++) {
+    if (time >= sorted[i].time && time <= sorted[i + 1].time) {
+      prev = sorted[i]
+      next = sorted[i + 1]
+      break
+    }
+  }
+  if (prev.easing === 'hold' || prev.value.length !== next.value.length) return prev.value
+  const duration = next.time - prev.time
+  if (duration === 0) return prev.value
+  const easedT = getEasingFunction(prev.easing)((time - prev.time) / duration)
+  return lerpSplinePoints(prev.value, next.value, easedT)
+}
+
 /**
  * clip.shapeMask with any keyframed params evaluated at clipTime. Returns the
  * base mask object itself (same identity) when no mask keyframes exist, so
@@ -427,6 +467,11 @@ export function getAnimatedShapeMask(clip, clipTime) {
       if (!animated) animated = { ...baseMask }
       animated[key] = getValueAtTime(propKeyframes, clipTime, Number(baseMask[key]) || 0)
     }
+  }
+  const pointKeyframes = keyframes['shapeMask.points']
+  if (Array.isArray(baseMask.points) && pointKeyframes && pointKeyframes.length > 0) {
+    if (!animated) animated = { ...baseMask }
+    animated.points = getSplinePointsAtTime(pointKeyframes, clipTime, baseMask.points)
   }
   return animated || baseMask
 }

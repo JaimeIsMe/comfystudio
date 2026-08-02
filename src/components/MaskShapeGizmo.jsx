@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { DEFAULT_SHAPE_MASK, normalizeShapeMask } from '../utils/shapeMask'
+import { DEFAULT_SHAPE_MASK, normalizeShapeMask, insertSplinePointAfter, removeSplinePointAt } from '../utils/shapeMask'
 
 // On-monitor editing for clip.shapeMask: dashed outline + gold handles over
 // the program monitor. Center dot moves the mask, edge handles resize the
@@ -186,41 +186,22 @@ export default function MaskShapeGizmo({
     }
   }, [isDragging, onMaskChange])
 
-  const clonePoints = () => (normalized?.points
-    ? normalized.points.map((p) => ({ x: p.x, y: p.y, hIn: { ...p.hIn }, hOut: { ...p.hOut } }))
-    : null)
-
   const insertPointAfter = (index) => {
     const pts = normalized?.points
     if (disabled || !pts) return
-    // De Casteljau split at t=0.5 preserves the drawn curve exactly.
-    const from = pts[index]
-    const to = pts[(index + 1) % pts.length]
-    const mid = (m, n) => ({ x: (m.x + n.x) / 2, y: (m.y + n.y) / 2 })
-    const p0 = { x: from.x, y: from.y }
-    const c1 = { x: from.x + from.hOut.x, y: from.y + from.hOut.y }
-    const c2 = { x: to.x + to.hIn.x, y: to.y + to.hIn.y }
-    const p3 = { x: to.x, y: to.y }
-    const m1 = mid(p0, c1)
-    const m2 = mid(c1, c2)
-    const m3 = mid(c2, p3)
-    const q1 = mid(m1, m2)
-    const q2 = mid(m2, m3)
-    const b = mid(q1, q2)
-    const nextPoints = clonePoints()
-    nextPoints[index].hOut = { x: m1.x - p0.x, y: m1.y - p0.y }
-    nextPoints[(index + 1) % pts.length].hIn = { x: m3.x - p3.x, y: m3.y - p3.y }
-    nextPoints.splice(index + 1, 0, { x: b.x, y: b.y, hIn: { x: q1.x - b.x, y: q1.y - b.y }, hOut: { x: q2.x - b.x, y: q2.y - b.y } })
     if (typeof onInteractionStart === 'function') onInteractionStart()
-    if (typeof onMaskChange === 'function') onMaskChange({ points: nextPoints })
+    if (typeof onMaskChange === 'function') {
+      onMaskChange({ points: insertSplinePointAfter(pts, index) }, { structural: 'insert', index })
+    }
   }
 
   const removePoint = (index) => {
     const pts = normalized?.points
     if (disabled || !pts || pts.length <= 3) return
-    const nextPoints = clonePoints().filter((_, i) => i !== index)
     if (typeof onInteractionStart === 'function') onInteractionStart()
-    if (typeof onMaskChange === 'function') onMaskChange({ points: nextPoints })
+    if (typeof onMaskChange === 'function') {
+      onMaskChange({ points: removeSplinePointAt(pts, index) }, { structural: 'remove', index })
+    }
   }
 
   if (!clip || !normalized) return null

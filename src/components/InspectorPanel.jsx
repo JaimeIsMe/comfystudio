@@ -1560,6 +1560,17 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
             )}
             {activeMask && (
               <>
+                {activeMask.shape === 'spline' && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-sf-text-muted">Shape (animate the drawn points)</span>
+                    <KeyframeButton
+                      clipId={selectedClip?.id}
+                      property="shapeMask.points"
+                      clip={selectedClip}
+                      playheadPosition={playheadPosition}
+                    />
+                  </div>
+                )}
                 {sliders.map((slider) => (
                   <div key={slider.key}>
                     <div className="flex justify-between items-center mb-1">

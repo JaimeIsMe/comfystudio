@@ -3373,10 +3373,15 @@ export const useTimelineStore = create(
       const hasShapeValue = shapeProperties && Object.prototype.hasOwnProperty.call(shapeProperties, property)
       const maskPropertyKey = property.startsWith('shapeMask.') ? property.slice('shapeMask.'.length) : null
       const maskForKeyframe = maskPropertyKey ? (normalizeShapeMask(clip.shapeMask) || DEFAULT_SHAPE_MASK) : null
+      // Shape keyframes snapshot the whole points array; without a spline
+      // there is nothing to key.
+      if (maskPropertyKey === 'points' && !Array.isArray(maskForKeyframe?.points)) return
       const currentValue = property === 'speed'
         ? (Number(clip.speed) > 0 ? Number(clip.speed) : 1)
         : maskForKeyframe
-          ? (Number(maskForKeyframe[maskPropertyKey]) || 0)
+          ? (maskPropertyKey === 'points'
+            ? maskForKeyframe.points.map((p) => ({ x: p.x, y: p.y, hIn: { ...p.hIn }, hOut: { ...p.hOut } }))
+            : (Number(maskForKeyframe[maskPropertyKey]) || 0))
           : hasAdjustmentValue
             ? adjustmentValue
             : hasShapeValue

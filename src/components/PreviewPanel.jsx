@@ -9,6 +9,7 @@ import useViewportClampedPosition from '../hooks/useViewportClampedPosition'
 import usePreviewPopout from '../hooks/usePreviewPopout'
 import { captureTimelineFrameAt, getTopmostVideoOrImageClipAtTime } from '../utils/captureTimelineFrame'
 import { getAnimatedTransform, getAnimatedShapeMask } from '../utils/keyframes'
+import { insertSplinePointAfter, removeSplinePointAt } from '../utils/shapeMask'
 import VideoLayerRenderer from './VideoLayerRenderer'
 import CanvasPreviewRenderer from './CanvasPreviewRenderer'
 import AudioLayerRenderer from './AudioLayerRenderer'
@@ -2961,13 +2962,33 @@ function PreviewPanel() {
                 frameRect={selectedPreviewFrameRect}
                 disabled={isSpaceHeld || isPanning || isZooming}
                 onInteractionStart={() => useTimelineStore.getState().saveToHistory()}
-                onMaskChange={(updates) => {
+                onMaskChange={(updates, meta) => {
                   const store = useTimelineStore.getState()
                   store.updateClipShapeMask(selectedPreviewClip.id, updates, false)
                   const maskClipTime = playheadPosition - (selectedPreviewClip.startTime || 0)
                   for (const [key, value] of Object.entries(updates || {})) {
-                    if (typeof value !== 'number') continue
                     const propertyId = `shapeMask.${key}`
+                    if (key === 'points') {
+                      if (!hasKeyframes(selectedPreviewClip.id, propertyId)) continue
+                      if (meta?.structural) {
+                        // Topology edits replay onto EVERY shape keyframe so
+                        // point counts stay matched and interpolation keeps
+                        // working — the same split/remove runs per keyframe's
+                        // own geometry.
+                        const existing = selectedPreviewClip.keyframes?.[propertyId] || []
+                        for (const keyframe of existing) {
+                          if (!Array.isArray(keyframe.value)) continue
+                          const nextValue = meta.structural === 'insert'
+                            ? insertSplinePointAfter(keyframe.value, meta.index)
+                            : removeSplinePointAt(keyframe.value, meta.index)
+                          store.setKeyframe(selectedPreviewClip.id, propertyId, keyframe.time, nextValue, keyframe.easing || 'easeInOut', { saveHistory: false })
+                        }
+                      } else if (Array.isArray(value)) {
+                        store.setKeyframe(selectedPreviewClip.id, propertyId, maskClipTime, value, 'easeInOut', { saveHistory: false })
+                      }
+                      continue
+                    }
+                    if (typeof value !== 'number') continue
                     if (hasKeyframes(selectedPreviewClip.id, propertyId)) {
                       store.setKeyframe(selectedPreviewClip.id, propertyId, maskClipTime, value, 'easeInOut', { saveHistory: false })
                     }
