@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Inspector reorganization — tabs + state dots</title>
+<style>
+  :root {
+    --dark-950:#0a0a0c; --dark-900:#121216; --dark-800:#1a1a20; --dark-700:#26262e;
+    --dark-600:#33333d; --text:#e8e8ec; --muted:#8b8b96; --accent:#e8b64c;
+    --accent-dim:rgba(232,182,76,.16);
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#070708; color:var(--text); font:12px/1.45 'Segoe UI',system-ui,sans-serif; padding:26px; }
+  h1 { font-size:15px; margin-bottom:4px; }
+  p.note { color:var(--muted); font-size:11px; max-width:860px; margin-bottom:20px; }
+  .row { display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap; }
+  .panel { width:262px; background:var(--dark-900); border:1px solid var(--dark-700); border-radius:8px; overflow:hidden; }
+  .panel-title { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; padding:7px 12px; border-bottom:1px solid var(--dark-700); background:var(--dark-800); }
+  .scroll-hint { text-align:center; color:var(--muted); font-size:14px; padding:4px 0 8px; }
+
+  /* ------- current (left) ------- */
+  .sec { display:flex; align-items:center; gap:7px; padding:8px 12px; border-bottom:1px solid var(--dark-700); font-size:11px; }
+  .sec .chev { color:var(--muted); font-size:9px; }
+  .sec .count { margin-left:auto; color:var(--muted); font-size:9px; }
+  .sec.open { background:var(--dark-800); }
+  .sub { padding:5px 12px 5px 30px; color:var(--muted); font-size:10px; border-bottom:1px solid var(--dark-700); }
+
+  /* ------- proposed (right) ------- */
+  .identity { display:flex; gap:9px; padding:10px 12px; border-bottom:1px solid var(--dark-700); align-items:center; }
+  .identity .thumb { width:44px; height:26px; border-radius:4px; background:linear-gradient(120deg,#5b3423,#20141c); border:1px solid var(--dark-600); }
+  .identity .name { font-size:11px; font-weight:600; }
+  .identity .meta { font-size:9px; color:var(--muted); }
+  .tabs { display:flex; border-bottom:1px solid var(--dark-700); background:var(--dark-800); }
+  .tab { flex:1; text-align:center; padding:7px 0 6px; font-size:9.5px; color:var(--muted); position:relative; cursor:default; border-right:1px solid var(--dark-700); }
+  .tab:last-child { border-right:none; }
+  .tab.active { color:var(--accent); background:var(--accent-dim); box-shadow:inset 0 -2px 0 var(--accent); }
+  .tab .dot { position:absolute; top:4px; right:5px; width:5px; height:5px; border-radius:50%; background:var(--accent); }
+  .group { border-bottom:1px solid var(--dark-700); }
+  .group-head { display:flex; align-items:center; gap:7px; padding:8px 12px; font-size:11px; }
+  .group-head .chev { color:var(--muted); font-size:9px; }
+  .group-head .gdot { width:5px; height:5px; border-radius:50%; background:var(--accent); }
+  .group-head .bypass { margin-left:auto; width:22px; height:12px; border-radius:6px; background:var(--accent); position:relative; }
+  .group-head .bypass.off { background:var(--dark-600); }
+  .group-head .bypass i { position:absolute; top:2px; right:2px; width:8px; height:8px; border-radius:50%; background:#fff; }
+  .group-head .bypass.off i { right:auto; left:2px; }
+  .group-head .reset { margin-left:6px; color:var(--muted); font-size:9px; }
+  .ctl { padding:0 12px 9px 12px; }
+  .ctl-row { display:flex; align-items:center; gap:6px; margin-top:7px; }
+  .ctl-row .k { width:9px; height:9px; transform:rotate(45deg); border:1px solid var(--muted); border-radius:1px; flex-shrink:0; }
+  .ctl-row .k.on { background:var(--accent); border-color:var(--accent); }
+  .ctl-row label { width:64px; color:var(--muted); font-size:9.5px; }
+  .ctl-row .slider { flex:1; height:3px; border-radius:2px; background:var(--dark-600); position:relative; }
+  .ctl-row .slider i { position:absolute; top:-3px; width:9px; height:9px; border-radius:50%; background:var(--accent); }
+  .ctl-row .val { width:34px; text-align:right; font-family:Consolas,monospace; font-size:9.5px; color:var(--text); }
+  .footer-actions { display:flex; gap:6px; padding:9px 12px; border-top:1px solid var(--dark-700); background:var(--dark-800); }
+  .footer-actions .act { flex:1; text-align:center; border:1px solid var(--dark-600); background:var(--dark-900); border-radius:5px; padding:5px 0; font-size:9.5px; color:var(--muted); }
+  .caption { margin-top:10px; color:var(--muted); font-size:10.5px; max-width:262px; }
+  .notes { margin-top:24px; max-width:860px; color:var(--muted); font-size:11px; }
+  .notes b { color:var(--text); }
+  .notes li { margin:6px 0 6px 16px; }
+</style>
+</head>
+<body>
+  <h1>Inspector reorganization — tabs, state dots, one anatomy</h1>
+  <p class="note">Left: today's single scroll for a video clip (9 sections, ~90 controls, no signal about which sections hold changes). Right: the proposal — sticky identity header, six task tabs with modified-state dots, groups with bypass toggles inside each tab, actions pinned to a footer. Resolve's tab-plus-dots pattern, CapCut's task naming, Nuke's only-what-this-node-has scoping.</p>
+
+  <div class="row">
+    <div class="panel">
+      <div class="panel-title">Today — video clip, one scroll</div>
+      <div class="sec open"><span class="chev">▾</span> Clip Info <span class="count">8 rows, read-only</span></div>
+      <div class="sec open"><span class="chev">▾</span> Transform <span class="count">~22 controls</span></div>
+      <div class="sub">position · scale · rotate · 3D rotation · perspective · flip · <b>opacity · blend mode</b> · motion blur · corner pin…</div>
+      <div class="sec"><span class="chev">▸</span> Compositing <span class="count">track matte</span></div>
+      <div class="sec"><span class="chev">▸</span> Crop <span class="count">4</span></div>
+      <div class="sec"><span class="chev">▸</span> Mask <span class="count">8</span></div>
+      <div class="sec"><span class="chev">▸</span> Effects <span class="count">blur + GLSL</span></div>
+      <div class="sec"><span class="chev">▸</span> Color <span class="count">4 groups × 7 + LUT ≈ 30</span></div>
+      <div class="sec"><span class="chev">▸</span> Timing <span class="count">speed · reverse · duration</span></div>
+      <div class="sec"><span class="chev">▸</span> Commit Render <span class="count">action, not a property</span></div>
+      <div class="scroll-hint">⋮</div>
+      <div class="caption" style="padding:0 12px 12px;">Problems: compositing split between two homes (opacity/blend hide inside Transform), metadata and actions mixed into the property scroll, and no way to see where the edits are without opening everything.</div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <div class="panel-title">Proposed — same clip</div>
+        <div class="identity">
+          <div class="thumb"></div>
+          <div>
+            <div class="name">character_close_up</div>
+            <div class="meta">Video · 1920×1080 · 24fps · 4.2s</div>
+          </div>
+        </div>
+        <div class="tabs">
+          <div class="tab">Transform<span class="dot"></span></div>
+          <div class="tab">Mask<span class="dot"></span></div>
+          <div class="tab active">Color<span class="dot"></span></div>
+          <div class="tab">Effects</div>
+          <div class="tab">Motion</div>
+          <div class="tab">Mix</div>
+        </div>
+        <div class="group">
+          <div class="group-head"><span class="chev">▾</span> Global <span class="gdot"></span><span class="bypass"><i></i></span><span class="reset">⟲</span></div>
+          <div class="ctl">
+            <div class="ctl-row"><span class="k on"></span><label>Exposure</label><div class="slider"><i style="left:62%"></i></div><span class="val">+18</span></div>
+            <div class="ctl-row"><span class="k"></span><label>Contrast</label><div class="slider"><i style="left:55%"></i></div><span class="val">+8</span></div>
+            <div class="ctl-row"><span class="k"></span><label>Saturation</label><div class="slider"><i style="left:50%"></i></div><span class="val">0</span></div>
+          </div>
+        </div>
+        <div class="group">
+          <div class="group-head"><span class="chev">▸</span> Shadows / Mids / Highs</div>
+        </div>
+        <div class="group">
+          <div class="group-head"><span class="chev">▾</span> Look (LUT) <span class="gdot"></span><span class="bypass"><i></i></span></div>
+          <div class="ctl">
+            <div class="ctl-row"><label style="width:auto">Kodak_2383 · Intensity</label><div class="slider"><i style="left:80%"></i></div><span class="val">80%</span></div>
+          </div>
+        </div>
+        <div class="footer-actions">
+          <div class="act">Commit Render</div>
+          <div class="act">Reveal ▾</div>
+          <div class="act">⋯</div>
+        </div>
+      </div>
+      <div class="caption">Gold dots = "something in here is non-default" — on tabs and on groups, so a stranger's project reads at a glance. Bypass pills A/B a whole group without losing values (Resolve's enable toggle). Clip metadata lives in the always-visible header; actions live in the footer, out of the property scroll.</div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <div class="panel-title">Tab contents by clip type</div>
+        <div class="sub" style="padding:9px 12px;"><b style="color:var(--text)">Video / Image</b><br>Transform (position·scale·rotate·3D·corner pin·crop·motion blur) · Mask · Color · Effects · Motion (speed·reverse·duration) · Mix (opacity·blend·track matte)</div>
+        <div class="sub" style="padding:9px 12px;"><b style="color:var(--text)">Text</b><br>Text (content·style·title animation) · Transform · Color · Effects · Motion · Mix</div>
+        <div class="sub" style="padding:9px 12px;"><b style="color:var(--text)">Audio</b><br>Audio (gain·fades·pan) · Motion</div>
+        <div class="sub" style="padding:9px 12px;"><b style="color:var(--text)">Adjustment</b><br>Color · Effects · Mask · Mix — nothing else, Nuke-style: only what the clip can do</div>
+        <div class="sub" style="padding:9px 12px;"><b style="color:var(--text)">Shape</b><br>Shape · Transform · Color · Motion · Mix</div>
+      </div>
+      <div class="caption">Every row keeps one anatomy: keyframe diamond · label · slider · value. Same order everywhere, so muscle memory transfers between tabs.</div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <b>What moves where (video clip):</b>
+    <li><b>Opacity + blend mode leave Transform</b> and join track matte in <b>Mix</b> — compositing gets one home instead of two.</li>
+    <li><b>Crop joins Transform</b> (it is a spatial property), <b>Mask gets its own tab</b> (CapCut precedent; it is the thing people hunt for).</li>
+    <li><b>Clip Info stops being a section</b> — name, type, resolution, fps, duration in the sticky header; the long metadata table moves behind the ⋯ menu.</li>
+    <li><b>Commit Render and Reveal become footer actions</b> — they are verbs, not properties.</li>
+    <li>Expansion state and defaults persist per tab+group exactly as today (same localStorage key shape).</li>
+  </div>
+</body>
+</html>
