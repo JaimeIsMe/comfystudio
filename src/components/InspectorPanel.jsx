@@ -3562,23 +3562,6 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
         })}
         {expandedSections.includes('crop') && (
           <div className="p-3 space-y-3 border-b border-sf-dark-700">
-            {/* Visual Crop Preview */}
-            <div className="relative w-full aspect-video bg-sf-dark-800 rounded overflow-hidden">
-              <div 
-                className="absolute bg-sf-dark-600 border border-sf-dark-500"
-                style={{
-                  left: `${transform.cropLeft}%`,
-                  right: `${transform.cropRight}%`,
-                  top: `${transform.cropTop}%`,
-                  bottom: `${transform.cropBottom}%`,
-                }}
-              >
-                <div className="w-full h-full flex items-center justify-center text-[9px] text-sf-text-muted">
-                  Preview
-                </div>
-              </div>
-            </div>
-
             {/* Crop Sliders */}
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -4456,22 +4439,6 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
         })}
         {expandedSections.includes('crop') && (
           <div className="p-3 space-y-3 border-b border-sf-dark-700">
-            <div className="relative w-full aspect-video bg-sf-dark-800 rounded overflow-hidden">
-              <div
-                className="absolute bg-sf-dark-600 border border-sf-dark-500"
-                style={{
-                  left: `${animatedTransform?.cropLeft ?? transform.cropLeft}%`,
-                  right: `${animatedTransform?.cropRight ?? transform.cropRight}%`,
-                  top: `${animatedTransform?.cropTop ?? transform.cropTop}%`,
-                  bottom: `${animatedTransform?.cropBottom ?? transform.cropBottom}%`,
-                }}
-              >
-                <div className="w-full h-full flex items-center justify-center text-[9px] text-sf-text-muted">
-                  Preview
-                </div>
-              </div>
-            </div>
-
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <div className="flex justify-between items-center mb-1">
