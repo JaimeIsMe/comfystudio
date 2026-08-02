@@ -3200,6 +3200,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     if (!selectedClip || !transform) return null
     const isShapeInspector = selectedClip.type === 'shape'
     const isImageInspector = selectedClip.type === 'image'
+    const isCaptionsInspector = selectedClip.type === 'captions'
     const summaryTitle = selectedClip.name || (isShapeInspector ? 'Shape Clip' : (isImageInspector ? 'Image Clip' : 'Video Clip'))
     const summarySubtitle = `${selectedTrack?.name || 'Unknown Track'} - ${isShapeInspector ? 'Shape clip' : (isImageInspector ? 'Image clip' : 'Video clip')}`
     const SummaryIcon = isShapeInspector ? Square : (isImageInspector ? FileImage : FileVideo)
@@ -3234,7 +3235,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
           badges: [
             {
               label: 'type',
-              value: isShapeInspector ? 'SHAPE' : (isImageInspector ? 'IMAGE' : 'VIDEO'),
+              value: isCaptionsInspector ? 'CAPTIONS' : (isShapeInspector ? 'SHAPE' : (isImageInspector ? 'IMAGE' : 'VIDEO')),
               className: typeBadgeClassName,
             },
             {

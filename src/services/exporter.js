@@ -14,6 +14,7 @@ import {
 import { loadLutLibrary } from './lutLibrary'
 import { getShapeMaskCanvases, getShapeMaskSignature } from '../utils/shapeMask'
 import { getRenderAdjustments, getRenderEffects, isClipBypassed } from '../utils/clipBypass'
+import { drawLiveCaptionsFrame } from '../utils/captionRenderer'
 import { getAudioClipFadeGain, getAudioClipFadeValues } from '../utils/audioClipFades'
 import { getAudioClipLinearGain, normalizeAudioClipGainDb } from '../utils/audioClipGain'
 import { clampTrackVolume, hasAudioSolo, isAudioTrackAudible, trackPanToStereoPosition, trackVolumeToLinearGain } from '../utils/audioTrackAudibility'
@@ -2221,8 +2222,9 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         ? [{ clipTime, weight: 1 }]
         : getMotionBlurSamples(clip, clipTime, fps, 'export')
       const hasMotionBlurSamples = motionBlurSamples.length > 1
-      if ((clip.type === 'text' || clip.type === 'shape') && !isFullBake) {
+      if ((clip.type === 'text' || clip.type === 'shape' || clip.type === 'captions') && !isFullBake) {
         const isShapeClip = clip.type === 'shape'
+        const isCaptionsClip = clip.type === 'captions'
         const baseOpacity = typeof clipTransform.opacity === 'number' ? clipTransform.opacity / 100 : 1
         const clipOpacity = (transitionStyle?.opacity ?? 1) * baseOpacity
         const blendMode = clipTransform.blendMode || 'normal'
@@ -2236,7 +2238,9 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
           return { shapeClip, rect }
         }
         const drawNativeClip = (targetCtx, rect, shapeClip, sampleClipTime) => {
-          if (isShapeClip) {
+          if (isCaptionsClip) {
+            drawLiveCaptionsFrame(targetCtx, rect.width, rect.height, clip.captions, sampleClipTime)
+          } else if (isShapeClip) {
             drawShape(targetCtx, { x: 0, y: 0, width: rect.width, height: rect.height }, shapeClip)
           } else {
             drawText(targetCtx, rect, clip, textStyleScale, sampleClipTime)

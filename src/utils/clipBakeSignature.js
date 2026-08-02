@@ -41,6 +41,7 @@ export const getClipBakeSignature = (clip) => {
     text: clip.text ?? null,
     textProperties: clip.textProperties || null,
     shapeProperties: clip.shapeProperties || null,
+    captions: clip.captions || null,
   })
   clipBakeSignatureCache.set(clip, signature)
   return signature

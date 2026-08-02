@@ -204,7 +204,7 @@ function buildClipSignature(clip) {
       blendMode: transform.blendMode || 'normal',
       blur: roundNumber(transform.blur),
     },
-    adjustments: (clip.type === 'adjustment' || clip.type === 'video' || clip.type === 'image' || clip.type === 'text' || clip.type === 'shape')
+    adjustments: (clip.type === 'adjustment' || clip.type === 'video' || clip.type === 'image' || clip.type === 'text' || clip.type === 'shape' || clip.type === 'captions')
       ? normalizeAdjustmentSettings(clip.adjustments || {})
       : null,
     shapeMask: clip.shapeMask || null,
@@ -212,6 +212,7 @@ function buildClipSignature(clip) {
     effects,
     textProperties,
     shapeProperties,
+    captions: clip.captions || null,
     keyframes,
   }
 }

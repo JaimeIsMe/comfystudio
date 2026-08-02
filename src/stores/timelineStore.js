@@ -552,7 +552,7 @@ const getNextClipCounter = (clips = [], fallback = 1) => {
 
 const isAdjustmentClipType = (clip) => clip?.type === 'adjustment'
 const isInfinitelyExtendableClipType = (clip) => (
-  clip?.type === 'image' || clip?.type === 'adjustment' || clip?.type === 'text' || clip?.type === 'shape'
+  clip?.type === 'image' || clip?.type === 'adjustment' || clip?.type === 'text' || clip?.type === 'shape' || clip?.type === 'captions'
 )
 const supportsClipAdjustments = (clip) => (
   clip?.type === 'video'
@@ -796,6 +796,90 @@ export const useTimelineStore = create(
   setMaskDrawActive: (active) => {
     if (get().maskDrawActive === !!active) return
     set({ maskDrawActive: !!active })
+  },
+  /**
+   * Place (or replace) the live captions clip: a synthetic clip whose cues
+   * render fresh every frame in preview and export — no baked overlay video.
+   * Reuses the dedicated role:'captions' track exactly like baked overlays.
+   */
+  placeLiveCaptions: ({ cues, preset, duration, name = 'Captions' } = {}) => {
+    const safeCues = Array.isArray(cues) ? cues : []
+    if (safeCues.length === 0) return null
+    get().saveToHistory()
+
+    let captionsTrack = get().tracks.find((t) => t.role === 'captions')
+    if (!captionsTrack) {
+      captionsTrack = get().addTrack('video', { role: 'captions', name: 'Captions' })
+    }
+    if (!captionsTrack) return null
+
+    // One captions clip per timeline: clear the captions track and any stray
+    // live captions clips parked elsewhere.
+    get().clips
+      .filter((clip) => clip.trackId === captionsTrack.id || clip.type === 'captions')
+      .forEach((clip) => get().removeClip(clip.id))
+
+    const safeDuration = Math.max(
+      0.4,
+      Number(duration) || Math.max(...safeCues.map((cue) => Number(cue?.end) || 0), 1)
+    )
+    const current = get()
+    const safeClipCounter = getNextClipCounter(current.clips, current.clipCounter || 1)
+    const newClip = {
+      id: `clip-${safeClipCounter}`,
+      trackId: captionsTrack.id,
+      assetId: null,
+      name,
+      startTime: 0,
+      duration: safeDuration,
+      sourceDuration: safeDuration,
+      trimStart: 0,
+      trimEnd: safeDuration,
+      color: '#3E6B5C',
+      type: 'captions',
+      enabled: true,
+      compositeLowerLayers: CLIP_COMPOSITE_MODE.AUTO,
+      url: null,
+      thumbnail: null,
+      captions: {
+        preset: preset || null,
+        cues: safeCues,
+      },
+      transform: {
+        positionX: 0,
+        positionY: 0,
+        positionZ: 0,
+        scaleX: 100,
+        scaleY: 100,
+        scaleLinked: true,
+        rotation: 0,
+        rotationX: 0,
+        rotationY: 0,
+        perspective: 1200,
+        anchorX: 50,
+        anchorY: 50,
+        opacity: 100,
+        flipH: false,
+        flipV: false,
+        cropTop: 0,
+        cropBottom: 0,
+        cropLeft: 0,
+        cropRight: 0,
+        motionBlurEnabled: false,
+        motionBlurMode: 'auto',
+        motionBlurSamples: 8,
+        motionBlurShutter: 180,
+        blendMode: 'normal',
+        blur: 0,
+      },
+    }
+    set((state) => ({
+      clips: [...state.clips, newClip],
+      clipCounter: Math.max(state.clipCounter, safeClipCounter + 1),
+      selectedClipIds: [newClip.id],
+      duration: Math.max(state.duration, newClip.duration + 10),
+    }))
+    return newClip
   },
   /**
    * Toggle a per-group bypass on a clip (mask | color | effects) — the

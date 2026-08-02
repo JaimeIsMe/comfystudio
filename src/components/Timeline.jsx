@@ -204,7 +204,7 @@ const parseFrameOffsetInput = (value, fps) => {
 
 const getClipSourceDurationForExtension = (clip) => {
   if (!clip) return Infinity
-  if (clip.type === 'image' || clip.type === 'adjustment' || clip.type === 'text' || clip.type === 'shape') return Infinity
+  if (clip.type === 'image' || clip.type === 'adjustment' || clip.type === 'text' || clip.type === 'shape' || clip.type === 'captions') return Infinity
   const raw = clip.sourceDuration
   if (raw === Infinity || raw === 'Infinity') return Infinity
   const parsed = Number(raw)
@@ -214,7 +214,7 @@ const getClipSourceDurationForExtension = (clip) => {
 }
 
 const isInfinitelyExtendableClip = (clip) => (
-  clip?.type === 'image' || clip?.type === 'adjustment' || clip?.type === 'text' || clip?.type === 'shape'
+  clip?.type === 'image' || clip?.type === 'adjustment' || clip?.type === 'text' || clip?.type === 'shape' || clip?.type === 'captions'
 )
 
 const getAudioWaveformContext = () => {
@@ -1530,7 +1530,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   // Helper to get clip URL - uses asset store URL if available (handles refreshed blob URLs)
   const getClipUrl = (clip) => {
     if (!clip) return null
-    if (clip.type === 'text' || clip.type === 'shape') return null
+    if (clip.type === 'text' || clip.type === 'shape' || clip.type === 'captions') return null
     // Try to get current URL from assets store (may have been regenerated after refresh)
     if (clip.assetId) {
       const assetUrl = getAssetUrl(clip.assetId)

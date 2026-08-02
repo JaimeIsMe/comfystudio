@@ -179,6 +179,33 @@ export function renderCaptionFrame({
   })
 }
 
+// Live captions clips (clip.type === 'captions'): draw exactly the frame the
+// baked overlay would contain at this time, through a scratch canvas so the
+// caller's composited state survives whatever clearing the frame renderer
+// does. Both the preview compositor and the exporter call this.
+let liveCaptionScratch = null
+export function drawLiveCaptionsFrame(targetCtx, width, height, captionsData, time) {
+  const cues = Array.isArray(captionsData?.cues) ? captionsData.cues : []
+  if (!targetCtx || !width || !height || cues.length === 0) return
+  const w = Math.max(1, Math.ceil(width))
+  const h = Math.max(1, Math.ceil(height))
+  if (!liveCaptionScratch) liveCaptionScratch = document.createElement('canvas')
+  if (liveCaptionScratch.width !== w) liveCaptionScratch.width = w
+  if (liveCaptionScratch.height !== h) liveCaptionScratch.height = h
+  const scratchCtx = liveCaptionScratch.getContext('2d')
+  scratchCtx.clearRect(0, 0, w, h)
+  renderCaptionFrame({
+    ctx: scratchCtx,
+    width: w,
+    height: h,
+    preset: captionsData?.preset || null,
+    cues,
+    time,
+    transparent: true,
+  })
+  targetCtx.drawImage(liveCaptionScratch, 0, 0, width, height)
+}
+
 export function renderCaptionPresetPreviewDataUrl(preset, width = 240, height = 140, globalOverrides = null) {
   if (typeof document === 'undefined') return null
 

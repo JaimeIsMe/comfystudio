@@ -8,6 +8,7 @@ import {
 import { DEFAULT_KINETIC_ACCENT_COLOR, buildKineticStyleWithColors } from '../utils/kineticCaptionRenderer'
 import { isElectron, writeGeneratedOverlayToProject } from '../services/fileSystem'
 import { useProjectStore } from '../stores/projectStore'
+import useTimelineStore from '../stores/timelineStore'
 import {
   buildCaptionAssetName,
   ensureCaptionsFolder,
@@ -1282,7 +1283,6 @@ function CaptionWorkspace({
         })
       }
 
-      setStatusMessage('Rendering animated caption overlay...')
       const renderCues = normalizedCues.map((cue) => ({
         ...cue,
         globalOverrides: {
@@ -1297,6 +1297,23 @@ function CaptionWorkspace({
           subtitlePosition,
         },
       }))
+      // Timeline scope places LIVE captions: a synthetic clip whose cues
+      // render fresh every frame in preview and export — no baked overlay,
+      // so Generate is instant and cue edits never re-render.
+      if (isTimelineScope && placeOnTimeline) {
+        const liveClip = useTimelineStore.getState().placeLiveCaptions({
+          cues: renderCues,
+          preset: renderPreset,
+          duration: cueDuration,
+        })
+        if (!liveClip) {
+          throw new Error('Could not place the captions clip on the timeline.')
+        }
+        setStatusMessage(`Live captions placed — ${renderCues.length} cues, instantly editable.`)
+        return
+      }
+
+      setStatusMessage('Rendering animated caption overlay…')
       const overlayBlob = await generateCaptionVideoBlob({
         preset: renderPreset,
         cues: renderCues,

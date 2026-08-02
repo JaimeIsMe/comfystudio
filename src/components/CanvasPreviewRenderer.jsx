@@ -18,6 +18,7 @@ import { LUTS_CHANGED_EVENT } from '../services/lutLibrary'
 import { registerPreviewFrameSource, unregisterPreviewFrameSource } from '../services/previewFrameTap'
 import { getShapeMaskCanvases, getShapeMaskSignature } from '../utils/shapeMask'
 import { getRenderAdjustments, getRenderEffects, isClipBypassed } from '../utils/clipBypass'
+import { drawLiveCaptionsFrame } from '../utils/captionRenderer'
 import {
   applyBlurPassesToCanvas,
   applyEffectsToTransform,
@@ -861,8 +862,9 @@ function CanvasPreviewRenderer({
     if (blurPx != null) filterParts.push(`blur(${blurPx}px)`)
     offCtx.filter = filterParts.length > 0 ? filterParts.join(' ') : 'none'
 
-    if ((clip.type === 'text' || clip.type === 'shape') && !isFullBake) {
+    if ((clip.type === 'text' || clip.type === 'shape' || clip.type === 'captions') && !isFullBake) {
       const isShapeClip = clip.type === 'shape'
+      const isCaptionsClip = clip.type === 'captions'
       const getTextShapeFrame = (sampleClipTime) => {
         const animatedShapeProperties = isShapeClip ? getAnimatedShapeProperties(clip, sampleClipTime) : null
         const shapeClip = isShapeClip ? { ...clip, shapeProperties: animatedShapeProperties || clip.shapeProperties } : clip
@@ -872,7 +874,9 @@ function CanvasPreviewRenderer({
         return { shapeClip, rect }
       }
       const drawNativeClip = (targetCtx, rect, shapeClip, sampleClipTime) => {
-        if (isShapeClip) {
+        if (isCaptionsClip) {
+          drawLiveCaptionsFrame(targetCtx, rect.width, rect.height, clip.captions, sampleClipTime)
+        } else if (isShapeClip) {
           drawShape(targetCtx, { x: 0, y: 0, width: rect.width, height: rect.height }, shapeClip)
         } else {
           drawText(targetCtx, rect, clip, 1, sampleClipTime)
@@ -1466,7 +1470,7 @@ function CanvasPreviewRenderer({
         applyAdjustmentLayer(stageCtx, clip, time, frameIndex, clipState)
         continue
       }
-      if (clip.type === 'video' || clip.type === 'image' || clip.type === 'text' || clip.type === 'shape') {
+      if (clip.type === 'video' || clip.type === 'image' || clip.type === 'text' || clip.type === 'shape' || clip.type === 'captions') {
         const status = drawVisualClip(stageCtx, entry, time, transitionInfo, clipState, frameIndex, matteEntryByClipId.get(clip.id) || null)
         if (status === 'unready') sawUnreadyVisual = true
       }
