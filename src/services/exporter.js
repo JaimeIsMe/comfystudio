@@ -12,6 +12,7 @@ import {
   normalizeAdjustmentSettings,
 } from '../utils/adjustments'
 import { loadLutLibrary } from './lutLibrary'
+import { getShapeMaskCanvases, getShapeMaskSignature } from '../utils/shapeMask'
 import { getAudioClipFadeGain, getAudioClipFadeValues } from '../utils/audioClipFades'
 import { getAudioClipLinearGain, normalizeAudioClipGainDb } from '../utils/audioClipGain'
 import { clampTrackVolume, hasAudioSolo, isAudioTrackAudible, trackPanToStereoPosition, trackVolumeToLinearGain } from '../utils/audioTrackAudibility'
@@ -2408,7 +2409,15 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       const asset = assetsState.getAssetById(clip.assetId)
       const cachedSourceUrl = cachedVideoSources.get(clip.id)
       const usingCachedRender = !!cachedSourceUrl
-      const maskEffect = (!usingCachedRender && (clip.effects || []).find(effect => effect.type === 'mask' && effect.enabled))
+      // Parametric shape masks synthesize a mask effect with the feathered
+      // raster pre-baked (invert included), so the three mask bodies below
+      // run byte-identical logic for shapes and AI raster masks alike. The
+      // OPAQUE luminance encoding is the one every export path reads —
+      // coverage must live in RGB here, not alpha (see utils/shapeMask.js).
+      const shapeMaskCanvases = !usingCachedRender ? getShapeMaskCanvases(clip.shapeMask) : null
+      const maskEffect = shapeMaskCanvases
+        ? { type: 'mask', enabled: true, invertMask: false, shapeCanvas: shapeMaskCanvases.luma, shapeSignature: getShapeMaskSignature(clip.shapeMask) }
+        : (!usingCachedRender && (clip.effects || []).find(effect => effect.type === 'mask' && effect.enabled))
       
       let sourceWidth = width
       let sourceHeight = height
@@ -2611,10 +2620,10 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
 
         let advancedOutputCanvas = offCanvas
         if (maskEffect) {
-          const maskAsset = assetsState.getAssetById(maskEffect.maskAssetId)
-          const maskFrameUrl = getMaskFrameInfo(clip, maskAsset, time)
-          const maskImageMap = maskElements.get(maskAsset?.id)
-          const maskImage = maskImageMap?.get(maskFrameUrl)
+          const maskAsset = maskEffect.shapeCanvas ? null : assetsState.getAssetById(maskEffect.maskAssetId)
+          const maskFrameUrl = maskEffect.shapeCanvas ? null : getMaskFrameInfo(clip, maskAsset, time)
+          const maskImageMap = maskEffect.shapeCanvas ? null : maskElements.get(maskAsset?.id)
+          const maskImage = maskEffect.shapeCanvas || maskImageMap?.get(maskFrameUrl)
 
           if (maskImage) {
             maskCtx.clearRect(0, 0, width, height)
@@ -2757,10 +2766,10 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         let gpuMaskHandled = false
         let gpuMaskSpec = null
         if (maskEffect) {
-          const maskAsset = assetsState.getAssetById(maskEffect.maskAssetId)
-          const maskFrameUrl = getMaskFrameInfo(clip, maskAsset, time)
-          const maskImageMap = maskElements.get(maskAsset?.id)
-          const maskImage = maskImageMap?.get(maskFrameUrl)
+          const maskAsset = maskEffect.shapeCanvas ? null : assetsState.getAssetById(maskEffect.maskAssetId)
+          const maskFrameUrl = maskEffect.shapeCanvas ? null : getMaskFrameInfo(clip, maskAsset, time)
+          const maskImageMap = maskEffect.shapeCanvas ? null : maskElements.get(maskAsset?.id)
+          const maskImage = maskEffect.shapeCanvas || maskImageMap?.get(maskFrameUrl)
           // Masks run natively unless the clip also has velocity blur —
           // the one combination still on the 2D path (their 2D ordering,
           // velocity after mask, differs from the native chain's).
@@ -2771,7 +2780,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
               gpuMaskSpec = {
                 source: maskImage,
                 sourceKey: `${clip.id}:mask`,
-                sourceVersion: maskFrameUrl,
+                sourceVersion: maskEffect.shapeSignature || maskFrameUrl,
                 corners: maskCorners,
                 invert: !!maskEffect.invertMask,
                 // The 2D mask path blurs media+mask at draw time inside the
@@ -3011,11 +3020,11 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         continue
       }
       if (maskEffect) {
-        const maskAsset = assetsState.getAssetById(maskEffect.maskAssetId)
-        const maskFrameUrl = getMaskFrameInfo(clip, maskAsset, time)
-        const maskImageMap = maskElements.get(maskAsset?.id)
-        const maskImage = maskImageMap?.get(maskFrameUrl)
-        
+        const maskAsset = maskEffect.shapeCanvas ? null : assetsState.getAssetById(maskEffect.maskAssetId)
+        const maskFrameUrl = maskEffect.shapeCanvas ? null : getMaskFrameInfo(clip, maskAsset, time)
+        const maskImageMap = maskEffect.shapeCanvas ? null : maskElements.get(maskAsset?.id)
+        const maskImage = maskEffect.shapeCanvas || maskImageMap?.get(maskFrameUrl)
+
         if (maskImage) {
           let buffers = maskRenderBuffers.get(clip.id)
           if (!buffers) {

@@ -36,6 +36,7 @@ export const getClipBakeSignature = (clip) => {
     keyframes: clip.keyframes || null,
     effects: clip.effects || null,
     adjustments: clip.adjustments || null,
+    shapeMask: clip.shapeMask || null,
     text: clip.text ?? null,
     textProperties: clip.textProperties || null,
     shapeProperties: clip.shapeProperties || null,

@@ -16,6 +16,7 @@ import {
 import { applyAdjustmentSettingsToCanvasGpu } from '../utils/adjustmentsGpu'
 import { LUTS_CHANGED_EVENT } from '../services/lutLibrary'
 import { registerPreviewFrameSource, unregisterPreviewFrameSource } from '../services/previewFrameTap'
+import { getShapeMaskCanvases, getShapeMaskSignature } from '../utils/shapeMask'
 import {
   applyBlurPassesToCanvas,
   applyEffectsToTransform,
@@ -333,7 +334,22 @@ function clipContainsCanvasPoint(point, clip, rect, transform = {}, transitionSt
 }
 
 function getMaskInfo(clip, getAssetById, time, isCachedRender = false) {
-  if (isCachedRender || !clip?.effects) return null
+  if (isCachedRender) return null
+  // Parametric shape mask (clip.shapeMask) wins over a raster mask effect
+  // for now — the AI/raster masks fold into the same home later. Feather
+  // and invert are baked into the rasters, so consumers treat it as a plain
+  // non-inverted matte: the 2D path composites the alpha encoding, the GPU
+  // path samples the opaque luminance encoding.
+  const shapeCanvases = getShapeMaskCanvases(clip?.shapeMask)
+  if (shapeCanvases) {
+    return {
+      shapeCanvasAlpha: shapeCanvases.alpha,
+      shapeCanvasLuma: shapeCanvases.luma,
+      shapeSignature: getShapeMaskSignature(clip.shapeMask),
+      invertMask: false,
+    }
+  }
+  if (!clip?.effects) return null
   const effect = clip.effects.find((entry) => entry?.type === 'mask' && entry.enabled)
   if (!effect) return null
   const maskAsset = getAssetById(effect.maskAssetId)
@@ -1016,15 +1032,15 @@ function CanvasPreviewRenderer({
         if (gpuSamples.length === 0) return
 
         let gpuMaskSpec = null
-        if (gpuMaskInfo?.url) {
-          const maskImage = getImageForUrl(gpuMaskInfo.url)
-          if (maskImage) {
+        if (gpuMaskInfo?.shapeCanvasLuma || gpuMaskInfo?.url) {
+          const maskSource = gpuMaskInfo.shapeCanvasLuma || getImageForUrl(gpuMaskInfo.url)
+          if (maskSource) {
             const maskCorners = getClipQuadCorners(rect, sampleTransformFor(clipTime), transitionStyle)
             if (maskCorners) {
               gpuMaskSpec = {
-                source: maskImage,
+                source: maskSource,
                 sourceKey: `${clip.id}:mask`,
-                sourceVersion: gpuMaskInfo.url,
+                sourceVersion: gpuMaskInfo.shapeSignature || gpuMaskInfo.url,
                 corners: maskCorners,
                 invert: !!gpuMaskInfo.invertMask,
                 blurPx: (!usesTonalAdjustments && blurPx != null)
@@ -1091,7 +1107,7 @@ function CanvasPreviewRenderer({
 
       const maskInfo = getMaskInfo(clip, getAssetById, time, isCachedRender)
       if (maskInfo) {
-        const maskCanvas = getProcessedMaskForUrl(maskInfo.url)
+        const maskCanvas = maskInfo.shapeCanvasAlpha || getProcessedMaskForUrl(maskInfo.url)
         if (maskCanvas) {
           maskCtx.clearRect(0, 0, width, height)
           for (const sample of motionBlurSamples) {

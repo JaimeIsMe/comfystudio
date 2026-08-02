@@ -17,6 +17,7 @@ import useProjectStore from '../stores/projectStore'
 import renderCacheService from '../services/renderCache'
 import { commitAdjustmentRender } from '../services/commitRender'
 import { LUTS_CHANGED_EVENT, importCubeLutFile, listLoadedLuts, loadLutLibrary } from '../services/lutLibrary'
+import { DEFAULT_SHAPE_MASK, normalizeShapeMask } from '../utils/shapeMask'
 import { saveRenderCache, deleteRenderCache, writeGeneratedOverlayToProject, isElectron } from '../services/fileSystem'
 import { getKeyframeAtTime, getKeyframeTimeTolerance, getAnimatedTransform, getAnimatedAdjustmentSettings, getAnimatedShapeProperties, EASING_OPTIONS } from '../utils/keyframes'
 import { TRACK_MATTE_OPTIONS, normalizeTrackMatte } from '../utils/trackMatte'
@@ -74,7 +75,7 @@ import { DEFAULT_LINE_THICKNESS, DEFAULT_POLYGON_SIDES, DEFAULT_SHAPE_PROPERTIES
 const TRANSITION_DEFAULT_DURATION_KEY = 'comfystudio-transition-default-duration-frames'
 const INSPECTOR_EXPANDED_SECTIONS_KEY = 'comfystudio-inspector-expanded-sections-v1'
 const INSPECTOR_EXPANDED_ADJUSTMENT_GROUPS_KEY = 'comfystudio-inspector-expanded-adjustment-groups-v1'
-const DEFAULT_INSPECTOR_EXPANDED_SECTIONS = ['clipInfo', 'transform', 'compositing', 'crop', 'timing', 'effects', 'text', 'style', 'shape', 'animation', 'adjustments', 'commit']
+const DEFAULT_INSPECTOR_EXPANDED_SECTIONS = ['clipInfo', 'transform', 'compositing', 'crop', 'mask', 'timing', 'effects', 'text', 'style', 'shape', 'animation', 'adjustments', 'commit']
 const DEFAULT_EXPANDED_ADJUSTMENT_GROUPS = ['global']
 const INSPECTOR_SETTINGS_SCOPE = {
   ALL: 'all',
@@ -554,6 +555,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     updateClipCompositeMode,
     updateClipTrackMatte,
     updateClipAdjustments,
+    updateClipShapeMask,
     resetClipTransform,
     updateTextProperties,
     updateShapeProperties,
@@ -1102,6 +1104,21 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     return true
   }, [selectedClip, hasAdjustmentChanges, saveToHistory, updateClipAdjustments])
 
+  // Shape mask (Step 1 of vector masking): rect/ellipse/rounded on the clip,
+  // feather + invert baked into the matte raster. Slider drags share one
+  // history entry per gesture, same session pattern as transforms.
+  const shapeMaskHistorySessionClipRef = useRef(null)
+  const applyShapeMaskWithHistory = useCallback((updates, keepSessionOpen = false) => {
+    if (!selectedClip) return false
+    const hasPendingSession = shapeMaskHistorySessionClipRef.current === selectedClip.id
+    if (!hasPendingSession) {
+      saveToHistory()
+    }
+    updateClipShapeMask(selectedClip.id, updates, false)
+    shapeMaskHistorySessionClipRef.current = keepSessionOpen ? selectedClip.id : null
+    return true
+  }, [selectedClip, saveToHistory, updateClipShapeMask])
+
   // LUT library (app-level, IndexedDB) for the Look control: primed on
   // mount, refreshed whenever an import or delete lands.
   const [lutOptions, setLutOptions] = useState([])
@@ -1401,6 +1418,120 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
           </div>
         )}
       </div>
+    )
+  }
+
+  // Mask section (video/image clips): always visible so the capability
+  // advertises itself; controls appear once a shape is chosen. Feather and
+  // invert bake into the matte, so preview and export match by construction.
+  const renderMaskSection = () => {
+    if (!selectedClip || (selectedClip.type !== 'video' && selectedClip.type !== 'image')) return null
+    const activeMask = normalizeShapeMask(selectedClip.shapeMask)
+    const maskValue = (key) => (activeMask?.[key] ?? DEFAULT_SHAPE_MASK[key])
+    const shapeChoices = [
+      { id: null, label: 'None' },
+      { id: 'rectangle', label: 'Rect' },
+      { id: 'ellipse', label: 'Ellipse' },
+      { id: 'rounded', label: 'Round' },
+    ]
+    const pickShape = (shapeId) => {
+      if (!shapeId) {
+        applyShapeMaskWithHistory(null)
+        return
+      }
+      applyShapeMaskWithHistory(activeMask ? { shape: shapeId } : { ...DEFAULT_SHAPE_MASK, shape: shapeId })
+    }
+    const sliders = [
+      { key: 'centerX', label: 'Center X', min: -50, max: 150, unit: '%' },
+      { key: 'centerY', label: 'Center Y', min: -50, max: 150, unit: '%' },
+      { key: 'width', label: 'Width', min: 1, max: 200, unit: '%' },
+      { key: 'height', label: 'Height', min: 1, max: 200, unit: '%' },
+      { key: 'rotation', label: 'Rotation', min: -180, max: 180, unit: '°' },
+      ...(maskValue('shape') === 'rounded'
+        ? [{ key: 'cornerRadius', label: 'Corner Radius', min: 0, max: 100, unit: '%' }]
+        : []),
+      { key: 'feather', label: 'Feather', min: 0, max: 50, unit: '' },
+    ]
+
+    return (
+      <>
+        {renderSectionHeader('mask', 'Mask', CircleDot, activeMask ? {
+          actions: renderHeaderActionButton({
+            icon: RotateCcw,
+            label: 'Remove Mask',
+            onClick: () => applyShapeMaskWithHistory(null),
+            title: 'Remove the shape mask',
+          }),
+        } : {})}
+        {expandedSections.includes('mask') && (
+          <div className="p-3 space-y-3 border-b border-sf-dark-700">
+            <div className="flex gap-1.5">
+              {shapeChoices.map((choice) => {
+                const isActive = choice.id === (activeMask?.shape ?? null)
+                return (
+                  <button
+                    key={choice.label}
+                    type="button"
+                    onClick={() => pickShape(choice.id)}
+                    className={`flex-1 rounded border px-1 py-1.5 text-[10px] transition-colors ${
+                      isActive
+                        ? 'border-sf-accent bg-sf-accent/15 text-sf-accent'
+                        : 'border-sf-dark-600 bg-sf-dark-800 text-sf-text-muted hover:bg-sf-dark-700'
+                    }`}
+                  >
+                    {choice.label}
+                  </button>
+                )
+              })}
+            </div>
+            {!activeMask && (
+              <p className="text-[10px] text-sf-text-muted">
+                Pick a shape to cut this clip out — soften the edge with Feather, flip it with Invert.
+              </p>
+            )}
+            {activeMask && (
+              <>
+                {sliders.map((slider) => (
+                  <div key={slider.key}>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="text-[9px] text-sf-text-muted">{slider.label}</label>
+                      <span className="text-[9px] text-sf-text-secondary">
+                        {Math.round(maskValue(slider.key))}{slider.unit}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={slider.min}
+                      max={slider.max}
+                      step={1}
+                      value={maskValue(slider.key)}
+                      onChange={(e) => applyShapeMaskWithHistory({ [slider.key]: Number(e.target.value) }, true)}
+                      onMouseUp={(e) => applyShapeMaskWithHistory({ [slider.key]: Number(e.target.value) })}
+                      onDoubleClick={() => applyShapeMaskWithHistory({ [slider.key]: DEFAULT_SHAPE_MASK[slider.key] })}
+                      title={`Double-click to reset to ${DEFAULT_SHAPE_MASK[slider.key]}${slider.unit}`}
+                      className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+                    />
+                  </div>
+                ))}
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[10px] text-sf-text-muted">Invert (cut a hole instead)</span>
+                  <button
+                    type="button"
+                    onClick={() => applyShapeMaskWithHistory({ invert: !maskValue('invert') })}
+                    className={`px-2 py-1 rounded border text-[10px] transition-colors ${
+                      maskValue('invert')
+                        ? 'border-sf-accent bg-sf-accent/15 text-sf-accent'
+                        : 'border-sf-dark-600 bg-sf-dark-800 text-sf-text-muted hover:bg-sf-dark-700'
+                    }`}
+                  >
+                    {maskValue('invert') ? 'Inverted' : 'Normal'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </>
     )
   }
 
@@ -3404,6 +3535,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
           </div>
         )}
 
+        {renderMaskSection()}
+
         {renderStandardClipAdjustmentsSection()}
 
         {/* Timing Section */}
@@ -4307,6 +4440,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
 
           </div>
         )}
+
+        {renderMaskSection()}
 
         {renderSectionHeader('effects', 'Effects', Zap)}
         {expandedSections.includes('effects') && (

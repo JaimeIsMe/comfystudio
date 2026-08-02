@@ -2961,6 +2961,32 @@ export const useTimelineStore = create(
   },
 
   /**
+   * Set or clear a clip's parametric shape mask (rect/ellipse/rounded with
+   * feather + invert). Pass partial updates to merge, or null to remove.
+   * Video and image clips only — the types the mask compositing paths draw.
+   */
+  updateClipShapeMask: (clipId, maskUpdates, saveHistory = false) => {
+    if (saveHistory) {
+      get().saveToHistory()
+    }
+
+    set((state) => ({
+      clips: state.clips.map((clip) => {
+        if (clip.id !== clipId || (clip.type !== 'video' && clip.type !== 'image')) return clip
+        if (maskUpdates === null) {
+          if (!clip.shapeMask) return clip
+          const { shapeMask, ...rest } = clip
+          return rest
+        }
+        return {
+          ...clip,
+          shapeMask: { ...(clip.shapeMask || {}), ...(maskUpdates || {}) },
+        }
+      })
+    }))
+  },
+
+  /**
    * Update audio clip properties such as fade-in and fade-out.
    * @param {string} clipId - The audio clip to update
    * @param {object} audioUpdates - Partial audio properties object

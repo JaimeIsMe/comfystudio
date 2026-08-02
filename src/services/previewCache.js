@@ -207,6 +207,7 @@ function buildClipSignature(clip) {
     adjustments: (clip.type === 'adjustment' || clip.type === 'video' || clip.type === 'image' || clip.type === 'text' || clip.type === 'shape')
       ? normalizeAdjustmentSettings(clip.adjustments || {})
       : null,
+    shapeMask: clip.shapeMask || null,
     effects,
     textProperties,
     shapeProperties,
