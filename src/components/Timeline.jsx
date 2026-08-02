@@ -44,6 +44,7 @@ import MasterAudioMeter from './AudioMeter'
 import GenerateMusicPopover from './GenerateMusicPopover'
 import { analyzeAudioSource } from '../services/audioAnalysis'
 import { getClipPlaybackTimeAtTimeline } from './CanvasPreviewRenderer'
+import { canRevealAssetInFileManager, getRevealInFileManagerLabel, revealAssetInFileManager } from '../utils/revealInFileManager'
 
 const TRANSITION_DEFAULT_DURATION_KEY = 'comfystudio-transition-default-duration-frames'
 const DEFAULT_WAVEFORM_SAMPLES = 8192
@@ -1004,6 +1005,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   }, [projectCanRedo, canRedo, projectHistoryLastChangedAt, timelineHistoryLastChangedAt, redoTimelineStructureChange, redo])
   const markerHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.ADD_MARKER])
   const matchFrameHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.MATCH_FRAME])
+  const revealInAssetsHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.REVEAL_IN_ASSETS])
   const splitAllHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.SPLIT_ALL])
   const splitActiveHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.SPLIT_ACTIVE])
   const selectFromStartHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.SELECT_FROM_START])
@@ -1130,23 +1132,38 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     // getLivePlayhead only reads the store; omitting it keeps this stable.
   }, [])
 
-  // Hotkey target: a selected video/audio clip (preferring one under the
-  // playhead), else the active track's clip at the playhead — the Premiere
-  // "targeted track" idiom adapted to Velorn's active track.
-  const resolveMatchFrameClip = useCallback(() => {
+  // Hotkey target: a selected clip passing the predicate (preferring one
+  // under the playhead), else the active track's clip at the playhead — the
+  // Premiere "targeted track" idiom adapted to Velorn's active track.
+  const resolveTargetedClip = useCallback((predicate) => {
     const state = useTimelineStore.getState()
     const playhead = getLivePlayhead()
-    const matchable = (clip) => clip && (clip.type === 'video' || clip.type === 'audio') && clip.assetId
     const containsPlayhead = (clip) => playhead >= (Number(clip.startTime) || 0)
       && playhead < (Number(clip.startTime) || 0) + (Number(clip.duration) || 0)
     const selected = (state.selectedClipIds || [])
       .map((id) => (state.clips || []).find((clip) => clip.id === id))
-      .filter(matchable)
+      .filter(predicate)
     if (selected.length > 0) return selected.find(containsPlayhead) || selected[0]
     return (state.clips || []).find((clip) => (
-      clip.trackId === state.activeTrackId && matchable(clip) && containsPlayhead(clip)
+      clip.trackId === state.activeTrackId && predicate(clip) && containsPlayhead(clip)
     )) || null
     // getLivePlayhead only reads the store; omitting it keeps this stable.
+  }, [])
+
+  const isMatchFrameClip = (clip) => Boolean(clip && (clip.type === 'video' || clip.type === 'audio') && clip.assetId)
+  const resolveMatchFrameClip = useCallback(
+    () => resolveTargetedClip(isMatchFrameClip),
+    [resolveTargetedClip]
+  )
+
+  // Reveal works for anything backed by an asset — images included.
+  const isRevealableClip = (clip) => Boolean(clip && clip.assetId)
+  const revealClipInAssetsPanel = useCallback((targetClip) => {
+    if (!isRevealableClip(targetClip)) return false
+    const asset = useAssetsStore.getState().getAssetById(targetClip.assetId)
+    if (!asset) return false
+    window.dispatchEvent(new CustomEvent('comfystudio-reveal-asset', { detail: { assetId: asset.id } }))
+    return true
   }, [])
 
   const handleTrackLaneContextMenu = useCallback((e, track) => {
@@ -3068,6 +3085,15 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         if (matchClip) {
           e.preventDefault()
           openMatchFrameForClip(matchClip)
+        }
+        return
+      }
+
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.REVEAL_IN_ASSETS])) {
+        const revealClip = resolveTargetedClip((clip) => Boolean(clip && clip.assetId))
+        if (revealClip) {
+          e.preventDefault()
+          revealClipInAssetsPanel(revealClip)
         }
         return
       }
@@ -7405,23 +7431,50 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         >
           {(() => {
             const contextClip = clips.find(c => c.id === clipContextMenu.clipId)
-            if (!contextClip || (contextClip.type !== 'video' && contextClip.type !== 'audio')) return null
-            const contextAsset = contextClip.assetId ? getAssetById(contextClip.assetId) : null
-            if (!contextAsset || (contextAsset.type !== 'video' && contextAsset.type !== 'audio')) return null
+            const contextAsset = contextClip?.assetId ? getAssetById(contextClip.assetId) : null
+            if (!contextAsset) return null
+            const canMatchFrame = (contextClip.type === 'video' || contextClip.type === 'audio')
+              && (contextAsset.type === 'video' || contextAsset.type === 'audio')
+            const canRevealOnDisk = canRevealAssetInFileManager(contextAsset)
             return (
               <>
+                {canMatchFrame && (
+                  <button
+                    onClick={() => {
+                      openMatchFrameForClip(contextClip)
+                      setClipContextMenu(null)
+                    }}
+                    className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
+                  >
+                    <span>Match Frame in Source Player</span>
+                    {matchFrameHotkeyLabel && (
+                      <span className="ml-auto text-sf-text-muted text-[10px]">{matchFrameHotkeyLabel}</span>
+                    )}
+                  </button>
+                )}
                 <button
                   onClick={() => {
-                    openMatchFrameForClip(contextClip)
+                    revealClipInAssetsPanel(contextClip)
                     setClipContextMenu(null)
                   }}
                   className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
                 >
-                  <span>Match Frame in Source Player</span>
-                  {matchFrameHotkeyLabel && (
-                    <span className="ml-auto text-sf-text-muted text-[10px]">{matchFrameHotkeyLabel}</span>
+                  <span>Reveal in Assets Panel</span>
+                  {revealInAssetsHotkeyLabel && (
+                    <span className="ml-auto text-sf-text-muted text-[10px]">{revealInAssetsHotkeyLabel}</span>
                   )}
                 </button>
+                {canRevealOnDisk && (
+                  <button
+                    onClick={() => {
+                      void revealAssetInFileManager(contextAsset)
+                      setClipContextMenu(null)
+                    }}
+                    className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
+                  >
+                    <span>{getRevealInFileManagerLabel()}</span>
+                  </button>
+                )}
                 <div className="h-px bg-sf-dark-600 my-1" />
               </>
             )

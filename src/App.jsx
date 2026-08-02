@@ -342,6 +342,19 @@ function App() {
     return () => window.removeEventListener('comfystudio-open-generate-tab', handler)
   }, [])
 
+  // Reveal-in-assets (timeline clip menu / Shift+F): make sure the Assets
+  // panel is actually visible — editor tab, left panel expanded, Assets tab.
+  // AssetsPanel handles the rest (folder, selection, scroll, flash).
+  useEffect(() => {
+    const handler = () => {
+      setMainTab('editor')
+      setLeftPanelTab('assets')
+      setLeftPanelExpanded(true)
+    }
+    window.addEventListener('comfystudio-reveal-asset', handler)
+    return () => window.removeEventListener('comfystudio-reveal-asset', handler)
+  }, [])
+
   // Allow Generate tab to open ComfyUI directly (used for workflow import guidance).
   useEffect(() => {
     const handler = () => {

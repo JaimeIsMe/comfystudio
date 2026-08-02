@@ -15,6 +15,7 @@ import OverlayGeneratorModal from '../OverlayGeneratorModal'
 import TopazVideoUpscaleDialog from '../TopazVideoUpscaleDialog'
 import ConfirmDialog from '../ConfirmDialog'
 import NewTimelineDialog from '../NewTimelineDialog'
+import { canRevealAssetInFileManager, getRevealInFileManagerLabel, revealAssetInFileManager } from '../../utils/revealInFileManager'
 // Thumbnail size presets (xs = extra small for denser grid)
 const THUMBNAIL_SIZES = {
   xs: { minWidth: 74, iconSize: 'w-3 h-3', playSize: 'w-3 h-3', badgeSize: 'text-[5px]', nameSize: 'text-[8px]', infoSize: 'text-[7px]' },
@@ -1112,6 +1113,47 @@ function AssetsPanel({ isActive = true }) {
     })
   }
 
+  // Reveal-in-assets (timeline clip menu / Shift+F): App.jsx has already made
+  // this panel visible; navigate to the asset's folder in both view modes,
+  // select it, and flash it into view. The flash class is applied to the DOM
+  // node directly — no re-render for a transient highlight.
+  useEffect(() => {
+    const handleReveal = (event) => {
+      const assetId = event?.detail?.assetId
+      if (!assetId) return
+      const asset = useAssetsStore.getState().assets.find((entry) => entry.id === assetId)
+      if (!asset) return
+      if (searchQuery.trim()) setSearchQuery('')
+      const folderId = asset.folderId ?? null
+      setCurrentFolderId(folderId)
+      if (folderId) {
+        setExpandedFolderIds((prev) => {
+          const next = new Set(prev)
+          const folderById = new Map((useAssetsStore.getState().folders || []).map((folder) => [folder.id, folder]))
+          let cursor = folderId
+          while (cursor && !next.has(cursor)) {
+            next.add(cursor)
+            cursor = folderById.get(cursor)?.parentId ?? null
+          }
+          return next
+        })
+      }
+      setSelectedAssetIds([assetId])
+      // Give the folder/selection state a beat to commit and lay out, then
+      // scroll and pulse. A timer (not rAF) so this also runs when the
+      // window is occluded — rAF is throttled to zero there.
+      window.setTimeout(() => {
+        const el = panelRef.current?.querySelector?.(`[data-asset-id="${CSS.escape(assetId)}"]`)
+        if (!el) return
+        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        el.classList.add('asset-reveal-flash')
+        window.setTimeout(() => el.classList.remove('asset-reveal-flash'), 1700)
+      }, 60)
+    }
+    window.addEventListener('comfystudio-reveal-asset', handleReveal)
+    return () => window.removeEventListener('comfystudio-reveal-asset', handleReveal)
+  }, [searchQuery])
+
   // Handle double-click: flip the preview monitor to asset mode. For
   // video/audio the source controls (mark In/Out, insert the range —
   // issue #89) appear under the monitor.
@@ -1889,6 +1931,7 @@ function AssetsPanel({ isActive = true }) {
                 <div
                   key={asset.id}
                   data-is-asset
+                  data-asset-id={asset.id}
                   draggable
                   style={{
                     paddingLeft: (depth + 1) * 14,
@@ -2265,6 +2308,7 @@ function AssetsPanel({ isActive = true }) {
                 <div
                   key={asset.id}
                   data-is-asset
+                  data-asset-id={asset.id}
                   draggable
                   onDragStart={(e) => startAssetDrag(e, asset.id, idsToMove)}
                   onDragEnd={endAssetDrag}
@@ -2452,6 +2496,7 @@ function AssetsPanel({ isActive = true }) {
                 <div 
                   key={asset.id}
                   data-is-asset
+                  data-asset-id={asset.id}
                   draggable
                   onDragStart={(e) => startAssetDrag(e, asset.id, idsToMove)}
                   onDragEnd={endAssetDrag}
@@ -2807,6 +2852,23 @@ function AssetsPanel({ isActive = true }) {
                     >
                       <Play className="w-3 h-3 text-sf-accent" />
                       Open in Source Player
+                    </button>
+                  )
+                })()}
+
+                {(() => {
+                  const menuAsset = assets.find((candidate) => candidate.id === contextMenu.assetId)
+                  if (!menuAsset || !canRevealAssetInFileManager(menuAsset)) return null
+                  return (
+                    <button
+                      onClick={() => {
+                        void revealAssetInFileManager(menuAsset)
+                        setContextMenu(null)
+                      }}
+                      className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2"
+                    >
+                      <FolderOpen className="w-3 h-3 text-sf-text-muted" />
+                      {getRevealInFileManagerLabel()}
                     </button>
                   )
                 })()}

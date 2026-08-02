@@ -374,3 +374,20 @@ html[data-input-modality="pointer"] [role="button"]:focus {
     display: none;
   }
 }
+
+/* Reveal-in-assets flash: applied imperatively to the revealed asset's row or
+   card, then removed — a pulse that draws the eye without a React re-render. */
+@keyframes asset-reveal-flash-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(var(--sf-accent) / 0); }
+  20%, 60% { box-shadow: 0 0 0 2px rgb(var(--sf-accent) / 0.95); }
+}
+.asset-reveal-flash {
+  animation: asset-reveal-flash-pulse 0.8s ease-in-out 2;
+  border-radius: 4px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .asset-reveal-flash {
+    animation: none;
+    box-shadow: 0 0 0 2px rgb(var(--sf-accent) / 0.95);
+  }
+}

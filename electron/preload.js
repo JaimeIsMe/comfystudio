@@ -421,6 +421,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   captureComfyWorkflowGraph: (payload = {}) => ipcRenderer.invoke('comfyui:captureWorkflowGraph', payload),
   focusRendererWindow: () => ipcRenderer.invoke('window:focusRenderer'),
   openExternalUrl: (url) => ipcRenderer.invoke('shell:openExternal', url),
+  showItemInFolder: (targetPath) => ipcRenderer.invoke('shell:showItemInFolder', targetPath),
   installWorkflowSetup: (payload = {}) => ipcRenderer.invoke('workflowSetup:install', payload),
   onWorkflowSetupProgress: (cb) => {
     const handler = (_, data) => cb(data)

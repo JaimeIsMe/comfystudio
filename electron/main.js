@@ -4892,6 +4892,29 @@ ipcMain.handle('shell:openExternal', async (_event, url) => {
   }
 })
 
+ipcMain.handle('shell:showItemInFolder', async (_event, targetPath) => {
+  const raw = String(targetPath || '').trim()
+  if (!raw) {
+    return { success: false, error: 'No path provided.' }
+  }
+  try {
+    const path = require('path')
+    const fs = require('fs')
+    if (!path.isAbsolute(raw)) {
+      return { success: false, error: 'Path must be absolute.' }
+    }
+    const normalized = path.normalize(raw)
+    if (!fs.existsSync(normalized)) {
+      return { success: false, error: 'File not found on disk.' }
+    }
+    const { shell } = require('electron')
+    shell.showItemInFolder(normalized)
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error?.message || 'Failed to reveal the file.' }
+  }
+})
+
 ipcMain.handle('comfyLauncher:openLogFile', async () => {
   const state = comfyLauncher.getState()
   const filePath = state?.logFilePath
