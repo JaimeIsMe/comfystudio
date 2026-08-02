@@ -415,6 +415,9 @@ function CaptionWorkspace({
   // and died the same night — collapsed, dragging Size showed nothing.
   const [transcribeDetailsOpen, setTranscribeDetailsOpen] = useState(false)
   const [statusMessage, setStatusMessage] = useState('')
+  // 0–100 while a transcription reports real progress (mix ≈ 0–40, whisper
+  // decode ≈ 40–100); null = indeterminate, spinner only.
+  const [transcribeProgress, setTranscribeProgress] = useState(null)
   const [error, setError] = useState('')
   const [errorExpanded, setErrorExpanded] = useState(false)
   const [errorCopied, setErrorCopied] = useState(false)
@@ -1170,6 +1173,8 @@ function CaptionWorkspace({
 
       const onProgress = (progress) => {
         setStatusMessage(progress?.message || 'Transcribing…')
+        const value = Number(progress?.progress)
+        setTranscribeProgress(Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : null)
       }
 
       const nextDraft = isTimelineScope
@@ -1193,6 +1198,7 @@ function CaptionWorkspace({
       )
     } finally {
       setIsTranscribing(false)
+      setTranscribeProgress(null)
     }
   }
 
@@ -1538,14 +1544,26 @@ function CaptionWorkspace({
                   type="button"
                   onClick={handleTranscribe}
                   disabled={!canTranscribe}
-                  className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-sf-accent px-4 py-2.5 text-sm font-medium text-white hover:bg-sf-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="relative overflow-hidden mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-sf-accent px-4 py-2.5 text-sm font-medium text-white hover:bg-sf-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isTranscribing ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Wand2 className="w-4 h-4" />
+                  {isTranscribing && Number.isFinite(transcribeProgress) && (
+                    <span
+                      className="absolute inset-y-0 left-0 bg-white/25 transition-[width] duration-300 ease-out"
+                      style={{ width: `${transcribeProgress}%` }}
+                    />
                   )}
-                  {isTimelineScope ? 'Transcribe timeline' : 'Transcribe audio'}
+                  <span className="relative inline-flex items-center gap-2">
+                    {isTranscribing ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Wand2 className="w-4 h-4" />
+                    )}
+                    {isTranscribing
+                      ? (Number.isFinite(transcribeProgress)
+                        ? `Transcribing… ${Math.round(transcribeProgress)}%`
+                        : 'Transcribing…')
+                      : (isTimelineScope ? 'Transcribe timeline' : 'Transcribe audio')}
+                  </span>
                 </button>
                 {isTimelineScope && (
                   <div className="mt-3 text-center text-[11px] text-sf-text-muted">
@@ -1579,7 +1597,9 @@ function CaptionWorkspace({
                     ) : (
                       <RefreshCw className="w-3.5 h-3.5" />
                     )}
-                    Re-transcribe
+                    {isTranscribing && Number.isFinite(transcribeProgress)
+                      ? `Transcribing ${Math.round(transcribeProgress)}%`
+                      : 'Re-transcribe'}
                   </button>
                   <button
                     type="button"
