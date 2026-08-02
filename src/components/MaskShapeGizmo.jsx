@@ -381,34 +381,43 @@ export default function MaskShapeGizmo({
                 className="absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-sf-accent border border-white/85 shadow-[0_0_8px_rgba(0,0,0,0.4)] pointer-events-auto cursor-move"
                 onPointerDown={(e) => beginDrag('move', e)}
               />
-              <button
-                type="button"
-                aria-label="Resize mask height (top)"
-                title="Drag to resize height"
-                className={`${handleClass} left-1/2 -top-1.5 -translate-x-1/2 cursor-ns-resize`}
-                onPointerDown={(e) => beginDrag('resize-n', e)}
-              />
-              <button
-                type="button"
-                aria-label="Resize mask height (bottom)"
-                title="Drag to resize height"
-                className={`${handleClass} left-1/2 -bottom-1.5 -translate-x-1/2 cursor-ns-resize`}
-                onPointerDown={(e) => beginDrag('resize-s', e)}
-              />
-              <button
-                type="button"
-                aria-label="Resize mask width (left)"
-                title="Drag to resize width"
-                className={`${handleClass} -left-1.5 top-1/2 -translate-y-1/2 cursor-ew-resize`}
-                onPointerDown={(e) => beginDrag('resize-w', e)}
-              />
-              <button
-                type="button"
-                aria-label="Resize mask width (right)"
-                title="Drag to resize width"
-                className={`${handleClass} -right-1.5 top-1/2 -translate-y-1/2 cursor-ew-resize`}
-                onPointerDown={(e) => beginDrag('resize-e', e)}
-              />
+              {/* Spline mode hides the edge handles: the seeded circle's
+                  cardinal anchors sit exactly where these live, and the later
+                  sibling steals the click — dragging "the top point" would
+                  resize height and mirror the bottom. Width/Height sliders
+                  still scale the whole path. */}
+              {!isSpline && (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Resize mask height (top)"
+                    title="Drag to resize height"
+                    className={`${handleClass} left-1/2 -top-1.5 -translate-x-1/2 cursor-ns-resize`}
+                    onPointerDown={(e) => beginDrag('resize-n', e)}
+                  />
+                  <button
+                    type="button"
+                    aria-label="Resize mask height (bottom)"
+                    title="Drag to resize height"
+                    className={`${handleClass} left-1/2 -bottom-1.5 -translate-x-1/2 cursor-ns-resize`}
+                    onPointerDown={(e) => beginDrag('resize-s', e)}
+                  />
+                  <button
+                    type="button"
+                    aria-label="Resize mask width (left)"
+                    title="Drag to resize width"
+                    className={`${handleClass} -left-1.5 top-1/2 -translate-y-1/2 cursor-ew-resize`}
+                    onPointerDown={(e) => beginDrag('resize-w', e)}
+                  />
+                  <button
+                    type="button"
+                    aria-label="Resize mask width (right)"
+                    title="Drag to resize width"
+                    className={`${handleClass} -right-1.5 top-1/2 -translate-y-1/2 cursor-ew-resize`}
+                    onPointerDown={(e) => beginDrag('resize-e', e)}
+                  />
+                </>
+              )}
             </>
           )}
         </div>
