@@ -8,6 +8,7 @@ import PreviewPanel from './components/PreviewPanel'
 import Timeline from './components/Timeline'
 import DopeSheet from './components/DopeSheet'
 import MixerPanel from './components/MixerPanel'
+import ScopesPanel from './components/ScopesPanel'
 import TransportControls from './components/TransportControls'
 import InspectorPanel from './components/InspectorPanel'
 import ResizeHandle from './components/ResizeHandle'
@@ -1019,13 +1020,26 @@ function App() {
                     >
                       Mixer
                     </button>
+                    <button
+                      onClick={() => setBottomEditorView('scopes')}
+                      className={`px-2 py-0.5 rounded text-[10px] transition-colors ${
+                        bottomEditorView === 'scopes'
+                          ? 'bg-sf-accent/20 text-sf-accent border border-sf-accent/40'
+                          : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+                      }`}
+                      title="Video scopes: luma waveform, RGB parade, vectorscope"
+                    >
+                      Scopes
+                    </button>
                   </div>
                   <span className="text-[10px] text-sf-text-muted">
                     {bottomEditorView === 'timeline'
                       ? `${timelineStatusText ? `${timelineStatusText} · ` : ''}Timeline · ${activeTimelineToolLabel}`
                       : bottomEditorView === 'mixer'
                         ? 'Audio mixer'
-                        : 'Keyframe edit mode'}
+                        : bottomEditorView === 'scopes'
+                          ? 'Video scopes'
+                          : 'Keyframe edit mode'}
                   </span>
                 </div>
                 {/* Selected bottom editor view - takes remaining height */}
@@ -1037,6 +1051,8 @@ function App() {
                     />
                   ) : bottomEditorView === 'mixer' ? (
                     <MixerPanel />
+                  ) : bottomEditorView === 'scopes' ? (
+                    <ScopesPanel />
                   ) : (
                     <DopeSheet />
                   )}

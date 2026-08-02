@@ -15,6 +15,7 @@ import {
 } from '../utils/adjustments'
 import { applyAdjustmentSettingsToCanvasGpu } from '../utils/adjustmentsGpu'
 import { LUTS_CHANGED_EVENT } from '../services/lutLibrary'
+import { registerPreviewFrameSource, unregisterPreviewFrameSource } from '../services/previewFrameTap'
 import {
   applyBlurPassesToCanvas,
   applyEffectsToTransform,
@@ -1573,6 +1574,18 @@ function CanvasPreviewRenderer({
     registerLivePreviewCapture(captureLiveFrameAt)
     return () => unregisterLivePreviewCapture(captureLiveFrameAt)
   }, [captureLiveFrameAt])
+
+  // Scopes tap (pull model): expose the committed frame + serial. The getter
+  // costs nothing unless something polls it — the render loop stays clean.
+  useEffect(() => {
+    const getter = () => ({
+      canvas: lastFrameCanvasRef.current,
+      serial: frameCommitSerialRef.current,
+      time: lastCommittedFrameTimeRef.current,
+    })
+    registerPreviewFrameSource(getter)
+    return () => unregisterPreviewFrameSource(getter)
+  }, [])
 
   useEffect(() => {
     const currentPlayhead = Number(playheadPosition) || 0
