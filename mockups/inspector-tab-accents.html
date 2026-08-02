@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inspector Tab Accents — variants</title>
+<style>
+  :root {
+    --dark-950: rgb(4 6 16);
+    --dark-900: rgb(8 12 26);
+    --dark-800: rgb(17 23 42);
+    --dark-700: rgb(31 31 58);
+    --dark-600: rgb(45 45 78);
+    --accent: rgb(152 112 0);          /* gold — current active + dots */
+    --text-primary: rgb(244 238 248);
+    --text-secondary: rgb(214 207 226);
+    --text-muted: rgb(160 151 180);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--dark-900);
+    color: var(--text-secondary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 28px 32px 48px;
+  }
+  h1 { font-size: 15px; color: var(--text-primary); font-weight: 600; }
+  .sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; margin-bottom: 24px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 28px 36px;
+    max-width: 1400px;
+  }
+  .cell h2 { font-size: 12px; color: var(--text-primary); font-weight: 600; }
+  .cell .caption { font-size: 10.5px; color: var(--text-muted); margin: 3px 0 10px; line-height: 1.45; min-height: 30px; }
+
+  /* ---- faithful panel chrome: 260px, sf-dark-800, sf-dark-700 borders ---- */
+  .panel {
+    width: 260px;
+    background: var(--dark-800);
+    border: 1px solid var(--dark-700);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .tabbar { display: flex; border-bottom: 1px solid var(--dark-700); background: var(--dark-800); }
+  .tab {
+    position: relative;
+    flex: 1 1 0; min-width: 0;
+    padding: 6px 2px;
+    font-size: 10px;
+    font-family: inherit;
+    text-align: center;
+    background: none; border: none; cursor: pointer;
+    border-right: 1px solid var(--dark-700);
+    color: var(--text-muted);
+    transition: color .12s, background-color .12s;
+  }
+  .tab:last-child { border-right: none; }
+  .tab:hover:not(.active) { color: var(--text-primary); background: rgb(31 31 58 / .6); }
+  .dot {
+    position: absolute; top: 4px; right: 4px;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent);
+  }
+
+  /* section stub below the bar, to ground it */
+  .stub { padding: 12px; }
+  .stub .sechead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .stub .sechead span { font-size: 10px; color: var(--text-secondary); font-weight: 600; }
+  .stub .row { margin-bottom: 10px; }
+  .stub .row .lab { display: flex; justify-content: space-between; font-size: 9px; color: var(--text-muted); margin-bottom: 4px; }
+  .stub .track { height: 4px; border-radius: 2px; background: var(--dark-600); position: relative; }
+  .stub .track i { position: absolute; left: 0; top: 0; bottom: 0; width: 42%; border-radius: 2px; background: var(--text-muted); opacity: .55; }
+
+  /* ================= VARIANTS ================= */
+  /* 0 — current: gold active, gold dots */
+  .v-current .tab.active {
+    color: var(--accent);
+    background: rgb(152 112 0 / .1);
+    box-shadow: inset 0 -2px 0 0 var(--accent);
+  }
+
+  /* A — active tab takes its own hue; inactive stays gray; dots stay gold */
+  .v-a .tab.active {
+    color: var(--tabc);
+    background: color-mix(in srgb, var(--tabc) 10%, transparent);
+    box-shadow: inset 0 -2px 0 0 var(--tabc);
+  }
+
+  /* B — CapCut-style: every label faintly carries its hue; active goes full; dots take the hue */
+  .v-b .tab { color: color-mix(in srgb, var(--tabc) 42%, var(--text-muted)); }
+  .v-b .tab:hover:not(.active) { color: color-mix(in srgb, var(--tabc) 70%, var(--text-primary)); }
+  .v-b .tab.active {
+    color: var(--tabc);
+    background: color-mix(in srgb, var(--tabc) 10%, transparent);
+    box-shadow: inset 0 -2px 0 0 var(--tabc);
+  }
+  .v-b .dot { background: var(--tabc); }
+
+  /* C — restrained: neutral text, only the underline takes the hue; dots stay gold */
+  .v-c .tab.active {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--tabc) 7%, transparent);
+    box-shadow: inset 0 -2px 0 0 var(--tabc);
+  }
+
+  .note {
+    margin-top: 26px; max-width: 640px;
+    font-size: 11px; color: var(--text-muted); line-height: 1.55;
+    border-top: 1px solid var(--dark-700); padding-top: 14px;
+  }
+  .note b { color: var(--text-secondary); font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1>Inspector tab accents — click tabs in each panel</h1>
+  <div class="sub">Real geometry: 260px panel, 10px labels, inset 2px underline, 6px state dots. Hues: Transform blue, Mask cyan, Color magenta, Effects violet, Motion green, Mix amber.</div>
+
+  <div class="grid" id="grid"></div>
+
+  <div class="note">
+    <b>Dots:</b> gold everywhere except variant B, where they take the tab's hue — one meaning ("non-default"), two readings; B trades that consistency for identity. <b>Collision watch:</b> Mix's amber sits nearest the gold accent; if B or A wins, Mix may want to shift colder. Dots shown on Color and Mix to simulate a graded clip with a matte.
+  </div>
+
+<script>
+  const TABS = [
+    { id: 'transform', label: 'Transform', hue: '#6C9BF0' },
+    { id: 'mask',      label: 'Mask',      hue: '#45C4D6' },
+    { id: 'color',     label: 'Color',     hue: '#E778B8', dot: true },
+    { id: 'effects',   label: 'Effects',   hue: '#A07BE8' },
+    { id: 'motion',    label: 'Motion',    hue: '#62C482' },
+    { id: 'mix',       label: 'Mix',       hue: '#E09A57', dot: true },
+  ];
+  const VARIANTS = [
+    { cls: 'v-current', title: '0 — Current (shipped Stage A)', caption: 'Gold active, gray inactive. The control.' },
+    { cls: 'v-a', title: 'A — Hue on active only', caption: 'The selected task announces itself in its own color; the bar stays quiet otherwise.' },
+    { cls: 'v-b', title: 'B — CapCut-style, always tinted', caption: 'Every tab faintly carries its hue for scanability; active goes full. Dots inherit the hue.' },
+    { cls: 'v-c', title: 'C — Neutral text, hued underline', caption: 'Most restrained: color only in the 2px underline and a 7% wash; labels stay editorial.' },
+  ];
+  const grid = document.getElementById('grid');
+  for (const v of VARIANTS) {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    cell.innerHTML = `<h2>${v.title}</h2><div class="caption">${v.caption}</div>`;
+    const panel = document.createElement('div');
+    panel.className = `panel ${v.cls}`;
+    const bar = document.createElement('div');
+    bar.className = 'tabbar';
+    for (const t of TABS) {
+      const b = document.createElement('button');
+      b.className = 'tab' + (t.id === 'color' ? ' active' : '');
+      b.style.setProperty('--tabc', t.hue);
+      b.textContent = t.label;
+      if (t.dot) b.insertAdjacentHTML('beforeend', '<span class="dot" title="Has non-default settings"></span>');
+      b.addEventListener('click', () => {
+        bar.querySelectorAll('.tab').forEach((x) => x.classList.remove('active'));
+        b.classList.add('active');
+      });
+      bar.appendChild(b);
+    }
+    panel.appendChild(bar);
+    panel.insertAdjacentHTML('beforeend', `
+      <div class="stub">
+        <div class="sechead"><span>Lift · Gamma · Gain</span></div>
+        <div class="row"><div class="lab"><span>Exposure</span><span>0.00</span></div><div class="track"><i></i></div></div>
+        <div class="row"><div class="lab"><span>Contrast</span><span>1.00</span></div><div class="track"><i></i></div></div>
+        <div class="row"><div class="lab"><span>Saturation</span><span>1.00</span></div><div class="track"><i style="width:58%"></i></div></div>
+      </div>`);
+    cell.appendChild(panel);
+    grid.appendChild(cell);
+  }
+</script>
+</body>
+</html>
