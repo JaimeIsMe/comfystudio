@@ -37,6 +37,7 @@ import {
 } from '../utils/adjustments'
 import { clearDiskCacheUrl } from './VideoLayerRenderer'
 import EffectsStack from './effects/EffectsStack'
+import ColorWheels from './ColorWheels'
 import { isManagedEffectType } from '../utils/effects'
 import { FRAME_RATE, TRANSITION_TYPES, TRANSITION_DEFAULT_SETTINGS } from '../constants/transitions'
 
@@ -1264,6 +1265,26 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     applyAdjustmentUpdatesWithHistory(buildAdjustmentUpdatePayload(key, value), false)
   }, [selectedClip, applyAdjustmentUpdatesWithHistory, buildAdjustmentUpdatePayload])
 
+  // Multi-path variant for the color wheels: one wheel gesture writes hue and
+  // saturation together, which must land as a single payload — two sequential
+  // single-path applies would each rebuild from the same base and drop one.
+  const handleClipAdjustmentPathsApply = useCallback((updates, commit = false) => {
+    if (!selectedClip || !updates || typeof updates !== 'object') return
+    let payload = baseAdjustments
+    for (const [propertyPath, value] of Object.entries(updates)) {
+      payload = setAdjustmentValue(payload, propertyPath, value)
+    }
+    const applied = applyAdjustmentUpdatesWithHistory(payload, !commit)
+    if (!applied) return
+    if (!commit) {
+      for (const [propertyPath, value] of Object.entries(updates)) {
+        if (propertyHasKeyframes(propertyPath)) {
+          setKeyframe(selectedClip.id, propertyPath, clipTime, value, 'easeInOut', { saveHistory: false })
+        }
+      }
+    }
+  }, [selectedClip, baseAdjustments, applyAdjustmentUpdatesWithHistory, propertyHasKeyframes, setKeyframe, clipTime])
+
   const handleClipAdjustmentGroupReset = useCallback((groupKey = 'all') => {
     if (!selectedClip) return false
 
@@ -1649,6 +1670,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
       <p className="text-[10px] text-sf-text-muted">
         {description}
       </p>
+      <ColorWheels values={values} onApply={handleClipAdjustmentPathsApply} />
       {renderAdjustmentGroup({
         title: 'Global',
         values,
