@@ -42,6 +42,7 @@ jobs:
           description = body or "The latest Velorn release is now available."
 
           payload = {
+              "username": "Velorn Releases",
               "content": (
                   f"New Velorn release is live: **{title}**\n\n"
                   f"GitHub release:\n{url}\n\n"
