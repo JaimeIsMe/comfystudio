@@ -6903,6 +6903,46 @@ ipcMain.handle('playback:transcode', async (event, { inputPath, outputPath }) =>
 })
 
 // ============================================
+// Image sequence import (VFX-style numbered frames)
+//
+// Transcode an ordered frame list into an editing intermediate the rest of
+// the app treats as a normal video (transcode-first sequence support). The
+// heavy lifting lives in imageSequenceTranscode.js so it can be exercised
+// from plain node; this handler adds the ffmpeg guard and progress relay.
+// ============================================
+ipcMain.handle('imageSequence:transcode', async (event, options = {}) => {
+  const ffmpegUnavailable = getFfmpegUnavailableError()
+  if (ffmpegUnavailable) {
+    return { success: false, error: ffmpegUnavailable }
+  }
+  const { transcodeImageSequence } = require('./imageSequenceTranscode')
+  try {
+    return await transcodeImageSequence({
+      ffmpegPath,
+      ffprobePath,
+      entries: options.entries,
+      fps: options.fps,
+      outputDir: options.outputDir,
+      baseName: options.baseName,
+      alpha: options.alpha ?? 'auto',
+      applyTrc: options.applyTrc || null,
+      onProgress: (progress) => {
+        try {
+          event.sender.send('imageSequence:progress', {
+            jobId: options.jobId || null,
+            ...progress,
+          })
+        } catch {
+          // Renderer gone mid-transcode; the job finishes regardless.
+        }
+      },
+    })
+  } catch (err) {
+    return { success: false, error: err?.message || String(err) }
+  }
+})
+
+// ============================================
 // Proxy cache (NLE-style: low-res preview proxies)
 //
 // Separate from the playback cache above. The playback cache keeps source

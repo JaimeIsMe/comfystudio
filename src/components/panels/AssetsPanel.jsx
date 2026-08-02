@@ -15,6 +15,8 @@ import OverlayGeneratorModal from '../OverlayGeneratorModal'
 import TopazVideoUpscaleDialog from '../TopazVideoUpscaleDialog'
 import ConfirmDialog from '../ConfirmDialog'
 import NewTimelineDialog from '../NewTimelineDialog'
+import ImageSequenceImportDialog from './ImageSequenceImportDialog'
+import { buildSequenceImportPlan, importImageSequenceAsAsset, canImportImageSequences } from '../../services/imageSequenceImport'
 import { canRevealAssetInFileManager, getRevealInFileManagerLabel, revealAssetInFileManager } from '../../utils/revealInFileManager'
 // Thumbnail size presets (xs = extra small for denser grid)
 const THUMBNAIL_SIZES = {
@@ -383,6 +385,10 @@ function AssetsPanel({ isActive = true }) {
   const SUPPORTED_AUDIO = ['.mp3', '.wav', '.ogg']
   const SUPPORTED_IMAGE = ['.jpg', '.jpeg', '.png', '.gif', '.webp']
   const ALL_SUPPORTED = [...SUPPORTED_VIDEO, ...SUPPORTED_AUDIO, ...SUPPORTED_IMAGE]
+  // Sequence-only formats: ffmpeg decodes them into an intermediate, but the
+  // browser can't display them as stills — they never import individually.
+  const SEQUENCE_ONLY_IMAGE = ['.tif', '.tiff', '.exr', '.dpx']
+  const PICKER_ACCEPT = (canImportImageSequences() ? [...ALL_SUPPORTED, ...SEQUENCE_ONLY_IMAGE] : ALL_SUPPORTED).join(',')
   
   // Determine file category from extension
   const getFileCategory = (filename) => {
@@ -451,11 +457,91 @@ function AssetsPanel({ isActive = true }) {
     setIsImporting(false)
   }
   
+  // Image sequence import (VFX-style numbered frames, Electron only). A drop
+  // or pick that looks sequence-shaped opens the dialog instead of importing
+  // frame-by-frame; the transcode produces a normal video asset tagged with
+  // its sequence provenance.
+  const [sequenceImportPlan, setSequenceImportPlan] = useState(null)
+  const [sequenceImportBusy, setSequenceImportBusy] = useState(false)
+  const [sequenceImportProgress, setSequenceImportProgress] = useState({})
+  const [sequenceImportError, setSequenceImportError] = useState('')
+
+  const maybeOpenSequenceImport = async (files) => {
+    try {
+      const plan = await buildSequenceImportPlan(files)
+      if (plan?.sequences?.length) {
+        setSequenceImportError('')
+        setSequenceImportProgress({})
+        setSequenceImportPlan(plan)
+        return true
+      }
+    } catch (err) {
+      console.warn('Image sequence detection failed:', err)
+    }
+    return false
+  }
+
+  const runSequenceImport = async (decisions) => {
+    if (!currentProjectHandle || sequenceImportBusy) return
+    setSequenceImportBusy(true)
+    setSequenceImportError('')
+    const unsubscribe = window.electronAPI?.onImageSequenceProgress
+      ? window.electronAPI.onImageSequenceProgress((update) => {
+          if (update?.jobId) {
+            setSequenceImportProgress((prev) => ({ ...prev, [update.jobId]: update }))
+          }
+        })
+      : null
+    try {
+      const stillFiles = [...(sequenceImportPlan?.leftoverFiles || [])]
+      for (let i = 0; i < decisions.length; i++) {
+        const decision = decisions[i]
+        if (decision.mode === 'stills') {
+          stillFiles.push(...(decision.stillsFiles || []))
+          continue
+        }
+        const payload = await importImageSequenceAsAsset({
+          projectDir: currentProjectHandle,
+          sequence: decision.sequence,
+          fps: decision.fps,
+          jobId: `seq_${i}`,
+        })
+        const newAsset = addAsset({ ...payload, folderId: currentFolderId })
+        // Same post-import treatment as any video: playback cache, proxies,
+        // thumbnail sprites, poster.
+        if (newAsset?.absolutePath) {
+          enqueuePlaybackTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
+          if (isProxyPlaybackEnabled()) {
+            enqueueProxyTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
+          }
+        }
+        if (newAsset && (payload.duration || 0) > 0.5) {
+          const projectPath = typeof currentProjectHandle === 'string' ? currentProjectHandle : null
+          generateAssetSprite(newAsset.id, projectPath).catch(() => {})
+          generateAssetPoster(newAsset.id, projectPath).catch(() => {})
+        }
+      }
+      setSequenceImportPlan(null)
+      setSequenceImportProgress({})
+      if (stillFiles.length > 0) {
+        await handleImport(stillFiles)
+      }
+    } catch (err) {
+      setSequenceImportError(err?.message || 'Sequence import failed.')
+    } finally {
+      unsubscribe?.()
+      setSequenceImportBusy(false)
+    }
+  }
+
   // Handle file input change
   const handleFileInputChange = (e) => {
     const files = Array.from(e.target.files || [])
-    handleImport(files)
     e.target.value = ''
+    ;(async () => {
+      if (await maybeOpenSequenceImport(files)) return
+      handleImport(files)
+    })()
   }
 
   const handleImportFcpXml = async () => {
@@ -707,13 +793,16 @@ function AssetsPanel({ isActive = true }) {
     if (isInternalAssetDrag || isInternalSequenceDrag) return
 
     const files = Array.from(e.dataTransfer.files || [])
-    const validFiles = files.filter(f => {
-      const ext = '.' + f.name.split('.').pop().toLowerCase()
-      return ALL_SUPPORTED.includes(ext)
-    })
-    if (validFiles.length > 0) {
-      handleImport(validFiles)
-    }
+    ;(async () => {
+      if (await maybeOpenSequenceImport(files)) return
+      const validFiles = files.filter(f => {
+        const ext = '.' + f.name.split('.').pop().toLowerCase()
+        return ALL_SUPPORTED.includes(ext)
+      })
+      if (validFiles.length > 0) {
+        handleImport(validFiles)
+      }
+    })()
   }
   
   // Open file picker
@@ -1992,7 +2081,7 @@ function AssetsPanel({ isActive = true }) {
         ref={fileInputRef}
         type="file"
         multiple
-        accept={ALL_SUPPORTED.join(',')}
+        accept={PICKER_ACCEPT}
         onChange={handleFileInputChange}
         className="hidden"
       />
@@ -2554,6 +2643,23 @@ function AssetsPanel({ isActive = true }) {
           </div>
         )}
       </div>
+
+      {sequenceImportPlan && (
+        <ImageSequenceImportDialog
+          plan={sequenceImportPlan}
+          defaultFps={getCurrentTimelineSettings?.()?.fps || 24}
+          busy={sequenceImportBusy}
+          progress={sequenceImportProgress}
+          error={sequenceImportError}
+          onImport={runSequenceImport}
+          onClose={() => {
+            if (!sequenceImportBusy) {
+              setSequenceImportPlan(null)
+              setSequenceImportError('')
+            }
+          }}
+        />
+      )}
 
       <NewTimelineDialog
         isOpen={showNewTimelineDialog}

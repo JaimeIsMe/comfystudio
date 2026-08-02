@@ -174,6 +174,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
   transcodeForPlayback: (options) => ipcRenderer.invoke('playback:transcode', options),
 
   /**
+   * Transcode a numbered image sequence (ordered frame paths + per-frame hold
+   * durations) into an editing intermediate: H.264 mp4, or VP9 webm when the
+   * frames carry alpha. Returns { success, outputPath, alpha, width, height,
+   * duration } — the caller imports the result like any video file.
+   * @param {{ entries: Array<{path: string, duration: number}>, fps: number,
+   *   outputDir: string, baseName: string, alpha?: boolean|'auto',
+   *   applyTrc?: string|null, jobId?: string }}
+   */
+  transcodeImageSequence: (options) => ipcRenderer.invoke('imageSequence:transcode', options),
+
+  /**
+   * Progress events for transcodeImageSequence jobs: { jobId, frame,
+   * totalFrames }. Returns an unsubscribe function.
+   */
+  onImageSequenceProgress: (callback) => {
+    const handler = (_event, data) => callback(data)
+    ipcRenderer.on('imageSequence:progress', handler)
+    return () => ipcRenderer.removeListener('imageSequence:progress', handler)
+  },
+
+  /**
    * Transcode video to a low-res proxy (default 540p, CRF 28, keyframe every 6)
    * for fast multi-layer timeline preview. Never used for export.
    * @param {{ inputPath: string, outputPath: string, targetHeight?: number }}
