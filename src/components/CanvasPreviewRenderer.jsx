@@ -89,7 +89,9 @@ function logCanvasDiag(event, payload = {}) {
   console.log(`[CanvasPreview] ${event}`, { t: nowSeconds, ...payload })
 }
 
-function getClipPlaybackTimingAtTimeline(clip, timelineTime, endOffset = 0.01, options = {}) {
+// Exported for Match Frame (Timeline.jsx): maps a timeline time to the clip's
+// source time with the same speed/ramp/reverse/trim math the preview uses.
+export function getClipPlaybackTimingAtTimeline(clip, timelineTime, endOffset = 0.01, options = {}) {
   if (!clip) return { time: 0, rawTime: 0, clamped: false, minTime: 0, maxTime: 0 }
   const baseScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
     ? clip.timelineFps / clip.sourceFps
@@ -123,7 +125,7 @@ function getClipPlaybackTimingAtTimeline(clip, timelineTime, endOffset = 0.01, o
   }
 }
 
-function getClipPlaybackTimeAtTimeline(clip, timelineTime, endOffset = 0.01, options = {}) {
+export function getClipPlaybackTimeAtTimeline(clip, timelineTime, endOffset = 0.01, options = {}) {
   return getClipPlaybackTimingAtTimeline(clip, timelineTime, endOffset, options).time
 }
 

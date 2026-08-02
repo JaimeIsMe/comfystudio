@@ -72,6 +72,8 @@ export default function PreviewSourceControls({ asset }) {
   const isPlaying = useAssetsStore((s) => s.isPlaying)
   const storeDuration = useAssetsStore((s) => s.duration)
   const setPreviewMode = useAssetsStore((s) => s.setPreviewMode)
+  const videoEl = useAssetsStore((s) => s.videoRef)
+  const sourceSeedRequest = useAssetsStore((s) => s.sourceSeedRequest)
   const timelineTracks = useTimelineStore((s) => s.tracks)
   const activeTrackId = useTimelineStore((s) => s.activeTrackId)
 
@@ -104,7 +106,34 @@ export default function PreviewSourceControls({ asset }) {
     setFooterNote({ tone: 'muted', text: '' })
     pendingSeekRef.current = null
     if (noteTimerRef.current) clearTimeout(noteTimerRef.current)
+    // A seed aimed at a different asset is stale — drop it so it can't fire
+    // if that asset gets previewed again later.
+    const staleSeed = useAssetsStore.getState().sourceSeedRequest
+    if (staleSeed && staleSeed.assetId !== asset?.id) {
+      useAssetsStore.getState().clearSourceSeedRequest()
+    }
   }, [asset?.id])
+
+  // Match Frame: consume a one-shot seed — mark the clip's source range and
+  // park the playhead on the requested frame. Runs after the reset effect
+  // (declaration order), so the seed lands on a clean slate. Waits for the
+  // preview <video> to register; seeks now or on loadedmetadata.
+  useEffect(() => {
+    const request = sourceSeedRequest
+    if (!request || !asset || request.assetId !== asset.id || !videoEl) return
+    const inSeed = Number(request.inPoint)
+    const outSeed = Number(request.outPoint)
+    setInPoint(Number.isFinite(inSeed) ? inSeed : null)
+    setOutPoint(Number.isFinite(outSeed) && outSeed > (Number.isFinite(inSeed) ? inSeed : 0) ? outSeed : null)
+    pendingSeekRef.current = null
+    const target = Number(request.seekTime)
+    if (Number.isFinite(target)) {
+      const applySeek = () => { videoEl.currentTime = Math.max(0, target) }
+      if (videoEl.readyState >= 1) applySeek()
+      else videoEl.addEventListener('loadedmetadata', applySeek, { once: true })
+    }
+    useAssetsStore.getState().clearSourceSeedRequest()
+  }, [sourceSeedRequest, asset?.id, videoEl])
 
   const isAudio = asset?.type === 'audio'
   const sourceFps = Number(asset?.settings?.fps ?? asset?.fps) || 24

@@ -43,6 +43,7 @@ import {
 import MasterAudioMeter from './AudioMeter'
 import GenerateMusicPopover from './GenerateMusicPopover'
 import { analyzeAudioSource } from '../services/audioAnalysis'
+import { getClipPlaybackTimeAtTimeline } from './CanvasPreviewRenderer'
 
 const TRANSITION_DEFAULT_DURATION_KEY = 'comfystudio-transition-default-duration-frames'
 const DEFAULT_WAVEFORM_SAMPLES = 8192
@@ -1002,6 +1003,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     return redo()
   }, [projectCanRedo, canRedo, projectHistoryLastChangedAt, timelineHistoryLastChangedAt, redoTimelineStructureChange, redo])
   const markerHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.ADD_MARKER])
+  const matchFrameHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.MATCH_FRAME])
   const splitAllHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.SPLIT_ALL])
   const splitActiveHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.SPLIT_ACTIVE])
   const selectFromStartHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.SELECT_FROM_START])
@@ -1095,6 +1097,58 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
       addToSelection: e.shiftKey || e.ctrlKey || e.metaKey,
     })
   }, [getTimeFromMouseEvent, getTimelinePointerPosition, getTrackGapAtTime])
+  // Match Frame: open the clip's source asset in the preview source player,
+  // parked on the exact source frame under the playhead, with the clip's
+  // trimmed range pre-marked as In/Out. Reads all state via getState() so
+  // the keydown effect can call it without dependency churn.
+  const openMatchFrameForClip = useCallback((targetClip) => {
+    if (!targetClip || (targetClip.type !== 'video' && targetClip.type !== 'audio')) return false
+    const assetsState = useAssetsStore.getState()
+    const asset = targetClip.assetId ? assetsState.getAssetById(targetClip.assetId) : null
+    if (!asset || (asset.type !== 'video' && asset.type !== 'audio')) return false
+
+    const playhead = getLivePlayhead()
+    const clipStart = Number(targetClip.startTime) || 0
+    const clipEnd = clipStart + (Number(targetClip.duration) || 0)
+    const playheadInside = playhead >= clipStart && playhead < clipEnd
+    // Same speed/ramp/reverse/trim math the preview uses, so the source
+    // player lands on the frame the monitor is showing.
+    const seekTime = playheadInside
+      ? getClipPlaybackTimeAtTimeline(targetClip, playhead, 0)
+      : (Number(targetClip.trimStart) || 0)
+
+    const trimStart = Number(targetClip.trimStart) || 0
+    const trimEnd = Number(targetClip.trimEnd)
+    const inPoint = Number.isFinite(trimEnd) ? Math.min(trimStart, trimEnd) : trimStart
+    const outPoint = Number.isFinite(trimEnd) ? Math.max(trimStart, trimEnd) : null
+
+    const timelineState = useTimelineStore.getState()
+    if (timelineState.isPlaying) timelineState.togglePlay()
+    assetsState.requestSourceSeed({ assetId: asset.id, seekTime, inPoint, outPoint })
+    assetsState.setPreview(asset)
+    return true
+    // getLivePlayhead only reads the store; omitting it keeps this stable.
+  }, [])
+
+  // Hotkey target: a selected video/audio clip (preferring one under the
+  // playhead), else the active track's clip at the playhead — the Premiere
+  // "targeted track" idiom adapted to Velorn's active track.
+  const resolveMatchFrameClip = useCallback(() => {
+    const state = useTimelineStore.getState()
+    const playhead = getLivePlayhead()
+    const matchable = (clip) => clip && (clip.type === 'video' || clip.type === 'audio') && clip.assetId
+    const containsPlayhead = (clip) => playhead >= (Number(clip.startTime) || 0)
+      && playhead < (Number(clip.startTime) || 0) + (Number(clip.duration) || 0)
+    const selected = (state.selectedClipIds || [])
+      .map((id) => (state.clips || []).find((clip) => clip.id === id))
+      .filter(matchable)
+    if (selected.length > 0) return selected.find(containsPlayhead) || selected[0]
+    return (state.clips || []).find((clip) => (
+      clip.trackId === state.activeTrackId && matchable(clip) && containsPlayhead(clip)
+    )) || null
+    // getLivePlayhead only reads the store; omitting it keeps this stable.
+  }, [])
+
   const handleTrackLaneContextMenu = useCallback((e, track) => {
     if (!track || track.locked) return
     if (
@@ -3006,6 +3060,15 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
       if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.ADD_MARKER])) {
         e.preventDefault()
         addMarker(getLivePlayhead())
+        return
+      }
+
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.MATCH_FRAME])) {
+        const matchClip = resolveMatchFrameClip()
+        if (matchClip) {
+          e.preventDefault()
+          openMatchFrameForClip(matchClip)
+        }
         return
       }
 
@@ -7340,6 +7403,29 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
           }}
           onClick={(e) => e.stopPropagation()}
         >
+          {(() => {
+            const contextClip = clips.find(c => c.id === clipContextMenu.clipId)
+            if (!contextClip || (contextClip.type !== 'video' && contextClip.type !== 'audio')) return null
+            const contextAsset = contextClip.assetId ? getAssetById(contextClip.assetId) : null
+            if (!contextAsset || (contextAsset.type !== 'video' && contextAsset.type !== 'audio')) return null
+            return (
+              <>
+                <button
+                  onClick={() => {
+                    openMatchFrameForClip(contextClip)
+                    setClipContextMenu(null)
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 flex items-center gap-2 transition-colors"
+                >
+                  <span>Match Frame in Source Player</span>
+                  {matchFrameHotkeyLabel && (
+                    <span className="ml-auto text-sf-text-muted text-[10px]">{matchFrameHotkeyLabel}</span>
+                  )}
+                </button>
+                <div className="h-px bg-sf-dark-600 my-1" />
+              </>
+            )
+          })()}
           {(() => {
             const contextClip = clips.find(c => c.id === clipContextMenu.clipId)
             const contextAsset = contextClip?.assetId ? getAssetById(contextClip.assetId) : null

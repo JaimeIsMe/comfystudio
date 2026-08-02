@@ -246,6 +246,25 @@ export const useAssetsStore = create(
   },
   
   /**
+   * One-shot seed for the preview source controls (Match Frame): park the
+   * source player on a specific frame with In/Out pre-marked. Consumed and
+   * cleared by PreviewSourceControls; never persisted (partialize whitelist).
+   */
+  sourceSeedRequest: null,
+
+  requestSourceSeed: (request) => {
+    if (!request?.assetId) return
+    set({
+      sourceSeedRequest: {
+        ...request,
+        token: `seed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      },
+    })
+  },
+
+  clearSourceSeedRequest: () => set({ sourceSeedRequest: null }),
+
+  /**
    * Preview mode: 'asset' (single asset preview) or 'timeline' (playing timeline)
    */
   previewMode: 'asset',
