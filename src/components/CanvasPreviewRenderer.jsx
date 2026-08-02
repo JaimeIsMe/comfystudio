@@ -55,7 +55,13 @@ const PRELOAD_LOOKAHEAD = 2.5
 const PLAYBACK_DIAG_KEY = 'comfystudio-playback-diag'
 const SCRUB_ACTIVE_WINDOW_MS = 220
 const SCRUB_SETTLE_DELAY_MS = SCRUB_ACTIVE_WINDOW_MS + 45
-const SCRUB_READY_TOLERANCE = 0.18
+// While scrubbing, chase the playhead whenever the presented frame is more
+// than ~one frame away. Completion-driven seeking (issueScrubSeek) already
+// caps this at one in-flight seek per video, so a tight tolerance costs no
+// extra concurrency — it just keeps the picture tracking the hand instead
+// of updating in multi-frame notches. (Was a fixed 0.18s, which read as a
+// ~4-frame dead zone at 24fps during slow cut-point hunting.)
+const getScrubReadyTolerance = (fps) => Math.max(0.04, 1 / Math.max(1, Number(fps) || 24))
 // If a scrub seek never presents a frame (element evicted, src cleared),
 // allow a replacement seek after this long instead of blocking the element.
 const SCRUB_SEEK_STALL_MS = 400
@@ -925,7 +931,7 @@ function CanvasPreviewRenderer({
         const isTransitionClip = !!transitionStyle
         const shouldHoldTransitionFrame = isTransitionClip && transitionPlayback.clamped
         const seekThreshold = state.isScrubbingPreview
-          ? SCRUB_READY_TOLERANCE
+          ? getScrubReadyTolerance(state.fps)
           : (state.isPlaying ? (seekDriven ? 0.12 : (shouldHoldTransitionFrame ? 0.025 : 0.16)) : 0.025)
         if (!state.isScrubbingPreview && video.readyState >= 1 && timeDiff > seekThreshold) {
           video.currentTime = targetTime
@@ -1365,7 +1371,7 @@ function CanvasPreviewRenderer({
         }
 
         const readyTolerance = state.isScrubbingPreview
-          ? SCRUB_READY_TOLERANCE
+          ? getScrubReadyTolerance(fps)
           : (seekDriven ? 0.12 : ((isTransitionClip && state.isPlaying && !loopSeekHoldActive) ? 0.16 : 0.025))
         if (Math.abs((video.currentTime || 0) - targetTime) > readyTolerance) {
           if (state.isScrubbingPreview) {
@@ -1534,7 +1540,7 @@ function CanvasPreviewRenderer({
     while (getNowMs() < deadline) {
       if (useTimelineStore.getState().isPlaying) return null
       // Force strict seek tolerances — scrub mode would accept video frames
-      // up to 0.18s away from the target.
+      // up to ~a frame away from the target.
       scrubPreviewStateRef.current.activeUntil = 0
       drawFrameRef.current?.()
       const currentPlayhead = useTimelineStore.getState().playheadPosition
