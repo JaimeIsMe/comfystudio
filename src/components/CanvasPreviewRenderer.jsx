@@ -17,6 +17,7 @@ import { applyAdjustmentSettingsToCanvasGpu } from '../utils/adjustmentsGpu'
 import { LUTS_CHANGED_EVENT } from '../services/lutLibrary'
 import { registerPreviewFrameSource, unregisterPreviewFrameSource } from '../services/previewFrameTap'
 import { getShapeMaskCanvases, getShapeMaskSignature } from '../utils/shapeMask'
+import { getRenderAdjustments, getRenderEffects, isClipBypassed } from '../utils/clipBypass'
 import {
   applyBlurPassesToCanvas,
   applyEffectsToTransform,
@@ -160,7 +161,7 @@ function resolvePreviewUrl(clip, getAssetById, useProxyPlaybackForAssets) {
 
 function hasManagedCanvasEffect(clip, clipTime) {
   if (!clip) return false
-  const effects = clip.effects || []
+  const effects = getRenderEffects(clip)
   return hasPixelFilterEffect(effects, clipTime)
     || hasGlslEffect(effects)
     || hasVignetteEffect(effects, clipTime)
@@ -334,6 +335,7 @@ function clipContainsCanvasPoint(point, clip, rect, transform = {}, transitionSt
 }
 
 function getMaskInfo(clip, getAssetById, time, isCachedRender = false) {
+  if (isClipBypassed(clip, 'mask')) return null
   if (isCachedRender) return null
   // Parametric shape mask (clip.shapeMask) wins over a raster mask effect
   // for now — the AI/raster masks fold into the same home later. Feather
@@ -668,7 +670,7 @@ function CanvasPreviewRenderer({
     const clipTime = time - (matteClip.startTime || 0)
     const matteTransform = applyEffectsToTransform(
       getAnimatedTransform(matteClip, clipTime) || matteClip.transform || {},
-      matteClip.effects,
+      getRenderEffects(matteClip),
       clipTime
     )
     const matteOpacity = typeof matteTransform.opacity === 'number' ? matteTransform.opacity / 100 : 1
@@ -780,7 +782,7 @@ function CanvasPreviewRenderer({
     const isFullBake = isFullBakeFresh(clip)
     const transitionStyle = getTransitionStyleForClip(transitionInfo, clip)
     const resolveClipTransformAtTime = (sampleClipTime) => (
-      applyEffectsToTransform(getAnimatedTransform(clip, sampleClipTime) || clip.transform || {}, clip.effects, sampleClipTime)
+      applyEffectsToTransform(getAnimatedTransform(clip, sampleClipTime) || clip.transform || {}, getRenderEffects(clip), sampleClipTime)
     )
     const liveClipTransform = resolveClipTransformAtTime(clipTime)
     const clipTransform = isFullBake
@@ -822,7 +824,7 @@ function CanvasPreviewRenderer({
     const blendMode = clipTransform?.blendMode || 'normal'
     const blurPx = transitionStyle?.blur ?? (clipTransform?.blur > 0 ? clipTransform.blur : null)
     const adjustmentSettings = normalizeAdjustmentSettings(
-      isFullBake ? {} : (getAnimatedAdjustmentSettings(clip, clipTime) || clip.adjustments || {})
+      isFullBake ? {} : getRenderAdjustments(clip, clipTime)
     )
     const usesTonalAdjustments = needsAdvancedColorPass(adjustmentSettings)
     const adjustmentFilter = buildCssFilterFromAdjustments(adjustmentSettings)
@@ -1182,10 +1184,10 @@ function CanvasPreviewRenderer({
     const height = state.height
     const clipTime = time - (clip.startTime || 0)
     const adjustmentSettings = normalizeAdjustmentSettings(
-      getAnimatedAdjustmentSettings(clip, clipTime) || clip.adjustments || {}
+      getRenderAdjustments(clip, clipTime)
     )
     const baseTransform = getAnimatedTransform(clip, clipTime) || clip.transform || {}
-    const clipTransform = applyEffectsToTransform(baseTransform, clip.effects, clipTime)
+    const clipTransform = applyEffectsToTransform(baseTransform, getRenderEffects(clip), clipTime)
     const usesManagedEffects = hasManagedCanvasEffect(clip, clipTime)
     const adjustmentIsActive = hasAdjustmentEffect(adjustmentSettings)
     // A transform-only adjustment layer (e.g. scale 110% to push everything
@@ -1752,7 +1754,7 @@ function CanvasPreviewRenderer({
       const clipTime = time - (clip.startTime || 0)
       const transitionStyle = getTransitionStyleForClip(transitionInfo, clip)
       const baseTransform = getAnimatedTransform(clip, clipTime) || clip.transform || {}
-      const clipTransform = applyEffectsToTransform(baseTransform, clip.effects, clipTime)
+      const clipTransform = applyEffectsToTransform(baseTransform, getRenderEffects(clip), clipTime)
       const { width: sourceWidth, height: sourceHeight } = getClipHitSourceDimensions({
         clip,
         clipTime,

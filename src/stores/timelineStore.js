@@ -797,6 +797,27 @@ export const useTimelineStore = create(
     if (get().maskDrawActive === !!active) return
     set({ maskDrawActive: !!active })
   },
+  /**
+   * Toggle a per-group bypass on a clip (mask | color | effects) — the
+   * Resolve-style A/B switch. Settings are untouched; renderers read the
+   * flags through utils/clipBypass.js.
+   */
+  setClipBypass: (clipId, group, bypassed) => {
+    get().saveToHistory()
+    set((state) => ({
+      clips: state.clips.map((clip) => {
+        if (clip.id !== clipId) return clip
+        const next = { ...(clip.bypass || {}) }
+        if (bypassed) next[group] = true
+        else delete next[group]
+        if (Object.keys(next).length === 0) {
+          const { bypass, ...rest } = clip
+          return rest
+        }
+        return { ...clip, bypass: next }
+      })
+    }))
+  },
   
   // In/Out points for three-point editing
   inPoint: null, // Timeline in-point (seconds)

@@ -65,7 +65,8 @@ export function getMotionBlurSamples(clip, clipTime, fps = 24, mode = 'preview')
   const settings = normalizeMotionBlurSettings(clip?.transform || {})
   const safeFps = Number.isFinite(Number(fps)) && Number(fps) > 0 ? Number(fps) : 24
   const maxSamples = MOTION_BLUR_SAMPLE_LIMITS[mode] || MOTION_BLUR_SAMPLE_LIMITS.preview
-  const sampleCount = settings.enabled ? Math.min(settings.samples, maxSamples) : 1
+  const effectsBypassed = clip?.bypass?.effects === true
+  const sampleCount = (settings.enabled && !effectsBypassed) ? Math.min(settings.samples, maxSamples) : 1
   const clipDuration = Math.max(0, Number(clip?.duration) || 0)
   const safeClipTime = clipDuration > 0
     ? clamp(Number(clipTime) || 0, 0, clipDuration)
@@ -132,6 +133,7 @@ export function getMotionBlurSamples(clip, clipTime, fps = 24, mode = 'preview')
 
 export function getVelocityMotionBlurOptions(clip, clipTime, fps = 24, resolveTransformAtTime = null) {
   const settings = normalizeMotionBlurSettings(clip?.transform || {})
+  if (clip?.bypass?.effects === true) return null
   if (!settings.enabled || settings.mode === 'sampled' || settings.samples <= 1) return null
 
   const safeFps = Number.isFinite(Number(fps)) && Number(fps) > 0 ? Number(fps) : 24

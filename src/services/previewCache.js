@@ -208,6 +208,7 @@ function buildClipSignature(clip) {
       ? normalizeAdjustmentSettings(clip.adjustments || {})
       : null,
     shapeMask: clip.shapeMask || null,
+    bypass: clip.bypass || null,
     effects,
     textProperties,
     shapeProperties,

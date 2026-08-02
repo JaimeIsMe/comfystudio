@@ -18,6 +18,7 @@ import renderCacheService from '../services/renderCache'
 import { commitAdjustmentRender } from '../services/commitRender'
 import { LUTS_CHANGED_EVENT, importCubeLutFile, listLoadedLuts, loadLutLibrary } from '../services/lutLibrary'
 import { DEFAULT_SHAPE_MASK, DEFAULT_SPLINE_POINTS, normalizeShapeMask } from '../utils/shapeMask'
+import { isClipBypassed } from '../utils/clipBypass'
 import { saveRenderCache, deleteRenderCache, writeGeneratedOverlayToProject, isElectron } from '../services/fileSystem'
 import { getKeyframeAtTime, getKeyframeTimeTolerance, getAnimatedTransform, getAnimatedAdjustmentSettings, getAnimatedShapeProperties, getAnimatedShapeMask, EASING_OPTIONS } from '../utils/keyframes'
 import { TRACK_MATTE_OPTIONS, normalizeTrackMatte } from '../utils/trackMatte'
@@ -577,6 +578,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     updateClipShapeMask,
     maskDrawActive,
     setMaskDrawActive,
+    setClipBypass,
     resetClipTransform,
     updateTextProperties,
     updateShapeProperties,
@@ -1480,6 +1482,30 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
   // Mask section (video/image clips): always visible so the capability
   // advertises itself; controls appear once a shape is chosen. Feather and
   // invert bake into the matte, so preview and export match by construction.
+  // Resolve-style A/B toggle: mutes a whole group in preview AND export
+  // without losing its settings (clip.bypass via utils/clipBypass.js).
+  const renderBypassPill = (group, what) => {
+    if (!selectedClip) return null
+    const bypassed = isClipBypassed(selectedClip, group)
+    return (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation()
+          setClipBypass(selectedClip.id, group, !bypassed)
+        }}
+        className={`px-1.5 py-0.5 rounded-full border text-[9px] font-medium transition-colors ${
+          bypassed
+            ? 'border-amber-400/70 bg-amber-400/15 text-amber-300'
+            : 'border-sf-dark-600 bg-sf-dark-800 text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700'
+        }`}
+        title={bypassed ? `${what} bypassed in preview and export — click to re-enable` : `Bypass ${what} without losing settings (A/B compare)`}
+      >
+        {bypassed ? 'Bypassed' : 'Bypass'}
+      </button>
+    )
+  }
+
   const renderMaskSection = () => {
     if (!selectedClip || (selectedClip.type !== 'video' && selectedClip.type !== 'image')) return null
     const activeMask = normalizeShapeMask(selectedClip.shapeMask)
@@ -1544,15 +1570,20 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     return (
       <>
         {renderSectionHeader('mask', 'Mask', CircleDot, (activeMask || maskEffect) ? {
-          actions: renderHeaderActionButton({
-            icon: RotateCcw,
-            label: 'Remove Mask',
-            onClick: () => {
-              if (activeMask) applyShapeMaskWithHistory(null)
-              if (maskEffect) removeEffect(selectedClip.id, maskEffect.id)
-            },
-            title: 'Remove the mask',
-          }),
+          actions: (
+            <>
+              {renderBypassPill('mask', 'The mask')}
+              {renderHeaderActionButton({
+                icon: RotateCcw,
+                label: 'Remove Mask',
+                onClick: () => {
+                  if (activeMask) applyShapeMaskWithHistory(null)
+                  if (maskEffect) removeEffect(selectedClip.id, maskEffect.id)
+                },
+                title: 'Remove the mask',
+              })}
+            </>
+          ),
         } : {})}
         {expandedSections.includes('mask') && (
           <div className="p-3 space-y-3 border-b border-sf-dark-700">
@@ -3121,7 +3152,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
               isActive ? '' : 'inspector-tab-tinted hover:bg-sf-dark-700/60'
             }`}
           >
-            {tab.label}
+            <span className={tab.bypassed ? 'line-through opacity-50' : undefined}>{tab.label}</span>
             {tab.dot && (
               <span
                 className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full"
@@ -3183,9 +3214,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     const videoTabs = [
       ...(isShapeInspector ? [{ id: 'shape', label: 'Shape', title: 'Shape geometry and fill' }] : []),
       { id: 'transform', label: 'Transform', title: 'Position, scale, rotation, crop', dot: transformHasEdits(dotTransform) },
-      ...(!isShapeInspector ? [{ id: 'mask', label: 'Mask', title: 'Shape and image masks', dot: maskHasEdits(selectedClip) }] : []),
-      { id: 'color', label: 'Color', title: 'Grade and Look (LUT)', dot: colorHasEdits(dotSettings) },
-      { id: 'effects', label: 'Effects', title: 'Blur and GLSL effects', dot: effectsHaveEdits(selectedClip, dotSettings) },
+      ...(!isShapeInspector ? [{ id: 'mask', label: 'Mask', title: 'Shape and image masks', dot: maskHasEdits(selectedClip), bypassed: isClipBypassed(selectedClip, 'mask') }] : []),
+      { id: 'color', label: 'Color', title: 'Grade and Look (LUT)', dot: colorHasEdits(dotSettings), bypassed: isClipBypassed(selectedClip, 'color') },
+      { id: 'effects', label: 'Effects', title: 'Blur and GLSL effects', dot: effectsHaveEdits(selectedClip, dotSettings), bypassed: isClipBypassed(selectedClip, 'effects') },
       { id: 'motion', label: 'Motion', title: 'Speed, reverse, duration', dot: motionHasEdits(selectedClip) },
       { id: 'mix', label: 'Mix', title: 'Opacity, blend, track matte', dot: mixHasEdits(dotTransform, selectedClip) },
     ]
@@ -4011,7 +4042,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
 
         {showTab('effects') && (<>
         {/* Effects Section */}
-        {renderSectionHeader('effects', 'Effects', Zap)}
+        {renderSectionHeader('effects', 'Effects', Zap, { actions: renderBypassPill('effects', 'All effects') })}
         {expandedSections.includes('effects') && (
           <div className="p-3 space-y-2 border-b border-sf-dark-700">
             {renderAdjustmentBlurControl('Applies blur as an effect on this clip.')}
@@ -4214,8 +4245,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
 
     const adjDotTransform = animatedTransform || transform || {}
     const adjTabs = [
-      { id: 'color', label: 'Color', title: 'Grade and Look for the layers below', dot: colorHasEdits(adjustments || {}) },
-      { id: 'effects', label: 'Effects', title: 'Blur and GLSL effects for the layers below', dot: effectsHaveEdits(selectedClip, adjustments || {}) },
+      { id: 'color', label: 'Color', title: 'Grade and Look for the layers below', dot: colorHasEdits(adjustments || {}), bypassed: isClipBypassed(selectedClip, 'color') },
+      { id: 'effects', label: 'Effects', title: 'Blur and GLSL effects for the layers below', dot: effectsHaveEdits(selectedClip, adjustments || {}), bypassed: isClipBypassed(selectedClip, 'effects') },
       { id: 'transform', label: 'Transform', title: 'Transform the stage copy', dot: transformHasEdits(adjDotTransform) },
       { id: 'motion', label: 'Motion', title: 'Timing', dot: motionHasEdits(selectedClip) },
     ]
@@ -4646,7 +4677,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
         </>)}
 
         {showAdjTab('effects') && (<>
-        {renderSectionHeader('effects', 'Effects', Zap)}
+        {renderSectionHeader('effects', 'Effects', Zap, { actions: renderBypassPill('effects', 'All effects') })}
         {expandedSections.includes('effects') && (
           <div className="p-3 space-y-2 border-b border-sf-dark-700">
             {renderAdjustmentBlurControl('Applies blur as an effect on the clips below this layer.')}
@@ -4673,12 +4704,17 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
         {renderSectionHeader('adjustments', 'Color', Sparkles, {
           actions: renderInspectorClipboardButtons({
             scope: INSPECTOR_SETTINGS_SCOPE.ADJUSTMENTS,
-            extraActions: renderHeaderActionButton({
-              icon: RotateCcw,
-              label: 'Reset',
-              onClick: handleClipAdjustmentsReset,
-              title: 'Reset color controls',
-            }),
+            extraActions: (
+              <>
+                {renderBypassPill('color', 'The grade and LUT')}
+                {renderHeaderActionButton({
+                  icon: RotateCcw,
+                  label: 'Reset',
+                  onClick: handleClipAdjustmentsReset,
+                  title: 'Reset color controls',
+                })}
+              </>
+            ),
           }),
         })}
         {expandedSections.includes('adjustments') && (
@@ -4801,12 +4837,17 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
       {renderSectionHeader('adjustments', 'Color', Sparkles, {
         actions: renderInspectorClipboardButtons({
           scope: INSPECTOR_SETTINGS_SCOPE.ADJUSTMENTS,
-          extraActions: renderHeaderActionButton({
-            icon: RotateCcw,
-            label: 'Reset',
-            onClick: handleClipAdjustmentsReset,
-            title: 'Reset color controls',
-          }),
+          extraActions: (
+            <>
+              {renderBypassPill('color', 'The grade and LUT')}
+              {renderHeaderActionButton({
+                icon: RotateCcw,
+                label: 'Reset',
+                onClick: handleClipAdjustmentsReset,
+                title: 'Reset color controls',
+              })}
+            </>
+          ),
         }),
       })}
       {expandedSections.includes('adjustments') && (
@@ -4931,8 +4972,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     const textTabs = [
       { id: 'text', label: 'Text', title: 'Content, style, title animation', dot: activeAnimationPresetId !== 'none' },
       { id: 'transform', label: 'Transform', title: 'Position, scale, rotation', dot: transformHasEdits(textDotTransform) },
-      { id: 'color', label: 'Color', title: 'Grade', dot: colorHasEdits(textDotSettings) },
-      { id: 'effects', label: 'Effects', title: 'Blur and GLSL effects', dot: effectsHaveEdits(selectedClip, textDotSettings) },
+      { id: 'color', label: 'Color', title: 'Grade', dot: colorHasEdits(textDotSettings), bypassed: isClipBypassed(selectedClip, 'color') },
+      { id: 'effects', label: 'Effects', title: 'Blur and GLSL effects', dot: effectsHaveEdits(selectedClip, textDotSettings), bypassed: isClipBypassed(selectedClip, 'effects') },
       { id: 'motion', label: 'Motion', title: 'Timing', dot: motionHasEdits(selectedClip) },
       { id: 'mix', label: 'Mix', title: 'Opacity, blend, track matte', dot: mixHasEdits(textDotTransform, selectedClip) },
     ]
@@ -5232,7 +5273,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
         </>)}
 
         {showTextTab('effects') && (<>
-        {renderSectionHeader('effects', 'Effects', Zap)}
+        {renderSectionHeader('effects', 'Effects', Zap, { actions: renderBypassPill('effects', 'All effects') })}
         {expandedSections.includes('effects') && (
           <div className="p-3 space-y-2 border-b border-sf-dark-700">
             {renderAdjustmentBlurControl('Applies blur as an effect on this text clip.')}

@@ -13,6 +13,7 @@ import {
 } from '../utils/adjustments'
 import { loadLutLibrary } from './lutLibrary'
 import { getShapeMaskCanvases, getShapeMaskSignature } from '../utils/shapeMask'
+import { getRenderAdjustments, getRenderEffects, isClipBypassed } from '../utils/clipBypass'
 import { getAudioClipFadeGain, getAudioClipFadeValues } from '../utils/audioClipFades'
 import { getAudioClipLinearGain, normalizeAudioClipGainDb } from '../utils/audioClipGain'
 import { clampTrackVolume, hasAudioSolo, isAudioTrackAudible, trackPanToStereoPosition, trackVolumeToLinearGain } from '../utils/audioTrackAudibility'
@@ -776,7 +777,7 @@ export const drawPerspectiveClipSource = (ctx, source, rect, transform = {}, tra
 
 const hasManagedPixelOrVignetteEffect = (clip, clipTime) => {
   if (!clip) return false
-  const effects = clip.effects || []
+  const effects = getRenderEffects(clip)
   return hasPixelFilterEffect(effects, clipTime)
     || hasGlslEffect(effects)
     || hasVignetteEffect(effects, clipTime)
@@ -792,7 +793,7 @@ const hasManagedPixelOrVignetteEffect = (clip, clipTime) => {
  */
 const applyClipManagedEffectsToOffCanvas = (offCanvas, offCtx, width, height, clip, clipTime, frameIndex, glslQualityScale = 1) => {
   if (!clip) return
-  const effects = clip.effects || []
+  const effects = getRenderEffects(clip)
   // Channel shifts, sharpening, grain, and analog damage are ImageData passes.
   // Glow stays separate because it needs canvas blur + screen blending.
   const hasImageDataEffects = effects.some((e) => (
@@ -1871,7 +1872,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
 
     const matteClipTime = time - (matteClip.startTime || 0)
     const matteTransform = scaleTransformToExport(
-      applyEffectsToTransform(getAnimatedTransform(matteClip, matteClipTime) || matteClip.transform || {}, matteClip.effects, matteClipTime)
+      applyEffectsToTransform(getAnimatedTransform(matteClip, matteClipTime) || matteClip.transform || {}, getRenderEffects(matteClip), matteClipTime)
     )
     const matteOpacity = typeof matteTransform.opacity === 'number' ? matteTransform.opacity / 100 : 1
     if (matteOpacity <= 0.001) return matteCanvas
@@ -2066,12 +2067,12 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       if (clip.type === 'adjustment') {
         const clipTime = time - clip.startTime
         const adjustmentSettings = normalizeAdjustmentSettings(
-          getAnimatedAdjustmentSettings(clip, clipTime) || clip.adjustments || {}
+          getRenderAdjustments(clip, clipTime)
         )
         const baseClipTransform = getAnimatedTransform(clip, clipTime) || clip.transform || {}
         // Apply camera shake / transform-affecting effects to the adjustment
         // layer so shake propagates to every clip beneath.
-        const clipTransform = scaleTransformToExport(applyEffectsToTransform(baseClipTransform, clip.effects, clipTime))
+        const clipTransform = scaleTransformToExport(applyEffectsToTransform(baseClipTransform, getRenderEffects(clip), clipTime))
         const usesManagedPixelEffects = hasManagedPixelOrVignetteEffect(clip, clipTime)
         const adjustmentIsActive = hasAdjustmentEffect(adjustmentSettings)
         // Transform-only adjustment layers must still composite (they draw
@@ -2094,7 +2095,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
             colorSettings: adjustmentSettings,
             blurPx: adjustmentSettings.blur > 0 ? adjustmentSettings.blur : null,
             managedPasses: usesManagedPixelEffects
-              ? buildManagedEffectGpuPasses(clip.effects, clipTime, frameIndex, width, height)
+              ? buildManagedEffectGpuPasses(getRenderEffects(clip), clipTime, frameIndex, width, height)
               : null,
             opacity: baseOpacity,
             blendMode,
@@ -2200,14 +2201,14 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       const fullBakeUrl = cachedVideoSources.get(clip.id) || null
       const isFullBake = !!fullBakeUrl && clip.cacheKind === 'full'
       const resolveClipTransformAtTime = (sampleClipTime) => scaleTransformToExport(
-        applyEffectsToTransform(getAnimatedTransform(clip, sampleClipTime) || clip.transform || {}, clip.effects, sampleClipTime)
+        applyEffectsToTransform(getAnimatedTransform(clip, sampleClipTime) || clip.transform || {}, getRenderEffects(clip), sampleClipTime)
       )
       const liveClipTransform = resolveClipTransformAtTime(clipTime)
       const clipTransform = isFullBake
         ? { opacity: liveClipTransform.opacity, blendMode: liveClipTransform.blendMode }
         : liveClipTransform
       const clipAdjustmentSettings = normalizeAdjustmentSettings(
-        isFullBake ? {} : (getAnimatedAdjustmentSettings(clip, clipTime) || clip.adjustments || {})
+        isFullBake ? {} : getRenderAdjustments(clip, clipTime)
       )
       const usesTonalAdjustments = needsAdvancedColorPass(clipAdjustmentSettings)
       const clipAdjustmentFilter = buildCssFilterFromAdjustments(clipAdjustmentSettings)
@@ -2414,11 +2415,12 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       // run byte-identical logic for shapes and AI raster masks alike. The
       // OPAQUE luminance encoding is the one every export path reads —
       // coverage must live in RGB here, not alpha (see utils/shapeMask.js).
-      const animatedShapeMask = !usingCachedRender ? getAnimatedShapeMask(clip, clipTime) : null
+      const maskBypassed = isClipBypassed(clip, 'mask')
+      const animatedShapeMask = (!usingCachedRender && !maskBypassed) ? getAnimatedShapeMask(clip, clipTime) : null
       const shapeMaskCanvases = animatedShapeMask ? getShapeMaskCanvases(animatedShapeMask) : null
       const maskEffect = shapeMaskCanvases
         ? { type: 'mask', enabled: true, invertMask: false, shapeCanvas: shapeMaskCanvases.luma, shapeSignature: getShapeMaskSignature(animatedShapeMask) }
-        : (!usingCachedRender && (clip.effects || []).find(effect => effect.type === 'mask' && effect.enabled))
+        : (!usingCachedRender && !maskBypassed && (clip.effects || []).find(effect => effect.type === 'mask' && effect.enabled))
       
       let sourceWidth = width
       let sourceHeight = height
