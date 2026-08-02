@@ -80,6 +80,19 @@ const INSPECTOR_EXPANDED_SECTIONS_KEY = 'comfystudio-inspector-expanded-sections
 const INSPECTOR_ACTIVE_TAB_KEY = 'comfystudio-inspector-active-tab-v1'
 const INSPECTOR_EXPANDED_ADJUSTMENT_GROUPS_KEY = 'comfystudio-inspector-expanded-adjustment-groups-v1'
 const DEFAULT_INSPECTOR_EXPANDED_SECTIONS = ['clipInfo', 'transform', 'compositing', 'crop', 'mask', 'timing', 'effects', 'text', 'style', 'shape', 'animation', 'adjustments', 'commit']
+
+// Per-tab identity hues; inactive labels tint 42% toward the hue (see
+// .inspector-tab-tinted in index.css), the active tab goes full, dots inherit.
+const INSPECTOR_TAB_HUES = {
+  shape: '#45C4D6',
+  transform: '#6C9BF0',
+  mask: '#45C4D6',
+  color: '#E778B8',
+  effects: '#A07BE8',
+  motion: '#62C482',
+  mix: '#E09A57',
+  text: '#E8837A',
+}
 const DEFAULT_EXPANDED_ADJUSTMENT_GROUPS = ['global']
 const INSPECTOR_SETTINGS_SCOPE = {
   ALL: 'all',
@@ -2840,21 +2853,32 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     <div className="sticky top-0 z-20 flex border-b border-sf-dark-700 bg-sf-dark-800">
       {tabs.map((tab) => {
         const isActive = tab.id === activeTabId
+        const hue = INSPECTOR_TAB_HUES[tab.id] ?? 'rgb(var(--sf-accent))'
         return (
           <button
             key={tab.id}
             type="button"
             onClick={() => setActiveInspectorTab(tab.id)}
             title={tab.title || tab.label}
+            style={isActive
+              ? {
+                '--tab-hue': hue,
+                color: hue,
+                backgroundColor: `color-mix(in srgb, ${hue} 10%, transparent)`,
+                boxShadow: `inset 0 -2px 0 0 ${hue}`,
+              }
+              : { '--tab-hue': hue }}
             className={`relative flex-1 min-w-0 px-0.5 py-1.5 text-[10px] transition-colors border-r border-sf-dark-700 last:border-r-0 ${
-              isActive
-                ? 'text-sf-accent bg-sf-accent/10 shadow-[inset_0_-2px_0_0] shadow-sf-accent'
-                : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700/60'
+              isActive ? '' : 'inspector-tab-tinted hover:bg-sf-dark-700/60'
             }`}
           >
             {tab.label}
             {tab.dot && (
-              <span className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-sf-accent" title="Has non-default settings" />
+              <span
+                className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: 'var(--tab-hue)' }}
+                title="Has non-default settings"
+              />
             )}
           </button>
         )

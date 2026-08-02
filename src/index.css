@@ -391,3 +391,13 @@ html[data-input-modality="pointer"] [role="button"]:focus {
     box-shadow: 0 0 0 2px rgb(var(--sf-accent) / 0.95);
   }
 }
+
+/* Inspector task tabs: inactive labels carry a faint per-tab identity hue.
+   The hue arrives via --tab-hue set inline per tab in InspectorPanel.jsx;
+   hover pulls the label most of the way to primary while keeping the hue. */
+.inspector-tab-tinted {
+  color: color-mix(in srgb, var(--tab-hue) 42%, rgb(var(--sf-text-muted)));
+}
+.inspector-tab-tinted:hover {
+  color: color-mix(in srgb, var(--tab-hue) 70%, rgb(var(--sf-text-primary)));
+}
