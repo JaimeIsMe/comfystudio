@@ -15,6 +15,7 @@ import CanvasPreviewRenderer from './CanvasPreviewRenderer'
 import AudioLayerRenderer from './AudioLayerRenderer'
 import PreviewTransformGizmo from './PreviewTransformGizmo'
 import MaskShapeGizmo from './MaskShapeGizmo'
+import MaskSplineDrawOverlay from './MaskSplineDrawOverlay'
 import PreviewSourceControls from './PreviewSourceControls'
 import {
   computePreviewSignature,
@@ -381,7 +382,14 @@ function PreviewPanel() {
     outPoint,
     rangeRenderState,
     maskEditActive,
+    maskDrawActive,
   } = useTimelineStore()
+
+  // Pen-draw mode ends when the selection changes or the panel unmounts.
+  useEffect(() => {
+    if (!maskDrawActive) return undefined
+    return () => useTimelineStore.getState().setMaskDrawActive(false)
+  }, [maskDrawActive, selectedClipIds])
   
   // Use timeline playback hook
   const {
@@ -2949,7 +2957,27 @@ function PreviewPanel() {
 
           {/* Mask gizmo takes over while the Inspector's Mask section is
               open on a masked clip — two gizmos at once is handle soup. */}
-          {maskEditActive && selectedPreviewClip?.shapeMask && selectedPreviewTransform && (
+          {maskDrawActive && selectedPreviewClip && selectedPreviewTransform && (
+            <div
+              className="absolute inset-0 overflow-visible pointer-events-none"
+              style={previewStageStyle}
+            >
+              <MaskSplineDrawOverlay
+                transform={selectedPreviewTransform}
+                buildVideoTransform={buildVideoTransform}
+                frameRect={selectedPreviewFrameRect}
+                onCancel={() => useTimelineStore.getState().setMaskDrawActive(false)}
+                onCommit={(maskUpdates) => {
+                  const store = useTimelineStore.getState()
+                  store.saveToHistory()
+                  store.updateClipShapeMask(selectedPreviewClip.id, maskUpdates, false)
+                  store.setMaskDrawActive(false)
+                }}
+              />
+            </div>
+          )}
+
+          {!maskDrawActive && maskEditActive && selectedPreviewClip?.shapeMask && selectedPreviewTransform && (
             <div
               className="absolute inset-0 overflow-visible pointer-events-none"
               style={previewStageStyle}
@@ -2998,7 +3026,7 @@ function PreviewPanel() {
             </div>
           )}
 
-          {showPreviewTransformControls && !(maskEditActive && selectedPreviewClip?.shapeMask) && selectedPreviewClip && selectedPreviewTransform && (
+          {showPreviewTransformControls && !maskDrawActive && !(maskEditActive && selectedPreviewClip?.shapeMask) && selectedPreviewClip && selectedPreviewTransform && (
             <div
               className="absolute inset-0 overflow-visible pointer-events-none"
               style={previewStageStyle}

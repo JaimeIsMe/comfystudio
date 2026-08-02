@@ -3,7 +3,7 @@ import {
   Move, RotateCw, Maximize2, Clock, Layers,
   ChevronDown, ChevronRight, ChevronLeft, Sparkles,
   Zap, Eye, SlidersHorizontal, CircleDot, Lock, Unlock,
-  FlipHorizontal, FlipVertical, Link, Unlink, Crop, MoreHorizontal,
+  FlipHorizontal, FlipVertical, Link, Unlink, Crop, MoreHorizontal, PenTool,
   Anchor, RotateCcw, Type, AlignLeft, AlignCenter, AlignRight,
   AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd,
   Diamond, ChevronFirst, ChevronLast,
@@ -575,6 +575,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     updateClipTrackMatte,
     updateClipAdjustments,
     updateClipShapeMask,
+    maskDrawActive,
+    setMaskDrawActive,
     resetClipTransform,
     updateTextProperties,
     updateShapeProperties,
@@ -1553,9 +1555,24 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
                 )
               })}
             </div>
+            <button
+              type="button"
+              onClick={() => setMaskDrawActive(!maskDrawActive)}
+              className={`w-full rounded border px-2 py-1.5 text-[10px] transition-colors flex items-center justify-center gap-1.5 ${
+                maskDrawActive
+                  ? 'border-sf-accent bg-sf-accent/15 text-sf-accent'
+                  : 'border-sf-dark-600 bg-sf-dark-800 text-sf-text-muted hover:bg-sf-dark-700'
+              }`}
+              title="Draw a spline on the monitor: click to add points, drag for curves, click the first point or press Enter to close, Esc cancels"
+            >
+              <PenTool className="w-3 h-3" />
+              {maskDrawActive
+                ? 'Drawing — click points on the monitor…'
+                : (activeMask ? 'Draw New Spline' : 'Draw a Spline (pen)')}
+            </button>
             {!activeMask && (
               <p className="text-[10px] text-sf-text-muted">
-                Pick a shape to cut this clip out — soften the edge with Feather, flip it with Invert.
+                Pick a shape to cut this clip out — or draw one point by point. Soften the edge with Feather, flip it with Invert.
               </p>
             )}
             {activeMask && (

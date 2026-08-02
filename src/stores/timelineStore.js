@@ -790,6 +790,13 @@ export const useTimelineStore = create(
     if (get().maskEditActive === !!active) return
     set({ maskEditActive: !!active })
   },
+  // Pen-draw mode for spline masks: the monitor becomes a click-to-place
+  // drawing surface while this is on. Transient like maskEditActive.
+  maskDrawActive: false,
+  setMaskDrawActive: (active) => {
+    if (get().maskDrawActive === !!active) return
+    set({ maskDrawActive: !!active })
+  },
   
   // In/Out points for three-point editing
   inPoint: null, // Timeline in-point (seconds)
