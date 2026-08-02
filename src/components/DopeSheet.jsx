@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { ClipboardPaste, Clock3, Copy, Diamond, Magnet, Spline, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, ClipboardPaste, Clock3, Copy, Diamond, Magnet, Repeat, Spline, Trash2 } from 'lucide-react'
 import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
-import { KEYFRAMEABLE_PROPERTIES, EASING_OPTIONS, getAnimatedTransform, getAnimatedAdjustmentSettings, quantizeTimeToFrame, getAllKeyframeTimes, getKeyframeTimeTolerance, parseCubicBezierEasing, getValueAtTime } from '../utils/keyframes'
+import { KEYFRAMEABLE_PROPERTIES, EASING_OPTIONS, getAnimatedTransform, getAnimatedAdjustmentSettings, getAnimatedShapeMask, quantizeTimeToFrame, getAllKeyframeTimes, getKeyframeTimeTolerance, parseCubicBezierEasing, getValueAtTime } from '../utils/keyframes'
+import { normalizeShapeMask } from '../utils/shapeMask'
 import BezierEasingEditor from './BezierEasingEditor'
 import { getSpriteFramePosition } from '../services/thumbnailSprites'
 
@@ -90,6 +91,41 @@ const REFERENCE_STRIP_HEIGHT = 48
 const PROPERTY_ROW_HEIGHT = 36
 const KEYFRAME_MULTI_DRAG_THRESHOLD_PX = 0.5
 
+const DOPE_SHEET_GROUP_LABELS = {
+  time: 'Timing',
+  position: 'Position',
+  scale: 'Scale',
+  rotation: 'Rotation',
+  perspective: 'Perspective',
+  opacity: 'Opacity',
+  effects: 'Effects',
+  anchor: 'Anchor',
+  crop: 'Crop',
+  cornerPin: 'Corner Pin',
+  adjustments: 'Color',
+  mask: 'Mask',
+}
+// Shape keyframes hold whole point arrays, so the row is timing-only:
+// diamonds, drag, copy, easing — no value label and no graph.
+const MASK_SHAPE_ROW = { id: 'shapeMask.points', label: 'Mask Shape', group: 'mask', unit: '', timingOnly: true }
+const SHOW_ALL_STORAGE_KEY = 'comfystudio-dopesheet-show-all-v1'
+const COLLAPSED_GROUPS_STORAGE_KEY = 'comfystudio-dopesheet-collapsed-groups-v1'
+const LOOP_CLIP_PLAY_STORAGE_KEY = 'comfystudio-dopesheet-loop-v1'
+
+const readStoredJson = (key, fallback) => {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw == null ? fallback : JSON.parse(raw)
+  } catch {
+    return fallback
+  }
+}
+const writeStoredJson = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch { /* storage unavailable */ }
+}
+
 const formatRowValue = (value) => {
   if (!Number.isFinite(value)) return ''
   const abs = Math.abs(value)
@@ -122,6 +158,12 @@ function DopeSheet() {
     redo,
   } = useTimelineStore(useShallow(pickDopeSheetStoreSlice))
   const [frameSnapEnabled, setFrameSnapEnabled] = useState(true)
+  const [showAllProperties, setShowAllProperties] = useState(() => readStoredJson(SHOW_ALL_STORAGE_KEY, false) === true)
+  const [collapsedGroups, setCollapsedGroups] = useState(() => {
+    const stored = readStoredJson(COLLAPSED_GROUPS_STORAGE_KEY, [])
+    return Array.isArray(stored) ? stored.filter((id) => typeof id === 'string') : []
+  })
+  const [loopClipPlay, setLoopClipPlay] = useState(() => readStoredJson(LOOP_CLIP_PLAY_STORAGE_KEY, true) !== false)
   const [isEasingEditorOpen, setIsEasingEditorOpen] = useState(false)
   const [graphPropertyId, setGraphPropertyId] = useState(null)
   const [selectedKeyframe, setSelectedKeyframe] = useState(null) // { propertyId, time }
@@ -155,16 +197,97 @@ function DopeSheet() {
     return playheadPosition - selectedClip.startTime
   }, [selectedClip])
 
-  const propertyRows = useMemo(() => {
+  const eligibleProperties = useMemo(() => {
     if (!selectedClip) return []
 
-    return KEYFRAMEABLE_PROPERTIES.filter((property) => {
+    const properties = KEYFRAMEABLE_PROPERTIES.filter((property) => {
       const hasBaseValue = Object.prototype.hasOwnProperty.call(selectedClip.transform || {}, property.id)
       const hasAdjustmentBaseValue = Object.prototype.hasOwnProperty.call(selectedClip.adjustments || {}, property.id)
+      const hasMaskBaseValue = property.group === 'mask'
+        && !!selectedClip.shapeMask
+        && (property.id !== 'shapeMask.cornerRadius' || selectedClip.shapeMask?.shape === 'rounded')
       const hasKeyframes = (selectedClip.keyframes?.[property.id] || []).length > 0
-      return hasBaseValue || hasAdjustmentBaseValue || hasKeyframes
+      return hasBaseValue || hasAdjustmentBaseValue || hasMaskBaseValue || hasKeyframes
     })
+    const hasShapeKeyframes = (selectedClip.keyframes?.[MASK_SHAPE_ROW.id] || []).length > 0
+    if (hasShapeKeyframes || selectedClip.shapeMask?.shape === 'spline') {
+      properties.push(MASK_SHAPE_ROW)
+    }
+    return properties
   }, [selectedClip])
+
+  // Rows the lanes actually render: Animated mode is a flat list of keyframed
+  // properties; All mode buckets by group with collapsible headers whose lane
+  // shows the union of child keyframe times.
+  const visibleRows = useMemo(() => {
+    if (!selectedClip) return []
+    if (!showAllProperties) {
+      return eligibleProperties
+        .filter((property) => (selectedClip.keyframes?.[property.id] || []).length > 0)
+        .map((property) => ({ kind: 'property', property }))
+    }
+    const groupsInOrder = []
+    const byGroup = new Map()
+    for (const property of eligibleProperties) {
+      const groupId = property.group || 'other'
+      if (!byGroup.has(groupId)) {
+        byGroup.set(groupId, [])
+        groupsInOrder.push(groupId)
+      }
+      byGroup.get(groupId).push(property)
+    }
+    const rows = []
+    for (const groupId of groupsInOrder) {
+      const groupProperties = byGroup.get(groupId)
+      const collapsed = collapsedGroups.includes(groupId)
+      const keyframeTimes = []
+      for (const property of groupProperties) {
+        for (const keyframe of (selectedClip.keyframes?.[property.id] || [])) {
+          if (!keyframeTimes.some((time) => Math.abs(time - keyframe.time) < 0.0005)) {
+            keyframeTimes.push(keyframe.time)
+          }
+        }
+      }
+      rows.push({
+        kind: 'group',
+        groupId,
+        label: DOPE_SHEET_GROUP_LABELS[groupId] || groupId,
+        count: groupProperties.length,
+        keyframeTimes: keyframeTimes.sort((a, b) => a - b),
+        collapsed,
+      })
+      if (!collapsed) {
+        for (const property of groupProperties) rows.push({ kind: 'property', property })
+      }
+    }
+    return rows
+  }, [collapsedGroups, eligibleProperties, selectedClip, showAllProperties])
+
+  const visiblePropertyEntries = useMemo(() => (
+    visibleRows.filter((row) => row.kind === 'property').map((row) => row.property)
+  ), [visibleRows])
+
+  const toggleShowAllProperties = useCallback(() => {
+    setShowAllProperties((value) => {
+      writeStoredJson(SHOW_ALL_STORAGE_KEY, !value)
+      return !value
+    })
+  }, [])
+
+  const toggleGroupCollapsed = useCallback((groupId) => {
+    setCollapsedGroups((current) => {
+      const next = current.includes(groupId) ? current.filter((id) => id !== groupId) : [...current, groupId]
+      writeStoredJson(COLLAPSED_GROUPS_STORAGE_KEY, next)
+      return next
+    })
+  }, [])
+
+  const toggleLoopClipPlay = useCallback(() => {
+    setLoopClipPlay((value) => {
+      writeStoredJson(LOOP_CLIP_PLAY_STORAGE_KEY, !value)
+      return !value
+    })
+  }, [])
 
   const rulerTicks = useMemo(() => {
     if (!selectedClip) return { major: [], minor: [] }
@@ -255,26 +378,27 @@ function DopeSheet() {
     const bottom = Math.max(rectState.startY, rectState.currentY)
     const hits = []
 
-    propertyRows.forEach((property, rowIndex) => {
+    visibleRows.forEach((row, rowIndex) => {
+      if (row.kind !== 'property') return
       const rowCenterY = RULER_HEIGHT + REFERENCE_STRIP_HEIGHT + rowIndex * PROPERTY_ROW_HEIGHT + (PROPERTY_ROW_HEIGHT / 2)
       if (rowCenterY < top || rowCenterY > bottom) return
 
-      const keyframes = selectedClip.keyframes?.[property.id] || []
+      const keyframes = selectedClip.keyframes?.[row.property.id] || []
       keyframes.forEach((keyframe) => {
         const x = LEFT_COLUMN_WIDTH + (clampToClipRange(keyframe.time) * pixelsPerSecond)
         if (x < left || x > right) return
-        hits.push({ propertyId: property.id, time: keyframe.time })
+        hits.push({ propertyId: row.property.id, time: keyframe.time })
       })
     })
 
     return normalizeKeyframeSelection(hits)
-  }, [clampToClipRange, normalizeKeyframeSelection, pixelsPerSecond, propertyRows, selectedClip])
+  }, [clampToClipRange, normalizeKeyframeSelection, pixelsPerSecond, visibleRows, selectedClip])
 
   const getKeyframesAtTimeColumn = useCallback((time) => {
     if (!selectedClip) return []
     const hits = []
 
-    propertyRows.forEach((property) => {
+    visiblePropertyEntries.forEach((property) => {
       const keyframes = selectedClip.keyframes?.[property.id] || []
       keyframes.forEach((keyframe) => {
         if (isSameKeyframeTime(keyframe.time, time)) {
@@ -284,7 +408,7 @@ function DopeSheet() {
     })
 
     return normalizeKeyframeSelection(hits)
-  }, [isSameKeyframeTime, normalizeKeyframeSelection, propertyRows, selectedClip])
+  }, [isSameKeyframeTime, normalizeKeyframeSelection, visiblePropertyEntries, selectedClip])
 
   const getClipTimeFromClientX = useCallback((clientX) => {
     if (!lanesScrollRef.current) return 0
@@ -353,6 +477,27 @@ function DopeSheet() {
     if (!selectedClip) return
 
     const targetTime = normalizeEditableTime(getClipLocalPlayheadTime())
+    // Mask properties live on clip.shapeMask, and the shape row's value is
+    // the whole animated points array at this time — both would fall through
+    // the transform lookup below to a wrong 0.
+    if (propertyId === MASK_SHAPE_ROW.id) {
+      const animatedPoints = getAnimatedShapeMask(selectedClip, targetTime)?.points
+      if (!Array.isArray(animatedPoints)) return
+      const value = animatedPoints.map((p) => ({ x: p.x, y: p.y, hIn: { ...p.hIn }, hOut: { ...p.hOut } }))
+      setKeyframe(selectedClip.id, propertyId, targetTime, value, 'easeInOut', { saveHistory: true })
+      setSelectedKeyframe({ propertyId, time: targetTime })
+      setSelectedKeyframes([{ propertyId, time: targetTime }])
+      return
+    }
+    if (propertyId.startsWith('shapeMask.')) {
+      const normalizedMask = normalizeShapeMask(getAnimatedShapeMask(selectedClip, targetTime))
+      const maskValue = Number(normalizedMask?.[propertyId.slice('shapeMask.'.length)])
+      const value = Number.isFinite(maskValue) ? maskValue : 0
+      setKeyframe(selectedClip.id, propertyId, targetTime, value, 'easeInOut', { saveHistory: true })
+      setSelectedKeyframe({ propertyId, time: targetTime })
+      setSelectedKeyframes([{ propertyId, time: targetTime }])
+      return
+    }
     const animatedTransform = getAnimatedTransform(selectedClip, targetTime) || selectedClip.transform || {}
     const animatedAdjustments = selectedClip.type === 'adjustment'
       ? (getAnimatedAdjustmentSettings(selectedClip, targetTime) || selectedClip.adjustments || {})
@@ -402,11 +547,58 @@ function DopeSheet() {
   useEffect(() => {
     // Leave graph mode when the clip changes or the property loses its row.
     if (!graphPropertyId) return
-    if (!selectedClip || !propertyRows.some((property) => property.id === graphPropertyId)) {
+    if (!selectedClip || !eligibleProperties.some((property) => property.id === graphPropertyId)) {
       setGraphPropertyId(null)
       setGraphDragScale(null)
     }
-  }, [graphPropertyId, propertyRows, selectedClip])
+  }, [graphPropertyId, eligibleProperties, selectedClip])
+
+  // While the keyframe editor is open with a clip, Space plays that clip's
+  // range: from the playhead when inside it, from the clip start otherwise.
+  // Capture phase so the global transport hotkey never sees the event.
+  useEffect(() => {
+    if (!selectedClip) return undefined
+    const handleKeyDown = (event) => {
+      if (event.code !== 'Space' || event.repeat) return
+      const target = event.target
+      const tag = String(target?.tagName || '').toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) return
+      event.preventDefault()
+      event.stopPropagation()
+      const store = useTimelineStore.getState()
+      if (store.isPlaying) {
+        store.togglePlay()
+        return
+      }
+      const localTime = (store.playheadPosition || 0) - selectedClip.startTime
+      const nearEnd = localTime >= clipDuration - (1 / (2 * safeFps))
+      if (localTime < 0 || nearEnd) {
+        store.setPlayheadPosition(selectedClip.startTime)
+      }
+      store.togglePlay()
+    }
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [clipDuration, safeFps, selectedClip])
+
+  // Clip-scoped playback boundary: loop back to the clip start or park at
+  // the clip end, depending on the Loop toggle.
+  useEffect(() => {
+    if (!selectedClip) return undefined
+    const clipEnd = selectedClip.startTime + clipDuration
+    const epsilon = 1 / (2 * safeFps)
+    const unsubscribe = useTimelineStore.subscribe((state) => {
+      if (!state.isPlaying) return
+      if ((state.playheadPosition || 0) < clipEnd - epsilon) return
+      if (loopClipPlay) {
+        state.setPlayheadPosition(selectedClip.startTime)
+      } else {
+        state.togglePlay()
+        state.setPlayheadPosition(clipEnd)
+      }
+    })
+    return unsubscribe
+  }, [clipDuration, loopClipPlay, safeFps, selectedClip])
 
   const graphData = useMemo(() => {
     if (!selectedClip || !graphPropertyId) return null
@@ -1135,6 +1327,38 @@ function DopeSheet() {
             <Magnet className="w-3 h-3" />
             {frameSnapEnabled ? `Frame Snap (${safeFps}fps)` : 'Free Time'}
           </button>
+          <div className="flex rounded border border-sf-dark-600 overflow-hidden">
+            <button
+              onClick={() => { if (showAllProperties) toggleShowAllProperties() }}
+              className={`px-2 py-0.5 text-[10px] transition-colors ${
+                !showAllProperties ? 'bg-sf-accent/20 text-sf-accent' : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+              }`}
+              title="Show only properties with keyframes"
+            >
+              Animated
+            </button>
+            <button
+              onClick={() => { if (!showAllProperties) toggleShowAllProperties() }}
+              className={`px-2 py-0.5 text-[10px] transition-colors border-l border-sf-dark-600 ${
+                showAllProperties ? 'bg-sf-accent/20 text-sf-accent' : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
+              }`}
+              title="Show every property, grouped and collapsible"
+            >
+              All
+            </button>
+          </div>
+          <button
+            onClick={toggleLoopClipPlay}
+            className={`px-2 py-0.5 rounded text-[10px] border transition-colors flex items-center gap-1 ${
+              loopClipPlay
+                ? 'bg-sf-accent/20 text-sf-accent border-sf-accent/40'
+                : 'bg-sf-dark-700 text-sf-text-muted border-sf-dark-600 hover:bg-sf-dark-600'
+            }`}
+            title="Space plays this clip's range while the keyframe editor is open; Loop repeats it"
+          >
+            <Repeat className="w-3 h-3" />
+            {loopClipPlay ? 'Loop Clip' : 'Play Once'}
+          </button>
           <span className="text-[10px] text-sf-text-muted">Ctrl/Cmd+Click = toggle select | Shift+Click/Drag = same-time column | Alt+Drag = marquee keyframes | Drag selected = move together</span>
           {selectedKeyframeCount > 0 && (
             <span className="px-1.5 py-0.5 rounded border border-sky-400/35 bg-sky-500/10 text-[10px] text-sky-200">
@@ -1322,14 +1546,16 @@ function DopeSheet() {
             </div>
           </div>
 
-          {propertyRows.length === 0 && (
+          {visibleRows.length === 0 && (
             <div className="h-16 flex items-center justify-center text-xs text-sf-text-muted border-b border-sf-dark-800">
-              This clip does not expose keyframeable properties yet.
+              {showAllProperties
+                ? 'This clip does not expose keyframeable properties yet.'
+                : 'Nothing animated yet — add keyframes with the Inspector diamonds, or switch to All.'}
             </div>
           )}
 
           {graphPropertyId && graphData && (() => {
-            const graphProperty = propertyRows.find((property) => property.id === graphPropertyId)
+            const graphProperty = eligibleProperties.find((property) => property.id === graphPropertyId)
             const gridValues = [graphScale.vMax, (graphScale.vMax + graphScale.vMin) / 2, graphScale.vMin]
             return (
               <div className="flex border-b border-sf-dark-800" style={{ height: `${GRAPH_HEIGHT}px` }}>
@@ -1418,28 +1644,71 @@ function DopeSheet() {
             )
           })()}
 
-          {!graphPropertyId && propertyRows.map((property) => {
+          {!graphPropertyId && visibleRows.map((row) => {
+            if (row.kind === 'group') {
+              return (
+                <div key={`group-${row.groupId}`} className="flex h-9 border-b border-sf-dark-800">
+                  <button
+                    type="button"
+                    onClick={() => toggleGroupCollapsed(row.groupId)}
+                    className="sticky left-0 z-10 flex items-center gap-1.5 px-2 text-[10px] uppercase tracking-wide text-sf-text-muted hover:text-sf-text-primary border-r border-sf-dark-700 bg-sf-dark-800 transition-colors text-left"
+                    style={{ width: `${LEFT_COLUMN_WIDTH}px` }}
+                    title={row.collapsed ? `Expand ${row.label}` : `Collapse ${row.label}`}
+                  >
+                    {row.collapsed ? <ChevronRight className="w-3 h-3 flex-shrink-0" /> : <ChevronDown className="w-3 h-3 flex-shrink-0" />}
+                    <span className="truncate">{row.label}</span>
+                    <span className="text-[9px] normal-case text-sf-text-muted/70">{row.count}</span>
+                  </button>
+                  <div
+                    className="relative border-r border-sf-dark-700 cursor-pointer bg-sf-dark-800/40"
+                    style={{ width: `${laneWidth}px` }}
+                    onMouseDown={handleLaneMouseDown}
+                  >
+                    <DopeSheetPlayheadLine
+                      clipStartTime={selectedClip.startTime}
+                      clipDuration={clipDuration}
+                      pixelsPerSecond={pixelsPerSecond}
+                      className="absolute top-0 bottom-0 w-px bg-yellow-500/80 pointer-events-none"
+                    />
+                    {row.keyframeTimes.map((time, index) => (
+                      <div
+                        key={`group-key-${row.groupId}-${index}`}
+                        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 pointer-events-none"
+                        style={{ left: `${clampToClipRange(time) * pixelsPerSecond}px` }}
+                      >
+                        <Diamond className="w-2 h-2 text-amber-300/55 fill-amber-500/35" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            }
+            const property = row.property
             const keyframes = selectedClip.keyframes?.[property.id] || []
 
             return (
               <div key={property.id} className="flex h-9 border-b border-sf-dark-800">
                 <div
-                  className="sticky left-0 z-10 flex items-center justify-between px-3 text-[11px] border-r border-sf-dark-700 bg-sf-dark-900"
+                  className={`sticky left-0 z-10 flex items-center justify-between text-[11px] border-r border-sf-dark-700 bg-sf-dark-900 ${showAllProperties ? 'pl-5 pr-3' : 'px-3'}`}
                   style={{ width: `${LEFT_COLUMN_WIDTH}px` }}
                 >
                   <span className="text-sf-text-secondary">{property.label}</span>
                   <span className="flex items-center gap-1">
                     {keyframes.length > 0 ? (
-                      <DopeSheetRowValueLabel
-                        keyframes={keyframes}
-                        clipStartTime={selectedClip.startTime}
-                        clipDuration={clipDuration}
-                        unit={property.unit}
-                      />
+                      property.timingOnly ? (
+                        <span className="text-[9px] text-sf-text-muted">{keyframes.length === 1 ? '1 key' : `${keyframes.length} keys`}</span>
+                      ) : (
+                        <DopeSheetRowValueLabel
+                          keyframes={keyframes}
+                          clipStartTime={selectedClip.startTime}
+                          clipDuration={clipDuration}
+                          unit={property.unit}
+                        />
+                      )
                     ) : (
                       <span className="text-[9px] text-sf-text-muted">{property.unit}</span>
                     )}
-                    {keyframes.length > 0 && (
+                    {keyframes.length > 0 && !property.timingOnly && (
                       <button
                         onClick={(event) => {
                           event.stopPropagation()
@@ -1487,7 +1756,9 @@ function DopeSheet() {
                           : 'z-10'
                       }`}
                       style={{ left: `${clampToClipRange(keyframe.time) * pixelsPerSecond}px` }}
-                      title={`${property.label}: ${keyframe.value.toFixed(2)}${property.unit} at ${formatSeconds(keyframe.time)} (${keyframe.easing || 'linear'})`}
+                      title={property.timingOnly || typeof keyframe.value !== 'number'
+                        ? `${property.label} at ${formatSeconds(keyframe.time)} (${keyframe.easing || 'linear'})`
+                        : `${property.label}: ${keyframe.value.toFixed(2)}${property.unit} at ${formatSeconds(keyframe.time)} (${keyframe.easing || 'linear'})`}
                       onMouseDown={(event) => startKeyframeDrag(event, property.id, keyframe.time)}
                       onDoubleClick={(event) => event.stopPropagation()}
                     >
