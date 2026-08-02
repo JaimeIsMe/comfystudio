@@ -12,6 +12,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["vite", "--port", "5199", "--strictPort"],
       "port": 5199
+    },
+    {
+      "name": "app-alt",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "5299", "--strictPort"],
+      "port": 5299
     }
   ]
 }
