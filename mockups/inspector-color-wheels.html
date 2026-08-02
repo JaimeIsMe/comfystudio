@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Color Wheels — Inspector Color tab</title>
+<style>
+  :root {
+    --dark-900: rgb(8 12 26);
+    --dark-800: rgb(17 23 42);
+    --dark-700: rgb(31 31 58);
+    --dark-600: rgb(45 45 78);
+    --text-primary: rgb(244 238 248);
+    --text-secondary: rgb(214 207 226);
+    --text-muted: rgb(160 151 180);
+    --color-hue: #E778B8; /* the Color tab's identity hue (variant B) */
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--dark-900); color: var(--text-secondary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 28px 32px 48px;
+  }
+  h1 { font-size: 15px; color: var(--text-primary); font-weight: 600; }
+  .sub { font-size: 11px; color: var(--text-muted); margin: 4px 0 24px; max-width: 720px; line-height: 1.5; }
+  .row { display: flex; gap: 40px; flex-wrap: wrap; align-items: flex-start; }
+  .cell h2 { font-size: 12px; color: var(--text-primary); font-weight: 600; }
+  .cell .caption { font-size: 10.5px; color: var(--text-muted); margin: 3px 0 10px; max-width: 280px; line-height: 1.45; }
+
+  .panel { width: 260px; background: var(--dark-800); border: 1px solid var(--dark-700); border-radius: 6px; overflow: hidden; }
+
+  /* tab bar with today's variant-B hues, Color active */
+  .tabbar { display: flex; border-bottom: 1px solid var(--dark-700); }
+  .tab { flex: 1; padding: 6px 2px; font-size: 10px; text-align: center; border-right: 1px solid var(--dark-700); }
+  .tab:last-child { border-right: none; }
+  .tab.on { color: var(--color-hue); background: color-mix(in srgb, var(--color-hue) 10%, transparent); box-shadow: inset 0 -2px 0 0 var(--color-hue); }
+
+  .body { padding: 12px; }
+  .sechead { font-size: 10px; color: var(--text-secondary); font-weight: 600; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+  .sechead .reset { font-size: 9px; color: var(--text-muted); cursor: default; }
+
+  /* ---- wheel ---- */
+  .wheel { position: relative; border-radius: 50%; cursor: crosshair; touch-action: none;
+    background:
+      radial-gradient(circle, rgb(10 10 16 / .92) 0%, rgb(10 10 16 / .55) 34%, rgb(10 10 16 / 0) 72%),
+      conic-gradient(from 90deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+    border: 1px solid var(--dark-600);
+  }
+  .puck { position: absolute; width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid #fff;
+    background: rgb(0 0 0 / .35); transform: translate(-50%, -50%); pointer-events: none;
+    box-shadow: 0 0 3px rgb(0 0 0 / .8); }
+  .wlabel { text-align: center; font-size: 9.5px; color: var(--text-secondary); margin-top: 5px; font-weight: 600; }
+  .wsub { text-align: center; font-size: 8.5px; color: var(--text-muted); }
+  .readout { text-align: center; font-size: 8.5px; color: var(--text-muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+  .level { margin-top: 6px; }
+  .level input[type="range"] { width: 100%; height: 3px; accent-color: var(--text-muted); }
+  .level .lv { display: flex; justify-content: space-between; font-size: 8.5px; color: var(--text-muted); }
+
+  /* A: 2x2 grid */
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+
+  /* B: pills + one big wheel */
+  .pills { display: flex; gap: 4px; margin-bottom: 12px; }
+  .pill { flex: 1; font-size: 9.5px; padding: 4px 0; text-align: center; border-radius: 4px; cursor: pointer;
+    background: var(--dark-700); color: var(--text-muted); border: 1px solid transparent; }
+  .pill.on { color: var(--text-primary); background: var(--dark-600); border-color: color-mix(in srgb, var(--color-hue) 45%, transparent); }
+
+  .demoted { border-top: 1px solid var(--dark-700); margin-top: 12px; padding-top: 8px;
+    display: flex; justify-content: space-between; align-items: center; font-size: 9.5px; color: var(--text-muted); }
+  .demoted b { color: var(--text-secondary); font-weight: 600; }
+  .note { margin-top: 26px; max-width: 680px; font-size: 11px; color: var(--text-muted); line-height: 1.55;
+    border-top: 1px solid var(--dark-700); padding-top: 14px; }
+  .note b { color: var(--text-secondary); font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1>Color tab — Resolve-style wheels (drag the pucks)</h1>
+  <div class="sub">
+    Mapping, zero pipeline changes: disc angle → the range's <b>hue</b> (−180..180°), disc radius → its <b>saturation</b>,
+    the slider under each wheel → the range's level: <b>Lift = shadows.offset · Gamma = midtones.gamma · Gain = highlights.gain</b>,
+    Global level = brightness. Scopes already live in the bottom view; Exposure/Contrast-style sliders demote to a Fine Controls row.
+  </div>
+
+  <div class="row">
+    <div class="cell">
+      <h2>A — Four wheels, 2×2</h2>
+      <div class="caption">Everything visible at once, Resolve muscle memory. Wheels are 100px at this panel width.</div>
+      <div class="panel">
+        <div class="tabbar">
+          <div class="tab">Transform</div><div class="tab">Mask</div><div class="tab on">Color</div>
+          <div class="tab">Effects</div><div class="tab">Motion</div><div class="tab">Mix</div>
+        </div>
+        <div class="body">
+          <div class="sechead"><span>Color Wheels</span><span class="reset">Reset All</span></div>
+          <div class="grid2" id="gridA"></div>
+          <div class="demoted"><span><b>Fine Controls</b> — brightness · contrast · sat …</span><span>▸</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cell">
+      <h2>B — One wheel + range pills</h2>
+      <div class="caption">One 190px wheel with real precision; Global/Lift/Gamma/Gain switch like CapCut. Each range remembers its puck.</div>
+      <div class="panel">
+        <div class="tabbar">
+          <div class="tab">Transform</div><div class="tab">Mask</div><div class="tab on">Color</div>
+          <div class="tab">Effects</div><div class="tab">Motion</div><div class="tab">Mix</div>
+        </div>
+        <div class="body">
+          <div class="sechead"><span>Color Wheels</span><span class="reset">Reset All</span></div>
+          <div class="pills" id="pillsB"></div>
+          <div id="wheelB"></div>
+          <div class="demoted"><span><b>Fine Controls</b> — brightness · contrast · sat …</span><span>▸</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>Open questions for the build:</b> puck sensitivity (Resolve uses heavy damping — small drags, small moves);
+    whether Lift/Gamma/Gain sliders also get keyframe diamonds like other rows (they should);
+    and whether Fine Controls keeps the per-range slider groups or only the global seven. Double-click a wheel or slider to reset it.
+  </div>
+
+<script>
+  const RANGES = [
+    { key: 'global',  name: 'Global', sub: 'brightness',        level: 'Level' },
+    { key: 'lift',    name: 'Lift',   sub: 'shadows · offset',  level: 'Lift'  },
+    { key: 'gamma',   name: 'Gamma',  sub: 'midtones · gamma',  level: 'Gamma' },
+    { key: 'gain',    name: 'Gain',   sub: 'highlights · gain', level: 'Gain'  },
+  ];
+
+  function makeWheel(size, state, onChange) {
+    const wrap = document.createElement('div');
+    const disc = document.createElement('div');
+    disc.className = 'wheel';
+    disc.style.width = disc.style.height = size + 'px';
+    const puck = document.createElement('div');
+    puck.className = 'puck';
+    disc.appendChild(puck);
+    const readout = document.createElement('div');
+    readout.className = 'readout';
+
+    const R = size / 2;
+    const place = () => {
+      const a = (state.hue - 90) * Math.PI / 180;
+      const r = (state.sat / 100) * (R - 8);
+      puck.style.left = (R + Math.cos(a) * r) + 'px';
+      puck.style.top = (R + Math.sin(a) * r) + 'px';
+      readout.textContent = `H ${state.hue >= 0 ? '+' : ''}${Math.round(state.hue)}°  ·  S ${Math.round(state.sat)}%`;
+    };
+    const fromEvent = (e) => {
+      const b = disc.getBoundingClientRect();
+      const dx = e.clientX - (b.left + R), dy = e.clientY - (b.top + R);
+      const r = Math.min(Math.hypot(dx, dy), R - 8);
+      let deg = Math.atan2(dy, dx) * 180 / Math.PI + 90;
+      if (deg > 180) deg -= 360;
+      state.hue = deg; state.sat = r / (R - 8) * 100;
+      place(); onChange && onChange();
+    };
+    let down = false;
+    disc.addEventListener('pointerdown', (e) => { down = true; fromEvent(e); try { disc.setPointerCapture(e.pointerId); } catch {} });
+    disc.addEventListener('pointermove', (e) => { if (down) fromEvent(e); });
+    disc.addEventListener('pointerup', () => { down = false; });
+    disc.addEventListener('dblclick', () => { state.hue = 0; state.sat = 0; place(); onChange && onChange(); });
+
+    wrap.appendChild(disc);
+    wrap.appendChild(readout);
+    wrap._place = place;
+    place();
+    return wrap;
+  }
+
+  function makeLevel(labelText, state) {
+    const level = document.createElement('div');
+    level.className = 'level';
+    const lv = document.createElement('div');
+    lv.className = 'lv';
+    const val = document.createElement('span');
+    lv.innerHTML = `<span>${labelText}</span>`;
+    lv.appendChild(val);
+    const input = document.createElement('input');
+    input.type = 'range'; input.min = -100; input.max = 100; input.value = state.lv;
+    const show = () => { val.textContent = state.lv > 0 ? '+' + state.lv : String(state.lv); };
+    input.addEventListener('input', () => { state.lv = Number(input.value); show(); });
+    input.addEventListener('dblclick', () => { state.lv = 0; input.value = 0; show(); });
+    level.appendChild(input);
+    level.appendChild(lv);
+    show();
+    return level;
+  }
+
+  /* A: 2x2 */
+  const gridA = document.getElementById('gridA');
+  for (const r of RANGES) {
+    const st = { hue: 0, sat: 0, lv: 0 };
+    const cell = document.createElement('div');
+    const w = makeWheel(100, st);
+    cell.appendChild(w);
+    cell.insertAdjacentHTML('beforeend', `<div class="wlabel">${r.name}</div><div class="wsub">${r.sub}</div>`);
+    cell.appendChild(makeLevel(r.level, st));
+    gridA.appendChild(cell);
+  }
+
+  /* B: pills + one wheel with per-range memory */
+  const statesB = Object.fromEntries(RANGES.map((r) => [r.key, { hue: 0, sat: 0, lv: 0 }]));
+  let currentB = 'gamma';
+  const pillsB = document.getElementById('pillsB');
+  const wheelHost = document.getElementById('wheelB');
+  let wheelWrap = null, levelB = null;
+  const renderB = () => {
+    if (wheelWrap) wheelWrap.remove();
+    if (levelB) levelB.remove();
+    const r = RANGES.find((x) => x.key === currentB);
+    wheelWrap = makeWheel(190, statesB[currentB]);
+    wheelWrap.querySelector('.wheel').style.margin = '0 auto';
+    wheelHost.appendChild(wheelWrap);
+    wheelWrap.insertAdjacentHTML('beforeend', `<div class="wsub" style="margin-top:2px">${r.sub}</div>`);
+    levelB = makeLevel(r.level, statesB[currentB]);
+    wheelHost.appendChild(levelB);
+    [...pillsB.children].forEach((p) => p.classList.toggle('on', p.dataset.key === currentB));
+  };
+  for (const r of RANGES) {
+    const p = document.createElement('div');
+    p.className = 'pill'; p.dataset.key = r.key; p.textContent = r.name;
+    p.addEventListener('click', () => { currentB = r.key; renderB(); });
+    pillsB.appendChild(p);
+  }
+  renderB();
+</script>
+</body>
+</html>
