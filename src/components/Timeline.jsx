@@ -1507,9 +1507,11 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   // Caption workspace state. We mount CaptionWorkspace at the timeline level
   // so captions can span the whole edited program. The session carries the
   // workspace input asset (a lightweight stand-in for timeline scope), which
-  // scope to open in, and — for the Edit Captions round-trip — the overlay
-  // clip the workspace should replace in place on Generate.
-  const [captionWorkspaceSession, setCaptionWorkspaceSession] = useState(null) // { asset, scope, replaceClipId }
+  // scope to open in, and — for the Edit Captions round-trips — either the
+  // baked overlay clip to replace in place on Generate (replaceClipId, asset
+  // scope) or the live captions clip to seed the workspace from
+  // (seedFromClipId, timeline scope).
+  const [captionWorkspaceSession, setCaptionWorkspaceSession] = useState(null) // { asset, scope, replaceClipId, seedFromClipId }
   const handlePasteAtPlayhead = useCallback(() => {
     if (!activeTrackId || copiedClips.length === 0) return false
     pasteClipsAtPlayhead(activeTrackId, getLivePlayhead(), assets)
@@ -1682,7 +1684,11 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     return end
   }, [clips])
 
-  const handleOpenTimelineCaptions = () => {
+  // options.editClipId: a live captions clip to edit — the workspace seeds
+  // itself from that clip (cues + controls snapshot) instead of its session
+  // stash, and Generate replaces the clip in place.
+  const handleOpenTimelineCaptions = (options = {}) => {
+    const editClipId = options.editClipId || null
     const programDuration = computeProgramDuration()
     if (programDuration <= 0) {
       alert('Add some clips to the timeline before captioning.')
@@ -1726,6 +1732,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     setCaptionWorkspaceSession({
       scope: 'timeline',
       replaceClipId: null,
+      seedFromClipId: editClipId,
       asset: {
         id: `timeline-mix-${Date.now()}`,
         name: 'Timeline',
@@ -1796,6 +1803,12 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   // replace in place on Generate.
   const handleEditCaptionsFromClip = (clip) => {
     setClipContextMenu(null)
+    // Live captions clips carry their own cues + workspace snapshot — reopen
+    // the timeline workspace seeded straight from the clip.
+    if (clip?.type === 'captions') {
+      handleOpenTimelineCaptions({ editClipId: clip.id })
+      return
+    }
     if (!clip?.assetId) return
     const overlayAsset = getAssetById(clip.assetId)
     const overlaySettings = overlayAsset?.settings || {}
@@ -1832,13 +1845,15 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     setCaptionWorkspaceSession({ scope: 'asset', asset: workspaceAsset, replaceClipId: clip.id })
   }
 
-  // Double-click a caption overlay clip = Edit Captions (the CapCut reflex).
-  // The caption check runs inside the handler, not at render time, so the
+  // Double-click a captions clip = Edit Captions (the CapCut reflex). Covers
+  // live captions clips (type 'captions') and legacy baked overlays. The
+  // caption check runs inside the handler, not at render time, so the
   // per-clip render path stays free of asset lookups. Other clip types keep
   // double-click unbound.
   const handleClipDoubleClick = (e, clip) => {
-    const clipAsset = clip?.assetId ? getAssetById(clip.assetId) : null
-    const isCaptionOverlay = Boolean(
+    const isLiveCaptions = clip?.type === 'captions'
+    const clipAsset = !isLiveCaptions && clip?.assetId ? getAssetById(clip.assetId) : null
+    const isCaptionOverlay = isLiveCaptions || Boolean(
       clipAsset?.settings?.overlayKind === 'captions' || clipAsset?.settings?.captionScope
     )
     if (!isCaptionOverlay) return
@@ -5251,7 +5266,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
               {showToolbarLabels && 'Shape'}
             </button>
             <button
-              onClick={handleOpenTimelineCaptions}
+              onClick={() => handleOpenTimelineCaptions()}
               className={toolbarButtonClass}
               title="Transcribe the timeline's audio and add animated captions on a new top track"
             >
@@ -7482,7 +7497,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
           {(() => {
             const contextClip = clips.find(c => c.id === clipContextMenu.clipId)
             const contextAsset = contextClip?.assetId ? getAssetById(contextClip.assetId) : null
-            const isCaptionOverlay = Boolean(
+            const isCaptionOverlay = contextClip?.type === 'captions' || Boolean(
               contextAsset?.settings?.overlayKind === 'captions' || contextAsset?.settings?.captionScope
             )
             if (!isCaptionOverlay) return null
@@ -8049,6 +8064,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
           if (!clip || !clip.assetId) return false
           return getAssetById(clip.assetId)?.settings?.captionScope === 'timeline'
         })}
+        seedFromClipId={captionWorkspaceSession?.seedFromClipId || null}
         timelineCaptionSidecarPath={(() => {
           for (const clip of clips) {
             if (!clip?.assetId) continue

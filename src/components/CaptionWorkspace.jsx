@@ -309,6 +309,56 @@ function createEmptyDraft(asset) {
 // re-transcribe. Keyed by project handle; lives for the app session only.
 const timelineCaptionSessionCache = new Map()
 
+// Rebuild the workspace's editable state from a live captions clip, shaped
+// like a sidecar draft so applySidecarDraft can consume it. The clip stores
+// render-ready cues (draft cues with per-cue globalOverrides baked in) plus —
+// since the edit round-trip shipped — the workspace's own controls snapshot.
+// Clips placed before the snapshot existed reverse-map their controls from
+// the first cue's globalOverrides: those ARE the resolved controls, minus
+// only the distinction between a user-picked text color and the preset's.
+function draftFromLiveCaptionsClip(clip) {
+  const captions = clip?.captions
+  const renderCues = Array.isArray(captions?.cues) ? captions.cues : []
+  if (renderCues.length === 0) return null
+  const cues = renderCues.map(({ globalOverrides, ...cue }) => cue)
+  const {
+    verticalPlacement,
+    horizontalPlacement,
+    motionProfile,
+    sizeScale,
+    verticalOffset,
+    textStyle: overrideTextStyle,
+    subtitleColor,
+    subtitlePosition: overridePosition,
+    ...overrideStyleControls
+  } = renderCues[0]?.globalOverrides || {}
+  const ws = captions.workspace || null
+  return {
+    presetId: ws?.presetId || captions.preset?.id || null,
+    accentColor: ws
+      ? (ws.accentColor || null)
+      : (captions.preset?.traditional ? null : captions.preset?.keyWordColor || null),
+    textColor: ws ? (ws.textColor ?? null) : (subtitleColor ?? null),
+    textStyle: ws?.textStyle || overrideTextStyle || null,
+    subtitlePosition: ws?.subtitlePosition || overridePosition || null,
+    styleControls: ws?.styleControls || overrideStyleControls,
+    globalVertical: ws?.globalVertical || verticalPlacement || null,
+    globalHorizontal: ws?.globalHorizontal || horizontalPlacement || null,
+    globalMotion: ws?.globalMotion || motionProfile || null,
+    globalSizeScale: typeof ws?.globalSizeScale === 'number'
+      ? ws.globalSizeScale
+      : (typeof sizeScale === 'number' ? sizeScale : null),
+    globalVerticalOffset: typeof ws?.globalVerticalOffset === 'number'
+      ? ws.globalVerticalOffset
+      : (typeof verticalOffset === 'number' ? verticalOffset : null),
+    modelId: ws?.modelId || null,
+    words: Array.isArray(ws?.words) ? ws.words : [],
+    transcriptText: cuesToTranscript(cues),
+    cues,
+    audioDuration: ws?.audioDuration || Number(clip?.duration) || null,
+  }
+}
+
 // An approximate TikTok UI overlaid on the positioning preview so the user can
 // keep captions clear of the platform chrome (right action rail + bottom
 // caption/handle/music). viewBox is the real frame size and the SVG is
@@ -388,6 +438,11 @@ function CaptionWorkspace({
   // overlay, used to restore cues/style after an app restart when the
   // in-memory session cache is cold.
   timelineCaptionSidecarPath = null,
+  // Timeline scope only: id of a live captions clip to edit. Set by the
+  // timeline's double-click / Edit Captions entry points; the workspace seeds
+  // itself from that clip's cues + workspace snapshot ahead of every other
+  // restore source, and Generate replaces the clip in place.
+  seedFromClipId = null,
   currentProjectHandle,
   timelineSize,
   folders,
@@ -839,12 +894,34 @@ function CaptionWorkspace({
       if (typeof existingStyleControls.shadowOpacity === 'number') setShadowOpacity(existingStyleControls.shadowOpacity)
       if (typeof existingStyleControls.shadowBlur === 'number') setShadowBlur(existingStyleControls.shadowBlur)
       if (typeof existingStyleControls.shadowDistance === 'number') setShadowDistance(existingStyleControls.shadowDistance)
+      // Placement globals: present in live-clip drafts and in sidecars saved
+      // since the round-trip shipped; older sidecars simply keep the defaults.
+      if (existingDraft.globalVertical) setGlobalVertical(existingDraft.globalVertical)
+      if (existingDraft.globalHorizontal) setGlobalHorizontal(existingDraft.globalHorizontal)
+      if (existingDraft.globalMotion) setGlobalMotion(existingDraft.globalMotion)
+      if (typeof existingDraft.globalSizeScale === 'number') setGlobalSizeScale(existingDraft.globalSizeScale)
+      if (typeof existingDraft.globalVerticalOffset === 'number') setGlobalVerticalOffset(existingDraft.globalVerticalOffset)
     }
 
-    // Timeline scope restores the in-memory session cache first (survives a
-    // reopen), then falls back to the sidecar saved by the last generated
-    // timeline overlay (survives an app restart).
+    // Timeline scope restore priority: the clip the user asked to edit
+    // (double-click / Edit Captions — the clip is the durable source, so this
+    // works after restarts and on other machines) → the in-memory session
+    // cache (may hold a fresher transcribe than the clip) → any live captions
+    // clip on the timeline (cold-start fallback) → the sidecar saved by the
+    // last baked timeline overlay.
     if (isTimelineScope) {
+      const timelineClips = useTimelineStore.getState().clips
+      const seedClip = seedFromClipId
+        ? timelineClips.find((c) => c.id === seedFromClipId && c.type === 'captions')
+        : null
+      const seedDraft = seedClip ? draftFromLiveCaptionsClip(seedClip) : null
+      if (seedDraft) {
+        applySidecarDraft(seedDraft)
+        setStatusMessage('Editing the captions from your timeline — Generate applies the changes in place.')
+        return () => {
+          cancelled = true
+        }
+      }
       const cached = currentProjectHandle ? timelineCaptionSessionCache.get(currentProjectHandle) : null
       if (cached?.draft) {
         setDraft(cached.draft)
@@ -870,19 +947,26 @@ function CaptionWorkspace({
         if (typeof cached.globalSizeScale === 'number') setGlobalSizeScale(cached.globalSizeScale)
         if (typeof cached.globalVerticalOffset === 'number') setGlobalVerticalOffset(cached.globalVerticalOffset)
         setStatusMessage('Restored your last timeline captions — re-transcribe if the audio changed.')
-      } else if (currentProjectHandle && timelineCaptionSidecarPath) {
-        ;(async () => {
-          try {
-            const existingDraft = await loadCaptionSidecar(currentProjectHandle, timelineCaptionSidecarPath)
-            if (!existingDraft || cancelled) return
-            applySidecarDraft(existingDraft)
-            setStatusMessage('Restored your last timeline captions — re-transcribe if the audio changed.')
-          } catch (loadError) {
-            if (!cancelled) {
-              console.warn('Could not load the timeline caption draft:', loadError)
+      } else {
+        const liveClip = timelineClips.find((c) => c.type === 'captions')
+        const liveDraft = liveClip ? draftFromLiveCaptionsClip(liveClip) : null
+        if (liveDraft) {
+          applySidecarDraft(liveDraft)
+          setStatusMessage('Restored the captions from your timeline clip — Generate applies changes in place.')
+        } else if (currentProjectHandle && timelineCaptionSidecarPath) {
+          ;(async () => {
+            try {
+              const existingDraft = await loadCaptionSidecar(currentProjectHandle, timelineCaptionSidecarPath)
+              if (!existingDraft || cancelled) return
+              applySidecarDraft(existingDraft)
+              setStatusMessage('Restored your last timeline captions — re-transcribe if the audio changed.')
+            } catch (loadError) {
+              if (!cancelled) {
+                console.warn('Could not load the timeline caption draft:', loadError)
+              }
             }
-          }
-        })()
+          })()
+        }
       }
       return () => {
         cancelled = true
@@ -908,7 +992,7 @@ function CaptionWorkspace({
     return () => {
       cancelled = true
     }
-  }, [asset, scope, currentProjectHandle, timelineCaptionSidecarPath, isOpen])
+  }, [asset, scope, currentProjectHandle, timelineCaptionSidecarPath, seedFromClipId, isOpen])
 
   // Grab a representative still for the positioning preview. Asset scope uses
   // the source clip (mid-point); timeline scope uses the frame under the
@@ -1237,6 +1321,23 @@ function CaptionWorkspace({
       // power the Edit Captions round-trip from the timeline clip. Asset
       // scope additionally bookmarks the sidecar on the source asset. Web
       // mode has no sidecars — the overlay still renders.
+      // One controls snapshot, two consumers: the sidecar file and (timeline
+      // scope) the live captions clip itself — either can restore this
+      // workspace exactly, including the placement globals.
+      const styleSnapshot = {
+        presetId: selectedPreset.id,
+        accentColor,
+        textColor,
+        textStyle: globalTextStyle,
+        subtitlePosition,
+        styleControls: captionStyleControls,
+        globalVertical,
+        globalHorizontal,
+        globalMotion,
+        globalSizeScale,
+        globalVerticalOffset,
+        modelId: draft.modelId,
+      }
       const sidecarPayload = {
         version: 1,
         scope: isTimelineScope ? 'timeline' : 'asset',
@@ -1245,13 +1346,7 @@ function CaptionWorkspace({
           sourceAssetName: asset.name,
           sourceAssetPath: asset.path || null,
         }),
-        presetId: selectedPreset.id,
-        accentColor,
-        textColor,
-        textStyle: globalTextStyle,
-        subtitlePosition,
-        styleControls: captionStyleControls,
-        modelId: draft.modelId,
+        ...styleSnapshot,
         transcriptText: cuesToTranscript(normalizedCues),
         words: draft.words,
         cues: normalizedCues,
@@ -1305,6 +1400,13 @@ function CaptionWorkspace({
           cues: renderCues,
           preset: renderPreset,
           duration: cueDuration,
+          workspace: {
+            version: 1,
+            ...styleSnapshot,
+            words: draft.words,
+            audioDuration: draft.audioDuration || cueDuration,
+            updatedAt: timestamp,
+          },
         })
         if (!liveClip) {
           throw new Error('Could not place the captions clip on the timeline.')

@@ -802,7 +802,7 @@ export const useTimelineStore = create(
    * render fresh every frame in preview and export — no baked overlay video.
    * Reuses the dedicated role:'captions' track exactly like baked overlays.
    */
-  placeLiveCaptions: ({ cues, preset, duration, name = 'Captions' } = {}) => {
+  placeLiveCaptions: ({ cues, preset, duration, workspace = null, name = 'Captions' } = {}) => {
     const safeCues = Array.isArray(cues) ? cues : []
     if (safeCues.length === 0) return null
     get().saveToHistory()
@@ -813,16 +813,49 @@ export const useTimelineStore = create(
     }
     if (!captionsTrack) return null
 
-    // One captions clip per timeline: clear the captions track and any stray
-    // live captions clips parked elsewhere.
-    get().clips
-      .filter((clip) => clip.trackId === captionsTrack.id || clip.type === 'captions')
+    // One captions clip per timeline. An existing live clip survives as the
+    // carrier — its transform, grade, masks, matte, bypass and keyframes ride
+    // through a regenerate — while baked leftovers and strays clear out.
+    const before = get().clips
+    const carrier = before.find((clip) => clip.type === 'captions' && clip.trackId === captionsTrack.id)
+      || before.find((clip) => clip.type === 'captions')
+    before
+      .filter((clip) => (clip.trackId === captionsTrack.id || clip.type === 'captions') && clip.id !== carrier?.id)
       .forEach((clip) => get().removeClip(clip.id))
 
     const safeDuration = Math.max(
       0.4,
       Number(duration) || Math.max(...safeCues.map((cue) => Number(cue?.end) || 0), 1)
     )
+    // `workspace` is the caption workspace's own controls snapshot (preset id,
+    // style controls, placement globals, word timings) — render-irrelevant,
+    // but it makes the edit round-trip lossless across restarts and machines.
+    const captionsPayload = {
+      preset: preset || null,
+      cues: safeCues,
+      ...(workspace ? { workspace } : {}),
+    }
+
+    if (carrier) {
+      set((state) => ({
+        clips: state.clips.map((clip) => (clip.id === carrier.id
+          ? {
+              ...clip,
+              trackId: captionsTrack.id,
+              startTime: 0,
+              duration: safeDuration,
+              sourceDuration: safeDuration,
+              trimStart: 0,
+              trimEnd: safeDuration,
+              captions: captionsPayload,
+            }
+          : clip)),
+        selectedClipIds: [carrier.id],
+        duration: Math.max(state.duration, safeDuration + 10),
+      }))
+      return get().clips.find((clip) => clip.id === carrier.id) || null
+    }
+
     const current = get()
     const safeClipCounter = getNextClipCounter(current.clips, current.clipCounter || 1)
     const newClip = {
@@ -841,10 +874,7 @@ export const useTimelineStore = create(
       compositeLowerLayers: CLIP_COMPOSITE_MODE.AUTO,
       url: null,
       thumbnail: null,
-      captions: {
-        preset: preset || null,
-        cues: safeCues,
-      },
+      captions: captionsPayload,
       transform: {
         positionX: 0,
         positionY: 0,
