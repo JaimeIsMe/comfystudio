@@ -3,7 +3,7 @@ import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import videoCache from '../services/videoCache'
 import { hasUsablePlaybackCache } from '../services/playbackCache'
-import { getAnimatedAdjustmentSettings, getAnimatedTransform, getAnimatedShapeProperties } from '../utils/keyframes'
+import { getAnimatedAdjustmentSettings, getAnimatedTransform, getAnimatedShapeProperties, getAnimatedShapeMask } from '../utils/keyframes'
 import {
   applyAdjustmentSettingsToImageData,
   buildCssFilterFromAdjustments,
@@ -340,12 +340,13 @@ function getMaskInfo(clip, getAssetById, time, isCachedRender = false) {
   // and invert are baked into the rasters, so consumers treat it as a plain
   // non-inverted matte: the 2D path composites the alpha encoding, the GPU
   // path samples the opaque luminance encoding.
-  const shapeCanvases = getShapeMaskCanvases(clip?.shapeMask)
+  const animatedShapeMask = getAnimatedShapeMask(clip, time - (clip?.startTime || 0))
+  const shapeCanvases = getShapeMaskCanvases(animatedShapeMask)
   if (shapeCanvases) {
     return {
       shapeCanvasAlpha: shapeCanvases.alpha,
       shapeCanvasLuma: shapeCanvases.luma,
-      shapeSignature: getShapeMaskSignature(clip.shapeMask),
+      shapeSignature: getShapeMaskSignature(animatedShapeMask),
       invertMask: false,
     }
   }

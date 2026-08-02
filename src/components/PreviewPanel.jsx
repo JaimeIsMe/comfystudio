@@ -8,7 +8,7 @@ import { useTimelinePlayback } from '../hooks/useTimelinePlayback'
 import useViewportClampedPosition from '../hooks/useViewportClampedPosition'
 import usePreviewPopout from '../hooks/usePreviewPopout'
 import { captureTimelineFrameAt, getTopmostVideoOrImageClipAtTime } from '../utils/captureTimelineFrame'
-import { getAnimatedTransform } from '../utils/keyframes'
+import { getAnimatedTransform, getAnimatedShapeMask } from '../utils/keyframes'
 import VideoLayerRenderer from './VideoLayerRenderer'
 import CanvasPreviewRenderer from './CanvasPreviewRenderer'
 import AudioLayerRenderer from './AudioLayerRenderer'
@@ -2955,14 +2955,23 @@ function PreviewPanel() {
             >
               <MaskShapeGizmo
                 clip={selectedPreviewClip}
-                mask={selectedPreviewClip.shapeMask}
+                mask={getAnimatedShapeMask(selectedPreviewClip, playheadPosition - (selectedPreviewClip.startTime || 0)) || selectedPreviewClip.shapeMask}
                 transform={selectedPreviewTransform}
                 buildVideoTransform={buildVideoTransform}
                 frameRect={selectedPreviewFrameRect}
                 disabled={isSpaceHeld || isPanning || isZooming}
                 onInteractionStart={() => useTimelineStore.getState().saveToHistory()}
                 onMaskChange={(updates) => {
-                  useTimelineStore.getState().updateClipShapeMask(selectedPreviewClip.id, updates, false)
+                  const store = useTimelineStore.getState()
+                  store.updateClipShapeMask(selectedPreviewClip.id, updates, false)
+                  const maskClipTime = playheadPosition - (selectedPreviewClip.startTime || 0)
+                  for (const [key, value] of Object.entries(updates || {})) {
+                    if (typeof value !== 'number') continue
+                    const propertyId = `shapeMask.${key}`
+                    if (hasKeyframes(selectedPreviewClip.id, propertyId)) {
+                      store.setKeyframe(selectedPreviewClip.id, propertyId, maskClipTime, value, 'easeInOut', { saveHistory: false })
+                    }
+                  }
                 }}
               />
             </div>

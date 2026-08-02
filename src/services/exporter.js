@@ -1,7 +1,7 @@
 import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
-import { getAnimatedTransform, getAnimatedAdjustmentSettings, getAnimatedTextProperties, getAnimatedShapeProperties } from '../utils/keyframes'
+import { getAnimatedTransform, getAnimatedAdjustmentSettings, getAnimatedTextProperties, getAnimatedShapeProperties, getAnimatedShapeMask } from '../utils/keyframes'
 import {
   applyAdjustmentSettingsToImageData,
   buildCssFilterFromAdjustments,
@@ -2414,9 +2414,10 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       // run byte-identical logic for shapes and AI raster masks alike. The
       // OPAQUE luminance encoding is the one every export path reads —
       // coverage must live in RGB here, not alpha (see utils/shapeMask.js).
-      const shapeMaskCanvases = !usingCachedRender ? getShapeMaskCanvases(clip.shapeMask) : null
+      const animatedShapeMask = !usingCachedRender ? getAnimatedShapeMask(clip, clipTime) : null
+      const shapeMaskCanvases = animatedShapeMask ? getShapeMaskCanvases(animatedShapeMask) : null
       const maskEffect = shapeMaskCanvases
-        ? { type: 'mask', enabled: true, invertMask: false, shapeCanvas: shapeMaskCanvases.luma, shapeSignature: getShapeMaskSignature(clip.shapeMask) }
+        ? { type: 'mask', enabled: true, invertMask: false, shapeCanvas: shapeMaskCanvases.luma, shapeSignature: getShapeMaskSignature(animatedShapeMask) }
         : (!usingCachedRender && (clip.effects || []).find(effect => effect.type === 'mask' && effect.enabled))
       
       let sourceWidth = width

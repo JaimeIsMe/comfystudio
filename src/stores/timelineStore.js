@@ -9,6 +9,7 @@ import { clampTrackPan, clampTrackVolume } from '../utils/audioTrackAudibility'
 import { normalizeAudioInserts } from '../utils/audioInserts'
 import { CLIP_COMPOSITE_MODE, normalizeClipCompositeMode } from '../utils/layerCompositing'
 import { getKeyframeTimeTolerance } from '../utils/keyframes'
+import { DEFAULT_SHAPE_MASK, normalizeShapeMask } from '../utils/shapeMask'
 import { normalizeTrackMatte } from '../utils/trackMatte'
 import { DEFAULT_LINE_THICKNESS, DEFAULT_SHAPE_PROPERTIES, getShapeDisplayName, normalizeShapeProperties } from '../utils/shapes'
 import {
@@ -3370,13 +3371,17 @@ export const useTimelineStore = create(
       const hasAdjustmentValue = adjustmentValue !== undefined
       const shapeProperties = clip.type === 'shape' ? normalizeShapeProperties(clip.shapeProperties || {}) : null
       const hasShapeValue = shapeProperties && Object.prototype.hasOwnProperty.call(shapeProperties, property)
+      const maskPropertyKey = property.startsWith('shapeMask.') ? property.slice('shapeMask.'.length) : null
+      const maskForKeyframe = maskPropertyKey ? (normalizeShapeMask(clip.shapeMask) || DEFAULT_SHAPE_MASK) : null
       const currentValue = property === 'speed'
         ? (Number(clip.speed) > 0 ? Number(clip.speed) : 1)
-        : hasAdjustmentValue
-          ? adjustmentValue
-          : hasShapeValue
-            ? shapeProperties[property]
-            : (clip.transform?.[property] ?? adjustmentValue ?? 0)
+        : maskForKeyframe
+          ? (Number(maskForKeyframe[maskPropertyKey]) || 0)
+          : hasAdjustmentValue
+            ? adjustmentValue
+            : hasShapeValue
+              ? shapeProperties[property]
+              : (clip.transform?.[property] ?? adjustmentValue ?? 0)
       get().setKeyframe(clipId, property, clipTime, currentValue, 'easeInOut', { saveHistory: true })
       // If scale is linked, also add keyframe for the other scale property
       if (isLinked) {

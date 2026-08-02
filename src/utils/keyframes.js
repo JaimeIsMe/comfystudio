@@ -203,6 +203,16 @@ export const KEYFRAMEABLE_PROPERTIES = [
     { id: `${groupKey}.offset`, label: `${groupKey.charAt(0).toUpperCase() + groupKey.slice(1)} Offset`, group: 'adjustments', unit: '' },
     { id: `${groupKey}.hue`, label: `${groupKey.charAt(0).toUpperCase() + groupKey.slice(1)} Hue`, group: 'adjustments', unit: 'deg' },
   ]),
+  // Whole-mask animation: dotted ids so they can't collide with the plain
+  // shape-clip ids ('width'), evaluated by getAnimatedShapeMask — NOT part
+  // of the transform (getAnimatedTransform skips group 'mask').
+  { id: 'shapeMask.centerX', label: 'Mask Center X', group: 'mask', unit: '%' },
+  { id: 'shapeMask.centerY', label: 'Mask Center Y', group: 'mask', unit: '%' },
+  { id: 'shapeMask.width', label: 'Mask Width', group: 'mask', unit: '%' },
+  { id: 'shapeMask.height', label: 'Mask Height', group: 'mask', unit: '%' },
+  { id: 'shapeMask.rotation', label: 'Mask Rotation', group: 'mask', unit: '°' },
+  { id: 'shapeMask.cornerRadius', label: 'Mask Corner Radius', group: 'mask', unit: '%' },
+  { id: 'shapeMask.feather', label: 'Mask Feather', group: 'mask', unit: '%' },
 ]
 
 export const ADJUSTMENT_KEYFRAME_PROPERTIES = [...GLOBAL_ADJUSTMENT_KEYS, ...TONAL_ADJUSTMENT_PROPERTY_IDS]
@@ -398,6 +408,29 @@ export function getAnimatedShapeProperties(clip, clipTime) {
   return normalizeShapeProperties(animatedShapeProperties)
 }
 
+export const SHAPE_MASK_KEYFRAME_KEYS = ['centerX', 'centerY', 'width', 'height', 'rotation', 'cornerRadius', 'feather']
+
+/**
+ * clip.shapeMask with any keyframed params evaluated at clipTime. Returns the
+ * base mask object itself (same identity) when no mask keyframes exist, so
+ * signature-based raster and render caches stay stable for static masks.
+ */
+export function getAnimatedShapeMask(clip, clipTime) {
+  const baseMask = clip?.shapeMask
+  if (!baseMask || typeof baseMask !== 'object') return baseMask ?? null
+  const keyframes = clip?.keyframes
+  if (!keyframes) return baseMask
+  let animated = null
+  for (const key of SHAPE_MASK_KEYFRAME_KEYS) {
+    const propKeyframes = keyframes[`shapeMask.${key}`]
+    if (propKeyframes && propKeyframes.length > 0) {
+      if (!animated) animated = { ...baseMask }
+      animated[key] = getValueAtTime(propKeyframes, clipTime, Number(baseMask[key]) || 0)
+    }
+  }
+  return animated || baseMask
+}
+
 // ==================== MOTION PATHS ====================
 // Spatial position interpolation: when positionX and positionY keyframes
 // share the same times and the clip opts in (transform.motionPathMode =
@@ -510,6 +543,7 @@ export function getAnimatedTransform(clip, clipTime) {
   // Override with keyframed values
   for (const prop of KEYFRAMEABLE_PROPERTIES) {
     if (prop.group === 'time') continue // speed remaps time, not the transform
+    if (prop.group === 'mask') continue // mask props live on clip.shapeMask, not the transform
     const propKeyframes = keyframes[prop.id]
     if (propKeyframes && propKeyframes.length > 0) {
       animatedTransform[prop.id] = getValueAtTime(

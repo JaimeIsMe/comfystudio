@@ -19,7 +19,7 @@ import { commitAdjustmentRender } from '../services/commitRender'
 import { LUTS_CHANGED_EVENT, importCubeLutFile, listLoadedLuts, loadLutLibrary } from '../services/lutLibrary'
 import { DEFAULT_SHAPE_MASK, normalizeShapeMask } from '../utils/shapeMask'
 import { saveRenderCache, deleteRenderCache, writeGeneratedOverlayToProject, isElectron } from '../services/fileSystem'
-import { getKeyframeAtTime, getKeyframeTimeTolerance, getAnimatedTransform, getAnimatedAdjustmentSettings, getAnimatedShapeProperties, EASING_OPTIONS } from '../utils/keyframes'
+import { getKeyframeAtTime, getKeyframeTimeTolerance, getAnimatedTransform, getAnimatedAdjustmentSettings, getAnimatedShapeProperties, getAnimatedShapeMask, EASING_OPTIONS } from '../utils/keyframes'
 import { TRACK_MATTE_OPTIONS, normalizeTrackMatte } from '../utils/trackMatte'
 import { CORNER_PIN_CORNERS } from '../utils/cornerPin'
 import { TEXT_ANIMATION_PRESETS, TEXT_ANIMATION_MODE_OPTIONS } from '../utils/textAnimationPresets'
@@ -1481,7 +1481,17 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
   const renderMaskSection = () => {
     if (!selectedClip || (selectedClip.type !== 'video' && selectedClip.type !== 'image')) return null
     const activeMask = normalizeShapeMask(selectedClip.shapeMask)
-    const maskValue = (key) => (activeMask?.[key] ?? DEFAULT_SHAPE_MASK[key])
+    const animatedMask = activeMask
+      ? (normalizeShapeMask(getAnimatedShapeMask(selectedClip, clipTime)) || activeMask)
+      : null
+    const maskValue = (key) => (animatedMask?.[key] ?? activeMask?.[key] ?? DEFAULT_SHAPE_MASK[key])
+    const applyMaskSliderValue = (key, value, keepSessionOpen = false) => {
+      applyShapeMaskWithHistory({ [key]: value }, keepSessionOpen)
+      const propertyId = `shapeMask.${key}`
+      if (propertyHasKeyframes(propertyId)) {
+        setKeyframe(selectedClip.id, propertyId, clipTime, value, 'easeInOut', { saveHistory: false })
+      }
+    }
     const shapeChoices = [
       { id: null, label: 'None' },
       { id: 'rectangle', label: 'Rect' },
@@ -1549,9 +1559,17 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
                   <div key={slider.key}>
                     <div className="flex justify-between items-center mb-1">
                       <label className="text-[9px] text-sf-text-muted">{slider.label}</label>
-                      <span className="text-[9px] text-sf-text-secondary">
-                        {Math.round(maskValue(slider.key))}{slider.unit}
-                      </span>
+                      <div className="flex items-center gap-1">
+                        <KeyframeButton
+                          clipId={selectedClip?.id}
+                          property={`shapeMask.${slider.key}`}
+                          clip={selectedClip}
+                          playheadPosition={playheadPosition}
+                        />
+                        <span className="text-[9px] text-sf-text-secondary">
+                          {Math.round(maskValue(slider.key))}{slider.unit}
+                        </span>
+                      </div>
                     </div>
                     <input
                       type="range"
@@ -1559,9 +1577,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
                       max={slider.max}
                       step={1}
                       value={maskValue(slider.key)}
-                      onChange={(e) => applyShapeMaskWithHistory({ [slider.key]: Number(e.target.value) }, true)}
-                      onMouseUp={(e) => applyShapeMaskWithHistory({ [slider.key]: Number(e.target.value) })}
-                      onDoubleClick={() => applyShapeMaskWithHistory({ [slider.key]: DEFAULT_SHAPE_MASK[slider.key] })}
+                      onChange={(e) => applyMaskSliderValue(slider.key, Number(e.target.value), true)}
+                      onMouseUp={(e) => applyMaskSliderValue(slider.key, Number(e.target.value))}
+                      onDoubleClick={() => applyMaskSliderValue(slider.key, DEFAULT_SHAPE_MASK[slider.key])}
                       title={`Double-click to reset to ${DEFAULT_SHAPE_MASK[slider.key]}${slider.unit}`}
                       className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
                     />
