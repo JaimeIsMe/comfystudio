@@ -304,18 +304,14 @@ export function handleGetCaptionStatus(payload = {}) {
   }
 }
 
-export function handleUpdateCaptionCues(payload = {}) {
-  const replacingAll = Array.isArray(payload.cues)
-  if (!captionDraft && !replacingAll) {
-    throw new Error('No caption draft exists yet. Run transcribe_captions first, or pass a full "cues" array to create a draft manually.')
-  }
-
-  const fallbackDuration = Number(captionDraft?.audioDuration) || 0
+// Apply the tool's edit vocabulary (full replace / per-cue edits / removals)
+// to a plain cue list. Shared by the draft target and the live-clip target.
+function applyCueEditsToList(baseCues, payload, fallbackDuration) {
   let nextCues
-  if (replacingAll) {
+  if (Array.isArray(payload.cues)) {
     nextCues = normalizeCueOrder(payload.cues, fallbackDuration)
   } else {
-    nextCues = captionDraft.cues.map((cue) => ({ ...cue }))
+    nextCues = baseCues.map((cue) => ({ ...cue }))
     const edits = Array.isArray(payload.edits) ? payload.edits : []
     for (const edit of edits) {
       const id = String(edit?.id || '').trim()
@@ -331,15 +327,141 @@ export function handleUpdateCaptionCues(payload = {}) {
     if (removeIds.size) nextCues = nextCues.filter((cue) => !removeIds.has(cue.id))
     nextCues = normalizeCueOrder(nextCues, fallbackDuration)
   }
-
   if (!nextCues.length) {
     throw new Error('The update would leave zero cues. Keep at least one cue, or re-run transcribe_captions.')
   }
+  return nextCues
+}
+
+function findLiveCaptionsClip(clipId) {
+  const clips = useTimelineStore.getState().clips || []
+  if (clipId) {
+    const clip = clips.find((c) => c.id === clipId)
+    if (!clip) throw new Error(`No clip found with id "${clipId}".`)
+    if (clip.type !== 'captions') {
+      throw new Error(`Clip "${clipId}" is a ${clip.type || 'unknown'} clip, not a live captions clip.`)
+    }
+    return clip
+  }
+  return clips.find((c) => c.type === 'captions' && Array.isArray(c.captions?.cues) && c.captions.cues.length) || null
+}
+
+// Edit the cues of a placed live captions clip in place. Per-cue
+// globalOverrides are preserved by cue id (new cues inherit the first cue's),
+// so text/timing edits never disturb the styling baked in at generate time.
+function updateLiveCaptionsClipCues(clip, payload) {
+  const renderCues = clip.captions.cues
+  const baseCues = renderCues.map(({ globalOverrides, ...cue }) => cue)
+  const fallbackDuration = Math.max(Number(clip.sourceDuration) || 0, Number(clip.duration) || 0)
+  const nextCues = applyCueEditsToList(baseCues, payload, fallbackDuration)
+
+  const overridesById = new Map(renderCues.map((cue) => [cue.id, cue.globalOverrides]))
+  const fallbackOverrides = renderCues[0]?.globalOverrides || {}
+  const nextRenderCues = nextCues.map((cue) => ({
+    ...cue,
+    globalOverrides: overridesById.get(cue.id) || fallbackOverrides,
+  }))
+
+  const maxCueEnd = Math.max(...nextCues.map((cue) => Number(cue.end) || 0), 0.4)
+  const prevSourceDuration = Number(clip.sourceDuration) || 0
+  const nextSourceDuration = Math.max(prevSourceDuration, maxCueEnd)
+  // Respect a deliberate trim: only an untrimmed clip follows the new cue
+  // extent (the same shape placeLiveCaptions produces).
+  const untrimmed = (Number(clip.trimStart) || 0) === 0
+    && Math.abs((Number(clip.trimEnd) || 0) - prevSourceDuration) < 1e-6
 
   if (payload.previewOnly === true) {
     return {
       previewOnly: true,
       action: 'update_caption_cues',
+      target: 'clip',
+      clipId: clip.id,
+      message: 'Cue update plan only. The captions clip was not changed.',
+      cueCount: nextCues.length,
+      cues: nextCues,
+      durationSeconds: untrimmed ? nextSourceDuration : Number(clip.duration) || 0,
+    }
+  }
+
+  const store = useTimelineStore.getState()
+  store.saveToHistory?.()
+  useTimelineStore.setState({
+    clips: useTimelineStore.getState().clips.map((c) => (c.id === clip.id
+      ? {
+          ...c,
+          sourceDuration: nextSourceDuration,
+          ...(untrimmed ? { duration: nextSourceDuration, trimEnd: nextSourceDuration } : {}),
+          captions: { ...c.captions, cues: nextRenderCues },
+        }
+      : c)),
+    ...(untrimmed
+      ? { duration: Math.max(useTimelineStore.getState().duration, nextSourceDuration + 10) }
+      : {}),
+  })
+
+  // Keep a timeline-scope draft in sync so a later generate_captions doesn't
+  // resurrect the pre-edit text.
+  if (captionDraft && captionDraft.scope === 'timeline') {
+    const timestamp = new Date().toISOString()
+    captionDraft = {
+      ...captionDraft,
+      cues: nextCues.map((cue) => ({ ...cue })),
+      transcriptText: cuesToTranscript(nextCues),
+      audioDuration: Math.max(Number(captionDraft.audioDuration) || 0, maxCueEnd),
+      updatedAt: timestamp,
+    }
+  }
+
+  return {
+    success: true,
+    action: 'update_caption_cues',
+    target: 'clip',
+    clipId: clip.id,
+    message: `Live captions clip updated (${nextCues.length} cue${nextCues.length === 1 ? '' : 's'}) — the change is visible immediately.`,
+    cueCount: nextCues.length,
+    cues: nextCues,
+  }
+}
+
+export function handleUpdateCaptionCues(payload = {}) {
+  const replacingAll = Array.isArray(payload.cues)
+  const explicitClipId = String(payload.clipId || '').trim() || null
+  const requested = typeof payload.target === 'string' ? payload.target.trim().toLowerCase() : null
+
+  // Target resolution: an explicit ask wins; then the transcription draft
+  // (the transcribe → update → generate flow, unchanged); then a placed live
+  // captions clip; then the legacy create-a-draft-from-cues path.
+  let target = null
+  if (requested === 'clip' || requested === 'live' || requested === 'timeline-clip') target = 'clip'
+  else if (requested === 'draft') target = 'draft'
+  else if (explicitClipId) target = 'clip'
+  else if (captionDraft) target = 'draft'
+  else if (findLiveCaptionsClip(null)) target = 'clip'
+  else if (replacingAll) target = 'draft'
+  else {
+    throw new Error('No caption draft and no live captions clip found. Run transcribe_captions first, generate captions, or pass a full "cues" array to create a draft manually.')
+  }
+
+  if (target === 'clip') {
+    const clip = findLiveCaptionsClip(explicitClipId)
+    if (!clip) {
+      throw new Error('No live captions clip on the timeline. generate_captions (timeline scope) places one, or use target "draft".')
+    }
+    return updateLiveCaptionsClipCues(clip, payload)
+  }
+
+  if (!captionDraft && !replacingAll) {
+    throw new Error('No caption draft exists yet. Run transcribe_captions first, or pass a full "cues" array to create a draft manually.')
+  }
+
+  const fallbackDuration = Number(captionDraft?.audioDuration) || 0
+  const nextCues = applyCueEditsToList(captionDraft?.cues || [], payload, fallbackDuration)
+
+  if (payload.previewOnly === true) {
+    return {
+      previewOnly: true,
+      action: 'update_caption_cues',
+      target: 'draft',
       message: 'Cue update plan only. The draft was not changed.',
       cueCount: nextCues.length,
       cues: nextCues,
@@ -370,6 +492,7 @@ export function handleUpdateCaptionCues(payload = {}) {
   return {
     success: true,
     action: 'update_caption_cues',
+    target: 'draft',
     message: `Caption draft updated (${nextCues.length} cue${nextCues.length === 1 ? '' : 's'}).`,
     cueCount: nextCues.length,
     cues: nextCues,
@@ -430,9 +553,6 @@ function placeCaptionOverlayOnTimeline(captionAsset, ctx) {
 
 async function runGenerateCaptionJob(job, ctx) {
   try {
-    job.stage = 'render'
-    job.message = `Rendering caption overlay (~${Math.ceil(ctx.duration)}s realtime)...`
-
     const preset = ctx.preset
     const traditional = preset.traditional === true
     const renderPreset = preset.renderer === 'kinetic' && !traditional
@@ -442,7 +562,9 @@ async function runGenerateCaptionJob(job, ctx) {
       || (traditional ? (preset.subtitleColor || preset.textColor) : preset.textColor)
       || '#FFFFFF'
 
-    const globalOverrides = {
+    // The eleven style controls, kept separate from the placement globals so
+    // the live clip's workspace snapshot matches what CaptionWorkspace stores.
+    const styleControls = {
       fontFamily: ctx.fontFamily || preset.fontFamily || 'Inter',
       backgroundColor: '#000000',
       backgroundOpacity: 65,
@@ -454,6 +576,9 @@ async function runGenerateCaptionJob(job, ctx) {
       shadowOpacity: 75,
       shadowBlur: traditional ? 25 : 18,
       shadowDistance: 5,
+    }
+    const globalOverrides = {
+      ...styleControls,
       verticalPlacement: ctx.verticalPlacement,
       horizontalPlacement: ctx.horizontalPlacement,
       motionProfile: ctx.motionProfile,
@@ -464,6 +589,85 @@ async function runGenerateCaptionJob(job, ctx) {
       subtitlePosition: ctx.subtitlePosition || preset.subtitlePosition || 'action-safe',
     }
     const renderCues = ctx.cues.map((cue) => ({ ...cue, globalOverrides }))
+
+    // Timeline scope places LIVE captions — the clip type the app has used
+    // since 8601a58. Cues render fresh every frame in preview and export, so
+    // generate is instant; no overlay video is baked and no asset is created.
+    if (ctx.scope === 'timeline' && ctx.placeOnTimeline) {
+      job.stage = 'place'
+      job.message = 'Placing live captions clip...'
+      const timestamp = new Date().toISOString()
+
+      // Sidecar parity with CaptionWorkspace (cold-start restore fallback);
+      // non-fatal, and web mode has no sidecars.
+      try {
+        await saveCaptionSidecar(useProjectStore.getState().currentProjectHandle, { name: 'timeline' }, {
+          version: 1,
+          scope: 'timeline',
+          presetId: preset.id,
+          accentColor: ctx.accentColor || null,
+          textColor: ctx.textColor || null,
+          textStyle: globalOverrides.textStyle,
+          subtitlePosition: globalOverrides.subtitlePosition,
+          styleControls,
+          globalVertical: ctx.verticalPlacement,
+          globalHorizontal: ctx.horizontalPlacement,
+          globalMotion: ctx.motionProfile,
+          globalSizeScale: ctx.sizeScale,
+          globalVerticalOffset: ctx.verticalOffset,
+          modelId: ctx.modelId || null,
+          transcriptText: cuesToTranscript(ctx.cues),
+          words: ctx.words || [],
+          cues: ctx.cues,
+          audioDuration: ctx.duration,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+      } catch (sidecarError) {
+        console.warn('Could not save the MCP caption sidecar:', sidecarError)
+      }
+
+      const liveClip = useTimelineStore.getState().placeLiveCaptions?.({
+        cues: renderCues,
+        preset: renderPreset,
+        duration: ctx.duration,
+        workspace: {
+          version: 1,
+          presetId: preset.id,
+          accentColor: ctx.accentColor || null,
+          textColor: ctx.textColor || null,
+          textStyle: globalOverrides.textStyle,
+          subtitlePosition: globalOverrides.subtitlePosition,
+          styleControls,
+          globalVertical: ctx.verticalPlacement,
+          globalHorizontal: ctx.horizontalPlacement,
+          globalMotion: ctx.motionProfile,
+          globalSizeScale: ctx.sizeScale,
+          globalVerticalOffset: ctx.verticalOffset,
+          modelId: ctx.modelId || null,
+          words: ctx.words || [],
+          audioDuration: ctx.duration,
+          updatedAt: timestamp,
+        },
+      })
+      if (!liveClip) throw new Error('Could not place the live captions clip on the timeline.')
+
+      finishCaptionJob(job, {
+        live: true,
+        assetId: null,
+        clipId: liveClip.id,
+        trackId: liveClip.trackId,
+        placedOnTimeline: true,
+        durationSeconds: ctx.duration,
+        cueCount: ctx.cues.length,
+        presetId: preset.id,
+        note: 'Placed a live captions clip — cues render every frame; edit them with update_caption_cues or double-click the clip in Velorn.',
+      })
+      return
+    }
+
+    job.stage = 'render'
+    job.message = `Rendering caption overlay (~${Math.ceil(ctx.duration)}s realtime)...`
 
     const overlayBlob = await generateCaptionVideoBlob({
       preset: renderPreset,
@@ -499,9 +703,15 @@ async function runGenerateCaptionJob(job, ctx) {
         textColor: ctx.textColor || null,
         textStyle: globalOverrides.textStyle,
         subtitlePosition: globalOverrides.subtitlePosition,
-        styleControls: globalOverrides,
+        styleControls,
+        globalVertical: ctx.verticalPlacement,
+        globalHorizontal: ctx.horizontalPlacement,
+        globalMotion: ctx.motionProfile,
+        globalSizeScale: ctx.sizeScale,
+        globalVerticalOffset: ctx.verticalOffset,
         modelId: ctx.modelId || null,
         transcriptText: cuesToTranscript(ctx.cues),
+        words: ctx.words || [],
         cues: ctx.cues,
         audioDuration: ctx.duration,
         createdAt: timestamp,
@@ -620,6 +830,7 @@ export function handleGenerateCaptions(payload = {}) {
     scope,
     sourceAssetId: scope === 'asset' ? captionDraft?.sourceAssetId || null : null,
     modelId: captionDraft?.modelId || '',
+    words: !inlineCues && Array.isArray(captionDraft?.words) ? captionDraft.words : [],
     accentColor: typeof payload.accentColor === 'string' && payload.accentColor.trim() ? payload.accentColor.trim() : null,
     textColor: typeof payload.textColor === 'string' && payload.textColor.trim() ? payload.textColor.trim() : null,
     fontFamily: typeof payload.fontFamily === 'string' && payload.fontFamily.trim() ? payload.fontFamily.trim() : null,
@@ -648,8 +859,9 @@ export function handleGenerateCaptions(payload = {}) {
     height: ctx.height,
     fps: ctx.fps,
     placeOnTimeline: ctx.placeOnTimeline,
-    estimatedRenderSeconds: Math.ceil(duration),
-    ...(scope === 'timeline' ? { note: 'Replaces any prior timeline-scope caption overlay on the Captions track.' } : {}),
+    ...(scope === 'timeline' && ctx.placeOnTimeline
+      ? { note: 'Places a LIVE captions clip (instant — cues render every frame, no baked overlay). Replaces any captions already on the Captions track; the clip keeps its transform/grade/masks through a regenerate.' }
+      : { estimatedRenderSeconds: Math.ceil(duration) }),
     pollWith: 'get_caption_status',
   }
 

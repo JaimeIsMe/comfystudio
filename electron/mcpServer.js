@@ -33,6 +33,7 @@ const MCP_ACTION_PLAN_WRITABLE_TOOLS = new Set([
   'import_asset_from_path',
   'relink_asset',
   'set_clip_style',
+  'set_clip_mask',
   'set_clip_label_color',
   'set_clips_enabled',
   'add_timeline_markers',
@@ -327,6 +328,15 @@ const MCP_CLIP_KEYFRAME_NUMBER_FIELDS = {
   gamma: [0, -100, 100],
   offset: [0, -100, 100],
   hue: [0, -180, 180],
+  // Whole-mask animation (video/image clips with a shape mask; create one
+  // with set_clip_mask first). Geometry is percent of the clip frame.
+  'shapeMask.centerX': [50, -50, 150],
+  'shapeMask.centerY': [50, -50, 150],
+  'shapeMask.width': [60, 1, 200],
+  'shapeMask.height': [60, 1, 200],
+  'shapeMask.rotation': [0, -180, 180],
+  'shapeMask.cornerRadius': [12, 0, 100],
+  'shapeMask.feather': [5, 0, 50],
 }
 for (const group of ['shadows', 'midtones', 'highlights']) {
   for (const property of ['brightness', 'contrast', 'saturation', 'gain', 'gamma', 'offset']) {
@@ -7531,10 +7541,12 @@ function createToolDefinitions() {
     },
     {
       name: 'update_caption_cues',
-      description: 'Edit the caption cue draft produced by transcribe_captions before rendering: fix text, retime, remove cues, or replace the whole cue list. Draft-only; the timeline does not change until generate_captions runs.',
+      description: 'Edit caption cues: fix text, retime, remove cues, or replace the whole list. Targets the transcription draft (the transcribe -> update -> generate flow) OR a live captions clip already placed on the timeline — clip edits are visible immediately and preserve each cue\'s styling. Default target: the draft when one exists, else the live captions clip.',
       inputSchema: {
         type: 'object',
         properties: {
+          target: { type: 'string', enum: ['draft', 'clip'], description: 'Force the edit target: the transcription draft, or the placed live captions clip.' },
+          clipId: { type: 'string', description: 'A specific live captions clip id (implies target "clip"). Usually unnecessary — a timeline has one captions clip.' },
           cues: {
             type: 'array',
             description: 'Full replacement cue list. Times are in seconds.',
@@ -7563,14 +7575,14 @@ function createToolDefinitions() {
               required: ['id'],
             },
           },
-          removeIds: { type: 'array', items: { type: 'string' }, description: 'Cue IDs to delete from the draft.' },
-          previewOnly: { type: 'boolean', description: 'When true, returns the resulting cue list without saving the draft.' },
+          removeIds: { type: 'array', items: { type: 'string' }, description: 'Cue IDs to delete.' },
+          previewOnly: { type: 'boolean', description: 'When true, returns the resulting cue list without changing the draft or clip.' },
         },
       },
     },
     {
       name: 'generate_captions',
-      description: 'Render the caption cue draft into a transparent animated overlay and place it on the dedicated Captions track. Starts a background job that renders in real time (a 10s program takes about 10s); poll get_caption_status. Replaces any prior timeline-scope caption overlay. Defaults to previewOnly.',
+      description: 'Generate captions from the cue draft. Timeline scope places a LIVE captions clip instantly (cues render every frame in preview and export — no baked overlay; the clip keeps its transform/grade/masks through a regenerate, and update_caption_cues edits it in place). Asset scope still renders a baked overlay in real time; poll get_caption_status either way. Defaults to previewOnly.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -8329,14 +8341,16 @@ function createToolDefinitions() {
     },
     {
       name: 'import_asset_from_path',
-      description: 'Preview or import a local media file path into the active Velorn project assets folder. Applies the same copy/import path as the UI import button and can place the new asset into an asset folder.',
+      description: 'Preview or import a local media path into the active Velorn project. Single files use the same copy/import path as the UI import button. Image sequences import too: point at a folder of numbered frames (or any one frame of a 3+ frame run — png/jpg/webp/tif/exr/dpx) and the run transcodes once into a single video clip tagged with its sequence provenance; gaps hold the previous frame.',
       inputSchema: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Absolute local file path to import.' },
+          path: { type: 'string', description: 'Absolute local file path to import — or a directory / any numbered frame of an image sequence.' },
           filePath: { type: 'string', description: 'Alias for path.' },
           sourcePath: { type: 'string', description: 'Alias for path.' },
-          category: { type: 'string', enum: ['video', 'audio', 'images', 'image'], description: 'Optional category. If omitted, inferred from extension.' },
+          asSequence: { type: 'boolean', description: 'true forces sequence import (errors if no run is found); false disables detection and imports the single file. Omit for auto-detect.' },
+          fps: { type: 'number', description: 'Sequence frame rate. Defaults to the project rate; recorded in the asset\'s sequenceSource tag for later re-interpretation.' },
+          category: { type: 'string', enum: ['video', 'audio', 'images', 'image'], description: 'Optional category for single-file imports. If omitted, inferred from extension.' },
           folderId: { type: 'string', description: 'Optional existing asset folder ID for the imported asset.' },
           folderPath: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Optional folder path to create/reuse before assigning the imported asset.' },
           folderName: { type: 'string', description: 'Single folder name alias for folderPath.' },
@@ -8362,7 +8376,7 @@ function createToolDefinitions() {
     },
     {
       name: 'set_clip_style',
-      description: 'Preview or batch-update simple clip styling: label color, enabled state, transform fields, crop, blur, blend mode, motion blur settings, track matte, motion path mode, and corner pin. Use for broad AI timeline polish passes. Defaults to previewOnly.',
+      description: 'Preview or batch-update simple clip styling: label color, enabled state, transform fields, crop, blur, blend mode, motion blur settings, track matte, motion path mode, corner pin, and bypass pills (per-group mask/color/effects A/B switches). Use for broad AI timeline polish passes. Defaults to previewOnly.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -8391,8 +8405,61 @@ function createToolDefinitions() {
           motionPathMode: { type: 'string', enum: ['linear', 'smooth'], description: 'Position keyframe interpolation: linear = straight lines, smooth = curved path through the keyframes (auto bezier).' },
           cornerPinEnabled: { type: 'boolean', description: 'Enable corner pin distortion (video/image clips, GPU compositing). Set the per-corner offsets via the transform object or keyframe them with set_clip_keyframes.' },
           trackMatte: { type: 'string', enum: ['none', 'alpha', 'alpha-inverted', 'luma', 'luma-inverted'], description: 'Track matte: the visual layer directly above the clip becomes the matte and is hidden from output. Alpha uses the matte layer\'s alpha, luma its brightness.' },
+          bypass: {
+            type: 'object',
+            description: 'Bypass pills: per-group A/B switches. true = the group is temporarily switched off (settings untouched, honored by preview AND export), false = active again. E.g. { "color": true } for a before/after grade check.',
+            properties: {
+              mask: { type: 'boolean' },
+              color: { type: 'boolean' },
+              effects: { type: 'boolean' },
+            },
+          },
           limit: { type: 'integer', description: 'Safety limit for matched clips. Defaults to 100.' },
           previewOnly: { type: 'boolean', description: 'When true, returns the style plan without changing clips. Defaults to true.' },
+        },
+      },
+    },
+    {
+      name: 'set_clip_mask',
+      description: 'Preview or set clip masks (video/image clips): parametric shapes (rectangle/ellipse/rounded), bezier spline masks, or an AI mask image — the same three modes as the Inspector Mask section. Whole-mask animation goes through set_clip_keyframes (shapeMask.* properties). Defaults to previewOnly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          clipId: { type: 'string', description: 'Single clip ID to update.' },
+          clipIds: { type: 'array', items: { type: 'string' }, description: 'Clip IDs to update.' },
+          filter: { type: 'string', enum: ['selected', 'disabled', 'enabled', 'visual', 'audio', 'labeled', 'colored'], description: 'Optional target filter when IDs are omitted.' },
+          trackId: { type: 'string', description: 'Only update clips on this track.' },
+          nameIncludes: { type: 'string', description: 'Only update clips whose name/asset/id contains this text.' },
+          shape: { type: 'string', enum: ['rectangle', 'ellipse', 'rounded', 'spline', 'image', 'none'], description: 'Mask mode. rectangle/ellipse/rounded/spline create or retype a shape mask; image assigns a mask asset (needs maskAssetId); none removes the shape mask. Omit to update geometry of an existing mask.' },
+          centerX: { type: 'number', description: 'Mask center X as % of frame width (default 50; -50..150).' },
+          centerY: { type: 'number', description: 'Mask center Y as % of frame height (default 50; -50..150).' },
+          width: { type: 'number', description: 'Mask width as % of frame width (1..200).' },
+          height: { type: 'number', description: 'Mask height as % of frame height (1..200).' },
+          rotation: { type: 'number', description: 'Mask rotation in degrees (-180..180).' },
+          cornerRadius: { type: 'number', description: 'Rounded-rect corner radius, % of the shorter half-extent (0..100).' },
+          feather: { type: 'number', description: 'Edge softness as % of frame height (0..50).' },
+          invert: { type: 'boolean', description: 'Invert the shape mask.' },
+          points: {
+            type: 'array',
+            description: 'Spline anchors in the mask unit box: x/y in -0.5..0.5 span the mask width/height (center/size/rotation move the whole path rigidly). hIn/hOut are optional bezier handle offsets FROM the anchor; omit them for straight polygon corners. At least 3 points.',
+            items: {
+              type: 'object',
+              properties: {
+                x: { type: 'number' },
+                y: { type: 'number' },
+                hIn: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } } },
+                hOut: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } } },
+              },
+              required: ['x', 'y'],
+            },
+          },
+          maskAssetId: { type: 'string', description: 'Mask asset id (type "mask" in get_assets) for shape "image". Replaces any existing image mask on the clip.' },
+          invertImageMask: { type: 'boolean', description: 'Invert the assigned image mask.' },
+          imageMaskFeather: { type: 'number', description: 'Feather for the assigned image mask, in pixels.' },
+          clearImageMask: { type: 'boolean', description: 'Remove any assigned image mask from the matched clips.' },
+          clear: { type: 'boolean', description: 'Remove the shape mask (same as shape "none"); combined with clearImageMask it clears everything.' },
+          limit: { type: 'integer', description: 'Safety limit for matched clips. Defaults to 25.' },
+          previewOnly: { type: 'boolean', description: 'When true, returns the mask plan without changing clips. Defaults to true.' },
         },
       },
     },
@@ -10752,6 +10819,8 @@ class ComfyStudioMcpServer {
         return this.runRendererActionTool('relink_asset', args, { bridgeName: 'MCP asset relink bridge', suggestedTool: 'relink_asset', defaultPreviewOnly: true })
       case 'set_clip_style':
         return this.runRendererActionTool('set_clip_style', args, { bridgeName: 'MCP clip style bridge', suggestedTool: 'set_clip_style', defaultPreviewOnly: true })
+      case 'set_clip_mask':
+        return this.runRendererActionTool('set_clip_mask', args, { bridgeName: 'MCP clip mask bridge', suggestedTool: 'set_clip_mask', defaultPreviewOnly: true })
       case 'run_mcp_action_plan':
         return this.runMcpActionPlan(snapshot, args)
       case 'set_in_out_range':
