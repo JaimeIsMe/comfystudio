@@ -3,7 +3,7 @@ import {
   Move, RotateCw, Maximize2, Clock, Layers,
   ChevronDown, ChevronRight, ChevronLeft, Sparkles,
   Zap, Eye, SlidersHorizontal, CircleDot, Lock, Unlock,
-  FlipHorizontal, FlipVertical, Link, Unlink, Crop,
+  FlipHorizontal, FlipVertical, Link, Unlink, Crop, MoreHorizontal,
   Anchor, RotateCcw, Type, AlignLeft, AlignCenter, AlignRight,
   AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd,
   Diamond, ChevronFirst, ChevronLast,
@@ -514,6 +514,7 @@ function KeyframeButton({ clipId, property, clip, playheadPosition }) {
 }
 
 function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, onToggleFullHeight, fullHeightDisabled = false }) {
+  const [clipInfoMenuOpen, setClipInfoMenuOpen] = useState(false)
   const [expandedSections, setExpandedSections] = useState(() => {
     try {
       const raw = localStorage.getItem(INSPECTOR_EXPANDED_SECTIONS_KEY)
@@ -2299,6 +2300,79 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
         {renderSectionHeader('compositing', 'Compositing', Layers)}
         {expandedSections.includes('compositing') && (
           <div className="p-3 space-y-3 border-b border-sf-dark-700">
+            {/* Opacity */}
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="text-[10px] text-sf-text-muted flex items-center gap-1">
+                  <Eye className="w-3 h-3" /> Opacity
+                </label>
+                <div className="flex items-center gap-1">
+                  <KeyframeButton
+                    clipId={selectedClip?.id}
+                    property="opacity"
+                    clip={selectedClip}
+                    playheadPosition={playheadPosition}
+                  />
+                  <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedTransform?.opacity ?? transform.opacity)}%</span>
+                </div>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={animatedTransform?.opacity ?? transform.opacity}
+                onChange={(e) => handleTransformChange('opacity', parseInt(e.target.value))}
+                onMouseUp={(e) => handleTransformCommit('opacity', parseInt(e.target.value))}
+                onDoubleClick={() => handleSliderReset('opacity', 100)}
+                title="Double-click to reset to 100%"
+                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
+              />
+            </div>
+
+            {/* Blend Mode (visual clips only) */}
+            {(selectedClip?.type === 'video' || selectedClip?.type === 'image' || selectedClip?.type === 'text' || selectedClip?.type === 'shape') && (
+              <div>
+                <label className="text-[10px] text-sf-text-muted block mb-1">
+                  Blend Mode
+                </label>
+                <select
+                  value={transform.blendMode ?? 'normal'}
+                  onChange={(e) => {
+                    handleTransformChange('blendMode', e.target.value)
+                    handleTransformCommit('blendMode', e.target.value)
+                  }}
+                  className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                >
+                  {BLEND_MODES.map(({ value, label }) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Track Matte (visual clips only) */}
+            {(selectedClip?.type === 'video' || selectedClip?.type === 'image' || selectedClip?.type === 'text' || selectedClip?.type === 'shape') && (
+              <div>
+                <label className="text-[10px] text-sf-text-muted block mb-1">
+                  Track Matte
+                </label>
+                <select
+                  value={normalizeTrackMatte(selectedClip?.trackMatte)}
+                  onChange={(e) => updateClipTrackMatte(selectedClip.id, e.target.value)}
+                  className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                >
+                  {TRACK_MATTE_OPTIONS.map(({ value, label }) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+                {normalizeTrackMatte(selectedClip?.trackMatte) !== 'none' && (
+                  <p className="text-[9px] text-sf-text-muted mt-1">
+                    Uses the clip on the layer directly above as the matte. That layer is hidden from output.
+                  </p>
+                )}
+              </div>
+            )}
+
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">
@@ -2872,7 +2946,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
   }
 
   const renderInspectorTabBar = (tabs, activeTabId) => (
-    <div className="sticky top-0 z-20 flex border-b border-sf-dark-700 bg-sf-dark-800">
+    <div className="sticky top-[42px] z-20 flex border-b border-sf-dark-700 bg-sf-dark-800">
       {tabs.map((tab) => {
         const isActive = tab.id === activeTabId
         const hue = INSPECTOR_TAB_HUES[tab.id] ?? 'rgb(var(--sf-accent))'
@@ -2919,7 +2993,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
       || near(t.rotation, 0) || near(t.rotationX, 0) || near(t.rotationY, 0)
       || !!t.flipH || !!t.flipV
       || near(t.cropTop, 0) || near(t.cropBottom, 0) || near(t.cropLeft, 0) || near(t.cropRight, 0)
-      || !!t.cornerPinEnabled || !!t.motionBlurEnabled
+      || !!t.cornerPinEnabled
   }
   const mixHasEdits = (t, clip) => {
     if (!t && !clip) return false
@@ -2932,6 +3006,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     || hasTonalAdjustmentEffect(settings)
     || hasLutEffect(settings)
   const effectsHaveEdits = (clip, settings) => (Number(settings?.blur) || 0) > 0
+    || clip?.transform?.motionBlurEnabled === true
     || (clip?.effects || []).some((effect) => effect?.enabled && effect.type !== 'mask')
   const motionHasEdits = (clip) => (Number(clip?.speed) || 1) !== 1 || !!clip?.reverse
   const maskHasEdits = (clip) => !!normalizeShapeMask(clip?.shapeMask)
@@ -2959,7 +3034,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
       { id: 'color', label: 'Color', title: 'Grade and Look (LUT)', dot: colorHasEdits(dotSettings) },
       { id: 'effects', label: 'Effects', title: 'Blur and GLSL effects', dot: effectsHaveEdits(selectedClip, dotSettings) },
       { id: 'motion', label: 'Motion', title: 'Speed, reverse, duration', dot: motionHasEdits(selectedClip) },
-      { id: 'mix', label: 'Mix', title: 'Track matte compositing', dot: mixHasEdits(dotTransform, selectedClip) },
+      { id: 'mix', label: 'Mix', title: 'Opacity, blend, track matte', dot: mixHasEdits(dotTransform, selectedClip) },
     ]
     const activeTab = resolveActiveInspectorTab(videoTabs)
     const showTab = (id) => activeTab === id
@@ -3383,79 +3458,6 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
                 </button>
               </div>
             </div>
-
-            {/* Opacity */}
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <label className="text-[10px] text-sf-text-muted flex items-center gap-1">
-                  <Eye className="w-3 h-3" /> Opacity
-                </label>
-                <div className="flex items-center gap-1">
-                  <KeyframeButton 
-                    clipId={selectedClip?.id} 
-                    property="opacity" 
-                    clip={selectedClip}
-                    playheadPosition={playheadPosition}
-                  />
-                  <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedTransform?.opacity ?? transform.opacity)}%</span>
-                </div>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={animatedTransform?.opacity ?? transform.opacity}
-                onChange={(e) => handleTransformChange('opacity', parseInt(e.target.value))}
-                onMouseUp={(e) => handleTransformCommit('opacity', parseInt(e.target.value))}
-                onDoubleClick={() => handleSliderReset('opacity', 100)}
-                title="Double-click to reset to 100%"
-                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
-              />
-            </div>
-
-            {/* Blend Mode (visual clips only) */}
-            {(selectedClip?.type === 'video' || selectedClip?.type === 'image' || selectedClip?.type === 'text' || selectedClip?.type === 'shape') && (
-              <div>
-                <label className="text-[10px] text-sf-text-muted block mb-1">
-                  Blend Mode
-                </label>
-                <select
-                  value={transform.blendMode ?? 'normal'}
-                  onChange={(e) => {
-                    handleTransformChange('blendMode', e.target.value)
-                    handleTransformCommit('blendMode', e.target.value)
-                  }}
-                  className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
-                >
-                  {BLEND_MODES.map(({ value, label }) => (
-                    <option key={value} value={value}>{label}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* Track Matte (visual clips only) */}
-            {(selectedClip?.type === 'video' || selectedClip?.type === 'image' || selectedClip?.type === 'text' || selectedClip?.type === 'shape') && (
-              <div>
-                <label className="text-[10px] text-sf-text-muted block mb-1">
-                  Track Matte
-                </label>
-                <select
-                  value={normalizeTrackMatte(selectedClip?.trackMatte)}
-                  onChange={(e) => updateClipTrackMatte(selectedClip.id, e.target.value)}
-                  className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
-                >
-                  {TRACK_MATTE_OPTIONS.map(({ value, label }) => (
-                    <option key={value} value={value}>{label}</option>
-                  ))}
-                </select>
-                {normalizeTrackMatte(selectedClip?.trackMatte) !== 'none' && (
-                  <p className="text-[9px] text-sf-text-muted mt-1">
-                    Uses the clip on the layer directly above as the matte. That layer is hidden from output.
-                  </p>
-                )}
-              </div>
-            )}
 
             {/* Corner Pin (video/image clips, GPU compositing) */}
             {(selectedClip?.type === 'video' || selectedClip?.type === 'image') && (
@@ -4881,7 +4883,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
       { id: 'color', label: 'Color', title: 'Grade', dot: colorHasEdits(textDotSettings) },
       { id: 'effects', label: 'Effects', title: 'Blur and GLSL effects', dot: effectsHaveEdits(selectedClip, textDotSettings) },
       { id: 'motion', label: 'Motion', title: 'Timing', dot: motionHasEdits(selectedClip) },
-      { id: 'mix', label: 'Mix', title: 'Track matte compositing', dot: mixHasEdits(textDotTransform, selectedClip) },
+      { id: 'mix', label: 'Mix', title: 'Opacity, blend, track matte', dot: mixHasEdits(textDotTransform, selectedClip) },
     ]
     const activeTextTab = resolveActiveInspectorTab(textTabs)
     const showTextTab = (id) => activeTextTab === id
@@ -5323,53 +5325,6 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
               />
             </div>
 
-            {/* Opacity */}
-            <div>
-              <div className="flex justify-between mb-1">
-                <label className="text-[10px] text-sf-text-muted flex items-center gap-1">
-                  <Eye className="w-3 h-3" /> Opacity
-                </label>
-                <div className="flex items-center gap-1">
-                  <KeyframeButton
-                    clipId={selectedClip?.id}
-                    property="opacity"
-                    clip={selectedClip}
-                    playheadPosition={playheadPosition}
-                  />
-                  <span className="text-[10px] text-sf-text-secondary">{Math.round(animatedTransform?.opacity ?? transform.opacity)}%</span>
-                </div>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={animatedTransform?.opacity ?? transform.opacity}
-                onChange={(e) => handleTransformChange('opacity', parseInt(e.target.value))}
-                onMouseUp={(e) => handleTransformCommit('opacity', parseInt(e.target.value))}
-                onDoubleClick={() => handleSliderReset('opacity', 100)}
-                title="Double-click to reset to 100%"
-                className="w-full h-1 bg-sf-dark-600 rounded-lg appearance-none cursor-pointer accent-sf-accent"
-              />
-            </div>
-
-            {/* Blend Mode */}
-            <div>
-              <label className="text-[10px] text-sf-text-muted block mb-1">
-                Blend Mode
-              </label>
-              <select
-                value={transform.blendMode ?? 'normal'}
-                onChange={(e) => {
-                  handleTransformChange('blendMode', e.target.value)
-                  handleTransformCommit('blendMode', e.target.value)
-                }}
-                className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
-              >
-                {BLEND_MODES.map(({ value, label }) => (
-                  <option key={value} value={value}>{label}</option>
-                ))}
-              </select>
-            </div>
           </div>
         )}
         </>)}
@@ -5770,55 +5725,65 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     }
 
     return (
-      <>
-        {renderSectionHeader('clipInfo', 'Clip Info', Info)}
-        {expandedSections.includes('clipInfo') && (
-          <div className="p-3 border-b border-sf-dark-700 space-y-3">
-            <div className="flex items-start gap-3">
-              <div className={`w-10 h-10 rounded-lg ${iconBgClassName} flex items-center justify-center flex-shrink-0`}>
-                <Icon className={`w-5 h-5 ${iconToneClassName}`} />
+      <div className="sticky top-0 z-30 h-[42px] px-3 flex items-center gap-2 border-b border-sf-dark-700 bg-sf-dark-800">
+        <div className={`w-6 h-6 rounded-md ${iconBgClassName} flex items-center justify-center flex-shrink-0`}>
+          <Icon className={`w-3.5 h-3.5 ${iconToneClassName}`} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-[11px] leading-tight font-medium text-sf-text-primary truncate" title={title}>
+            {title}
+          </p>
+          <p className="text-[9px] leading-tight text-sf-text-muted truncate">
+            {subtitle}
+          </p>
+        </div>
+        {badges.length > 0 && (
+          <div className="flex justify-end gap-1 flex-shrink-0">
+            {badges.map((badge) => (
+              <span
+                key={`${badge.label}-${badge.value}`}
+                className={`inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-medium ${badge.className || 'bg-sf-dark-700 text-sf-text-secondary'}`}
+              >
+                {badge.value}
+              </span>
+            ))}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => setClipInfoMenuOpen((open) => !open)}
+          title="Clip details"
+          className={`p-1 rounded flex-shrink-0 transition-colors ${
+            clipInfoMenuOpen
+              ? 'bg-sf-dark-600 text-sf-text-primary'
+              : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700'
+          }`}
+        >
+          <MoreHorizontal className="w-3.5 h-3.5" />
+        </button>
+        {clipInfoMenuOpen && (
+          <>
+            <div className="fixed inset-0 z-30" onClick={() => setClipInfoMenuOpen(false)} />
+            <div className="absolute left-2 right-2 top-full mt-1 z-40 rounded-md border border-sf-dark-600 bg-sf-dark-800 shadow-xl p-2 space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                {infoItems.map((item) => (
+                  <div key={`${item.label}-${item.value}`} className="rounded border border-sf-dark-700 bg-sf-dark-900/70 px-2 py-1.5 min-w-0">
+                    <div className="text-[9px] uppercase tracking-wider text-sf-text-muted">{item.label}</div>
+                    <div className="mt-0.5 truncate text-[11px] font-medium text-sf-text-primary" title={item.value}>
+                      {item.value}
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-sf-text-primary truncate" title={title}>
-                  {title}
-                </p>
-                <p className="text-[10px] text-sf-text-muted truncate">
-                  {subtitle}
-                </p>
-              </div>
-              {badges.length > 0 && (
-                <div className="flex flex-wrap justify-end gap-1 max-w-[45%]">
-                  {badges.map((badge) => (
-                    <span
-                      key={`${badge.label}-${badge.value}`}
-                      className={`inline-flex items-center rounded px-2 py-0.5 text-[10px] font-medium ${badge.className || 'bg-sf-dark-700 text-sf-text-secondary'}`}
-                    >
-                      {badge.value}
-                    </span>
-                  ))}
+              {actions && (
+                <div className="space-y-2">
+                  {actions}
                 </div>
               )}
             </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              {infoItems.map((item) => (
-                <div key={`${item.label}-${item.value}`} className="rounded border border-sf-dark-700 bg-sf-dark-900/70 px-2 py-1.5 min-w-0">
-                  <div className="text-[9px] uppercase tracking-wider text-sf-text-muted">{item.label}</div>
-                  <div className="mt-0.5 truncate text-[11px] font-medium text-sf-text-primary" title={item.value}>
-                    {item.value}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {actions && (
-              <div className="space-y-2">
-                {actions}
-              </div>
-            )}
-          </div>
+          </>
         )}
-      </>
+      </div>
     )
   }
   
