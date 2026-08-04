@@ -2773,6 +2773,63 @@ export function modifySeedance2Workflow(workflow, options = {}) {
   return modified
 }
 
+function resolveMinimaxH3Resolution(width, height) {
+  const longestSide = Math.max(Number(width) || 0, Number(height) || 0)
+  if (longestSide >= 2000) return '2K'
+  return '768P'
+}
+
+/**
+ * Configure MiniMax H3 reference-to-video without touching the ComfyUI graph.
+ * H3 receives one exact still and one exact audio segment. The audio is a
+ * reference input, not a request for H3 to compose replacement music.
+ */
+export function modifyMinimaxH3ReferenceWorkflow(workflow, options = {}) {
+  const {
+    prompt = '',
+    width = 2560,
+    height = 1440,
+    duration = 5,
+    seed = Math.floor(Math.random() * 1000000000000),
+    filenamePrefix = 'video/velorn_minimax_h3',
+    assetFilenames = {},
+  } = options
+
+  const modified = JSON.parse(JSON.stringify(workflow))
+  const referenceImage = String(assetFilenames.referenceImage1 || '').trim()
+  const referenceAudio = String(assetFilenames.referenceAudio1 || '').trim()
+
+  for (const node of Object.values(modified)) {
+    if (!node?.inputs) continue
+
+    if (node.class_type === 'MinimaxHailuo03ReferenceNode') {
+      if ('model.prompt' in node.inputs) node.inputs['model.prompt'] = prompt
+      if ('model.resolution' in node.inputs) node.inputs['model.resolution'] = resolveMinimaxH3Resolution(width, height)
+      if ('model.ratio' in node.inputs) node.inputs['model.ratio'] = resolveClosestAspectRatio(width, height)
+      if ('model.duration' in node.inputs) {
+        node.inputs['model.duration'] = Math.max(5, Math.min(15, Math.round(Number(duration) || 5)))
+      }
+      if ('seed' in node.inputs) node.inputs.seed = seed
+      if ('watermark' in node.inputs) node.inputs.watermark = false
+
+      if (referenceImage && Array.isArray(node.inputs['model.reference_images.image_1'])) {
+        const loadNode = modified[String(node.inputs['model.reference_images.image_1'][0])]
+        if (loadNode?.inputs && 'image' in loadNode.inputs) loadNode.inputs.image = referenceImage
+      }
+      if (referenceAudio && Array.isArray(node.inputs['model.reference_audios.audio_1'])) {
+        const loadNode = modified[String(node.inputs['model.reference_audios.audio_1'][0])]
+        if (loadNode?.inputs && 'audio' in loadNode.inputs) loadNode.inputs.audio = referenceAudio
+      }
+    }
+
+    if (node.class_type === 'SaveVideo' && 'filename_prefix' in node.inputs) {
+      node.inputs.filename_prefix = filenamePrefix || node.inputs.filename_prefix || 'video/velorn_minimax_h3'
+    }
+  }
+
+  return modified
+}
+
 export function modifySoniloVideoToMusicWorkflow(workflow, options = {}) {
   const {
     prompt = '',

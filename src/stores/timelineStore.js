@@ -6,6 +6,7 @@ import { getAdjustmentValue, mergeAdjustmentSettings, normalizeAdjustmentSetting
 import { clampAudioFadeDuration } from '../utils/audioClipFades'
 import { normalizeAudioClipGainDb } from '../utils/audioClipGain'
 import { clampTrackPan, clampTrackVolume } from '../utils/audioTrackAudibility'
+import { hasVideoSolo, isVideoTrackVisible } from '../utils/videoTrackVisibility'
 import { normalizeAudioInserts } from '../utils/audioInserts'
 import { CLIP_COMPOSITE_MODE, normalizeClipCompositeMode } from '../utils/layerCompositing'
 import { getKeyframeTimeTolerance } from '../utils/keyframes'
@@ -4573,8 +4574,9 @@ export const useTimelineStore = create(
    */
   getActiveClipAtTime: (time) => {
     const state = get()
+    const anyVideoSolo = hasVideoSolo(state.tracks)
     // Get video tracks in reverse order (top track = highest priority)
-    const videoTracks = state.tracks.filter(t => t.type === 'video' && t.visible && !t.muted)
+    const videoTracks = state.tracks.filter(t => isVideoTrackVisible(t, anyVideoSolo))
     
     for (const track of videoTracks) {
       const clip = state.clips.find(c => 
@@ -4594,6 +4596,7 @@ export const useTimelineStore = create(
    */
   getActiveClipsAtTime: (time) => {
     const state = get()
+    const anyVideoSolo = hasVideoSolo(state.tracks)
     const activeClips = []
     const addedClipIds = new Set()
 
@@ -4616,7 +4619,9 @@ export const useTimelineStore = create(
       const clipB = state.clips.find(c => c.id === transition.clipBId)
       if (!clipA || !clipB) return
       const track = state.tracks.find(t => t.id === clipA.trackId)
-      if (!track || !track.visible || track.muted) return
+      if (!track || (track.type === 'video'
+        ? !isVideoTrackVisible(track, anyVideoSolo)
+        : !track.visible || track.muted)) return
       if (clipA.trackId !== clipB.trackId) return
       if (!isClipEnabled(clipA) || !isClipEnabled(clipB)) return
       removeActiveClip(clipA.id)
@@ -4626,7 +4631,9 @@ export const useTimelineStore = create(
     }
 
     for (const track of state.tracks) {
-      if (!track.visible || track.muted) continue
+      if (track.type === 'video') {
+        if (!isVideoTrackVisible(track, anyVideoSolo)) continue
+      } else if (!track.visible || track.muted) continue
 
       const trackClips = state.clips.filter(c =>
         c.trackId === track.id &&
@@ -4646,7 +4653,9 @@ export const useTimelineStore = create(
       if (!clipA || !clipB) continue
       if (clipA.trackId !== clipB.trackId) continue
       const track = state.tracks.find(t => t.id === clipA.trackId)
-      if (!track || !track.visible || track.muted) continue
+      if (!track || (track.type === 'video'
+        ? !isVideoTrackVisible(track, anyVideoSolo)
+        : !track.visible || track.muted)) continue
       const split = normalizeTransitionSplit(transition?.settings?.split, transition?.settings?.alignment || 'center')
       const editPoint = Number.isFinite(Number(transition.editPoint))
         ? Number(transition.editPoint)
@@ -4671,6 +4680,7 @@ export const useTimelineStore = create(
    */
   getTransitionAtTime: (time) => {
     const state = get()
+    const anyVideoSolo = hasVideoSolo(state.tracks)
     const safeTime = Number(time)
     if (!Number.isFinite(safeTime)) return null
 
@@ -4689,7 +4699,7 @@ export const useTimelineStore = create(
         if (!clip) continue
 
         const clipTrack = state.tracks.find(t => t.id === clip.trackId)
-        if (!clipTrack || clipTrack.type !== 'video' || !clipTrack.visible || clipTrack.muted) continue
+        if (!isVideoTrackVisible(clipTrack, anyVideoSolo)) continue
 
         const duration = Math.min(Number(transition.duration) || 0, Number(clip.duration) || 0)
         if (duration <= 0) continue
@@ -4727,7 +4737,7 @@ export const useTimelineStore = create(
       if (!clipA || !clipB) continue
 
       const clipTrack = state.tracks.find(t => t.id === clipA.trackId)
-      if (!clipTrack || clipTrack.type !== 'video' || !clipTrack.visible || clipTrack.muted) continue
+      if (!isVideoTrackVisible(clipTrack, anyVideoSolo)) continue
       if (clipA.trackId !== clipB.trackId) continue
       const duration = Number(transition.duration)
       if (!Number.isFinite(duration) || duration <= 0) continue
@@ -5060,13 +5070,15 @@ export const useTimelineStore = create(
   },
 
   /**
-   * Toggle track solo (audio tracks). Solo does not override mute; when any
-   * audio track is soloed, only soloed unmuted audio tracks are audible.
+   * Toggle track solo. Audio solo controls audibility; video solo controls
+   * picture visibility. Multiple tracks of the same type can be soloed.
    */
   toggleTrackSolo: (trackId) => {
     set((state) => ({
       tracks: state.tracks.map(track =>
-        track.id === trackId ? { ...track, solo: !track.solo } : track
+        track.id === trackId && (track.type === 'audio' || track.type === 'video')
+          ? { ...track, solo: !track.solo }
+          : track
       )
     }))
   },

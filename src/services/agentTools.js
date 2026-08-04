@@ -56,6 +56,7 @@ const WRITE_TOOL_NAMES = new Set([
   'prepare_generation_from_timeline_context',
   'queue_prepared_generation',
   'queue_timeline_generation_batch',
+  'queue_h3_reference_video',
   'queue_prompt_generation_batch',
   'export_timeline',
   'export_fcpxml',

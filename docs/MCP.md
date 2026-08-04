@@ -399,6 +399,8 @@ These tools use the same persistent Director state as the visible Music Video UI
 | `prepare_generation_from_timeline_context` | Preview/apply staging Generate from a selected clip or playhead frame. |
 | `queue_prepared_generation` | Preview/queue the currently staged Generate request. |
 | `queue_timeline_generation_batch` | Preview/queue multiple image-to-video generations from timeline context. |
+| `queue_h3_reference_video` | Preview/queue one MiniMax H3 image+audio reference performance shot without opening the ComfyUI canvas. |
+| `get_generation_queue_status` | Poll live Generate jobs, prompt IDs, progress, failures, and imported result asset IDs. |
 | `queue_prompt_generation_batch` | Preview/queue text-to-image or text-to-video generations from prompts. |
 
 ### Captions
@@ -491,6 +493,36 @@ Preview a small generation batch:
       }
     ],
     "previewOnly": true
+  }
+}
+```
+
+Preview a MiniMax H3 lip-sync shot before spending credits:
+
+```json
+{
+  "tool": "queue_h3_reference_video",
+  "arguments": {
+    "imageAssetId": "asset-reference-frame",
+    "audioAssetId": "asset-exact-audio-segment",
+    "shotId": "S01",
+    "prompt": "Use Image 1 as the exact identity and composition reference. Use Audio 1 as the exact and sole performance-timing reference. Synchronize every visible mouth movement precisely to the supplied audio.",
+    "durationSeconds": 9,
+    "resolutionTier": "2K",
+    "aspectRatio": "16:9",
+    "previewOnly": true
+  }
+}
+```
+
+After explicit approval, repeat with `previewOnly: false`, then poll:
+
+```json
+{
+  "tool": "get_generation_queue_status",
+  "arguments": {
+    "workflowId": "minimax-h3-r2v",
+    "includeDone": true
   }
 }
 ```

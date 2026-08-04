@@ -235,11 +235,11 @@
   },
   "1626": {
     "inputs": {
-      "text": "text, subtitles, logo, still image, still video, no motion, static, frozen, blurry, low quality, distorted, bad anatomy, oversaturated, pixelated, low resolution, grainy, compression artifacts, jpeg artifacts, glitches, watermark, signature, copyright, distorted sound, saturated sound, loud sound, deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, blurry teeth, disfigured teeth",
+      "text": "",
       "clip": ["1562", 0]
     },
     "class_type": "CLIPTextEncode",
-    "_meta": { "title": "CLIP Text Encode (Negative)" }
+    "_meta": { "title": "CLIP Text Encode (Keep Empty for LTX 2.3)" }
   },
   "1630": {
     "inputs": {

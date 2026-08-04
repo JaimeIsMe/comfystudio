@@ -93,6 +93,7 @@ const MCP_ACTION_PLAN_WRITABLE_TOOLS = new Set([
   'regenerate_music_video_keyframe',
   'regenerate_music_video_video',
   'queue_timeline_template_generation',
+  'queue_h3_reference_video',
   'export_timeline',
   'export_delivery_batch',
   'export_fcpxml',
@@ -150,6 +151,10 @@ const MCP_PROMPT_BATCH_WORKFLOW_ALIASES = new Map([
   ['seedancereference', 'seedance2-r2v'],
   ['seedanceref', 'seedance2-r2v'],
   ['seedanceugc', 'seedance2-r2v'],
+  ['minimaxh3', 'minimax-h3-r2v'],
+  ['h3', 'minimax-h3-r2v'],
+  ['minimaxh3r2v', 'minimax-h3-r2v'],
+  ['h3reference', 'minimax-h3-r2v'],
   ['imageedit', 'image-edit'],
   ['qwenimageedit', 'image-edit'],
   ['qwenimageedit2509', 'image-edit'],
@@ -248,6 +253,14 @@ const MCP_PROMPT_BATCH_SUPPORTED_WORKFLOWS = new Map([
     defaultDurationSeconds: 15,
     defaultFps: 24,
     defaultResolution: { width: 720, height: 1280 },
+  }],
+  ['minimax-h3-r2v', {
+    label: 'MiniMax H3 Reference + Audio to Video',
+    category: 'video',
+    outputType: 'video',
+    defaultDurationSeconds: 5,
+    defaultFps: 24,
+    defaultResolution: { width: 2560, height: 1440 },
   }],
 ])
 const MCP_TRANSITION_TYPES = new Set([
@@ -564,6 +577,7 @@ function trackRef(track) {
     type: track.type || 'unknown',
     visible: track.visible !== false,
     muted: Boolean(track.muted),
+    solo: Boolean(track.solo),
     locked: Boolean(track.locked),
     role: track.role || null,
     channels: track.channels || null,
@@ -3880,6 +3894,7 @@ function isClipActiveAtTime(clip, timeSeconds) {
 
 function getTimelineFrameClips(timeline, timeSeconds) {
   const tracks = Array.isArray(timeline?.tracks) ? timeline.tracks : []
+  const anyVideoSolo = tracks.some((track) => track?.type === 'video' && track.solo === true)
   const trackIndexById = new Map(tracks.map((track, index) => [track?.id, index]))
   const trackById = new Map(tracks.map((track) => [track?.id, track]))
   const activeClips = (timeline?.clips || [])
@@ -3892,7 +3907,10 @@ function getTimelineFrameClips(timeline, timeSeconds) {
         trackIndex: trackIndexById.has(clip.trackId) ? trackIndexById.get(clip.trackId) : Number.MAX_SAFE_INTEGER,
       }
     })
-    .filter(({ track }) => track && track.visible !== false && !track.muted)
+    .filter(({ track }) => track
+      && track.visible !== false
+      && !track.muted
+      && (track.type !== 'video' || !anyVideoSolo || track.solo === true))
     .sort((a, b) => a.trackIndex - b.trackIndex || getClipStart(a.clip) - getClipStart(b.clip))
 
   const visualTypes = new Set(['video', 'image', 'text', 'shape'])
@@ -3918,11 +3936,12 @@ function getTimelineFrameClips(timeline, timeSeconds) {
   }
 }
 
-function isVisualTimelineClip(clip, track) {
+function isVisualTimelineClip(clip, track, anyVideoSolo = false) {
   const type = String(clip?.type || '').toLowerCase()
   return track?.type === 'video'
     && track.visible !== false
     && !track.muted
+    && (!anyVideoSolo || track.solo === true)
     && clip?.enabled !== false
     && ['video', 'image', 'text', 'shape'].includes(type)
     && getClipDuration(clip) > 0
@@ -5284,6 +5303,7 @@ function resolveVisibleShotRange(timeline, args = {}) {
 function resolveVisibleShotSamples(timeline, args = {}) {
   const range = resolveVisibleShotRange(timeline, args)
   const tracks = Array.isArray(timeline?.tracks) ? timeline.tracks : []
+  const anyVideoSolo = tracks.some((track) => track?.type === 'video' && track.solo === true)
   const trackById = new Map(tracks.map((track) => [track?.id, track]))
   const fps = range.fps
   const frameDuration = 1 / fps
@@ -5298,7 +5318,7 @@ function resolveVisibleShotSamples(timeline, args = {}) {
 
   for (const clip of timeline?.clips || []) {
     const track = trackById.get(clip?.trackId)
-    if (!isVisualTimelineClip(clip, track)) continue
+    if (!isVisualTimelineClip(clip, track, anyVideoSolo)) continue
     const clipStart = getClipStart(clip)
     const clipEnd = getClipEnd(clip)
     if (clipEnd <= range.startSeconds || clipStart >= range.endSeconds) continue
@@ -7129,6 +7149,41 @@ function createToolDefinitions() {
       },
     },
     {
+      name: 'queue_h3_reference_video',
+      description: 'Preview or queue one MiniMax H3 reference-to-video job from an exact Velorn image asset and audio asset. Designed for paid hero performance and lip-sync shots. Defaults to previewOnly; applying can spend Comfy credits, so require explicit approval first. No negative prompt is sent.',
+      inputSchema: {
+        type: 'object',
+        required: ['imageAssetId', 'audioAssetId', 'prompt'],
+        properties: {
+          imageAssetId: { type: 'string', description: 'Velorn image asset ID for the exact first/reference frame.' },
+          audioAssetId: { type: 'string', description: 'Velorn audio asset ID for the exact performance segment.' },
+          prompt: { type: 'string', description: 'Positive H3 performance prompt. Refer to the connected inputs as Image 1 and Audio 1.' },
+          shotId: { type: 'string', description: 'Optional shot label stored with the queued job for later identification.' },
+          durationSeconds: { type: 'number', description: 'Generation duration, 5-15 whole seconds. Shorter shot audio is generated as 5 seconds and can be trimmed in the edit.' },
+          resolutionTier: { type: 'string', enum: ['768P', '2K'], description: 'H3 output tier. Defaults to 2K.' },
+          aspectRatio: { type: 'string', enum: ['16:9', '9:16', '1:1'], description: 'Output aspect ratio. Defaults to 16:9.' },
+          seed: { type: 'integer', description: 'Optional deterministic seed.' },
+          folderId: { type: 'string', description: 'Optional Velorn asset-folder ID for the completed result.' },
+          previewOnly: { type: 'boolean', description: 'When true, validates and returns the exact paid-generation plan without queueing. Defaults to true.' },
+          timeoutMs: { type: 'integer', description: 'Renderer response timeout. Defaults to 30000.' },
+        },
+      },
+    },
+    {
+      name: 'get_generation_queue_status',
+      description: 'Return live Velorn Generate-queue jobs, including queued/running/completed/failed state, progress, prompt IDs, and imported result asset IDs. Filter by workflowId, jobIds, or batchId. Read-only.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workflowId: { type: 'string' },
+          jobIds: { type: 'array', items: { type: 'string' } },
+          batchId: { type: 'string' },
+          includeDone: { type: 'boolean', description: 'Include completed jobs. Defaults to true.' },
+          limit: { type: 'integer', description: 'Maximum jobs returned. Defaults to 100.' },
+        },
+      },
+    },
+    {
       name: 'queue_prompt_generation_batch',
       description: 'Preview or queue text-to-image/text-to-video generation jobs directly from written prompts, plus image-input workflows such as image-edit when each job supplies its input via jobs[].assetFieldIds.image. Use this for brief-to-assets workflows before assembling a sequence. Defaults to previewOnly; applying can start local/credit-backed generation, so require explicit user approval first.',
       inputSchema: {
@@ -7878,11 +7933,12 @@ function createToolDefinitions() {
     },
     {
       name: 'assemble_music_video_timeline',
-      description: 'Preview or assemble ready Music Video clips and song audio into a generated edit timeline with coverage tracks and vocal-performance sync locks. Existing assembled shots are kept. Defaults to previewOnly.',
+      description: 'Preview or assemble ready Music Video clips and song audio into a generated edit timeline with coverage tracks and vocal-performance sync locks. Existing assembled shots are kept. Pass a new timelineName to build a clean assembly without altering an older edit. Defaults to previewOnly.',
       inputSchema: {
         type: 'object',
         properties: {
           saveAfterAssembly: { type: 'boolean', description: 'Save the project after assembly. Defaults to true.' },
+          timelineName: { type: 'string', description: 'Optional generated timeline name. Use a new name for a clean assembly instead of reusing an older edit.' },
           previewOnly: { type: 'boolean', description: 'Defaults to true.' },
           timeoutMs: { type: 'integer' },
         },
@@ -8913,7 +8969,7 @@ function createToolDefinitions() {
           trackId: { type: 'string', description: 'Track ID from get_timeline.' },
           name: { type: 'string', description: 'Optional new track name.' },
           muted: { type: 'boolean', description: 'Mute/unmute the track.' },
-          solo: { type: 'boolean', description: 'Solo/unsolo an audio track. While any audio track is soloed, only soloed unmuted audio tracks are audible in preview and export.' },
+          solo: { type: 'boolean', description: 'Solo/unsolo an audio or video track. Audio solo limits audible tracks; video solo limits visible picture tracks in preview, export, and inspection.' },
           volume: { type: 'number', description: 'Mixer fader level for audio tracks, 0-200 (100 = unity/0 dB, 200 = +6 dB). Applies to preview and export.' },
           pan: { type: 'number', description: 'Stereo pan for audio tracks, -100 (full left) to 100 (full right), 0 = center. Applies to preview and export.' },
           inserts: {
@@ -10717,6 +10773,10 @@ class ComfyStudioMcpServer {
         return this.runRendererActionTool('install_workflow_setup', args, { bridgeName: 'MCP workflow install bridge', suggestedTool: 'install_workflow_setup', defaultPreviewOnly: true })
       case 'get_workflow_install_status':
         return this.runRendererActionTool('get_workflow_install_status', args, { bridgeName: 'MCP workflow install bridge', suggestedTool: 'get_workflow_install_status' })
+      case 'queue_h3_reference_video':
+        return this.queueH3ReferenceVideo(snapshot, args)
+      case 'get_generation_queue_status':
+        return this.runRendererActionTool('get_generation_queue_status', args, { bridgeName: 'MCP generation queue status bridge', suggestedTool: 'get_generation_queue_status' })
       case 'queue_prompt_generation_batch':
         return this.queuePromptGenerationBatch(snapshot, args)
       case 'generate_music':
@@ -11925,6 +11985,65 @@ class ComfyStudioMcpServer {
     })
   }
 
+  async queueH3ReferenceVideo(snapshot, args = {}) {
+    const imageAssetId = String(args.imageAssetId || '').trim()
+    const audioAssetId = String(args.audioAssetId || '').trim()
+    const prompt = String(args.prompt || '').trim().slice(0, 5000)
+    if (!imageAssetId) return errorResult('imageAssetId is required.')
+    if (!audioAssetId) return errorResult('audioAssetId is required.')
+    if (!prompt) return errorResult('prompt is required.')
+
+    const assetById = new Map((snapshot.assets || []).map((asset) => [String(asset?.id || ''), asset]))
+    const imageAsset = assetById.get(imageAssetId)
+    const audioAsset = assetById.get(audioAssetId)
+    if (!imageAsset) return errorResult(`Unknown Velorn image asset ID: ${imageAssetId}`)
+    if (!audioAsset) return errorResult(`Unknown Velorn audio asset ID: ${audioAssetId}`)
+    if (String(imageAsset.type || '').toLowerCase() !== 'image') {
+      return errorResult(`imageAssetId must reference an image; ${imageAssetId} is ${imageAsset.type || 'unknown'}.`)
+    }
+    if (String(audioAsset.type || '').toLowerCase() !== 'audio') {
+      return errorResult(`audioAssetId must reference audio; ${audioAssetId} is ${audioAsset.type || 'unknown'}.`)
+    }
+
+    const requestedTier = String(args.resolutionTier || '2K').trim().toLowerCase()
+    const tier = requestedTier === '768p' || requestedTier === '1080p' ? '768P' : '2K'
+    const aspectRatio = ['16:9', '9:16', '1:1'].includes(String(args.aspectRatio || '').trim())
+      ? String(args.aspectRatio).trim()
+      : '16:9'
+    const dimensionsByTier = tier === '2K'
+      ? { '16:9': { width: 2560, height: 1440 }, '9:16': { width: 1440, height: 2560 }, '1:1': { width: 2048, height: 2048 } }
+      : { '16:9': { width: 1366, height: 768 }, '9:16': { width: 768, height: 1366 }, '1:1': { width: 768, height: 768 } }
+    const requestedDuration = Number(args.durationSeconds ?? args.duration)
+    const assetDuration = Number(audioAsset.duration || audioAsset.metadata?.duration || audioAsset.settings?.duration)
+    const durationSeconds = Math.max(5, Math.min(15, Math.round(
+      Number.isFinite(requestedDuration) && requestedDuration > 0
+        ? requestedDuration
+        : (Number.isFinite(assetDuration) && assetDuration > 0 ? assetDuration : 5)
+    )))
+    const shotId = String(args.shotId || '').trim().slice(0, 120)
+
+    return this.queuePromptGenerationBatch(snapshot, {
+      previewOnly: args.previewOnly !== false,
+      timeoutMs: args.timeoutMs,
+      folderId: args.folderId,
+      jobs: [{
+        workflowId: 'minimax-h3-r2v',
+        workflowLabel: 'MiniMax H3 Reference + Audio to Video',
+        prompt,
+        promptLabel: shotId || `H3 ${imageAsset.name || imageAssetId}`,
+        seed: args.seed,
+        durationSeconds,
+        fps: 24,
+        resolution: dimensionsByTier[aspectRatio],
+        assetFieldIds: {
+          referenceImage1: imageAssetId,
+          referenceAudio1: audioAssetId,
+        },
+        folderId: args.folderId,
+      }],
+    })
+  }
+
   async queuePromptGenerationBatch(snapshot, args = {}) {
     const plan = resolvePromptGenerationBatchPlan(snapshot, args)
     if (plan.error) return errorResult(plan.error)
@@ -12761,6 +12880,9 @@ class ComfyStudioMcpServer {
     const updates = {}
     if (Object.prototype.hasOwnProperty.call(args, 'name')) updates.name = String(args.name || '').trim().slice(0, 80)
     if (Object.prototype.hasOwnProperty.call(args, 'muted')) updates.muted = args.muted === true
+    if ((track.type === 'audio' || track.type === 'video') && Object.prototype.hasOwnProperty.call(args, 'solo')) {
+      updates.solo = args.solo === true
+    }
     if (Object.prototype.hasOwnProperty.call(args, 'locked')) updates.locked = args.locked === true
     if (Object.prototype.hasOwnProperty.call(args, 'visible')) updates.visible = args.visible !== false
     if (track.type === 'audio' && Object.prototype.hasOwnProperty.call(args, 'channels')) {
@@ -12769,7 +12891,7 @@ class ComfyStudioMcpServer {
     const requestedIndex = Number(args.index ?? args.newIndex)
     const hasIndex = Number.isFinite(requestedIndex)
     if (Object.keys(updates).length === 0 && !hasIndex) {
-      return errorResult('Provide at least one update: name, muted, locked, visible, channels, or index.')
+      return errorResult('Provide at least one update: name, muted, solo, locked, visible, channels, or index.')
     }
 
     const plan = {

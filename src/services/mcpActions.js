@@ -189,11 +189,11 @@ function summarizeTrack(track) {
     muted: !!track.muted,
     locked: !!track.locked,
     visible: track.visible !== false,
+    solo: !!track.solo,
     role: track.role || null,
     channels: track.channels || null,
     ...(track.type === 'audio'
       ? {
-        solo: !!track.solo,
         volume: clampTrackVolume(track.volume),
         pan: clampTrackPan(track.pan),
         inserts: normalizeAudioInserts(track.inserts),
@@ -1990,13 +1990,13 @@ async function handleQueuePreparedGeneration(payload = {}) {
   })
 }
 
-async function waitForMusicVideoWorkspaceReady(timeoutMs = 30000) {
+async function waitForGenerateWorkspaceReady(timeoutMs = 30000) {
   if (typeof window === 'undefined') {
     throw new Error('Music Video tools are only available in the renderer.')
   }
 
   window.dispatchEvent(new CustomEvent('comfystudio-open-generate-tab', {
-    detail: { source: 'mcp-music-video-workspace' },
+    detail: { source: 'mcp-generate-workspace' },
   }))
 
   return await new Promise((resolve, reject) => {
@@ -2037,7 +2037,7 @@ async function dispatchMusicVideoWorkspaceRequest(payload = {}, {
   }
 
   const timeoutMs = Math.min(120000, Math.max(1000, Number(payload.timeoutMs) || 30000))
-  await waitForMusicVideoWorkspaceReady(timeoutMs)
+  await waitForGenerateWorkspaceReady(timeoutMs)
 
   return await new Promise((resolve, reject) => {
     let settled = false
@@ -2284,6 +2284,40 @@ async function handleQueueTimelineTemplateGeneration(payload = {}) {
         respond: (result = {}) => {
           if (result?.success === false) {
             finish(reject, new Error(result.error || result.message || 'Could not queue template generation.'))
+            return
+          }
+          finish(resolve, result)
+        },
+      },
+    }))
+  })
+}
+
+async function handleGetGenerationQueueStatus(payload = {}) {
+  if (typeof window === 'undefined') {
+    throw new Error('Generation queue status is only available in the renderer.')
+  }
+
+  const timeoutMs = Math.min(30000, Math.max(1000, Number(payload.timeoutMs) || 10000))
+  await waitForGenerateWorkspaceReady(timeoutMs)
+  return await new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (callback, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      callback(value)
+    }
+    const timeout = setTimeout(() => {
+      finish(reject, new Error('Generate workspace did not respond to the MCP queue-status request.'))
+    }, timeoutMs)
+
+    window.dispatchEvent(new CustomEvent('comfystudio-mcp-get-generation-queue-status', {
+      detail: {
+        ...payload,
+        respond: (result = {}) => {
+          if (result?.success === false) {
+            finish(reject, new Error(result.error || result.message || 'Could not inspect the generation queue.'))
             return
           }
           finish(resolve, result)
@@ -2672,6 +2706,7 @@ async function handleQueuePromptGenerationBatch(payload = {}) {
   }
 
   const timeoutMs = Math.min(120000, Math.max(1000, Number(payload.timeoutMs) || 30000))
+  await waitForGenerateWorkspaceReady(timeoutMs)
   return await new Promise((resolve, reject) => {
     let settled = false
     const finish = (callback, value) => {
@@ -3717,7 +3752,7 @@ function handleUpdateTrack(payload = {}) {
   const updates = {}
   if (Object.prototype.hasOwnProperty.call(payload, 'name')) updates.name = String(payload.name || '').trim().slice(0, 80)
   if (Object.prototype.hasOwnProperty.call(payload, 'muted')) updates.muted = payload.muted === true
-  if (current.type === 'audio' && Object.prototype.hasOwnProperty.call(payload, 'solo')) updates.solo = payload.solo === true
+  if ((current.type === 'audio' || current.type === 'video') && Object.prototype.hasOwnProperty.call(payload, 'solo')) updates.solo = payload.solo === true
   if (current.type === 'audio' && Object.prototype.hasOwnProperty.call(payload, 'volume')) updates.volume = clampTrackVolume(payload.volume)
   if (current.type === 'audio' && Object.prototype.hasOwnProperty.call(payload, 'pan')) updates.pan = clampTrackPan(payload.pan)
   if (current.type === 'audio' && Object.prototype.hasOwnProperty.call(payload, 'inserts')) updates.inserts = normalizeAudioInserts(payload.inserts)
@@ -8477,6 +8512,8 @@ async function handleMcpAction(request = {}) {
       return handleQueueTimelineGenerationBatch(request.payload || {})
     case 'queue_timeline_template_generation':
       return handleQueueTimelineTemplateGeneration(request.payload || {})
+    case 'get_generation_queue_status':
+      return handleGetGenerationQueueStatus(request.payload || {})
     case 'import_comfyui_workflow':
       return handleImportComfyUiWorkflow(request.payload || {})
     case 'install_workflow_setup':

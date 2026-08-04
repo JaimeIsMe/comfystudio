@@ -1,0 +1,58 @@
+{
+  "2": {
+    "inputs": {
+      "image": "velorn_h3_reference.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Reference Image"
+    }
+  },
+  "3": {
+    "inputs": {
+      "filename_prefix": "video/velorn_minimax_h3",
+      "format": "auto",
+      "codec": "auto",
+      "video": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  },
+  "4": {
+    "inputs": {
+      "model": "MiniMax H3",
+      "model.prompt": "Use <Picture 1> as the exact identity and composition reference. Use <Audio 1> as the exact and sole performance-timing reference. Preserve identity, materials, anatomy, wardrobe, and framing while synchronizing visible mouth movement precisely to the supplied audio.",
+      "model.resolution": "2K",
+      "model.ratio": "16:9",
+      "model.duration": 5,
+      "seed": 0,
+      "watermark": false,
+      "model.reference_images.image_1": [
+        "2",
+        0
+      ],
+      "model.reference_audios.audio_1": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "MinimaxHailuo03ReferenceNode",
+    "_meta": {
+      "title": "MiniMax H3 Reference to Video"
+    }
+  },
+  "5": {
+    "inputs": {
+      "audio": "velorn_h3_reference.mp3"
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "Reference Audio"
+    }
+  }
+}

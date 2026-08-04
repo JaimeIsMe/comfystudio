@@ -9883,7 +9883,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     yoloVideoFps,
   ])
 
-  const handleAssembleMusicVideoTimeline = useCallback(async () => {
+  const handleAssembleMusicVideoTimeline = useCallback(async (options = {}) => {
     if (!isYoloMusicMode) {
       return { ok: false, message: 'Switch to Music Video Creation first.' }
     }
@@ -9919,8 +9919,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       ? `${timelineResolution.width}x${timelineResolution.height}`
       : ''
     const songName = String(yoloMusicAudioAsset?.name || 'Music Video').replace(/\.[a-z0-9]{2,5}$/i, '').trim()
+    const requestedTimelineName = String(options?.timelineName || '').trim()
     const timelineResult = await ensureGeneratedEditTimeline({
-      name: buildGeneratedEditTimelineName('Music Video', [songName || 'Music Video', timelineResolutionLabel].filter(Boolean).join(' - ')),
+      name: requestedTimelineName || buildGeneratedEditTimelineName('Music Video', [songName || 'Music Video', timelineResolutionLabel].filter(Boolean).join(' - ')),
       width: timelineResolution.width,
       height: timelineResolution.height,
       fps: Number(yoloVideoFps) || null,
@@ -13286,7 +13287,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             })
             return
           }
-          const result = await handleAssembleMusicVideoTimeline()
+          const result = await handleAssembleMusicVideoTimeline({
+            timelineName: String(detail.timelineName || '').trim(),
+          })
           if (!result?.ok) throw new Error(result?.message || 'Could not assemble the Music Video timeline.')
           if (detail.saveAfterAssembly !== false) await saveProject?.()
           respond({
@@ -14723,6 +14726,54 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
     validateDependenciesForQueue,
   ])
 
+  useEffect(() => {
+    const handler = (event) => {
+      const detail = event?.detail || {}
+      const respond = typeof detail.respond === 'function' ? detail.respond : null
+      if (!respond) return
+
+      const workflowId = String(detail.workflowId || '').trim()
+      const batchId = String(detail.batchId || '').trim()
+      const requestedJobIds = new Set(
+        (Array.isArray(detail.jobIds) ? detail.jobIds : [])
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      )
+      const includeDone = detail.includeDone !== false
+      const limit = Math.max(1, Math.min(500, Math.floor(Number(detail.limit) || 100)))
+      let jobs = [...queueRef.current]
+      if (workflowId) jobs = jobs.filter((job) => String(job?.workflowId || '') === workflowId)
+      if (batchId) jobs = jobs.filter((job) => String(job?.mcpBatch?.id || '') === batchId)
+      if (requestedJobIds.size > 0) jobs = jobs.filter((job) => requestedJobIds.has(String(job?.id || '')))
+      if (!includeDone) jobs = jobs.filter((job) => !['done', 'error', 'cancelled'].includes(String(job?.status || '').toLowerCase()))
+      jobs = jobs.slice(-limit).reverse()
+
+      respond({
+        success: true,
+        action: 'get_generation_queue_status',
+        count: jobs.length,
+        activeCount: jobs.filter((job) => ACTIVE_JOB_STATUSES.includes(job?.status)).length,
+        jobs: jobs.map((job) => ({
+          id: job.id,
+          workflowId: job.workflowId,
+          workflowLabel: job.workflowLabel,
+          status: job.status,
+          progress: Number(job.progress) || 0,
+          promptId: job.promptId || null,
+          promptLabel: job.mcpBatch?.promptLabel || null,
+          batchId: job.mcpBatch?.id || null,
+          duration: job.duration || null,
+          resolution: job.resolution || null,
+          resultAssetIds: Array.isArray(job.resultAssetIds) ? job.resultAssetIds : [],
+          error: job.error || null,
+        })),
+      })
+    }
+
+    window.addEventListener('comfystudio-mcp-get-generation-queue-status', handler)
+    return () => window.removeEventListener('comfystudio-mcp-get-generation-queue-status', handler)
+  }, [])
+
   // Poll for result
   const pollForResult = async (promptId, wfId, onProgress, expectedOutputPrefix = '') => {
     // Hard absolute cap (belt-and-suspenders). Long video workflows like
@@ -15728,6 +15779,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         job.workflowId === 'seedance2-mini-r2v' ||
         job.workflowId === 'seedance2-flf2v' ||
         job.workflowId === 'seedance2-r2v' ||
+        job.workflowId === 'minimax-h3-r2v' ||
         job.workflowId === TOPAZ_VIDEO_UPSCALE_WORKFLOW_ID
           ? `video/director_${outputToken}`
           : (
@@ -16015,6 +16067,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         modifyNanoBanana2Workflow,
         modifyOpenAIGPTImage2Workflow,
         modifySeedance2Workflow,
+        modifyMinimaxH3ReferenceWorkflow,
         modifySoniloVideoToMusicWorkflow,
         modifyGrokTextToImageWorkflow,
         modifySeedream5LiteImageEditWorkflow,
@@ -16214,6 +16267,18 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             seed: job.seed,
             assetFilenames: seedanceAssetFilenames,
             generateAudio: job.generateAudio !== undefined ? Boolean(job.generateAudio) : true,
+            filenamePrefix: outputPrefix || `video/${job.workflowId}`,
+          })
+          break
+        }
+        case 'minimax-h3-r2v': {
+          modifiedWorkflow = modifyMinimaxH3ReferenceWorkflow(workflowJson, {
+            prompt: job.prompt,
+            width: job.resolution?.width,
+            height: job.resolution?.height,
+            duration: job.duration,
+            seed: job.seed,
+            assetFilenames: assetFieldFilenames,
             filenamePrefix: outputPrefix || `video/${job.workflowId}`,
           })
           break
