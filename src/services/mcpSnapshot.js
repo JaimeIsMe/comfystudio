@@ -110,11 +110,11 @@ function sanitizeTrack(track = {}) {
     muted: Boolean(track.muted),
     locked: Boolean(track.locked),
     visible: track.visible !== false,
+    solo: Boolean(track.solo),
     role: track.role || null,
     channels: track.channels || null,
     ...(track.type === 'audio'
       ? {
-        solo: Boolean(track.solo),
         volume: clampTrackVolume(track.volume),
         pan: clampTrackPan(track.pan),
         inserts: normalizeAudioInserts(track.inserts),

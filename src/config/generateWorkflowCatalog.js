@@ -158,6 +158,27 @@ const miniReferenceToVideoFields = Object.freeze([
   field('seed', { label: 'Seed', type: 'seed' }),
 ])
 
+const minimaxH3ReferenceToVideoFields = Object.freeze([
+  field('referenceImage1', {
+    label: 'Reference frame',
+    type: 'assetSelect',
+    assetType: 'image',
+    required: true,
+    helper: 'Exact first-frame identity, composition, wardrobe, and material reference.',
+  }),
+  field('referenceAudio1', {
+    label: 'Performance audio',
+    type: 'assetSelect',
+    assetType: 'audio',
+    required: true,
+    helper: 'Exact audio segment used for performance and lip-sync timing.',
+  }),
+  field('prompt', { label: 'Prompt', type: 'textarea' }),
+  field('duration', { label: 'Duration', type: 'duration' }),
+  field('resolution', { label: 'Resolution', type: 'resolution' }),
+  field('seed', { label: 'Seed', type: 'seed' }),
+])
+
 const imageFields = Object.freeze([
   field('prompt', { label: 'Prompt', type: 'textarea' }),
   field('imageResolution', { label: 'Image size', type: 'imageResolution' }),
@@ -568,6 +589,25 @@ export const GENERATE_WORKFLOW_CATALOG = Object.freeze([
     fields: videoFields,
     runnable: true,
     tags: ['grok', 'cloud', 'video'],
+  },
+  {
+    id: 'minimax-h3-r2v',
+    workflowId: 'minimax-h3-r2v',
+    title: 'MiniMax H3: Reference + Audio to Video',
+    description: 'Generate a premium reference-driven video with native audio-conditioned performance timing.',
+    subtitle: 'MiniMax H3 image + audio reference video',
+    mode: 'generate',
+    route: 'cloud',
+    category: 'image-to-video',
+    provider: 'MiniMax',
+    cover: cover('seedance2-r2v.webp'),
+    badge: 'Cloud',
+    runtimeLabel: 'Uses Comfy credits',
+    needsImage: false,
+    outputType: 'video',
+    fields: minimaxH3ReferenceToVideoFields,
+    runnable: true,
+    tags: ['minimax', 'h3', 'reference video', 'audio reference', 'lip sync', 'cloud'],
   },
   {
     id: 'seedance2-t2v',

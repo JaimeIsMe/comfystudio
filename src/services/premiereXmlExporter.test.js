@@ -238,3 +238,32 @@ test('exports only the audible audio track when another track is soloed', () => 
   assert.match(xml, /Audible dialogue/)
   assert.equal(countOccurrences(xml, /<clipitem /g), 1)
 })
+
+test('exports only soloed video tracks while preserving audio', () => {
+  const xml = buildPremiereXml({
+    timelineSettings: { width: 1920, height: 1080, fps: 24 },
+    timeline: {
+      duration: 2,
+      tracks: [
+        { id: 'v1', type: 'video', name: 'Main picture' },
+        { id: 'v2', type: 'video', name: 'Solo review take', solo: true },
+        { id: 'a1', type: 'audio', name: 'Song' },
+      ],
+      clips: [
+        { id: 'main', trackId: 'v1', assetId: 'main-asset', type: 'video', name: 'Hidden by video solo', startTime: 0, duration: 2 },
+        { id: 'solo', trackId: 'v2', assetId: 'solo-asset', type: 'video', name: 'Visible solo take', startTime: 0, duration: 2 },
+        { id: 'song', trackId: 'a1', assetId: 'song-asset', type: 'audio', name: 'Song remains audible', startTime: 0, duration: 2 },
+      ],
+    },
+    assets: [
+      { id: 'main-asset', type: 'video', absolutePath: 'C:\\Media\\main.mp4', duration: 2 },
+      { id: 'solo-asset', type: 'video', absolutePath: 'C:\\Media\\solo.mp4', duration: 2 },
+      { id: 'song-asset', type: 'audio', absolutePath: 'C:\\Media\\song.wav', duration: 2 },
+    ],
+  })
+
+  assert.doesNotMatch(xml, /Hidden by video solo/)
+  assert.match(xml, /Visible solo take/)
+  assert.match(xml, /Song remains audible/)
+  assert.equal(countOccurrences(xml, /<clipitem /g), 2)
+})

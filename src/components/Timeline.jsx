@@ -5737,12 +5737,26 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
                 <button 
                   onClick={(e) => { e.stopPropagation(); toggleTrackVisibility(track.id) }}
                   className="p-0.5 hover:bg-sf-dark-600 rounded"
+                  title={track.visible ? 'Hide video track' : 'Show video track'}
                 >
                   {track.visible ? (
                     <Eye className="w-3 h-3 text-sf-text-muted" />
                   ) : (
                     <EyeOff className="w-3 h-3 text-sf-text-muted opacity-50" />
                   )}
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); toggleTrackSolo(track.id) }}
+                  className={`min-w-[18px] h-[18px] flex items-center justify-center rounded text-[10px] font-bold transition-colors ${
+                    track.solo
+                      ? 'bg-yellow-500/80 text-black'
+                      : 'bg-sf-dark-600 text-sf-text-muted hover:bg-sf-dark-500 hover:text-sf-text-secondary'
+                  }`}
+                  title={track.solo ? 'Unsolo video track' : 'Solo video track (show only soloed video tracks)'}
+                  aria-pressed={track.solo === true}
+                  aria-label={`${track.solo ? 'Unsolo' : 'Solo'} video track ${track.name}`}
+                >
+                  S
                 </button>
                 <button 
                   onClick={(e) => { e.stopPropagation(); toggleTrackLock(track.id) }}

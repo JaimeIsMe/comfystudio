@@ -1,4 +1,5 @@
 import { applySoloAsMute } from '../utils/audioTrackAudibility.js'
+import { applyVideoSoloAsHidden } from '../utils/videoTrackVisibility.js'
 
 const XMEML_VERSION = '5'
 const DEFAULT_FPS = 24
@@ -376,7 +377,7 @@ export function buildPremiereXml({
   const height = Math.max(1, Math.round(safeNumber(timelineSettings.height, 1080)))
   const normalizedTimelineSettings = { width, height, fps: sequenceRate.fps }
   const clips = Array.isArray(timeline.clips) ? timeline.clips : []
-  const tracks = applySoloAsMute(Array.isArray(timeline.tracks) ? timeline.tracks : [])
+  const tracks = applyVideoSoloAsHidden(applySoloAsMute(Array.isArray(timeline.tracks) ? timeline.tracks : []))
   const assetsById = new Map((Array.isArray(assets) ? assets : []).map((asset) => [asset.id, asset]))
   const { videoTracks, audioTracks, items } = collectExportTracks(clips, tracks, assetsById)
 

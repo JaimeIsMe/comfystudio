@@ -1,6 +1,6 @@
 {
   "name": "velorn",
-  "version": "0.3.21",
+  "version": "0.3.22",
   "description": "AI-native video editing built around real creative timelines, generative workflows, and local agent control.",
   "main": "electron/main.js",
   "scripts": {
@@ -25,7 +25,8 @@
     "test:dirty-tracker": "node --experimental-default-type=module --test ./src/services/projectDirtyTracker.test.js",
     "test:premiere-xml": "node --experimental-default-type=module --test ./src/services/premiereXmlExporter.test.js",
     "test:export-frame-source": "node --experimental-default-type=module --test ./src/services/exportFrameSource.test.js",
-    "test:export-source-preparation": "node --test ./tests/exportSourcePreparation.test.js"
+    "test:export-source-preparation": "node --test ./tests/exportSourcePreparation.test.js",
+    "test:mcp-h3": "node --test ./tests/mcpH3ReferenceVideo.test.js"
   },
   "keywords": [
     "animatic",
