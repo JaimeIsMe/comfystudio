@@ -16,6 +16,22 @@ const URL_LIKE_PATTERN = /^(https?|blob|data|file):/i
 const splitPathSegments = (value) => String(value || '').split(/[\\/]+/).filter(Boolean)
 
 /**
+ * Convert a current-machine path under the open project into the portable
+ * forward-slash path stored in project files.
+ */
+export const getProjectRelativeAssetPath = (filePath, projectPath) => {
+  const fileSegments = splitPathSegments(filePath)
+  const projectSegments = splitPathSegments(projectPath)
+  if (fileSegments.length <= projectSegments.length || projectSegments.length === 0) return ''
+
+  const isUnderProject = projectSegments.every((segment, index) => (
+    segment.toLowerCase() === fileSegments[index]?.toLowerCase()
+  ))
+  if (!isUnderProject) return ''
+  return fileSegments.slice(projectSegments.length).join('/')
+}
+
+/**
  * Absolute in any of the shapes we record: drive-letter (C:\ or C:/),
  * UNC (\\server\share), or POSIX root (/Users/...).
  */

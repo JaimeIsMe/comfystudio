@@ -53,6 +53,7 @@ import {
 import { applyTransitionClip, getFadeOverlayInfo, getTransitionCanvasStyle } from '../utils/transitionStyles'
 import { isFullBakeFresh } from '../utils/clipBakeSignature'
 import { createGpuCompositor, isGpuExportEnabled } from './gpuCompositor'
+import { isAbsoluteRecordedPath } from './assetRelinkFallback'
 
 const DEFAULT_SAMPLE_RATE = 44100
 const AUDIO_FETCH_TIMEOUT_MS = 15000
@@ -175,9 +176,21 @@ const isElectron = () => typeof window !== 'undefined' && window.electronAPI != 
 /** Resolve asset to a stable file:// URL for export when in Electron to avoid blob URL invalidation / OOM */
 async function getExportAssetUrl(asset, projectHandle) {
   if (!asset?.url) return null
-  if (isElectron() && projectHandle && asset.path) {
+  if (isElectron() && asset.absolutePath) {
     try {
-      const filePath = await window.electronAPI.pathJoin(projectHandle, asset.path)
+      return await window.electronAPI.getFileUrlDirect(asset.absolutePath)
+    } catch (e) {
+      console.warn('Export: could not resolve absolute file URL for asset:', asset.name, e)
+    }
+  }
+  if (isElectron() && asset.path) {
+    try {
+      const filePath = isAbsoluteRecordedPath(asset.path)
+        ? asset.path
+        : projectHandle
+          ? await window.electronAPI.pathJoin(projectHandle, asset.path)
+          : null
+      if (!filePath) return asset.url
       return await window.electronAPI.getFileUrlDirect(filePath)
     } catch (e) {
       console.warn('Export: could not resolve file URL for asset, using blob:', asset.name, e)
@@ -188,15 +201,18 @@ async function getExportAssetUrl(asset, projectHandle) {
 
 async function getExportAssetPath(asset, projectHandle) {
   if (!isElectron() || !asset) return null
-  if (typeof projectHandle === 'string' && asset.path) {
+  if (typeof asset.absolutePath === 'string' && asset.absolutePath.trim()) {
+    return asset.absolutePath
+  }
+  if (asset.path) {
     try {
-      return await window.electronAPI.pathJoin(projectHandle, asset.path)
+      if (isAbsoluteRecordedPath(asset.path)) return asset.path
+      if (typeof projectHandle === 'string') {
+        return await window.electronAPI.pathJoin(projectHandle, asset.path)
+      }
     } catch (err) {
       console.warn('Export: could not resolve local asset path:', asset.name, err)
     }
-  }
-  if (typeof asset.absolutePath === 'string' && asset.absolutePath.trim()) {
-    return asset.absolutePath
   }
   return null
 }

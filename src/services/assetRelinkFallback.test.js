@@ -3,10 +3,32 @@ import test from 'node:test'
 
 import {
   buildMovedAssetPathCandidates,
+  getProjectRelativeAssetPath,
   getRecordedAbsolutePath,
   isAbsoluteRecordedPath,
   resolveMovedAssetPath,
 } from './assetRelinkFallback.js'
+
+test('getProjectRelativeAssetPath creates portable paths across platforms', () => {
+  assert.equal(
+    getProjectRelativeAssetPath(
+      '/Users/jaime/Projects/My Film/assets/video/shot.mp4',
+      '/Users/jaime/Projects/My Film'
+    ),
+    'assets/video/shot.mp4'
+  )
+  assert.equal(
+    getProjectRelativeAssetPath(
+      'C:\\Projects\\My Film\\assets\\video\\shot.mp4',
+      'c:\\projects\\my film'
+    ),
+    'assets/video/shot.mp4'
+  )
+  assert.equal(
+    getProjectRelativeAssetPath('/Users/jaime/Other/shot.mp4', '/Users/jaime/Projects/My Film'),
+    ''
+  )
+})
 
 test('isAbsoluteRecordedPath recognizes windows, UNC, and posix roots', () => {
   assert.equal(isAbsoluteRecordedPath('C:\\Users\\old\\clip.mp4'), true)

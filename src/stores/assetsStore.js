@@ -1,7 +1,11 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { PLAYBACK_CACHE_VERSION } from '../services/playbackCache'
-import { resolveMovedAssetPath } from '../services/assetRelinkFallback'
+import {
+  getProjectRelativeAssetPath,
+  isAbsoluteRecordedPath,
+  resolveMovedAssetPath,
+} from '../services/assetRelinkFallback'
 
 const SPRITE_GENERATION_CONCURRENCY = 2
 let activeSpriteGenerationCount = 0
@@ -553,13 +557,14 @@ export const useAssetsStore = create(
           if (isElectronMode() && projectPath && localFileExists) {
             const moved = await resolveMovedAssetPath(asset, projectPath, localFileExists)
             if (moved) {
+              const portablePath = getProjectRelativeAssetPath(moved.toPath, projectPath)
               // Same field shape as relink_asset: the derived artifacts
               // (caches, proxies, sprite, poster) still point at the old
               // machine, so drop them and let them rebuild on demand.
               workingAsset = {
                 ...asset,
                 absolutePath: moved.toPath,
-                path: moved.toPath,
+                path: portablePath || moved.toPath,
                 isImported: true,
                 playbackCachePath: undefined,
                 playbackCacheUrl: undefined,
@@ -582,6 +587,24 @@ export const useAssetsStore = create(
                 fromPath: moved.fromPath,
                 toPath: moved.toPath,
               })
+            }
+
+            // v0.3.22 could persist the repaired absolute path in `path`.
+            // Normalize those existing records without requiring another move.
+            if (isAbsoluteRecordedPath(workingAsset.path)) {
+              const portablePath = getProjectRelativeAssetPath(workingAsset.path, projectPath)
+              if (portablePath) {
+                const previousPath = workingAsset.path
+                workingAsset = { ...workingAsset, path: portablePath }
+                if (!autoRelinkedAssets.some((entry) => entry.id === asset.id)) {
+                  autoRelinkedAssets.push({
+                    id: asset.id,
+                    name: asset.name || asset.id,
+                    fromPath: previousPath,
+                    toPath: workingAsset.absolutePath || previousPath,
+                  })
+                }
+              }
             }
           }
 
