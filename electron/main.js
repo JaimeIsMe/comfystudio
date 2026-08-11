@@ -15,6 +15,12 @@ const ffprobeStaticPath = ffprobeStatic?.path || ffprobeStatic
 const { inspectIsoBmffLayout } = require('./exportSourcePreparation')
 const { registerCaptionWhisperHandlers } = require('./captionWhisper')
 const {
+  cancelRtxVideoUpscale,
+  checkRtxRuntime,
+  installRtxRuntime,
+  runRtxVideoUpscale,
+} = require('./rtxVideoUpscale')
+const {
   ComfyLauncher,
   detectLaunchersForComfyRoot,
   DEFAULT_CONFIG: DEFAULT_LAUNCHER_CONFIG,
@@ -122,6 +128,9 @@ function resolvePackagedBinaryPath(binaryPath) {
 
 const ffmpegPath = resolvePackagedBinaryPath(ffmpegStaticPath)
 const ffprobePath = resolvePackagedBinaryPath(ffprobeStaticPath)
+const rtxHelperPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'scripts', 'rtx_vsr_stream.py')
+  : path.join(__dirname, '..', 'scripts', 'rtx_vsr_stream.py')
 
 // ffmpeg-static resolves a path whether or not its install script actually
 // downloaded the binary (skipped postinstalls, antivirus quarantine), and
@@ -4746,6 +4755,67 @@ ipcMain.handle('settings:delete', async (event, key) => {
     return { success: false, error: err.message }
   }
 })
+
+// ============================================
+// NVIDIA RTX Video Super Resolution
+// ============================================
+
+async function getRtxRuntimeContext() {
+  const settings = await readSettingsRaw().catch(() => ({}))
+  return {
+    userDataPath: app.getPath('userData'),
+    comfyRootPath: settings?.[COMFY_ROOT_SETTING_KEY] || '',
+    explicitPythonPath: settings?.rtxPythonPath || '',
+  }
+}
+
+ipcMain.handle('rtx:checkRuntime', async () => {
+  try {
+    return await checkRtxRuntime(await getRtxRuntimeContext())
+  } catch (error) {
+    return {
+      ready: false,
+      installAvailable: process.platform === 'win32' && process.arch === 'x64',
+      error: error?.message || String(error),
+    }
+  }
+})
+
+ipcMain.handle('rtx:installRuntime', async (event) => {
+  try {
+    return await installRtxRuntime({
+      userDataPath: app.getPath('userData'),
+      onProgress: (progress) => {
+        if (!event.sender.isDestroyed()) event.sender.send('rtx:setupProgress', progress)
+      },
+    })
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) }
+  }
+})
+
+ipcMain.handle('rtx:run', async (event, payload = {}) => {
+  try {
+    const runtime = await checkRtxRuntime(await getRtxRuntimeContext())
+    if (!runtime.ready) {
+      return { success: false, error: runtime.error || 'The NVIDIA RTX runtime is not ready.' }
+    }
+    return await runRtxVideoUpscale({
+      ...payload,
+      runtime,
+      helperPath: rtxHelperPath,
+      ffmpegPath,
+      ffprobePath,
+      onProgress: (progress) => {
+        if (!event.sender.isDestroyed()) event.sender.send('rtx:progress', progress)
+      },
+    })
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) }
+  }
+})
+
+ipcMain.handle('rtx:cancel', (_event, jobId) => cancelRtxVideoUpscale(jobId))
 
 // ============================================
 // MCP Server IPC

@@ -43,6 +43,9 @@ coverage/
 *.tmp
 *.temp
 .cache/
+tmp/
+__pycache__/
+*.py[cod]
 
 # Electron
 release/

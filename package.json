@@ -1,6 +1,6 @@
 {
   "name": "velorn",
-  "version": "0.3.23",
+  "version": "0.3.24",
   "description": "AI-native video editing built around real creative timelines, generative workflows, and local agent control.",
   "main": "electron/main.js",
   "scripts": {
@@ -117,6 +117,10 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "scripts/rtx_vsr_stream.py",
+        "to": "scripts/rtx_vsr_stream.py"
       }
     ],
     "win": {

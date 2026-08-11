@@ -3,6 +3,7 @@ import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 import exportTimeline from '../services/exporter'
+import { runRtxVideoUpscale } from '../services/rtxVideoUpscale'
 
 const isElectron = () => typeof window !== 'undefined' && window.electronAPI != null
 
@@ -14,7 +15,7 @@ export default function ExportWorker() {
     started.current = true
 
     window.electronAPI.onExportJob(async (job) => {
-      const { projectPath, outputPath, options, state: jobState } = job
+      const { projectPath, outputPath, options, postProcess, state: jobState } = job
       console.log('[ExportWorker] Job received', { projectPath: !!projectPath, outputPath: !!outputPath, assetsCount: jobState?.assets?.length, clipsCount: jobState?.timeline?.clips?.length })
       if (!projectPath || !outputPath || !jobState) {
         window.electronAPI.sendExportError?.('Invalid export job')
@@ -59,13 +60,68 @@ export default function ExportWorker() {
           { ...options, outputPath, signal: abortController.signal },
           (progress) => {
             if (progress?.progress % 20 < 5) console.log('[ExportWorker] Progress', progress?.progress, progress?.status)
-            window.electronAPI.sendExportProgress?.(progress)
+            if (postProcess?.type === 'rtx-4k') {
+              window.electronAPI.sendExportProgress?.({
+                ...progress,
+                progress: typeof progress?.progress === 'number' ? progress.progress * 0.6 : progress?.progress,
+                status: `Source render - ${progress?.status || 'Rendering timeline'}`,
+              })
+            } else {
+              window.electronAPI.sendExportProgress?.(progress)
+            }
           }
         )
+        let finalResult = result
+        if (postProcess?.type === 'rtx-4k') {
+          let upscaleComplete = false
+          try {
+            console.log('[ExportWorker] Starting direct RTX 4K post-process', {
+              sourcePath: outputPath,
+              finalPath: postProcess.outputPath,
+              quality: postProcess.quality,
+            })
+            const upscaleResult = await runRtxVideoUpscale({
+              inputPath: outputPath,
+              outputPath: postProcess.outputPath,
+              sourceWidth: postProcess.sourceWidth || options?.width,
+              sourceHeight: postProcess.sourceHeight || options?.height,
+              videoCodec: postProcess.videoCodec || options?.videoCodec,
+              quality: postProcess.quality,
+              signal: abortController.signal,
+              onStatus: (status) => {
+                window.electronAPI.sendExportProgress?.({
+                  frame: status?.frame,
+                  totalFrames: status?.totalFrames,
+                  etaSeconds: status?.etaSeconds,
+                  progress: 60 + ((Number(status?.progress) || 0) * 0.4),
+                  status: status?.statusMessage || 'Running direct NVIDIA RTX 4K upscale...',
+                })
+              },
+            })
+            upscaleComplete = true
+            finalResult = {
+              ...result,
+              ...upscaleResult,
+              outputPath: postProcess.outputPath,
+              sourceExport: result,
+              encoderUsed: `${result?.encoderUsed || 'timeline export'} + NVIDIA RTX Video Super Resolution`,
+            }
+          } catch (error) {
+            if (abortController.signal.aborted || error?.name === 'AbortError') throw error
+            throw new Error(`${error?.message || 'RTX upscale failed'} The normal source render was kept at ${outputPath}.`)
+          } finally {
+            if ((upscaleComplete || abortController.signal.aborted) && window.electronAPI?.deleteFile) {
+              const cleanup = await window.electronAPI.deleteFile(outputPath).catch(() => null)
+              if (cleanup?.success === false) {
+                console.warn('[ExportWorker] Could not delete RTX source render', cleanup.error)
+              }
+            }
+          }
+        }
         // Stringify: the worker's console reaches export-worker.log via the
         // console-message event, which flattens objects to "[object Object]".
-        console.log('[ExportWorker] Export complete', JSON.stringify(result))
-        window.electronAPI.sendExportComplete?.(result)
+        console.log('[ExportWorker] Export complete', JSON.stringify(finalResult))
+        window.electronAPI.sendExportComplete?.(finalResult)
       } catch (err) {
         const errMsg = err && typeof err === 'object' && err instanceof Event
           ? `Export error (${err.type}): ${err.target?.error?.message || err.target?.statusText || 'see console'}`
