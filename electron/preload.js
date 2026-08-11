@@ -147,6 +147,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   checkNvenc: () => ipcRenderer.invoke('export:checkNvenc'),
 
+  // Direct NVIDIA RTX Video Super Resolution. The optional runtime is
+  // managed by Velorn and does not require a running ComfyUI server.
+  checkRtxVideoUpscaleRuntime: () => ipcRenderer.invoke('rtx:checkRuntime'),
+  installRtxVideoUpscaleRuntime: () => ipcRenderer.invoke('rtx:installRuntime'),
+  runRtxVideoUpscale: (options) => ipcRenderer.invoke('rtx:run', options),
+  cancelRtxVideoUpscale: (jobId) => ipcRenderer.invoke('rtx:cancel', jobId),
+  onRtxVideoUpscaleProgress: (callback) => {
+    const handler = (_event, data) => callback(data)
+    ipcRenderer.on('rtx:progress', handler)
+    return () => ipcRenderer.removeListener('rtx:progress', handler)
+  },
+  onRtxVideoUpscaleSetupProgress: (callback) => {
+    const handler = (_event, data) => callback(data)
+    ipcRenderer.on('rtx:setupProgress', handler)
+    return () => ipcRenderer.removeListener('rtx:setupProgress', handler)
+  },
+
   /**
    * Make a local source safe for the renderer's decoders. mode 'remux'
    * (default): already-fast-start files are reused, other containers are

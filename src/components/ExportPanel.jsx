@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Download, Plus, Trash2, Play, Settings, Film, Clock, RotateCcw, Square } from 'lucide-react'
+import { Download, Plus, Trash2, Play, Settings, Film, Clock, RotateCcw, Sparkles, Square } from 'lucide-react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../stores/projectStore'
 import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
@@ -8,6 +8,15 @@ import buildFcpXml from '../services/fcpxmlExporter'
 import buildPremiereXml from '../services/premiereXmlExporter'
 import { mixTimelineAudioToWav } from '../services/timelineAudioMix'
 import { analyzeAudioBuffer } from '../services/audioAnalysis'
+import {
+  checkRtxVideoUpscaleReadiness,
+  installRtxVideoUpscaleRuntime,
+} from '../services/rtxVideoUpscale'
+import {
+  RTX_VIDEO_UPSCALE_DEFAULTS,
+  RTX_VIDEO_UPSCALE_QUALITY_OPTIONS,
+  resolveRtx4kDimensions,
+} from '../config/rtxVideoUpscaleConfig'
 
 const EXPORT_SETTINGS_STORAGE_PREFIX = 'comfystudio-export-settings-v1'
 
@@ -163,6 +172,8 @@ const createDefaultExportSettings = (filename) => ({
   loudnessTarget: -14,
   useProxyMedia: false,
   useDirectFramePipe: true,
+  postProcessUpscale: 'none',
+  rtxUpscaleQuality: RTX_VIDEO_UPSCALE_DEFAULTS.quality,
 })
 
 const EXPORT_PRESETS = [
@@ -378,6 +389,13 @@ function ExportPanel() {
   const [exportResult, setExportResult] = useState(null)
   const [etaSeconds, setEtaSeconds] = useState(null)
   const [renderFps, setRenderFps] = useState(null)
+  const [rtxReadiness, setRtxReadiness] = useState({
+    status: 'idle',
+    ready: false,
+    installAvailable: false,
+    error: '',
+  })
+  const [rtxInstallProgress, setRtxInstallProgress] = useState(null)
 
   // Pre-flight loudness check: render the timeline's program audio (the same
   // mixer captions use) and measure it with the shared analysis engine.
@@ -481,6 +499,52 @@ function ExportPanel() {
     }
   }, [])
 
+  const handleCheckRtxSetup = async () => {
+    setRtxReadiness((current) => ({ ...current, status: 'checking', ready: false, error: '' }))
+    try {
+      const result = await checkRtxVideoUpscaleReadiness()
+      setRtxReadiness({
+        ...result,
+        status: result.ready ? 'ready' : 'error',
+        ready: Boolean(result.ready),
+        installAvailable: Boolean(result.installAvailable),
+        error: result.error || '',
+      })
+      return result
+    } catch (error) {
+      const result = {
+        ready: false,
+        installAvailable: false,
+        error: error?.message || 'Could not check the NVIDIA RTX runtime.',
+      }
+      setRtxReadiness({ ...result, status: 'error' })
+      return result
+    }
+  }
+
+  const handleInstallRtxRuntime = async () => {
+    setRtxInstallProgress({ percent: 0, message: 'Preparing the NVIDIA RTX runtime installer...' })
+    setRtxReadiness((current) => ({ ...current, status: 'installing', error: '' }))
+    try {
+      await installRtxVideoUpscaleRuntime({
+        onStatus: (status) => setRtxInstallProgress(status),
+      })
+      setRtxInstallProgress({ percent: 100, message: 'NVIDIA RTX runtime is ready.' })
+      return await handleCheckRtxSetup()
+    } catch (error) {
+      const message = error?.message || 'Could not install the NVIDIA RTX runtime.'
+      setRtxReadiness((current) => ({ ...current, status: 'error', ready: false, error: message }))
+      setRtxInstallProgress(null)
+      return { ready: false, error: message }
+    }
+  }
+
+  const handleToggleRtxUpscale = () => {
+    const enabling = settings.postProcessUpscale !== 'rtx-4k'
+    handleSettingChange('postProcessUpscale', enabling ? 'rtx-4k' : 'none')
+    if (enabling) void handleCheckRtxSetup()
+  }
+
   useEffect(() => {
     if (typeof window === 'undefined' || !window.electronAPI?.onExportProgress) return
     const onProgress = (data) => {
@@ -556,6 +620,7 @@ function ExportPanel() {
         }
         if (value === 'webm' || value === 'prores' || value === 'audio') {
           next.useHardwareEncoder = false
+          next.postProcessUpscale = 'none'
         }
         if (value === 'audio') {
           // The whole export IS the audio — the include toggle is moot.
@@ -570,6 +635,7 @@ function ExportPanel() {
         if (value === 'vp9') {
           next.format = 'webm'
           next.useHardwareEncoder = false
+          next.postProcessUpscale = 'none'
         } else {
           next.format = 'mp4'
         }
@@ -599,6 +665,7 @@ function ExportPanel() {
     setSettings((prev) => {
       const next = {
         ...prev,
+        postProcessUpscale: 'none',
         ...exportPreset.settings,
       }
       const requestedCodec = next.videoCodec
@@ -632,6 +699,7 @@ function ExportPanel() {
   }
 
   const activeExportPresetId = useMemo(() => {
+    if (settings.postProcessUpscale === 'rtx-4k') return null
     const isEqual = (a, b) => String(a) === String(b)
     return EXPORT_PRESETS.find((exportPreset) => (
       Object.entries(exportPreset.settings).every(([key, value]) => isEqual(settings[key], value))
@@ -822,6 +890,27 @@ function ExportPanel() {
     return Number(settings.fps) || 24
   }
 
+  const rtxUpscaleEnabled = settings.postProcessUpscale === 'rtx-4k'
+  const rtxSourceResolution = resolveResolution()
+  const rtxTargetResolution = resolveRtx4kDimensions(rtxSourceResolution.width, rtxSourceResolution.height)
+  const rtxToggleDisabledReason = !window.electronAPI?.checkRtxVideoUpscaleRuntime
+    ? 'RTX upscale is available only in the Velorn desktop app.'
+    : window.electronAPI.platform !== 'win32'
+      ? 'NVIDIA RTX Video Super Resolution is currently available on Windows only.'
+      : settings.format !== 'mp4'
+        ? 'NVIDIA RTX Video Super Resolution currently requires an MP4 export.'
+        : null
+
+  const rtxReadinessText = rtxReadiness.status === 'checking'
+    ? 'Checking the direct NVIDIA RTX runtime...'
+    : rtxReadiness.status === 'installing'
+      ? (rtxInstallProgress?.message || 'Installing the optional NVIDIA RTX runtime...')
+      : rtxReadiness.status === 'ready'
+        ? `Direct RTX engine ready${rtxReadiness.gpu ? ` on ${rtxReadiness.gpu}` : ''}.`
+        : rtxReadiness.status === 'error'
+          ? rtxReadiness.error
+          : 'Runs directly on NVIDIA RTX. ComfyUI is not required. Optional runtime is about 1 GB.'
+
   const resolveRange = () => {
     if (settings.range === 'inout' && inPoint !== null && outPoint !== null) {
       return { start: Math.min(inPoint, outPoint), end: Math.max(inPoint, outPoint) }
@@ -864,6 +953,9 @@ function ExportPanel() {
     if (pixelCount >= 3840 * 2160) {
       hints.push('4K exports are heavy. Consider proxies or lower resolution for previews.')
     }
+    if (settings.postProcessUpscale === 'rtx-4k') {
+      hints.push('RTX 4K runs after the normal render and streams one frame at a time to keep memory bounded.')
+    }
     if (settings.useProxyMedia && proxyCoverage.ready > 0) {
       hints.push(`Proxy export will use ${proxyCoverage.ready}/${proxyCoverage.total} ready video prox${proxyCoverage.ready === 1 ? 'y' : 'ies'}.`)
     } else if (settings.useProxyMedia && proxyCoverage.total > 0) {
@@ -905,8 +997,15 @@ function ExportPanel() {
   }, [clips, transitions, tracks, settings, getCurrentTimelineSettings, nvencStatus, proxyCoverage])
 
   const runExportJob = async (jobSettings, labelOverride = null) => {
+    const shouldRunRtxUpscale = jobSettings.postProcessUpscale === 'rtx-4k'
     if (jobSettings.format === 'gif' || jobSettings.format === 'png-seq') {
       throw new Error('GIF and PNG sequence export are not wired yet.')
+    }
+    if (shouldRunRtxUpscale && jobSettings.format !== 'mp4') {
+      throw new Error('NVIDIA RTX Video Super Resolution currently requires an MP4 export.')
+    }
+    if (shouldRunRtxUpscale && window.electronAPI?.platform !== 'win32') {
+      throw new Error('NVIDIA RTX Video Super Resolution is currently available on Windows only.')
     }
     if (jobSettings.useHardwareEncoder && nvencStatus.checked) {
       const codecSupported = jobSettings.videoCodec === 'h265'
@@ -924,6 +1023,15 @@ function ExportPanel() {
     setExportError(null)
     setExportResult(null)
     setIsExporting(true)
+
+    if (shouldRunRtxUpscale) {
+      setExportStatus('Checking the direct NVIDIA RTX runtime...')
+      const readiness = await handleCheckRtxSetup()
+      if (!readiness.ready) {
+        setIsExporting(false)
+        throw new Error(readiness.error || 'The NVIDIA RTX runtime is not ready.')
+      }
+    }
 
     const { width, height } = resolveResolution()
     const fps = resolveFps()
@@ -968,16 +1076,30 @@ function ExportPanel() {
           : (jobSettings.format === 'webm' ? 'webm' : (jobSettings.format === 'prores' ? 'mov' : 'mp4'))
         const outputFolder = await window.electronAPI.pathJoin(currentProjectHandle, 'renders')
         await window.electronAPI.createDirectory(outputFolder)
-        const defaultPath = await window.electronAPI.pathJoin(outputFolder, `${options.filename}.${outputExtension}`)
-        const outputPath = await window.electronAPI.saveFileDialog({
-          title: 'Export Timeline',
+        const outputBaseName = shouldRunRtxUpscale ? `${options.filename}_rtx4k` : options.filename
+        const defaultPath = await window.electronAPI.pathJoin(outputFolder, `${outputBaseName}.${outputExtension}`)
+        const finalOutputPath = await window.electronAPI.saveFileDialog({
+          title: shouldRunRtxUpscale ? 'Export Timeline with NVIDIA RTX 4K Upscale' : 'Export Timeline',
           defaultPath,
           filters: [{ name: outputExtension.toUpperCase(), extensions: [outputExtension] }],
         })
-        if (!outputPath) {
+        if (!finalOutputPath) {
           setIsExporting(false)
           throw new Error('Export cancelled')
         }
+        const sourceOutputPath = shouldRunRtxUpscale
+          ? await window.electronAPI.pathJoin(outputFolder, `.velorn-rtx-source-${Date.now()}.mp4`)
+          : finalOutputPath
+        const postProcess = shouldRunRtxUpscale
+          ? {
+              type: 'rtx-4k',
+              outputPath: finalOutputPath,
+              sourceWidth: width,
+              sourceHeight: height,
+              videoCodec: jobSettings.videoCodec,
+              quality: jobSettings.rtxUpscaleQuality || RTX_VIDEO_UPSCALE_DEFAULTS.quality,
+            }
+          : null
         const state = {
           timeline: { clips, tracks, transitions },
           assets: assets.map((a) => ({
@@ -993,12 +1115,16 @@ function ExportPanel() {
             maskFrames: a.maskFrames?.map((f) => ({ ...f, url: undefined })),
           })),
         }
-        await window.electronAPI.runExportInWorker({
+        const workerStart = await window.electronAPI.runExportInWorker({
           projectPath: currentProjectHandle,
-          outputPath,
-          options: { ...options, outputPath },
+          outputPath: sourceOutputPath,
+          options: { ...options, outputPath: sourceOutputPath },
+          postProcess,
           state,
         })
+        if (workerStart?.success === false) {
+          throw new Error(workerStart.error || 'Could not start the export worker.')
+        }
         return
       } catch (err) {
         setExportError(err?.message || 'Export failed')
@@ -1365,6 +1491,90 @@ function ExportPanel() {
                     <span className="text-[10px] text-sf-text-muted">
                       Skips PNG frame files during export
                     </span>
+                  </div>
+
+                  <div className="mt-3 border-t border-sf-dark-700 pt-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-sf-text-primary">
+                        <Sparkles className="h-3.5 w-3.5 shrink-0 text-sf-accent" />
+                        <span>NVIDIA RTX 4K upscale</span>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-label="NVIDIA RTX 4K upscale"
+                        aria-checked={rtxUpscaleEnabled}
+                        disabled={Boolean(rtxToggleDisabledReason) || isExporting || rtxReadiness.status === 'installing'}
+                        onClick={handleToggleRtxUpscale}
+                        title={rtxToggleDisabledReason || 'Upscale the finished MP4 directly with NVIDIA RTX Video Super Resolution'}
+                        className={`relative h-5 w-9 shrink-0 rounded-full border transition-colors ${
+                          rtxUpscaleEnabled
+                            ? 'border-sf-accent bg-sf-accent'
+                            : 'border-sf-dark-600 bg-sf-dark-800'
+                        } ${(rtxToggleDisabledReason || isExporting || rtxReadiness.status === 'installing') ? 'cursor-not-allowed opacity-50' : ''}`}
+                      >
+                        <span className={`absolute left-0.5 top-0.5 h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+                          rtxUpscaleEnabled ? 'translate-x-4' : 'translate-x-0'
+                        }`} />
+                      </button>
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-sf-text-muted">
+                      Runs after the normal render. Target: {rtxTargetResolution.width}x{rtxTargetResolution.height}.
+                    </div>
+
+                    {rtxUpscaleEnabled && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <label className="text-[10px] uppercase tracking-wider text-sf-text-muted" htmlFor="rtx-upscale-quality">
+                          Quality
+                        </label>
+                        <select
+                          id="rtx-upscale-quality"
+                          value={settings.rtxUpscaleQuality || RTX_VIDEO_UPSCALE_DEFAULTS.quality}
+                          onChange={(event) => handleSettingChange('rtxUpscaleQuality', event.target.value)}
+                          disabled={rtxReadiness.status === 'installing'}
+                          className="rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-1 text-xs text-sf-text-primary focus:border-sf-accent focus:outline-none disabled:opacity-50"
+                        >
+                          {RTX_VIDEO_UPSCALE_QUALITY_OPTIONS.map((option) => (
+                            <option key={option.id} value={option.id}>{option.label}</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => void handleCheckRtxSetup()}
+                          disabled={rtxReadiness.status === 'checking' || rtxReadiness.status === 'installing'}
+                          className="text-[10px] text-sf-accent hover:text-sf-accent-hover disabled:opacity-50"
+                        >
+                          Check setup
+                        </button>
+                        {rtxReadiness.status === 'error' && rtxReadiness.installAvailable && (
+                          <button
+                            type="button"
+                            onClick={() => void handleInstallRtxRuntime()}
+                            className="rounded border border-sf-accent/50 bg-sf-accent/10 px-2 py-1 text-[10px] font-medium text-sf-accent hover:bg-sf-accent/20"
+                          >
+                            Install RTX runtime
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {rtxReadiness.status === 'installing' && (
+                      <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-sf-dark-800">
+                        <div
+                          className="h-full bg-sf-accent transition-[width]"
+                          style={{ width: `${Math.max(2, Math.min(100, Number(rtxInstallProgress?.percent) || 2))}%` }}
+                        />
+                      </div>
+                    )}
+                    <div className={`mt-1 text-[10px] ${
+                      rtxReadiness.status === 'error'
+                        ? 'text-sf-warning'
+                        : rtxReadiness.status === 'ready'
+                          ? 'text-sf-accent'
+                          : 'text-sf-text-muted'
+                    }`}>
+                      {rtxToggleDisabledReason || rtxReadinessText}
+                    </div>
                   </div>
                 </div>
                 
