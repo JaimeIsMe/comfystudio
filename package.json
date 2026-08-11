@@ -26,7 +26,8 @@
     "test:premiere-xml": "node --experimental-default-type=module --test ./src/services/premiereXmlExporter.test.js",
     "test:export-frame-source": "node --experimental-default-type=module --test ./src/services/exportFrameSource.test.js",
     "test:export-source-preparation": "node --test ./tests/exportSourcePreparation.test.js",
-    "test:mcp-h3": "node --test ./tests/mcpH3ReferenceVideo.test.js"
+    "test:mcp-h3": "node --test ./tests/mcpH3ReferenceVideo.test.js",
+    "test:mcp-my-workflows": "node --test ./tests/myWorkflowCatalog.test.js"
   },
   "keywords": [
     "animatic",

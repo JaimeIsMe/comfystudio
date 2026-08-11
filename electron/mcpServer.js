@@ -13,6 +13,7 @@ const MCP_TIMELINE_BATCH_AUTO_MAX_EDGE = 1280
 const MCP_TIMELINE_BATCH_AUTO_DIMENSION_MULTIPLE = 16
 const MCP_PROMPT_BATCH_MAX_VARIATIONS_PER_WORKFLOW = 8
 const MCP_PROMPT_BATCH_MAX_TOTAL_JOBS = 24
+const MCP_MY_WORKFLOW_ID_PREFIX = 'my-workflow:'
 const MCP_ASSET_BATCH_MAX_ITEMS = 24
 const MCP_TEMPLATE_REPO = 'Comfy-Org/workflow_templates'
 const MCP_TEMPLATE_INDEX_URL = `https://raw.githubusercontent.com/${MCP_TEMPLATE_REPO}/main/templates/index.json`
@@ -4916,6 +4917,36 @@ function normalizePromptBatchWorkflowId(value) {
   return MCP_PROMPT_BATCH_WORKFLOW_ALIASES.get(compact) || raw
 }
 
+function isMcpMyWorkflowId(value) {
+  return String(value || '').trim().startsWith(MCP_MY_WORKFLOW_ID_PREFIX)
+}
+
+function getPromptBatchWorkflowInfo(workflowId, workflowInfos = new Map()) {
+  return MCP_PROMPT_BATCH_SUPPORTED_WORKFLOWS.get(workflowId)
+    || workflowInfos.get(workflowId)
+    || null
+}
+
+function getRequestedMyWorkflowIds(args = {}) {
+  const values = []
+  if (Array.isArray(args.jobs)) values.push(...args.jobs.map((entry) => entry?.workflowId))
+  if (Array.isArray(args.workflows)) {
+    values.push(...args.workflows.map((entry) => (
+      typeof entry === 'object' && entry !== null
+        ? entry.workflowId || entry.id || entry.workflow || entry.name
+        : entry
+    )))
+  }
+  if (Array.isArray(args.workflowIds)) values.push(...args.workflowIds)
+  else if (args.workflowIds) values.push(...splitWorkflowList(args.workflowIds))
+  if (args.workflowId) values.push(args.workflowId)
+  return Array.from(new Set(
+    values
+      .map((value) => String(value || '').trim())
+      .filter(isMcpMyWorkflowId)
+  ))
+}
+
 function getPromptBatchVariationCount(value, fallback = 1) {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return fallback
@@ -4965,7 +4996,7 @@ function normalizePromptBatchPrompts(args = {}) {
   return { prompts }
 }
 
-function normalizePromptBatchWorkflows(args = {}) {
+function normalizePromptBatchWorkflows(args = {}, workflowInfos = new Map()) {
   const fallbackCount = getPromptBatchVariationCount(
     args.variationsPerWorkflow ?? args.variationsPerPrompt ?? args.variationCount ?? args.variations ?? args.count,
     1
@@ -4984,10 +5015,10 @@ function normalizePromptBatchWorkflows(args = {}) {
       : rawEntry
     const workflowId = normalizePromptBatchWorkflowId(rawWorkflow)
     if (!workflowId) continue
-    const workflowInfo = MCP_PROMPT_BATCH_SUPPORTED_WORKFLOWS.get(workflowId)
+    const workflowInfo = getPromptBatchWorkflowInfo(workflowId, workflowInfos)
     if (!workflowInfo) {
       return {
-        error: `Unsupported prompt generation workflow "${rawWorkflow}". Use one of: ${[...MCP_PROMPT_BATCH_SUPPORTED_WORKFLOWS.keys()].join(', ')}.`,
+        error: `Unsupported prompt generation workflow "${rawWorkflow}". Use list_velorn_workflows to choose a bundled workflow or an agent-ready My Workflows entry.`,
       }
     }
 
@@ -5019,6 +5050,11 @@ function normalizePromptBatchWorkflows(args = {}) {
       label: String((typeof rawEntry === 'object' && rawEntry !== null && rawEntry.workflowLabel) || workflowInfo.label || workflowId),
       category: workflowInfo.category,
       outputType: workflowInfo.outputType,
+      needsImage: Boolean(workflowInfo.requiresInputImage),
+      assetFields: [
+        ...(workflowInfo.requiredAssetFields || []),
+        ...(workflowInfo.optionalAssetFields || []),
+      ],
       variations: entryCount,
       seedInputs,
       seeds: seedInputs.map((explicitSeed, index) => {
@@ -5027,6 +5063,8 @@ function normalizePromptBatchWorkflows(args = {}) {
       resolution: entryResolution,
       durationSeconds: entryDuration,
       fps: entryFps,
+      source: workflowInfo.source || 'bundled',
+      libraryWorkflowId: workflowInfo.libraryWorkflowId || null,
     })
     seedOffset += entryCount
   }
@@ -5092,7 +5130,7 @@ function normalizePromptBatchAssetFieldIds(value = {}) {
   return result
 }
 
-function resolvePromptGenerationBatchPlan(_snapshot, args = {}) {
+function resolvePromptGenerationBatchPlan(_snapshot, args = {}, workflowInfos = new Map()) {
   const folderId = String(args.folderId || args.outputFolderId || '').trim() || null
 
   if (Array.isArray(args.jobs) && args.jobs.length > 0) {
@@ -5105,7 +5143,7 @@ function resolvePromptGenerationBatchPlan(_snapshot, args = {}) {
     try {
       jobs = args.jobs.map((job, index) => {
         const workflowId = normalizePromptBatchWorkflowId(job?.workflowId)
-        const workflowInfo = MCP_PROMPT_BATCH_SUPPORTED_WORKFLOWS.get(workflowId)
+        const workflowInfo = getPromptBatchWorkflowInfo(workflowId, workflowInfos)
         if (!workflowInfo) {
           throw new Error(`Unsupported prompt generation workflow "${job?.workflowId || ''}".`)
         }
@@ -5120,6 +5158,11 @@ function resolvePromptGenerationBatchPlan(_snapshot, args = {}) {
           workflowLabel: String(job?.workflowLabel || workflowInfo.label || workflowId),
           category: workflowInfo.category,
           outputType: workflowInfo.outputType,
+          needsImage: Boolean(workflowInfo.requiresInputImage),
+          workflowAssetFields: [
+            ...(workflowInfo.requiredAssetFields || []),
+            ...(workflowInfo.optionalAssetFields || []),
+          ],
           prompt,
           negativePrompt: String(job?.negativePrompt || '').trim().slice(0, 2000),
           assetFieldIds,
@@ -5136,6 +5179,8 @@ function resolvePromptGenerationBatchPlan(_snapshot, args = {}) {
           fps: getTimelineBatchPositiveNumber(job?.fps, workflowInfo.defaultFps || null),
           resolution: normalizePromptBatchResolution(job?.resolution, workflowInfo.defaultResolution),
           folderId: String(job?.folderId || job?.outputFolderId || folderId || '').trim() || null,
+          workflowSource: workflowInfo.source || 'bundled',
+          libraryWorkflowId: workflowInfo.libraryWorkflowId || null,
         }
       })
     } catch (error) {
@@ -5158,11 +5203,11 @@ function resolvePromptGenerationBatchPlan(_snapshot, args = {}) {
 
   const promptState = normalizePromptBatchPrompts(args)
   if (promptState.error) return { error: promptState.error }
-  const workflowState = normalizePromptBatchWorkflows(args)
+  const workflowState = normalizePromptBatchWorkflows(args, workflowInfos)
   if (workflowState.error) return { error: workflowState.error }
 
   const inputImageWorkflow = workflowState.entries.find((entry) => (
-    MCP_PROMPT_BATCH_SUPPORTED_WORKFLOWS.get(entry.workflowId)?.requiresInputImage
+    getPromptBatchWorkflowInfo(entry.workflowId, workflowInfos)?.requiresInputImage
   ))
   if (inputImageWorkflow) {
     return {
@@ -5188,6 +5233,8 @@ function resolvePromptGenerationBatchPlan(_snapshot, args = {}) {
           workflowLabel: workflow.label,
           category: workflow.category,
           outputType: workflow.outputType,
+          needsImage: Boolean(workflow.needsImage),
+          workflowAssetFields: workflow.assetFields || [],
           prompt: promptEntry.prompt,
           negativePrompt: promptEntry.negativePrompt,
           promptLabel: promptEntry.label,
@@ -5200,6 +5247,8 @@ function resolvePromptGenerationBatchPlan(_snapshot, args = {}) {
           fps: workflow.fps,
           resolution: workflow.resolution,
           folderId,
+          workflowSource: workflow.source || 'bundled',
+          libraryWorkflowId: workflow.libraryWorkflowId || null,
         })
         jobIndex += 1
       }
@@ -6414,7 +6463,7 @@ function createToolDefinitions() {
     },
     {
       name: 'list_velorn_workflows',
-      description: 'List bundled Velorn workflows available on this machine, with category, local/cloud runtime, input-image requirement, and workflow file names. Useful before choosing a workflow for local generation or setup checks.',
+      description: 'List bundled Velorn workflows and graphs saved under Generate > My Workflows. Saved graphs include MCP readiness, detected Velorn markers, output type, and any setup blockers. Ready My Workflows entries can be passed to queue_prompt_generation_batch by their my-workflow: id.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -6425,8 +6474,13 @@ function createToolDefinitions() {
           },
           category: {
             type: 'string',
-            enum: ['video', 'image', 'audio', 'text'],
+            enum: ['video', 'image', 'audio', 'text', 'custom'],
             description: 'Optional workflow category filter.',
+          },
+          source: {
+            type: 'string',
+            enum: ['registry', 'file-scan', 'my-workflows'],
+            description: 'Optional source filter. Use my-workflows for graphs saved by the user in Generate.',
           },
           query: {
             type: 'string',
@@ -6441,13 +6495,13 @@ function createToolDefinitions() {
     },
     {
       name: 'inspect_velorn_workflow',
-      description: 'Inspect a bundled or explicit Velorn workflow JSON, extract required ComfyUI class_type node names, validate them against the configured local ComfyUI /object_info, and return install/update hints for missing nodes.',
+      description: 'Inspect a bundled, My Workflows, or explicit Velorn workflow JSON. Returns MCP readiness and marker requirements for saved graphs, extracts ComfyUI node classes, validates them against local /object_info, and provides setup hints.',
       inputSchema: {
         type: 'object',
         properties: {
           workflowId: {
             type: 'string',
-            description: 'Workflow id from list_velorn_workflows, for example z-image-turbo, ltx23-i2v, image-edit, caption-qwen-asr, or music-video-shot-ltx23.',
+            description: 'Workflow id from list_velorn_workflows, for example z-image-turbo, ltx23-i2v, or my-workflow:my-saved-graph.',
           },
           workflowFile: {
             type: 'string',
@@ -7185,7 +7239,7 @@ function createToolDefinitions() {
     },
     {
       name: 'queue_prompt_generation_batch',
-      description: 'Preview or queue text-to-image/text-to-video generation jobs directly from written prompts, plus image-input workflows such as image-edit when each job supplies its input via jobs[].assetFieldIds.image. Use this for brief-to-assets workflows before assembling a sequence. Defaults to previewOnly; applying can start local/credit-backed generation, so require explicit user approval first.',
+      description: 'Preview or queue text-to-image/text-to-video jobs from written prompts. Supports bundled workflows, image-input workflows, and agent-ready my-workflow: ids returned by list_velorn_workflows. For saved workflows, provide any required input image through jobs[].assetFieldIds.image. Defaults to previewOnly; applying can start local/credit-backed generation, so require explicit user approval first.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -7214,7 +7268,7 @@ function createToolDefinitions() {
           workflowIds: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Prompt workflow ids or aliases, for example ["z-image-turbo", "ltx23-t2v"].',
+            description: 'Prompt workflow ids or aliases, for example ["z-image-turbo", "ltx23-t2v", "my-workflow:my-saved-graph"].',
           },
           jobs: {
             type: 'array',
@@ -11394,6 +11448,7 @@ class ComfyStudioMcpServer {
       const result = await this.listComfyStudioWorkflows({
         runtime: args.runtime,
         category: args.category,
+        source: args.source,
         query: args.query,
         refresh: args.refresh === true,
       })
@@ -12044,8 +12099,57 @@ class ComfyStudioMcpServer {
     })
   }
 
+  async resolvePromptBatchMyWorkflows(args = {}) {
+    const requestedIds = getRequestedMyWorkflowIds(args)
+    const workflowInfos = new Map()
+    if (requestedIds.length === 0) return { workflowInfos }
+    if (!this.listComfyStudioWorkflows) {
+      return { error: 'My Workflows discovery is unavailable. Restart Velorn and try again.' }
+    }
+
+    let catalog
+    try {
+      catalog = await this.listComfyStudioWorkflows({ source: 'my-workflows' })
+    } catch (error) {
+      return { error: `Could not read My Workflows: ${error?.message || String(error)}` }
+    }
+    if (catalog?.success === false) {
+      return { error: catalog.error || 'Could not read My Workflows.' }
+    }
+
+    const byId = new Map((catalog?.workflows || []).map((entry) => [String(entry?.id || ''), entry]))
+    for (const workflowId of requestedIds) {
+      const entry = byId.get(workflowId)
+      if (!entry) {
+        return { error: `Saved workflow "${workflowId}" was not found. Run list_velorn_workflows with source "my-workflows" and use the returned id.` }
+      }
+      if (entry.mcpRunnable !== true) {
+        return {
+          error: `Saved workflow "${entry.label || workflowId}" is visible but not agent-ready. ${entry.readinessMessage || 'Add the required Velorn marker nodes and save it again.'}`,
+        }
+      }
+      const outputType = entry.outputType === 'video' ? 'video' : 'image'
+      workflowInfos.set(workflowId, {
+        label: entry.label || workflowId,
+        category: outputType,
+        outputType,
+        requiresInputImage: Boolean(entry.needsImage),
+        defaultResolution: { width: 1280, height: 720 },
+        defaultDurationSeconds: outputType === 'video' ? 5 : null,
+        defaultFps: outputType === 'video' ? 24 : null,
+        source: 'my-workflows',
+        libraryWorkflowId: entry.libraryId || workflowId.slice(MCP_MY_WORKFLOW_ID_PREFIX.length),
+        requiredAssetFields: entry.requiredAssetFields || [],
+        optionalAssetFields: entry.optionalAssetFields || [],
+      })
+    }
+    return { workflowInfos }
+  }
+
   async queuePromptGenerationBatch(snapshot, args = {}) {
-    const plan = resolvePromptGenerationBatchPlan(snapshot, args)
+    const resolvedMyWorkflows = await this.resolvePromptBatchMyWorkflows(args)
+    if (resolvedMyWorkflows.error) return errorResult(resolvedMyWorkflows.error)
+    const plan = resolvePromptGenerationBatchPlan(snapshot, args, resolvedMyWorkflows.workflowInfos)
     if (plan.error) return errorResult(plan.error)
 
     if (args.previewOnly !== false) {

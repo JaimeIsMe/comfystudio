@@ -31,6 +31,7 @@ const {
   DEFAULT_MCP_PORT,
   createComfyStudioMcpServer,
 } = require('./mcpServer')
+const { loadMyWorkflowCatalog } = require('./myWorkflowCatalog')
 
 const isDev = !app.isPackaged
 
@@ -2587,7 +2588,7 @@ async function resolveBundledWorkflowDir() {
   return candidates[0]
 }
 
-async function loadMcpWorkflowCatalog({ refresh = false } = {}) {
+async function loadBundledMcpWorkflowCatalog({ refresh = false } = {}) {
   if (cachedMcpWorkflowCatalog && !refresh) return cachedMcpWorkflowCatalog
 
   const workflowsDir = await resolveBundledWorkflowDir()
@@ -2641,6 +2642,44 @@ async function loadMcpWorkflowCatalog({ refresh = false } = {}) {
   return cachedMcpWorkflowCatalog
 }
 
+async function loadMcpWorkflowCatalog({ refresh = false } = {}) {
+  const [bundledCatalog, myWorkflowCatalog] = await Promise.all([
+    loadBundledMcpWorkflowCatalog({ refresh }),
+    loadMyWorkflowCatalog(app.getPath('userData')),
+  ])
+  const bundledWorkflows = bundledCatalog?.success ? bundledCatalog.workflows : []
+  const myWorkflows = myWorkflowCatalog?.success ? myWorkflowCatalog.workflows : []
+
+  if (!bundledCatalog?.success && !myWorkflowCatalog?.success) {
+    return {
+      success: false,
+      error: bundledCatalog?.error || 'Could not read Velorn workflows.',
+      workflowsDir: bundledCatalog?.workflowsDir || null,
+      myWorkflowsDir: myWorkflowCatalog?.workflowsDir || null,
+      workflows: [],
+    }
+  }
+
+  return {
+    success: true,
+    workflowsDir: bundledCatalog?.workflowsDir || null,
+    myWorkflowsDir: myWorkflowCatalog?.workflowsDir || null,
+    count: bundledWorkflows.length + myWorkflows.length,
+    bundledCount: bundledWorkflows.length,
+    myWorkflowsCount: myWorkflows.length,
+    sourceCounts: {
+      bundled: bundledWorkflows.length,
+      'my-workflows': myWorkflows.length,
+    },
+    workflows: [...bundledWorkflows, ...myWorkflows],
+    warnings: [
+      ...(!bundledCatalog?.success && bundledCatalog?.error ? [bundledCatalog.error] : []),
+      ...(myWorkflowCatalog?.errors || []),
+    ],
+    generatedAt: new Date().toISOString(),
+  }
+}
+
 async function loadMcpNodeHintManifest() {
   if (cachedMcpNodeHintManifest) return cachedMcpNodeHintManifest
   try {
@@ -2670,7 +2709,14 @@ function collectWorkflowClassTypes(value, classTypes = new Set()) {
   if (typeof value.class_type === 'string' && value.class_type.trim()) {
     classTypes.add(value.class_type.trim())
   }
-  if (typeof value.type === 'string' && value.widgets_values && Array.isArray(value.inputs)) {
+  if (
+    typeof value.type === 'string'
+    && (
+      Array.isArray(value.inputs)
+      || Array.isArray(value.outputs)
+      || Array.isArray(value.widgets_values)
+    )
+  ) {
     classTypes.add(value.type.trim())
   }
   if (Array.isArray(value)) {
@@ -2755,38 +2801,82 @@ async function listComfyStudioWorkflowsInternal(options = {}) {
   if (!catalog.success) return catalog
   const runtime = String(options?.runtime || '').trim().toLowerCase()
   const category = String(options?.category || '').trim().toLowerCase()
+  const source = String(options?.source || '').trim().toLowerCase()
   const query = String(options?.query || '').trim().toLowerCase()
   let workflows = catalog.workflows
   if (runtime) workflows = workflows.filter((workflow) => workflow.runtime === runtime)
   if (category) workflows = workflows.filter((workflow) => workflow.category === category)
+  if (source) workflows = workflows.filter((workflow) => workflow.source === source)
   if (query) {
     workflows = workflows.filter((workflow) => [
       workflow.id,
       workflow.label,
       workflow.category,
+      workflow.libraryCategory,
       workflow.runtime,
       workflow.description,
       workflow.file,
+      workflow.source,
+      workflow.readiness,
     ].some((value) => String(value || '').toLowerCase().includes(query)))
   }
 
   return {
-    action: 'list_comfystudio_workflows',
+    action: 'list_velorn_workflows',
     success: true,
     workflowsDir: catalog.workflowsDir,
-    filters: { runtime: runtime || null, category: category || null, query: query || null },
+    myWorkflowsDir: catalog.myWorkflowsDir,
+    filters: {
+      runtime: runtime || null,
+      category: category || null,
+      source: source || null,
+      query: query || null,
+    },
     count: workflows.length,
     totalCount: catalog.count,
-    workflows: workflows.map(({ id, label, category, runtime, needsImage, description, file, source }) => ({
+    sourceCounts: catalog.sourceCounts,
+    workflows: workflows.map(({
       id,
+      libraryId,
       label,
       category,
+      libraryCategory,
       runtime,
       needsImage,
       description,
       file,
-      source,
+      source: workflowSource,
+      outputType,
+      mcpRunnable,
+      readiness,
+      readinessMessage,
+      blockers,
+      acceptsAudio,
+      markerStatus,
+      requiredAssetFields,
+      optionalAssetFields,
+    }) => ({
+      id,
+      libraryId,
+      label,
+      category,
+      libraryCategory,
+      runtime,
+      needsImage,
+      description,
+      file,
+      source: workflowSource,
+      outputType,
+      mcpRunnable,
+      readiness,
+      readinessMessage,
+      blockers,
+      acceptsAudio,
+      markerStatus,
+      requiredAssetFields,
+      optionalAssetFields,
     })),
+    warnings: catalog.warnings || [],
     generatedAt: new Date().toISOString(),
   }
 }
@@ -2817,7 +2907,18 @@ async function inspectComfyStudioWorkflowInternal(options = {}) {
     }
   }
 
-  const classTypes = Array.from(collectWorkflowClassTypes(workflowJson)).sort()
+  const inspectedWorkflowJson = resolved.workflow.source === 'my-workflows'
+    ? workflowJson?.uiWorkflow
+    : workflowJson
+  if (!inspectedWorkflowJson || typeof inspectedWorkflowJson !== 'object') {
+    return {
+      success: false,
+      error: 'The saved My Workflows entry is missing its ComfyUI graph.',
+      workflow: resolved.workflow,
+    }
+  }
+
+  const classTypes = Array.from(collectWorkflowClassTypes(inspectedWorkflowJson)).sort()
   const hintManifest = await loadMcpNodeHintManifest()
   const includeValidation = options?.includeValidation !== false
   let validation = null
@@ -2832,6 +2933,9 @@ async function inspectComfyStudioWorkflowInternal(options = {}) {
   const missing = validation?.validation?.missing || []
   const installHints = buildWorkflowNodeHints(missing, hintManifest)
   const recommendations = []
+  if (resolved.workflow.source === 'my-workflows' && resolved.workflow.mcpRunnable === false) {
+    recommendations.push(resolved.workflow.readinessMessage || 'Add the missing Velorn marker nodes and save the workflow again.')
+  }
   if (includeValidation && validation?.validation?.ok) {
     recommendations.push('All workflow node classes are available in the configured local ComfyUI.')
   } else if (includeValidation && missing.length > 0) {
@@ -2849,21 +2953,31 @@ async function inspectComfyStudioWorkflowInternal(options = {}) {
   }
 
   return {
-    action: 'inspect_comfystudio_workflow',
+    action: 'inspect_velorn_workflow',
     success: true,
     workflow: {
       id: resolved.workflow.id,
+      libraryId: resolved.workflow.libraryId,
       label: resolved.workflow.label,
       category: resolved.workflow.category,
+      libraryCategory: resolved.workflow.libraryCategory,
       runtime: resolved.workflow.runtime,
       needsImage: resolved.workflow.needsImage,
       description: resolved.workflow.description,
       file: resolved.workflow.file,
       path: resolved.workflow.path,
       source: resolved.workflow.source,
+      outputType: resolved.workflow.outputType,
+      mcpRunnable: resolved.workflow.mcpRunnable,
+      readiness: resolved.workflow.readiness,
+      readinessMessage: resolved.workflow.readinessMessage,
+      blockers: resolved.workflow.blockers,
+      markerStatus: resolved.workflow.markerStatus,
+      requiredAssetFields: resolved.workflow.requiredAssetFields,
+      optionalAssetFields: resolved.workflow.optionalAssetFields,
     },
     graph: {
-      format: workflowJson?.last_node_id || workflowJson?.nodes ? 'comfyui-graph-or-api' : 'api-json',
+      format: inspectedWorkflowJson?.last_node_id || inspectedWorkflowJson?.nodes ? 'comfyui-graph-or-api' : 'api-json',
       nodeClassCount: classTypes.length,
       nodeClasses: options?.includeNodeClasses === false ? undefined : classTypes,
     },

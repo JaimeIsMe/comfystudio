@@ -156,6 +156,15 @@ import {
   SHORT_FILM_VIDEO_WORKFLOW_ID,
 } from '../config/shortFilmConfig'
 
+const MCP_MY_WORKFLOW_ID_PREFIX = 'my-workflow:'
+
+function getMcpMyWorkflowLibraryId(workflowId = '') {
+  const normalized = String(workflowId || '').trim()
+  return normalized.startsWith(MCP_MY_WORKFLOW_ID_PREFIX)
+    ? normalized.slice(MCP_MY_WORKFLOW_ID_PREFIX.length).trim()
+    : ''
+}
+
 const CATEGORY_ICONS = { video: Video, image: ImageIcon, audio: Music }
 const STORYBOARD_REFERENCE_WORKFLOW_IDS = new Set([
   'image-edit',
@@ -14451,6 +14460,41 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           respond({ success: false, error: 'Every prompt generation batch job needs prompt text.', status })
           return
         }
+        const myWorkflowById = new Map()
+        for (const requestedWorkflowId of workflowIds) {
+          const libraryId = getMcpMyWorkflowLibraryId(requestedWorkflowId)
+          if (!libraryId) continue
+          const request = requestedJobs.find((job) => String(job?.workflowId || '').trim() === requestedWorkflowId) || {}
+          const outputType = String(request.outputType || '').trim().toLowerCase()
+          if (!['image', 'video'].includes(outputType)) {
+            respond({ success: false, error: `Saved workflow ${requestedWorkflowId} is missing its MCP output type. List the workflow again and retry.`, status })
+            return
+          }
+          const fields = (Array.isArray(request.workflowAssetFields) ? request.workflowAssetFields : [])
+            .filter((field) => field?.id && field?.assetType)
+            .map((field) => ({
+              id: String(field.id),
+              type: 'assetSelect',
+              label: String(field.label || field.id),
+              assetType: String(field.assetType),
+              required: Boolean(field.required),
+            }))
+          myWorkflowById.set(requestedWorkflowId, {
+            workflowId: requestedWorkflowId,
+            libraryId: String(request.libraryWorkflowId || libraryId).trim(),
+            title: String(request.workflowLabel || requestedWorkflowId).trim(),
+            outputType,
+            needsImage: Boolean(request.needsImage),
+            inputAssetType: request.needsImage ? 'image' : null,
+            requiresAudio: false,
+            runnable: true,
+            fields,
+          })
+        }
+        const getMcpPromptWorkflowManifest = (id) => (
+          myWorkflowById.get(String(id || '').trim())
+          || getWorkflowManifestByWorkflowId(String(id || '').trim())
+        )
         const normalizeMcpPromptAssetFieldIds = (job = {}) => {
           const result = {}
           const direct = job?.assetFieldIds && typeof job.assetFieldIds === 'object'
@@ -14493,7 +14537,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         const missingAssetIds = []
         const wrongTypeAssetFields = []
         for (const job of requestedJobs) {
-          const manifest = getWorkflowManifestByWorkflowId(String(job?.workflowId || '').trim())
+          const manifest = getMcpPromptWorkflowManifest(job?.workflowId)
           const fieldsById = new Map((manifest?.fields || []).map((field) => [field?.id, field]).filter(([id]) => Boolean(id)))
           for (const [fieldId, assetId] of Object.entries(normalizeMcpPromptAssetFieldIds(job))) {
             const asset = assetById.get(assetId)
@@ -14517,7 +14561,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         }
 
         for (const id of workflowIds) {
-          const manifest = getWorkflowManifestByWorkflowId(id)
+          const manifest = getMcpPromptWorkflowManifest(id)
           const label = getWorkflowDisplayLabel(id) || id
           if (!manifest) {
             respond({ success: false, error: `Unknown Velorn workflow: ${id}`, status })
@@ -14576,7 +14620,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           void startComfyLauncher()
         }
 
-        const depsOk = await validateDependenciesForQueue(workflowIds, 'MCP prompt generation batch')
+        const dependencyWorkflowIds = workflowIds.filter((id) => !myWorkflowById.has(id))
+        const depsOk = await validateDependenciesForQueue(dependencyWorkflowIds, 'MCP prompt generation batch')
         if (!depsOk) {
           respond({ success: false, error: 'Missing required workflow dependencies for this prompt generation batch.', status })
           return
@@ -14608,8 +14653,12 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         }
 
         const createdJobs = requestedJobs.map((request, index) => {
-          const wfId = String(request?.workflowId || '').trim()
-          const manifest = getWorkflowManifestByWorkflowId(wfId)
+          const requestedWorkflowId = String(request?.workflowId || '').trim()
+          const myWorkflow = myWorkflowById.get(requestedWorkflowId) || null
+          const wfId = myWorkflow
+            ? (myWorkflow.outputType === 'video' ? CUSTOM_GENERATE_VIDEO_WORKFLOW_ID : CUSTOM_GENERATE_IMAGE_WORKFLOW_ID)
+            : requestedWorkflowId
+          const manifest = myWorkflow || getWorkflowManifestByWorkflowId(wfId)
           const outputType = String(request.outputType || manifest?.outputType || 'image').toLowerCase()
           const jobCategory = outputType === 'video' ? 'video' : 'image'
           const fallbackResolution = jobCategory === 'image' ? effectiveImageResolution : resolution
@@ -14656,6 +14705,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             mcpBatch: {
               id: batchId,
               action: 'queue_prompt_generation_batch',
+              requestedWorkflowId: myWorkflow ? requestedWorkflowId : null,
               index: index + 1,
               total: requestedJobs.length,
               promptLabel: promptLabel || null,
@@ -14664,6 +14714,13 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
               workflowVariation: Number(request.variation) || null,
               workflowVariationCount: Number(request.variationCount) || null,
             },
+            customWorkflow: myWorkflow ? {
+              name: myWorkflow.title,
+              libraryId: myWorkflow.libraryId,
+              agentControlled: true,
+              outputType: myWorkflow.outputType,
+              requiresInputImage: myWorkflow.needsImage,
+            } : undefined,
           }
           if (Object.prototype.hasOwnProperty.call(request, 'generateAudio')) {
             jobOverrides.generateAudio = Boolean(request.generateAudio)
@@ -14686,7 +14743,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           },
           jobs: createdJobs.map((job) => ({
             id: job.id,
-            workflowId: job.workflowId,
+            workflowId: job.mcpBatch?.requestedWorkflowId || job.workflowId,
+            executionWorkflowId: job.mcpBatch?.requestedWorkflowId ? job.workflowId : undefined,
             workflowLabel: job.workflowLabel,
             category: job.category,
             prompt: job.prompt,
@@ -14742,7 +14800,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       const includeDone = detail.includeDone !== false
       const limit = Math.max(1, Math.min(500, Math.floor(Number(detail.limit) || 100)))
       let jobs = [...queueRef.current]
-      if (workflowId) jobs = jobs.filter((job) => String(job?.workflowId || '') === workflowId)
+      if (workflowId) jobs = jobs.filter((job) => (
+        String(job?.workflowId || '') === workflowId
+        || String(job?.mcpBatch?.requestedWorkflowId || '') === workflowId
+      ))
       if (batchId) jobs = jobs.filter((job) => String(job?.mcpBatch?.id || '') === batchId)
       if (requestedJobIds.size > 0) jobs = jobs.filter((job) => requestedJobIds.has(String(job?.id || '')))
       if (!includeDone) jobs = jobs.filter((job) => !['done', 'error', 'cancelled'].includes(String(job?.status || '').toLowerCase()))
@@ -14755,7 +14816,8 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         activeCount: jobs.filter((job) => ACTIVE_JOB_STATUSES.includes(job?.status)).length,
         jobs: jobs.map((job) => ({
           id: job.id,
-          workflowId: job.workflowId,
+          workflowId: job.mcpBatch?.requestedWorkflowId || job.workflowId,
+          executionWorkflowId: job.mcpBatch?.requestedWorkflowId ? job.workflowId : undefined,
           workflowLabel: job.workflowLabel,
           status: job.status,
           progress: Number(job.progress) || 0,
@@ -16017,10 +16079,19 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         || job.workflowId === CUSTOM_GENERATE_IMAGE_WORKFLOW_ID
         || job.workflowId === CUSTOM_GENERATE_VIDEO_WORKFLOW_ID
       ) {
-        try {
-          workflowJson = JSON.parse(String(job?.customWorkflow?.jsonText || ''))
-        } catch (error) {
-          throw new Error(`Custom workflow JSON is invalid: ${error?.message || error}`)
+        const libraryId = String(job?.customWorkflow?.libraryId || '').trim()
+        if (libraryId) {
+          const converted = await convertCustomLibraryWorkflowToApi(libraryId)
+          if (!converted?.success || !converted.apiWorkflow) {
+            throw new Error(converted?.error || `Could not prepare saved workflow "${job?.customWorkflow?.name || libraryId}".`)
+          }
+          workflowJson = converted.apiWorkflow
+        } else {
+          try {
+            workflowJson = JSON.parse(String(job?.customWorkflow?.jsonText || ''))
+          } catch (error) {
+            throw new Error(`Custom workflow JSON is invalid: ${error?.message || error}`)
+          }
         }
       } else if (isImportedWorkflowId(job.workflowId)) {
         const importedEntry = getImportedWorkflowEntry(job.workflowId)
@@ -16202,10 +16273,20 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           break
         case CUSTOM_GENERATE_VIDEO_WORKFLOW_ID:
           modifiedWorkflow = modifyCustomVideoWorkflow(workflowJson, {
-            requireInputImage: false,
+            requireInputImage: Boolean(
+              job?.customWorkflow?.agentControlled
+              && job?.customWorkflow?.requiresInputImage
+            ),
             prompt: job.prompt,
-            inputImage: assetFieldFilenames.customInputImage || uploadedFilename || '',
-            inputAudio: assetFieldFilenames.customAudioAsset || uploadedAudioFilename || '',
+            inputImage: assetFieldFilenames.image
+              || assetFieldFilenames.inputImage
+              || assetFieldFilenames.customInputImage
+              || uploadedFilename
+              || '',
+            inputAudio: assetFieldFilenames.audio
+              || assetFieldFilenames.customAudioAsset
+              || uploadedAudioFilename
+              || '',
             seed: job.seed,
             width: job.resolution?.width,
             height: job.resolution?.height,
@@ -16318,17 +16399,38 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           })
           break
         case CUSTOM_GENERATE_IMAGE_WORKFLOW_ID:
-          modifiedWorkflow = modifyCustomKeyframeWorkflow(workflowJson, {
-            requireInputImage: false,
-            requirePrompt: false,
-            validateOptionalEndpoints: false,
-            prompt: '',
-            inputImage: assetFieldFilenames.customInputImage || uploadedFilename || '',
-            seed: null,
-            width: null,
-            height: null,
-            filenamePrefix: outputPrefix || 'image/custom_generate',
-          })
+          if (job?.customWorkflow?.agentControlled) {
+            modifiedWorkflow = modifyCustomKeyframeWorkflow(workflowJson, {
+              requireInputImage: Boolean(job?.customWorkflow?.requiresInputImage),
+              requirePrompt: true,
+              prompt: job.prompt,
+              inputImage: assetFieldFilenames.image
+                || assetFieldFilenames.inputImage
+                || assetFieldFilenames.customInputImage
+                || uploadedFilename
+                || '',
+              seed: job.seed,
+              width: job.resolution?.width,
+              height: job.resolution?.height,
+              referenceImages: [
+                assetFieldFilenames.referenceImage1,
+                assetFieldFilenames.referenceImage2,
+              ].filter(Boolean),
+              filenamePrefix: outputPrefix || 'image/custom_generate',
+            })
+          } else {
+            modifiedWorkflow = modifyCustomKeyframeWorkflow(workflowJson, {
+              requireInputImage: false,
+              requirePrompt: false,
+              validateOptionalEndpoints: false,
+              prompt: '',
+              inputImage: assetFieldFilenames.customInputImage || uploadedFilename || '',
+              seed: null,
+              width: null,
+              height: null,
+              filenamePrefix: outputPrefix || 'image/custom_generate',
+            })
+          }
           break
         case 'z-image-turbo':
           modifiedWorkflow = modifyZImageTurboWorkflow(workflowJson, {
