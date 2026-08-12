@@ -1,0 +1,6 @@
+{
+  "languages": [
+    { "code": "en", "name": "English", "file": "lang_en.json", "direction": "ltr" },
+    { "code": "ja", "name": "日本語", "file": "lang_jp.json", "direction": "ltr" }
+  ]
+}

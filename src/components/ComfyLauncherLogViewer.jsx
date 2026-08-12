@@ -19,6 +19,7 @@ import {
   subscribeComfyLauncherState,
   getComfyLauncherSnapshot,
 } from '../services/comfyLauncher'
+import { useI18n } from '../i18n/I18nContext'
 
 const STREAM_CHIPS = [
   { id: 'event', label: 'generation', dotClass: 'bg-violet-400/80' },
@@ -37,6 +38,7 @@ function formatTimestamp(ts) {
 }
 
 function ComfyLauncherLogViewer({ open, onClose }) {
+  const { t } = useI18n()
   const [state, setState] = useState(() => getComfyLauncherSnapshot())
   const [logs, setLogs] = useState(() => getComfyLauncherLogs())
   const [paused, setPaused] = useState(false)
@@ -86,13 +88,13 @@ function ComfyLauncherLogViewer({ open, onClose }) {
     try {
       const text = filteredLogs.map((entry) => `[${formatTimestamp(entry.ts)}][${entry.stream}] ${entry.text}`).join('\n')
       await navigator.clipboard?.writeText(text)
-      setCopyFeedback(`Copied ${filteredLogs.length} lines`)
+      setCopyFeedback(t('logViewer.copiedLines', { count: filteredLogs.length }))
       setTimeout(() => setCopyFeedback(''), 1500)
     } catch (err) {
-      setCopyFeedback('Copy failed')
+      setCopyFeedback(t('logViewer.copyFailed'))
       setTimeout(() => setCopyFeedback(''), 1500)
     }
-  }, [filteredLogs])
+  }, [filteredLogs, t])
 
   const handleClear = useCallback(() => {
     // Renderer-side clear only; the on-disk log keeps growing.
@@ -108,15 +110,15 @@ function ComfyLauncherLogViewer({ open, onClose }) {
           <div className="flex items-center gap-2 min-w-0">
             <span className={`w-2 h-2 rounded-full ${state.state === 'running' ? 'bg-emerald-400' : state.state === 'starting' || state.state === 'stopping' ? 'bg-amber-400 animate-pulse' : state.state === 'external' ? 'bg-sky-400' : state.state === 'crashed' ? 'bg-red-500' : 'bg-slate-400'}`} />
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-sf-text-primary">ComfyUI Logs</div>
-              <div className="text-[11px] text-sf-text-muted truncate">{state.statusMessage || `Endpoint: ${state.httpBase || 'unknown'}`}</div>
+              <div className="text-sm font-semibold text-sf-text-primary">{t('logViewer.title')}</div>
+              <div className="text-[11px] text-sf-text-muted truncate">{state.statusMessage || t('logViewer.endpoint', { endpoint: state.httpBase || t('feedback.unknown') })}</div>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
             className="p-1.5 rounded hover:bg-sf-dark-700 text-sf-text-muted hover:text-sf-text-primary"
-            title="Close"
+            title={t('common.close')}
           >
             <X className="w-4 h-4" />
           </button>
@@ -129,7 +131,7 @@ function ComfyLauncherLogViewer({ open, onClose }) {
               type="text"
               value={filterText}
               onChange={(e) => setFilterText(e.target.value)}
-              placeholder="Filter…"
+              placeholder={t('logViewer.filter')}
               className="w-full pl-7 pr-2 py-1.5 text-[11.5px] bg-sf-dark-800 border border-sf-dark-700 rounded text-sf-text-primary placeholder-sf-text-muted focus:outline-none focus:border-sf-accent"
             />
           </div>
@@ -159,10 +161,10 @@ function ComfyLauncherLogViewer({ open, onClose }) {
               ? 'bg-amber-500/20 border border-amber-500/40 text-amber-200'
               : 'bg-sf-dark-800 border border-sf-dark-700 text-sf-text-secondary hover:bg-sf-dark-700'
             }`}
-            title={paused ? 'Resume live updates' : 'Pause live updates'}
+            title={paused ? t('logViewer.resume') : t('logViewer.pause')}
           >
             {paused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
-            {paused ? 'Paused' : 'Live'}
+            {paused ? t('logViewer.paused') : t('logViewer.live')}
           </button>
 
           <label className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-sf-dark-800 border border-sf-dark-700 text-[11px] text-sf-text-secondary cursor-pointer">
@@ -172,7 +174,7 @@ function ComfyLauncherLogViewer({ open, onClose }) {
               onChange={(e) => setAutoScroll(e.target.checked)}
               className="accent-sf-accent w-3 h-3"
             />
-            Auto-scroll
+            {t('logViewer.autoScroll')}
           </label>
 
           <div className="ml-auto flex items-center gap-1.5">
@@ -180,29 +182,29 @@ function ComfyLauncherLogViewer({ open, onClose }) {
               type="button"
               onClick={handleCopyAll}
               className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] bg-sf-dark-800 border border-sf-dark-700 text-sf-text-secondary hover:bg-sf-dark-700"
-              title="Copy filtered lines"
+              title={t('logViewer.copyHelp')}
             >
               <Copy className="w-3 h-3" />
-              Copy
+              {t('logViewer.copy')}
             </button>
             <button
               type="button"
               onClick={handleClear}
               className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] bg-sf-dark-800 border border-sf-dark-700 text-sf-text-secondary hover:bg-sf-dark-700"
-              title="Clear what is shown here. The on-disk log keeps growing."
+              title={t('logViewer.clearHelp')}
             >
               <Trash2 className="w-3 h-3" />
-              Clear view
+              {t('logViewer.clearView')}
             </button>
             <button
               type="button"
               onClick={() => { void openComfyLauncherLogFile() }}
               disabled={!state.logFilePath}
               className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] bg-sf-dark-800 border border-sf-dark-700 text-sf-text-secondary hover:bg-sf-dark-700 disabled:opacity-50"
-              title={state.logFilePath || 'No log file yet'}
+              title={state.logFilePath || t('logViewer.noFile')}
             >
               <FolderOpen className="w-3 h-3" />
-              Open file
+              {t('logViewer.openFile')}
             </button>
           </div>
         </div>
@@ -214,8 +216,8 @@ function ComfyLauncherLogViewer({ open, onClose }) {
           {filteredLogs.length === 0 ? (
             <div className="px-2 py-1.5 text-sf-text-muted italic">
               {logs.length === 0
-                ? 'No log output yet. Logs appear when ComfyUI starts.'
-                : 'No lines match the current filter.'}
+                ? t('logViewer.empty')
+                : t('logViewer.noMatch')}
             </div>
           ) : (
             filteredLogs.map((entry, idx) => (
@@ -238,7 +240,12 @@ function ComfyLauncherLogViewer({ open, onClose }) {
         </div>
 
         <div className="flex items-center justify-between gap-3 px-4 py-2 border-t border-sf-dark-700 bg-sf-dark-950/50 text-[10.5px] text-sf-text-muted">
-          <span>{filteredLogs.length} of {logs.length} lines{logs.length >= 2000 ? ' (rolling buffer)' : ''}{paused ? ' • paused' : ''}</span>
+          <span>{t('logViewer.lineSummary', {
+            visible: filteredLogs.length,
+            total: logs.length,
+            rolling: logs.length >= 2000 ? t('logViewer.rolling') : '',
+            paused: paused ? t('logViewer.pausedSuffix') : '',
+          })}</span>
           <span>{copyFeedback}</span>
           {state.logFilePath && (
             <span className="truncate inline-flex items-center gap-1" title={state.logFilePath}>

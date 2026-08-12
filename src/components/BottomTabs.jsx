@@ -1,13 +1,15 @@
 import { Layers, Sparkles, FolderOpen, Workflow, Settings, SlidersHorizontal } from 'lucide-react'
+import { useI18n } from '../i18n/I18nContext'
 
 function BottomTabs({ activeTab, onTabChange }) {
+  const { t } = useI18n()
   const tabs = [
-    { id: 'scenes', label: 'Scenes', icon: Layers },
-    { id: 'generate', label: 'Generate', icon: Sparkles },
-    { id: 'effects', label: 'Effects', icon: SlidersHorizontal },
-    { id: 'assets', label: 'Assets', icon: FolderOpen },
-    { id: 'workflows', label: 'Workflows', icon: Workflow },
-    { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'scenes', label: t('tabs.scenes'), icon: Layers },
+    { id: 'generate', label: t('tabs.generate'), icon: Sparkles },
+    { id: 'effects', label: t('tabs.effects'), icon: SlidersHorizontal },
+    { id: 'assets', label: t('tabs.assets'), icon: FolderOpen },
+    { id: 'workflows', label: t('tabs.workflows'), icon: Workflow },
+    { id: 'settings', label: t('tabs.settings'), icon: Settings },
   ]
 
   return (

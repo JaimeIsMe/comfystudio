@@ -2,6 +2,7 @@ import { Type, AlignLeft, AlignCenter, AlignRight } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTimelineStore } from '../../stores/timelineStore'
 import { TEXT_ANIMATION_PRESETS, TEXT_ANIMATION_MODE_OPTIONS } from '../../utils/textAnimationPresets'
+import { useI18n } from '../../i18n/I18nContext'
 
 // Available fonts for text clips
 const FONT_OPTIONS = [
@@ -10,6 +11,7 @@ const FONT_OPTIONS = [
 ]
 
 function TextPanel() {
+  const { t } = useI18n()
   // Timeline store for adding text clips
   const {
     addTextClip,
@@ -21,7 +23,7 @@ function TextPanel() {
   } = useTimelineStore()
   
   // Text generation state
-  const [textContent, setTextContent] = useState('Sample Text')
+  const [textContent, setTextContent] = useState(() => t('textPanel.sampleText'))
   const [textFontFamily, setTextFontFamily] = useState('Inter')
   const [textFontSize, setTextFontSize] = useState(64)
   const [textFontWeight, setTextFontWeight] = useState('bold')
@@ -75,19 +77,19 @@ function TextPanel() {
       <div className="p-3 space-y-4">
         {/* Text Content */}
         <div>
-          <label className="text-xs font-medium text-sf-text-primary mb-1.5 block">Text Content</label>
+          <label className="text-xs font-medium text-sf-text-primary mb-1.5 block">{t('textPanel.textContent')}</label>
           <textarea
             value={textContent}
             onChange={(e) => setTextContent(e.target.value)}
             className="w-full h-24 bg-sf-dark-800 border border-sf-dark-600 rounded-lg p-2 text-xs text-sf-text-primary placeholder-sf-text-muted resize-none focus:outline-none focus:border-sf-accent transition-colors"
-            placeholder="Enter your text..."
+            placeholder={t('textPanel.placeholder')}
           />
         </div>
 
         {/* Font Settings */}
         <div className="space-y-3">
           <div>
-            <label className="text-[10px] text-sf-text-secondary mb-1 block">Font Family</label>
+            <label className="text-[10px] text-sf-text-secondary mb-1 block">{t('textPanel.fontFamily')}</label>
             <select
               value={textFontFamily}
               onChange={(e) => setTextFontFamily(e.target.value)}
@@ -102,7 +104,7 @@ function TextPanel() {
           <div className="grid grid-cols-2 gap-3">
             {/* Font Size */}
             <div>
-              <label className="text-[10px] text-sf-text-secondary mb-1 block">Size: {textFontSize}px</label>
+              <label className="text-[10px] text-sf-text-secondary mb-1 block">{t('textPanel.size', { size: textFontSize })}</label>
               <input
                 type="range"
                 min="12"
@@ -115,32 +117,32 @@ function TextPanel() {
 
             {/* Font Weight */}
             <div>
-              <label className="text-[10px] text-sf-text-secondary mb-1 block">Weight</label>
+              <label className="text-[10px] text-sf-text-secondary mb-1 block">{t('textPanel.weight')}</label>
               <select
                 value={textFontWeight}
                 onChange={(e) => setTextFontWeight(e.target.value)}
                 className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-[10px] text-sf-text-primary focus:outline-none focus:border-sf-accent"
               >
-                <option value="normal">Normal</option>
-                <option value="bold">Bold</option>
-                <option value="100">Thin</option>
-                <option value="300">Light</option>
-                <option value="500">Medium</option>
-                <option value="600">Semi Bold</option>
-                <option value="800">Extra Bold</option>
-                <option value="900">Black</option>
+                <option value="normal">{t('textPanel.weights.normal')}</option>
+                <option value="bold">{t('textPanel.weights.bold')}</option>
+                <option value="100">{t('textPanel.weights.thin')}</option>
+                <option value="300">{t('textPanel.weights.light')}</option>
+                <option value="500">{t('textPanel.weights.medium')}</option>
+                <option value="600">{t('textPanel.weights.semiBold')}</option>
+                <option value="800">{t('textPanel.weights.extraBold')}</option>
+                <option value="900">{t('textPanel.weights.black')}</option>
               </select>
             </div>
           </div>
 
           {/* Text Alignment */}
           <div>
-            <label className="text-[10px] text-sf-text-secondary mb-1.5 block">Alignment</label>
+            <label className="text-[10px] text-sf-text-secondary mb-1.5 block">{t('textPanel.alignment')}</label>
             <div className="flex gap-1">
               {[
-                { value: 'left', icon: AlignLeft, label: 'Left' },
-                { value: 'center', icon: AlignCenter, label: 'Center' },
-                { value: 'right', icon: AlignRight, label: 'Right' },
+                { value: 'left', icon: AlignLeft, label: t('textPanel.left') },
+                { value: 'center', icon: AlignCenter, label: t('textPanel.center') },
+                { value: 'right', icon: AlignRight, label: t('textPanel.right') },
               ].map(({ value, icon: Icon, label }) => (
                 <button
                   key={value}
@@ -161,12 +163,12 @@ function TextPanel() {
 
         {/* Colors Section */}
         <div className="space-y-3">
-          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider block">Colors</label>
+          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider block">{t('textPanel.colors')}</label>
           
           <div className="grid grid-cols-2 gap-3">
             {/* Text Color */}
             <div>
-              <label className="text-[10px] text-sf-text-secondary mb-1 block">Text Color</label>
+              <label className="text-[10px] text-sf-text-secondary mb-1 block">{t('textPanel.textColor')}</label>
               <div className="flex gap-2">
                 <input
                   type="color"
@@ -185,7 +187,7 @@ function TextPanel() {
 
             {/* Stroke Color */}
             <div>
-              <label className="text-[10px] text-sf-text-secondary mb-1 block">Stroke Color</label>
+              <label className="text-[10px] text-sf-text-secondary mb-1 block">{t('textPanel.strokeColor')}</label>
               <div className="flex gap-2">
                 <input
                   type="color"
@@ -206,7 +208,7 @@ function TextPanel() {
           {/* Stroke Width */}
           <div>
             <div className="flex justify-between text-[10px] mb-1">
-              <span className="text-sf-text-secondary">Stroke Width</span>
+              <span className="text-sf-text-secondary">{t('textPanel.strokeWidth')}</span>
               <span className="text-sf-text-muted">{textStrokeWidth}px</span>
             </div>
             <input
@@ -222,12 +224,12 @@ function TextPanel() {
 
         {/* Background Section */}
         <div className="space-y-3">
-          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider block">Background</label>
+          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider block">{t('textPanel.background')}</label>
           
           <div className="grid grid-cols-2 gap-3">
             {/* Background Color */}
             <div>
-              <label className="text-[10px] text-sf-text-secondary mb-1 block">Color</label>
+              <label className="text-[10px] text-sf-text-secondary mb-1 block">{t('textPanel.color')}</label>
               <div className="flex gap-2">
                 <input
                   type="color"
@@ -247,7 +249,7 @@ function TextPanel() {
             {/* Background Opacity */}
             <div>
               <div className="flex justify-between text-[10px] mb-1">
-                <span className="text-sf-text-secondary">Opacity</span>
+                <span className="text-sf-text-secondary">{t('textPanel.opacity')}</span>
                 <span className="text-sf-text-muted">{textBackgroundOpacity}%</span>
               </div>
               <input
@@ -272,14 +274,14 @@ function TextPanel() {
             className="w-3.5 h-3.5 rounded border-sf-dark-600 bg-sf-dark-700 text-sf-accent focus:ring-sf-accent focus:ring-offset-0 cursor-pointer"
           />
           <label htmlFor="textShadow" className="text-[11px] text-sf-text-secondary cursor-pointer flex-1">
-            Drop shadow
+            {t('textPanel.dropShadow')}
           </label>
         </div>
 
         {/* Duration */}
         <div>
           <div className="flex justify-between text-[10px] mb-1">
-            <span className="text-sf-text-secondary">Duration</span>
+            <span className="text-sf-text-secondary">{t('textPanel.duration')}</span>
             <span className="text-sf-text-muted">{textDuration}s</span>
           </div>
           <div className="flex gap-0.5">
@@ -299,7 +301,7 @@ function TextPanel() {
 
         {/* Title Animation Presets */}
         <div className="space-y-2">
-          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider block">Title Animation</label>
+          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider block">{t('textPanel.titleAnimation')}</label>
           <div className="grid grid-cols-3 gap-1">
             {TEXT_ANIMATION_MODE_OPTIONS.map((option) => (
               <button
@@ -311,7 +313,7 @@ function TextPanel() {
                     : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
                 }`}
               >
-                {option.label}
+                {t(`textPanel.animationModes.${option.id}`, undefined, option.label)}
               </button>
             ))}
           </div>
@@ -324,7 +326,7 @@ function TextPanel() {
                   : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
               }`}
             >
-              None
+              {t('textPanel.none')}
             </button>
             {TEXT_ANIMATION_PRESETS.map((preset) => (
               <button
@@ -336,18 +338,18 @@ function TextPanel() {
                     : 'bg-sf-dark-700 text-sf-text-muted hover:bg-sf-dark-600'
                 }`}
               >
-                {preset.name}
+                {t(`textPanel.animationPresets.${preset.id}`, undefined, preset.name)}
               </button>
             ))}
           </div>
           <p className="text-[10px] text-sf-text-muted">
-            Applied automatically when you add the text clip.
+            {t('textPanel.animationHelp')}
           </p>
         </div>
 
         {/* Preview */}
         <div className="bg-sf-dark-800 rounded-lg p-4 relative overflow-hidden">
-          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider block mb-2">Preview</label>
+          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider block mb-2">{t('textPanel.preview')}</label>
           <div 
             className="min-h-[80px] flex items-center justify-center rounded"
             style={{
@@ -369,7 +371,7 @@ function TextPanel() {
                 paintOrder: 'stroke fill',
               }}
             >
-              {textContent || 'Sample Text'}
+              {textContent || t('textPanel.sampleText')}
             </span>
           </div>
         </div>
@@ -386,19 +388,19 @@ function TextPanel() {
             }`}
           >
             <Type className="w-4 h-4" />
-            Add Text to Timeline
+            {t('textPanel.addToTimeline')}
           </button>
           
           <p className="text-[10px] text-sf-text-muted text-center">
             {preferredVideoTrack
-              ? `Text will be added at playhead position on ${preferredVideoTrack.name}`
-              : 'Add a video track to place text on the timeline'}
+              ? t('textPanel.addAtPlayhead', { track: preferredVideoTrack.name })
+              : t('textPanel.noVideoTrack')}
           </p>
         </div>
 
         {/* Text Presets */}
         <div className="pt-3 border-t border-sf-dark-700">
-          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2 block">Presets</label>
+          <label className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2 block">{t('textPanel.presets')}</label>
           <div className="flex flex-wrap gap-1">
             {[
               { name: 'Title', size: 72, weight: 'bold', color: '#FFFFFF' },
@@ -417,7 +419,7 @@ function TextPanel() {
                 }}
                 className="px-2 py-1 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-secondary transition-colors"
               >
-                {preset.name}
+                {t(`textPanel.stylePresets.${preset.name.replaceAll(' ', '')}`, undefined, preset.name)}
               </button>
             ))}
           </div>

@@ -1,7 +1,9 @@
 import { Download, Check, RefreshCw, HardDrive, Cloud, Loader2, ChevronDown, ChevronRight } from 'lucide-react'
 import { useState } from 'react'
+import { useI18n } from '../../i18n/I18nContext'
 
 function WorkflowsPanel() {
+  const { t } = useI18n()
   const [selectedWorkflow, setSelectedWorkflow] = useState(null)
   const [downloading, setDownloading] = useState(null)
   const [filter, setFilter] = useState('all')
@@ -83,8 +85,8 @@ function WorkflowsPanel() {
       {/* Header */}
       <div className="p-2 border-b border-sf-dark-700">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-medium text-sf-text-primary">Workflows</span>
-          <button className="p-1 hover:bg-sf-dark-700 rounded transition-colors" title="Check for updates">
+          <span className="text-xs font-medium text-sf-text-primary">{t('workflowsPanel.title')}</span>
+          <button className="p-1 hover:bg-sf-dark-700 rounded transition-colors" title={t('workflowsPanel.checkUpdates')}>
             <RefreshCw className="w-3.5 h-3.5 text-sf-text-muted" />
           </button>
         </div>
@@ -97,7 +99,7 @@ function WorkflowsPanel() {
               filter === 'all' ? 'bg-sf-dark-600 text-sf-text-primary' : 'text-sf-text-muted hover:text-sf-text-secondary'
             }`}
           >
-            All
+            {t('workflowsPanel.all')}
           </button>
           <button
             onClick={() => setFilter('installed')}
@@ -105,7 +107,7 @@ function WorkflowsPanel() {
               filter === 'installed' ? 'bg-sf-dark-600 text-sf-text-primary' : 'text-sf-text-muted hover:text-sf-text-secondary'
             }`}
           >
-            Installed ({installedCount})
+            {t('workflowsPanel.installedCount', { count: installedCount })}
           </button>
           <button
             onClick={() => setFilter('available')}
@@ -113,7 +115,7 @@ function WorkflowsPanel() {
               filter === 'available' ? 'bg-sf-dark-600 text-sf-text-primary' : 'text-sf-text-muted hover:text-sf-text-secondary'
             }`}
           >
-            Available
+            {t('workflowsPanel.available')}
           </button>
         </div>
       </div>
@@ -132,7 +134,7 @@ function WorkflowsPanel() {
                 className="w-full flex items-center gap-1 px-1 py-1 text-[10px] text-sf-text-muted uppercase tracking-wider hover:text-sf-text-secondary"
               >
                 {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                {category}
+                {t(`workflowsPanel.categories.${category.replaceAll(' ', '')}`, undefined, category)}
               </button>
               
               {isExpanded && categoryWorkflows.map(workflow => (
@@ -146,7 +148,7 @@ function WorkflowsPanel() {
                   }`}
                 >
                   <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-xs font-medium text-sf-text-primary truncate">{workflow.name}</span>
+                    <span className="text-xs font-medium text-sf-text-primary truncate">{t(`workflowsPanel.items.${workflow.id}.name`, undefined, workflow.name)}</span>
                     {workflow.installed ? (
                       <Check className="w-3 h-3 text-sf-success flex-shrink-0" />
                     ) : (
@@ -164,10 +166,10 @@ function WorkflowsPanel() {
                   {/* Expanded details */}
                   {selectedWorkflow?.id === workflow.id && (
                     <div className="mt-2 pt-2 border-t border-sf-dark-600">
-                      <p className="text-[10px] text-sf-text-secondary mb-2">{workflow.description}</p>
+                      <p className="text-[10px] text-sf-text-secondary mb-2">{t(`workflowsPanel.items.${workflow.id}.description`, undefined, workflow.description)}</p>
                       {workflow.installed ? (
                         <button className="w-full py-1 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-[10px] text-sf-text-muted transition-colors">
-                          Uninstall
+                          {t('workflowsPanel.uninstall')}
                         </button>
                       ) : (
                         <button
@@ -178,12 +180,12 @@ function WorkflowsPanel() {
                           {downloading === workflow.id ? (
                             <>
                               <Loader2 className="w-3 h-3 animate-spin" />
-                              Downloading...
+                              {t('workflowsPanel.downloading')}
                             </>
                           ) : (
                             <>
                               <Download className="w-3 h-3" />
-                              Download
+                              {t('workflowsPanel.download')}
                             </>
                           )}
                         </button>
@@ -200,8 +202,8 @@ function WorkflowsPanel() {
       {/* Storage Info */}
       <div className="p-2 border-t border-sf-dark-700 bg-sf-dark-800">
         <div className="flex items-center justify-between text-[10px] text-sf-text-muted mb-1">
-          <span>Storage</span>
-          <span>12.7 GB used</span>
+          <span>{t('workflowsPanel.storage')}</span>
+          <span>{t('workflowsPanel.storageUsed', { size: '12.7 GB' })}</span>
         </div>
         <div className="h-1 bg-sf-dark-600 rounded-full overflow-hidden">
           <div className="h-full bg-sf-accent rounded-full" style={{ width: '45%' }} />

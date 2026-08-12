@@ -6,19 +6,16 @@ import {
   collectFeedbackDiagnostics,
   sendFeedback,
 } from '../services/feedback'
+import { useI18n } from '../i18n/I18nContext'
 
 const DIAGNOSTIC_LABELS = [
-  ['appVersion', 'Velorn version'],
-  ['platform', 'Platform'],
-  ['os', 'OS'],
-  ['gpu', 'GPU'],
-  ['comfyConnected', 'ComfyUI connected'],
-  ['screen', 'Screen'],
+  'appVersion', 'platform', 'os', 'gpu', 'comfyConnected', 'screen',
 ]
 
 const DISCORD_INVITE_URL = 'https://discord.gg/QWZUuUChVK'
 
 function DiscordCallout() {
+  const { t } = useI18n()
   return (
     <a
       href={DISCORD_INVITE_URL}
@@ -28,24 +25,25 @@ function DiscordCallout() {
     >
       <MessageCircle className="h-5 w-5 flex-shrink-0 text-indigo-300" />
       <span className="min-w-0 text-[11px] leading-snug text-sf-text-secondary">
-        <span className="font-semibold text-sf-text-primary">Want a faster answer? Join our Discord.</span>{' '}
-        The team hangs out there — and often another creator has already solved exactly your problem.
+        <span className="font-semibold text-sf-text-primary">{t('feedback.discordTitle')}</span>{' '}
+        {t('feedback.discordBody')}
       </span>
       <span className="ml-auto flex-shrink-0 rounded bg-indigo-500/80 px-2 py-1 text-[10px] font-medium text-white transition-colors group-hover:bg-indigo-500">
-        Join
+        {t('feedback.join')}
       </span>
     </a>
   )
 }
 
-function formatDiagnosticValue(value) {
-  if (value === null || value === undefined || value === '') return 'unknown'
-  if (value === true) return 'yes'
-  if (value === false) return 'no'
+function formatDiagnosticValue(value, t) {
+  if (value === null || value === undefined || value === '') return t('feedback.unknown')
+  if (value === true) return t('feedback.yes')
+  if (value === false) return t('feedback.no')
   return String(value)
 }
 
 export default function FeedbackSection() {
+  const { t } = useI18n()
   const [category, setCategory] = useState('bug')
   const [message, setMessage] = useState('')
   const [email, setEmail] = useState('')
@@ -78,7 +76,7 @@ export default function FeedbackSection() {
       setSent(true)
       setMessage('')
     } catch (sendError) {
-      setError(sendError instanceof Error ? sendError.message : 'Could not send feedback.')
+      setError(sendError instanceof Error ? sendError.message : t('feedback.sendFailed'))
     } finally {
       setSending(false)
     }
@@ -89,16 +87,16 @@ export default function FeedbackSection() {
       <div className="space-y-3">
         <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-4 py-6 text-center">
           <CheckCircle2 className="mx-auto h-8 w-8 text-green-300" />
-          <div className="mt-3 text-sm font-medium text-sf-text-primary">Thanks — got it.</div>
+          <div className="mt-3 text-sm font-medium text-sf-text-primary">{t('feedback.thanks')}</div>
           <p className="mt-1 text-[11px] text-sf-text-muted">
-            Your feedback goes straight to the team. If you left an email, we may follow up.
+            {t('feedback.thanksBody')}
           </p>
           <button
             type="button"
             onClick={() => { setSent(false); setError('') }}
             className="mt-4 rounded bg-sf-dark-700 px-3 py-1.5 text-[11px] text-sf-text-secondary hover:bg-sf-dark-600"
           >
-            Send another
+            {t('feedback.sendAnother')}
           </button>
         </div>
         <DiscordCallout />
@@ -110,10 +108,9 @@ export default function FeedbackSection() {
     <div className="space-y-4">
       <DiscordCallout />
       <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
-        <div className="text-sm font-medium text-sf-text-primary">Send feedback</div>
+        <div className="text-sm font-medium text-sf-text-primary">{t('feedback.title')}</div>
         <p className="mt-1 text-[11px] text-sf-text-muted">
-          Found a bug, missing a feature, or just have a thought? It lands directly with the team —
-          no account, no forms, no GitHub required.
+          {t('feedback.description')}
         </p>
 
         <div className="mt-3 flex items-center gap-1.5">
@@ -128,7 +125,7 @@ export default function FeedbackSection() {
                   : 'border border-sf-dark-700 bg-sf-dark-800 text-sf-text-muted hover:border-sf-dark-500 hover:text-sf-text-primary'
               }`}
             >
-              {entry.label}
+              {t(`feedback.categories.${entry.id}`, undefined, entry.label)}
             </button>
           ))}
         </div>
@@ -139,8 +136,8 @@ export default function FeedbackSection() {
           maxLength={FEEDBACK_MESSAGE_MAX_LENGTH}
           rows={5}
           placeholder={category === 'bug'
-            ? 'What happened, and what did you expect instead?'
-            : 'Tell us what you are thinking...'}
+            ? t('feedback.bugPlaceholder')
+            : t('feedback.generalPlaceholder')}
           className="mt-3 w-full resize-y rounded-lg border border-sf-dark-700 bg-sf-dark-800 px-3 py-2 text-xs text-sf-text-primary outline-none transition-colors placeholder:text-sf-text-muted focus:border-sf-accent"
         />
 
@@ -148,7 +145,7 @@ export default function FeedbackSection() {
           type="email"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
-          placeholder="Email for a reply (optional)"
+          placeholder={t('feedback.emailPlaceholder')}
           className="mt-2 w-full rounded-lg border border-sf-dark-700 bg-sf-dark-800 px-3 py-2 text-xs text-sf-text-primary outline-none transition-colors placeholder:text-sf-text-muted focus:border-sf-accent"
         />
 
@@ -160,7 +157,7 @@ export default function FeedbackSection() {
             className="mt-0.5 accent-sf-accent"
           />
           <span className="text-[11px] text-sf-text-muted">
-            Include system info — it makes bugs much easier to fix. Exactly this, nothing more:
+            {t('feedback.includeDiagnostics')}
           </span>
         </label>
 
@@ -168,15 +165,15 @@ export default function FeedbackSection() {
           <div className="mt-2 rounded border border-sf-dark-700 bg-black/30 px-3 py-2">
             {diagnostics ? (
               <dl className="space-y-0.5">
-                {DIAGNOSTIC_LABELS.map(([key, label]) => (
+                {DIAGNOSTIC_LABELS.map((key) => (
                   <div key={key} className="flex gap-2 text-[11px]">
-                    <dt className="w-36 flex-shrink-0 text-sf-text-muted">{label}</dt>
-                    <dd className="min-w-0 truncate text-sf-text-secondary">{formatDiagnosticValue(diagnostics[key])}</dd>
+                    <dt className="w-36 flex-shrink-0 text-sf-text-muted">{t(`feedback.diagnostics.${key}`)}</dt>
+                    <dd className="min-w-0 truncate text-sf-text-secondary">{formatDiagnosticValue(diagnostics[key], t)}</dd>
                   </div>
                 ))}
               </dl>
             ) : (
-              <div className="text-[11px] text-sf-text-muted">Collecting…</div>
+              <div className="text-[11px] text-sf-text-muted">{t('feedback.collecting')}</div>
             )}
           </div>
         )}
@@ -194,7 +191,7 @@ export default function FeedbackSection() {
             className="inline-flex items-center gap-1.5 rounded bg-sf-accent px-3 py-1.5 text-[11px] font-medium text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
           >
             {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-            {sending ? 'Sending…' : 'Send feedback'}
+            {sending ? t('feedback.sending') : t('feedback.title')}
           </button>
         </div>
       </div>

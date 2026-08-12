@@ -1,0 +1,60 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { interpolate, normalizeLocale, resolveLanguage, translate } from './core.js'
+
+function leafKeys(value, prefix = '') {
+  return Object.entries(value).flatMap(([key, child]) => {
+    const path = prefix ? `${prefix}.${key}` : key
+    return child && typeof child === 'object' ? leafKeys(child, path) : [path]
+  })
+}
+
+function placeholders(message) {
+  return [...String(message).matchAll(/\{\{\s*([^{}\s]+)\s*\}\}/g)].map((match) => match[1]).sort()
+}
+
+test('normalizes browser locales and the jp alias', () => {
+  assert.equal(normalizeLocale('ja-JP'), 'ja')
+  assert.equal(normalizeLocale('jp'), 'ja')
+  assert.equal(normalizeLocale('pt_BR'), 'pt')
+})
+
+test('falls back to English for unavailable languages and missing messages', () => {
+  const languages = [{ code: 'en' }, { code: 'ja' }]
+  assert.equal(resolveLanguage('fr-FR', languages), 'en')
+  assert.equal(translate({ en: { action: 'Save' }, ja: {} }, 'ja', 'action'), 'Save')
+})
+
+test('interpolates named values without removing unknown placeholders', () => {
+  assert.equal(interpolate('Hello {{name}} {{missing}}', { name: 'Velorn' }), 'Hello Velorn {{missing}}')
+})
+
+test('Japanese dictionary has the same keys and placeholders as English', () => {
+  const english = JSON.parse(readFileSync(new URL('../../public/lang/lang_en.json', import.meta.url), 'utf8'))
+  const japanese = JSON.parse(readFileSync(new URL('../../public/lang/lang_jp.json', import.meta.url), 'utf8'))
+  const englishKeys = leafKeys(english).sort()
+  const japaneseKeys = leafKeys(japanese).sort()
+  assert.deepEqual(japaneseKeys, englishKeys)
+  for (const key of englishKeys) {
+    assert.deepEqual(placeholders(getNestedValueForTest(japanese, key)), placeholders(getNestedValueForTest(english, key)), key)
+  }
+})
+
+test('ComfyUI workflow names and categories remain in English', () => {
+  const english = JSON.parse(readFileSync(new URL('../../public/lang/lang_en.json', import.meta.url), 'utf8'))
+  const japanese = JSON.parse(readFileSync(new URL('../../public/lang/lang_jp.json', import.meta.url), 'utf8'))
+  const protectedPaths = [
+    'workflowsPanel.categories.ImagetoVideo',
+    'workflowsPanel.categories.TexttoImage',
+    'workflowsPanel.categories.ImagetoImage',
+    ...Object.keys(english.workflowsPanel.items).map((id) => `workflowsPanel.items.${id}.name`),
+  ]
+  for (const path of protectedPaths) {
+    assert.equal(getNestedValueForTest(japanese, path), getNestedValueForTest(english, path), path)
+  }
+})
+
+function getNestedValueForTest(dictionary, key) {
+  return key.split('.').reduce((value, part) => value[part], dictionary)
+}

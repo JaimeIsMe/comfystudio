@@ -3,7 +3,7 @@ import {
   X, Server, FolderOpen, Palette, Monitor, Save,
   HardDrive, Film, Keyboard, Wrench, Power,
   KeyRound, CheckCircle2, ExternalLink, Loader2, RefreshCcw,
-  Volume2, Play, Bot, Copy, MessageSquare,
+  Volume2, Play, Bot, Copy, MessageSquare, Globe2,
 } from 'lucide-react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../stores/projectStore'
 import useTimelineStore from '../stores/timelineStore'
@@ -56,6 +56,7 @@ import {
   getShowCloudCreditBalance,
   setShowCloudCreditBalance,
 } from '../services/cloudCreditDisplaySettings'
+import { useI18n } from '../i18n/I18nContext'
 
 const AUTO_IMPORT_KEY = 'comfystudio-auto-import-comfy-outputs'
 const OUTPUT_DIRECTORY_SETTING_KEY = 'outputDirectory'
@@ -105,6 +106,12 @@ const SETTINGS_SECTIONS = [
     title: 'Workflow Setup',
     icon: Wrench,
     description: 'Scan workflows, review missing dependencies, and install curated models or node packs.',
+  },
+  {
+    id: 'language',
+    title: 'Language',
+    icon: Globe2,
+    description: 'Choose the language used in the Velorn interface.',
   },
   {
     id: 'appearance',
@@ -175,6 +182,7 @@ function SettingsRailItem({ section, isActive, onSelect }) {
 }
 
 function GeneralTab({ initialSection = null }) {
+  const { language, languages, setLanguage, t } = useI18n()
   const initialComfyConnection = getLocalComfyConnectionSync()
   const [comfyPortInput, setComfyPortInput] = useState(String(initialComfyConnection.port || DEFAULT_COMFY_PORT))
   const [comfyConnectionState, setComfyConnectionState] = useState({
@@ -728,9 +736,14 @@ function GeneralTab({ initialSection = null }) {
     }
   }
 
+  const localizedSections = useMemo(() => SETTINGS_SECTIONS.map((section) => ({
+    ...section,
+    title: t(`settings.sections.${section.id}.title`, undefined, section.title),
+    description: t(`settings.sections.${section.id}.description`, undefined, section.description),
+  })), [t])
   const activeSectionMeta = useMemo(
-    () => SETTINGS_SECTIONS.find((section) => section.id === activeSection) || SETTINGS_SECTIONS[0],
-    [activeSection]
+    () => localizedSections.find((section) => section.id === activeSection) || localizedSections[0],
+    [activeSection, localizedSections]
   )
   const isWorkflowSetupActive = activeSection === 'workflow-setup'
 
@@ -1342,6 +1355,29 @@ function GeneralTab({ initialSection = null }) {
     case 'launcher':
       activeSectionContent = <ComfyLauncherSettingsSection onOpenLogViewer={() => setLogViewerOpen(true)} />
       break
+    case 'language':
+      activeSectionContent = (
+        <div className="space-y-5">
+          <div>
+            <label htmlFor="velorn-display-language" className="block text-xs text-sf-text-muted mb-1">
+              {t('settings.languageLabel')}
+            </label>
+            <select
+              id="velorn-display-language"
+              value={language}
+              onChange={(event) => setLanguage(event.target.value)}
+              className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-3 py-2 text-sm text-sf-text-primary focus:outline-none focus:border-sf-accent"
+            >
+              {languages.map((item) => (
+                <option key={item.code} value={item.code}>{item.name}</option>
+              ))}
+            </select>
+            <p className="mt-2 text-xs text-sf-text-secondary">{t('settings.languageHelp')}</p>
+            <p className="mt-1 text-[10px] text-sf-text-muted">{t('settings.fallbackHelp')}</p>
+          </div>
+        </div>
+      )
+      break
     case 'appearance':
       activeSectionContent = (
         <div className="space-y-4">
@@ -1658,12 +1694,12 @@ function GeneralTab({ initialSection = null }) {
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <aside className="w-[250px] flex-shrink-0 border-r border-sf-dark-700 bg-sf-dark-950/60">
           <div className="border-b border-sf-dark-700 px-4 py-4">
-            <div className="text-[10px] uppercase tracking-[0.18em] text-sf-text-muted">Categories</div>
-            <p className="mt-1 text-xs text-sf-text-secondary">Pick a settings area to edit.</p>
+            <div className="text-[10px] uppercase tracking-[0.18em] text-sf-text-muted">{t('settings.categories')}</div>
+            <p className="mt-1 text-xs text-sf-text-secondary">{t('settings.pickArea')}</p>
           </div>
           <div className="overflow-y-auto p-2">
             <div className="space-y-1">
-              {SETTINGS_SECTIONS.map((section) => (
+              {localizedSections.map((section) => (
                 <SettingsRailItem
                   key={section.id}
                   section={section}
@@ -1718,7 +1754,7 @@ function GeneralTab({ initialSection = null }) {
           }`}
         >
           <Save className="w-4 h-4" />
-          {settingsSaved ? 'Saved' : 'Save Settings'}
+          {settingsSaved ? t('common.saved') : t('settings.saveSettings')}
         </button>
       </div>
     </div>
@@ -1726,6 +1762,7 @@ function GeneralTab({ initialSection = null }) {
 }
 
 export default function SettingsModal({ isOpen, onClose, initialSection = null }) {
+  const { t } = useI18n()
   if (!isOpen) return null
 
   return (
@@ -1738,11 +1775,11 @@ export default function SettingsModal({ isOpen, onClose, initialSection = null }
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-sf-dark-700 flex-shrink-0">
-          <h2 className="text-lg font-medium text-sf-text-primary">Settings</h2>
+          <h2 className="text-lg font-medium text-sf-text-primary">{t('settings.title')}</h2>
           <button
             onClick={onClose}
             className="p-1.5 hover:bg-sf-dark-700 rounded-lg transition-colors"
-            aria-label="Close"
+            aria-label={t('common.close')}
           >
             <X className="w-5 h-5 text-sf-text-muted" />
           </button>
