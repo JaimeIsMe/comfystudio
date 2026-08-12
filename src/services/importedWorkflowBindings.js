@@ -5,7 +5,11 @@
 // input nodes; those ids survive conversion because only subgraph-internal
 // nodes get composite ids.
 
-const TEXT_INPUT_KEYS = ['text', 'prompt', 'positive_prompt', 'caption', 'text_g']
+// Partner/API nodes can expose namespaced widget keys instead of the usual
+// ComfyUI `prompt` input. MiniMax H3, for example, stores its positive prompt
+// under `model.prompt`. Treat it as a first-class prompt binding so a queue-time
+// prompt actually replaces the template's baked character/scene prompt.
+const TEXT_INPUT_KEYS = ['text', 'prompt', 'model.prompt', 'positive_prompt', 'caption', 'text_g']
 const SEED_INPUT_KEYS = ['seed', 'noise_seed']
 const ASSET_INPUT_KEY_CANDIDATES = {
   image: ['image'],
