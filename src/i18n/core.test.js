@@ -30,14 +30,22 @@ test('interpolates named values without removing unknown placeholders', () => {
   assert.equal(interpolate('Hello {{name}} {{missing}}', { name: 'Velorn' }), 'Hello Velorn {{missing}}')
 })
 
-test('Japanese dictionary has the same keys and placeholders as English', () => {
+test('registered language dictionaries have the same keys and placeholders as English', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../../public/lang/languages.json', import.meta.url), 'utf8'))
   const english = JSON.parse(readFileSync(new URL('../../public/lang/lang_en.json', import.meta.url), 'utf8'))
-  const japanese = JSON.parse(readFileSync(new URL('../../public/lang/lang_jp.json', import.meta.url), 'utf8'))
   const englishKeys = leafKeys(english).sort()
-  const japaneseKeys = leafKeys(japanese).sort()
-  assert.deepEqual(japaneseKeys, englishKeys)
-  for (const key of englishKeys) {
-    assert.deepEqual(placeholders(getNestedValueForTest(japanese, key)), placeholders(getNestedValueForTest(english, key)), key)
+  for (const language of manifest.languages) {
+    if (language.code === 'en') continue
+    const dictionary = JSON.parse(readFileSync(new URL(`../../public/lang/${language.file}`, import.meta.url), 'utf8'))
+    const dictionaryKeys = leafKeys(dictionary).sort()
+    assert.deepEqual(dictionaryKeys, englishKeys, language.code)
+    for (const key of englishKeys) {
+      assert.deepEqual(
+        placeholders(getNestedValueForTest(dictionary, key)),
+        placeholders(getNestedValueForTest(english, key)),
+        `${language.code}: ${key}`,
+      )
+    }
   }
 })
 
