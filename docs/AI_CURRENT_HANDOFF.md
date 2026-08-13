@@ -4,20 +4,24 @@ Last updated: 2026-08-12
 
 This is the live state for moving Velorn development from the old Windows checkout to a clean repository state that can be cloned on Ubuntu.
 
-## Clean Migration Branch
+## Merged Migration
 
 - Worktree: `C:\Users\papa\Documents\coding_projects\general\velorn-migration-cleanup`
-- Branch: `codex/migration-cleanup`
-- Base: `origin/main` at `0ca5db5` (`v0.3.25`)
-- This branch is intentionally separate from the old dirty `main` checkout.
+- Current local branch: `codex/post-merge-cleanup`, tracking `origin/main`
+- PR: `#99` - merged into `main` on 2026-08-12
+- Merge commit: `c4be213`
+- Latest release remains `v0.3.25`; the recovered changes are on `main` but have not been released yet.
+- This worktree remains intentionally separate from the old dirty `main` checkout.
 
-Recovered, tested, and committed changes:
+Recovered, tested, and merged changes:
 
 1. `592cf30` - Add a Settings toggle that hides the Comfy.org credit balance and stops its polling while hidden.
 2. `fb09ce6` - Refresh paused text/shape/caption rasters when timeline or asset state changes.
 3. `bcea1de` - Recognize namespaced `model.prompt` inputs in imported workflows, with MiniMax H3 regression coverage.
 
 The production renderer build passed after every feature. Electron main/preload syntax checks pass. All ten existing `package.json` test scripts plus the two recovered-feature suites pass: 82 tests total, 0 failures.
+
+The maintainer also verified all three user-facing behaviors in the Electron app before PR #99 was merged.
 
 ## Preserved Windows Checkout
 
@@ -46,18 +50,15 @@ Do not reset, pull, delete, or repurpose the old checkout until the maintainer h
 - My Workflows MCP support was not recopied because it already shipped upstream in v0.3.25.
 - Manual title-bar/window dragging and unload changes were reviewed but not migrated. They are platform-sensitive, mixed with unrelated work, and lack a clear verification record. They remain recoverable in the old checkout and backup patch.
 - Generated timeline contact sheets, output media, mockups, marketing drafts, and old handoff notes were not brought into the clean branch.
-- No old worktree has been deleted.
+- No dirty old worktree has been deleted.
 
 ## Remaining Work
 
-1. Launch `npm run electron:dev` for maintainer UI verification of:
-   - Settings credit-balance toggle.
-   - Immediate paused text-clip preview updates.
-   - A custom imported workflow using `model.prompt` if a suitable graph is available.
-2. Review the final branch diff and commit these context documents.
-3. Push or merge only after the maintainer approves the clean result.
-4. On Ubuntu, clone the repository fresh after the intended branch is merged/pushed; do not copy `node_modules` or the Windows `.codex` directory.
-5. Keep Windows available for Windows packaging, Azure signing behavior, and NVIDIA RTX export testing.
+1. Commit and merge this post-merge handoff update.
+2. On Ubuntu, clone `main` fresh; do not copy `node_modules` or the Windows `.codex` directory.
+3. Run the Ubuntu startup commands below and verify Velorn opens.
+4. Keep Windows available for Windows packaging, Azure signing behavior, and NVIDIA RTX export testing.
+5. Remove old worktrees and generated files only after their dirty/unique state has been audited and the maintainer explicitly approves deletion.
 
 ## Ubuntu First Session
 
