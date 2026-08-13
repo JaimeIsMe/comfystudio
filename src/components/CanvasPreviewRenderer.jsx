@@ -417,6 +417,13 @@ function CanvasPreviewRenderer({
   const lastPreloadTimeRef = useRef(0)
   const lastDrawTimeRef = useRef(null)
   const loopSeekHoldUntilRef = useRef(0)
+  const rasterSourceRevisionRef = useRef(0)
+  const rasterSourceInputsRef = useRef({
+    clips: null,
+    tracks: null,
+    transitions: null,
+    assets: null,
+  })
   const [, setAssetRevision] = useState(0)
 
   const {
@@ -430,6 +437,17 @@ function CanvasPreviewRenderer({
     glslPreviewQuality,
   } = useTimelineStore()
   const assets = useAssetsStore(state => state.assets)
+
+  const previousRasterInputs = rasterSourceInputsRef.current
+  if (
+    previousRasterInputs.clips !== clips
+    || previousRasterInputs.tracks !== tracks
+    || previousRasterInputs.transitions !== transitions
+    || previousRasterInputs.assets !== assets
+  ) {
+    rasterSourceRevisionRef.current += 1
+    rasterSourceInputsRef.current = { clips, tracks, transitions, assets }
+  }
 
   const safeWidth = Math.max(1, Math.round(Number(timelineWidth) || 1920))
   const safeHeight = Math.max(1, Math.round(Number(timelineHeight) || 1080))
@@ -515,6 +533,7 @@ function CanvasPreviewRenderer({
     playbackRate,
     useProxyPlaybackForAssets,
     glslPreviewQuality,
+    rasterSourceRevision: rasterSourceRevisionRef.current,
     width: safeWidth,
     height: safeHeight,
     fps: safeFps,
@@ -1141,7 +1160,10 @@ function CanvasPreviewRenderer({
         samples: [{
           source: buffers.offCanvas,
           sourceKey: `${clip.id}:2d`,
-          sourceVersion: frameIndex,
+          // The same timeline frame can be repainted after a paused edit.
+          // Include the visual-state revision so the GPU uploads the fresh
+          // text/shape/caption raster instead of reusing the old texture.
+          sourceVersion: `${frameIndex}:${state.rasterSourceRevision || 0}`,
           corners: [
             { x: 0, y: 0, u: 0, v: 0, w: 1 },
             { x: width, y: 0, u: 1, v: 0, w: 1 },
