@@ -65,6 +65,7 @@ import { extractVisualStyleNotes } from '../utils/musicVisualStyle'
 import { checkWorkflowDependencies, buildMissingDependencyClipboardText } from '../services/workflowDependencies'
 import { openApiWorkflowInComfyUi, openBundledWorkflowInComfyUi } from '../services/workflowSetupManager'
 import { useWorkflowSetupFlow } from '../hooks/useWorkflowSetupFlow'
+import { useI18n } from '../i18n/I18nContext'
 import {
   getComfyLauncherSnapshot,
   isComfyLauncherAvailable,
@@ -2954,6 +2955,7 @@ function AssetInputBrowser({
   selectedAssetFields = {},
   onSelectAssetField = null,
 }) {
+  const { t } = useI18n()
   const { assets, folders } = useAssetsStore()
   const [search, setSearch] = useState('')
   const [currentFolderId, setCurrentFolderId] = useState(null)
@@ -3096,12 +3098,12 @@ function AssetInputBrowser({
   return (
     <div className="h-full flex flex-col">
       <div className="flex-shrink-0 p-2 border-b border-sf-dark-700">
-        <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">Input Source</div>
+        <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">{t('generate.assets.inputSource')}</div>
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-sf-text-muted" />
           <input
             type="text" value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Search assets..."
+            placeholder={t('generate.assets.search')}
             className="w-full pl-7 pr-2 py-1 bg-sf-dark-800 border border-sf-dark-600 rounded text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
           />
         </div>
@@ -3114,7 +3116,7 @@ function AssetInputBrowser({
             }`}
           >
             <FolderOpen className="h-3 w-3" />
-            Assets
+            {t('generate.assets.assets')}
           </button>
           {getFolderPath().map((folder) => (
             <div key={folder.id} className="flex items-center gap-1">
@@ -3133,13 +3135,13 @@ function AssetInputBrowser({
         </div>
         {normalizedSearch && (
           <div className="mt-1 text-[9px] text-sf-text-muted">
-            Searching all folders
+            {t('generate.assets.searchingAll')}
           </div>
         )}
         {assetSlots.length > 0 && (
           <div className="mt-2 space-y-1">
             <div className="text-[9px] uppercase tracking-wider text-sf-text-muted">
-              Assign selected asset to
+              {t('generate.assets.assignTo')}
             </div>
             <div className="grid grid-cols-1 gap-1">
               {assetSlots.map((slot) => {
@@ -3161,7 +3163,7 @@ function AssetInputBrowser({
                       <span className="shrink-0 text-[8px] uppercase opacity-70">{slot.assetType || 'media'}</span>
                     </div>
                     <div className={`mt-0.5 truncate text-[9px] ${slotAsset ? 'text-sf-text-secondary' : 'text-sf-text-muted'}`}>
-                      {slotAsset?.name || 'Nothing selected'}
+                      {slotAsset?.name || t('generate.assets.nothingSelected')}
                     </div>
                   </button>
                 )
@@ -3269,10 +3271,10 @@ function AssetInputBrowser({
           <div className="text-center py-8 text-sf-text-muted">
             <FolderOpen className="w-8 h-8 mx-auto mb-2 opacity-50" />
             <p className="text-xs">
-              {normalizedSearch ? 'No matching assets' : `No ${assetTypeLabel} assets here`}
+              {normalizedSearch ? t('generate.assets.noMatches') : t('generate.assets.noneHere', { type: assetTypeLabel })}
             </p>
             <p className="text-[10px]">
-              {normalizedSearch ? 'Try a different search or folder name' : 'Open another folder or import media in the Assets tab'}
+              {normalizedSearch ? t('generate.assets.tryDifferent') : t('generate.assets.importHelp')}
             </p>
           </div>
         ) : (
@@ -3439,6 +3441,7 @@ function loadPersistedGenerateWorkspaceState(project, projectHandle) {
 // Main GenerateWorkspace Component
 // ============================================
 function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
+  const { t } = useI18n()
   const {
     currentProjectHandle,
     currentProject,
@@ -16916,7 +16919,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
               }}
               className={`px-3 py-1 rounded text-xs transition-colors ${generationMode === 'single' ? 'bg-sf-accent text-white' : 'text-sf-text-muted hover:text-sf-text-primary'}`}
             >
-              Generate
+              {t('generate.mode.generate')}
             </button>
             <button
               onClick={() => {
@@ -16925,7 +16928,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
               }}
               className={`px-3 py-1 rounded text-xs transition-colors ${generationMode === 'yolo' ? 'bg-sf-accent text-white' : 'text-sf-text-muted hover:text-sf-text-primary'}`}
             >
-              Director
+              {t('generate.mode.director')}
             </button>
           </div>
         </div>
@@ -19750,19 +19753,19 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
               type="button"
               onClick={() => setRightSidebarCollapsed(false)}
               className="flex flex-col items-center justify-center py-4 px-2 text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-800 transition-colors"
-              title="Expand queue panel"
+              title={t('generate.queue.expand')}
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
           ) : (
           <>
           <div className="flex-shrink-0 flex items-center justify-between gap-2 p-2 border-b border-sf-dark-700">
-            <span className="text-[10px] text-sf-text-muted uppercase tracking-wider truncate">Queue</span>
+            <span className="text-[10px] text-sf-text-muted uppercase tracking-wider truncate">{t('generate.queue.title')}</span>
             <button
               type="button"
               onClick={() => setRightSidebarCollapsed(true)}
               className="p-1 rounded text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700 transition-colors flex-shrink-0"
-              title="Collapse panel"
+              title={t('generate.queue.collapse')}
             >
               <ChevronRight className="w-4 h-4" />
             </button>
@@ -19779,8 +19782,12 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             >
               <Sparkles className="w-4 h-4" />
               {generationMode === 'yolo'
-                ? `Queue ${yoloModeLabel} Keyframes`
-                : `Queue ${selectedWorkflowManifest?.outputType === 'audio' || category === 'audio' ? 'Audio' : selectedWorkflowManifest?.outputType === 'image' || category === 'image' ? 'Image' : 'Video'}`}
+                ? t('generate.queue.keyframes', { mode: yoloModeLabel })
+                : t(selectedWorkflowManifest?.outputType === 'audio' || category === 'audio'
+                  ? 'generate.queue.audio'
+                  : selectedWorkflowManifest?.outputType === 'image' || category === 'image'
+                    ? 'generate.queue.image'
+                    : 'generate.queue.video')}
             </button>
             <div className="mt-2 flex gap-2">
               {generationQueue.some(j => j.status === 'paused') && (
@@ -19802,14 +19809,14 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                     : 'bg-sf-dark-800 text-sf-text-muted cursor-not-allowed'
                 }`}
               >
-                Clear Queue
+                {t('generate.queue.clear')}
               </button>
             </div>
 
             {generationMode === 'single' && (
               <div className="mt-3 rounded-lg border border-sf-dark-600 bg-sf-dark-800/60 p-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">Workflow Dependencies</div>
+                  <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">{t('generate.dependencies.title')}</div>
                   <button
                     type="button"
                     onClick={() => { void runWorkflowDependencyCheck() }}
@@ -19819,21 +19826,21 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                         ? 'border-sf-dark-600 text-sf-text-muted cursor-not-allowed'
                         : 'border-sf-dark-500 text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400'
                     }`}
-                    title="Re-check required nodes/models"
+                    title={t('generate.dependencies.recheckHelp')}
                   >
                     <RefreshCw className={`w-3 h-3 ${dependencyCheckInProgress ? 'animate-spin' : ''}`} />
-                    Re-check
+                    {t('generate.dependencies.recheck')}
                   </button>
                 </div>
 
                 <div className="mt-1 text-[10px] text-sf-text-muted">{currentWorkflow?.label || workflowId}</div>
 
                 {dependencyCheck.status === 'offline' && (
-                  <div className="mt-2 text-[10px] text-yellow-400">ComfyUI is offline. Start ComfyUI to run dependency checks.</div>
+                  <div className="mt-2 text-[10px] text-yellow-400">{t('generate.dependencies.offline')}</div>
                 )}
 
                 {dependencyCheck.status === 'checking' && (
-                  <div className="mt-2 text-[10px] text-yellow-400">Checking installed nodes and models...</div>
+                  <div className="mt-2 text-[10px] text-yellow-400">{t('generate.dependencies.checking')}</div>
                 )}
 
                 {dependencyCheck.status === 'error' && (
@@ -19861,12 +19868,12 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                 {dependencyCheck.status === 'missing' && (
                   <div className="mt-2 space-y-2">
                     <div className="text-[10px] text-sf-error">
-                      Missing required dependencies. Queueing is blocked until these are installed.
+                    {t('generate.dependencies.missing')}
                     </div>
 
                     {dependencyCheck.missingNodes.length > 0 && (
                       <div className="text-[10px]">
-                        <div className="text-sf-text-muted mb-1">Missing nodes:</div>
+                        <div className="text-sf-text-muted mb-1">{t('generate.dependencies.missingNodes')}</div>
                         <div className="space-y-1">
                           {dependencyCheck.missingNodes.map((node) => (
                             <div key={node.classType} className="text-sf-error">{node.classType}</div>
@@ -19877,7 +19884,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
 
                     {dependencyCheck.missingModels.length > 0 && (
                       <div className="text-[10px]">
-                        <div className="text-sf-text-muted mb-1">Missing models:</div>
+                        <div className="text-sf-text-muted mb-1">{t('generate.dependencies.missingModels')}</div>
                         <div className="space-y-1">
                           {dependencyCheck.missingModels.map((model) => (
                             <div key={`${model.classType}:${model.inputKey}:${model.filename}`} className="text-sf-error break-all">
@@ -19895,14 +19902,14 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                       <div className="mt-1 flex items-center justify-between gap-2 rounded border border-yellow-400/30 bg-yellow-400/5 px-2 py-1.5">
                         <div className="flex items-center gap-1.5 text-[10px] text-yellow-300">
                           <KeyRound className="h-3 w-3" />
-                          <span>This workflow runs on Comfy.org's API. Add your key to unlock it.</span>
+                          <span>{t('generate.dependencies.cloudKey')}</span>
                         </div>
                         <button
                           type="button"
                           onClick={() => setApiKeyDialogOpen(true)}
                           className="rounded bg-sf-accent px-2 py-0.5 text-[10px] font-medium text-white transition-colors hover:bg-sf-accent/90"
                         >
-                          Set up key
+                          {t('generate.dependencies.setUpKey')}
                         </button>
                       </div>
                     )}
@@ -19922,14 +19929,14 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                       onClick={() => { void handleCopyDependencyReport() }}
                       className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
                     >
-                      Copy report
+                      {t('generate.dependencies.copyReport')}
                     </button>
                     <button
                       type="button"
                       onClick={() => { void handleOpenCurrentWorkflowInComfyUi() }}
                       className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
                     >
-                      Load in ComfyUI
+                      {t('generate.dependencies.loadComfy')}
                     </button>
                     {typeof onOpenWorkflowSetup === 'function' && (
                       <button
@@ -19937,7 +19944,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                         onClick={() => onOpenWorkflowSetup()}
                         className="px-2 py-1 rounded border border-sf-dark-500 text-[10px] text-sf-text-secondary hover:text-sf-text-primary hover:border-sf-dark-400 transition-colors"
                       >
-                        Workflow Setup
+                        {t('generate.dependencies.workflowSetup')}
                       </button>
                     )}
                     {dependencyCheck.pack?.docsUrl && (
@@ -19947,7 +19954,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                         rel="noreferrer"
                         className="text-[10px] text-sf-accent hover:text-sf-accent-hover"
                       >
-                        Open node registry
+                        {t('generate.dependencies.openRegistry')}
                       </a>
                     )}
                   </div>
@@ -19956,11 +19963,11 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             )}
 
             {!isConnected && (
-              <div className="mt-2 text-[10px] text-sf-error text-center">ComfyUI is not running. Start it to generate.</div>
+              <div className="mt-2 text-[10px] text-sf-error text-center">{t('generate.dependencies.notRunning')}</div>
             )}
 
             {generationMode === 'single' && currentWorkflow?.needsImage && !selectedAsset && !frameForAI && (
-              <div className="mt-2 text-[10px] text-yellow-500 text-center">Select an input asset or use a timeline frame (right-click preview → Extend with AI)</div>
+              <div className="mt-2 text-[10px] text-yellow-500 text-center">{t('generate.assets.selectInput')}</div>
             )}
             {generationMode === 'yolo' && yoloQueueVariants.length === 0 && (
               <div className="mt-2 text-[10px] text-yellow-500 text-center">Build a plan first before queueing.</div>
@@ -20133,20 +20140,20 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
               onClick={() => setWorkflowInfoExpanded(prev => !prev)}
               className="w-full flex items-center justify-between gap-2 text-left text-[10px] text-sf-text-muted uppercase tracking-wider mb-2 hover:text-sf-text-primary transition-colors"
             >
-              Workflow Info
+              {t('generate.info.title')}
               {workflowInfoExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
             </button>
             {workflowInfoExpanded && (
             <div className="space-y-2 text-[11px] text-sf-text-secondary">
               {generationMode === 'single' ? (
                 <>
-                  <div><span className="text-sf-text-muted">Category:</span> {category}</div>
-                  <div><span className="text-sf-text-muted">Workflow:</span> {currentWorkflow?.label}</div>
-                  <div><span className="text-sf-text-muted">Hardware tier:</span> {currentWorkflowTierMeta?.label || 'Unknown'}</div>
-                  <div><span className="text-sf-text-muted">Runtime:</span> {currentWorkflowRuntimeLabel}</div>
+                  <div><span className="text-sf-text-muted">{t('generate.info.category')}:</span> {category}</div>
+                  <div><span className="text-sf-text-muted">{t('generate.info.workflow')}:</span> {currentWorkflow?.label}</div>
+                  <div><span className="text-sf-text-muted">{t('generate.info.hardware')}:</span> {currentWorkflowTierMeta?.label || t('generate.info.unknown')}</div>
+                  <div><span className="text-sf-text-muted">{t('generate.info.runtime')}:</span> {currentWorkflowRuntimeLabel}</div>
                   {currentWorkflowUsesCloud && (
                     <div>
-                      <span className="text-sf-text-muted">Cloud estimate / run:</span>{' '}
+                      <span className="text-sf-text-muted">{t('generate.info.cloudEstimate')}:</span>{' '}
                       {dependencyCheck.status === 'checking'
                         ? 'Checking pricing...'
                         : dependencyCheck?.estimatedCredits
@@ -20165,11 +20172,11 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                           )}
                     </div>
                   )}
-                  <div><span className="text-sf-text-muted">Needs input:</span> {currentWorkflow?.needsImage ? 'Yes (image)' : 'No'}</div>
+                  <div><span className="text-sf-text-muted">{t('generate.info.needsInput')}:</span> {currentWorkflow?.needsImage ? t('generate.info.yesImage') : t('generate.info.no')}</div>
                   {category === 'video' && (
                     <>
-                      <div><span className="text-sf-text-muted">Output:</span> {duration}s @ {fps}fps ({getFrameCount()} frames)</div>
-                      <div><span className="text-sf-text-muted">Resolution:</span> {resolution.width}x{resolution.height}</div>
+                      <div><span className="text-sf-text-muted">{t('generate.info.output')}:</span> {duration}s @ {fps}fps ({getFrameCount()} frames)</div>
+                      <div><span className="text-sf-text-muted">{t('generate.info.resolution')}:</span> {resolution.width}x{resolution.height}</div>
                     </>
                   )}
                   {category === 'image' && currentOutputResolution && (imageResolutionControlVisible || seedreamUsesInputResolution) && (
@@ -20182,7 +20189,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
                       <div><span className="text-sf-text-muted">Key:</span> {keyscale}</div>
                     </>
                   )}
-                  <div><span className="text-sf-text-muted">Seed:</span> {seed}</div>
+                  <div><span className="text-sf-text-muted">{t('generate.info.seed')}:</span> {seed}</div>
                 </>
               ) : (
                 <>

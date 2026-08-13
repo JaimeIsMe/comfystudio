@@ -13,9 +13,301 @@
     "scenes": "Scenes",
     "generate": "Generate",
     "effects": "Effects",
+    "text": "Text",
     "assets": "Assets",
     "workflows": "Workflows",
     "settings": "Settings"
+  },
+  "leftPanel": {
+    "fullHeight": "Expand panel (full height)",
+    "exitFullHeight": "Contract panel (exit full height)",
+    "collapse": "Collapse panel",
+    "expand": "Expand panel"
+  },
+  "effectsPanel": {
+    "transitionsTab": "Transitions",
+    "effectsTab": "Effects",
+    "effectHelp": "Select one or more clips on the timeline, then click an effect or preset to apply. Configure parameters in the Inspector.",
+    "clickEffectHelp": "Click to apply to selected clips",
+    "applyPresetHelp": "Apply {{effect}} preset \"{{preset}}\"",
+    "searchTransitions": "Search transitions...",
+    "applyAt": "Apply at",
+    "frameShort": "{{count}}f",
+    "secondsShort": "({{seconds}}s)",
+    "transitionHelp": "Drag a transition onto a cut, or select two adjacent clips and click a transition to apply. Select one clip to apply to its start or end. Fine-tune duration in the Inspector after applying.",
+    "applyTo": "Apply to",
+    "startIn": "Start (In)",
+    "endOut": "End (Out)",
+    "transitionSettings": "Transition Settings",
+    "betweenClips": "Between Clips",
+    "transitionsTitle": "Transitions",
+    "dragOrClickSelected": "Drag to a cut or click to apply to selected clips",
+    "dragOrClick": "Drag to a cut or click to apply",
+    "duration": "Duration",
+    "frames": "frames",
+    "zoom": "Zoom",
+    "blur": "Blur",
+    "messages": {
+      "edgeTooShort": "Clip is too short for an edge transition.",
+      "edgeAddFailed": "Could not add edge transition.",
+      "selectAdjacent": "Select two adjacent clips on the same track to apply a transition.",
+      "insufficientHandles": "Insufficient handles. Extend clip trims to add a transition.",
+      "transitionAddFailed": "Could not add transition. Check clip handles or overlap.",
+      "selectClipsForEffect": "Select one or more clips, then click an effect to apply.",
+      "presetSuffix": " ({{preset}})",
+      "effectAddedOne": "Added {{effect}}{{preset}} to 1 clip.",
+      "effectAddedMany": "Added {{effect}}{{preset}} to {{count}} clips."
+    },
+    "transitionCategories": {
+      "dissolve": "Dissolve",
+      "motion": "Motion",
+      "wipe": "Wipe"
+    },
+    "transitions": {
+      "items": {
+        "dissolve": "Cross Dissolve",
+        "fade-black": "Fade to Black",
+        "fade-white": "Fade to White",
+        "dip-color": "Dip to Color",
+        "flash": "Flash Cut",
+        "wipe-left": "Wipe Left",
+        "wipe-right": "Wipe Right",
+        "wipe-up": "Wipe Up",
+        "wipe-down": "Wipe Down",
+        "slide-left": "Push Left",
+        "slide-right": "Push Right",
+        "slide-up": "Push Up",
+        "slide-down": "Push Down",
+        "whip-left": "Whip Pan Left",
+        "whip-right": "Whip Pan Right",
+        "zoom-in": "Zoom In",
+        "zoom-out": "Zoom Out",
+        "cross-zoom": "Cross Zoom",
+        "blur": "Blur Dissolve"
+      }
+    },
+    "effectGroups": {
+      "motion": "Motion",
+      "blur-focus": "Blur & Focus",
+      "lens-distortion": "Lens & Distortion",
+      "film-color": "Film & Color",
+      "analog-glitch": "Analog & Glitch",
+      "framing": "Framing"
+    },
+    "catalog": {
+      "glslCameraShake": {
+        "label": "Camera Shake",
+        "description": "GPU UV camera shake with procedural position, rotation, zoom, and shutter blur.",
+        "presets": { "handheld": "Handheld", "runAndGun": "Run & Gun", "impact": "Impact" }
+      },
+      "gaussianBlur": {
+        "label": "Gaussian Blur",
+        "description": "Soft, even blur for dreamy focus pulls, privacy blur, or background defocus.",
+        "presets": { "soft": "Soft", "dream": "Dreamy", "heavy": "Heavy" }
+      },
+      "glslDirectionalBlur": {
+        "label": "Directional Blur",
+        "description": "GPU directional blur for motion streaks and speed-ramp accents.",
+        "presets": { "horizontal": "Horizontal", "vertical": "Vertical", "speedLine": "Speed Line" }
+      },
+      "glslLensBlur": {
+        "label": "Lens Blur",
+        "description": "GPU polygon bokeh blur with highlight bloom and subtle chromatic spread.",
+        "presets": { "soft": "Soft", "cinematic": "Cinematic", "dream": "Dream Bokeh" }
+      },
+      "glslSharpen": {
+        "label": "Sharpen",
+        "description": "GPU shader sharpen for comparing against the standard Sharpen effect.",
+        "presets": { "subtle": "Subtle", "crisp": "Crisp", "strong": "Strong" }
+      },
+      "glslFisheye": {
+        "label": "Fisheye",
+        "description": "GPU barrel and anti-barrel lens distortion.",
+        "presets": { "subtle": "Subtle", "fisheye": "Fisheye", "wide": "Wide Lens" }
+      },
+      "glslChromaWarp": {
+        "label": "Chroma Warp",
+        "description": "Radial spectrum-style chromatic aberration with optional barrel warp.",
+        "presets": { "subtle": "Subtle", "prism": "Prism", "warp": "Warped" }
+      },
+      "glslFilmGrain": {
+        "label": "Film Grain",
+        "description": "GPU procedural film grain inspired by film-stock re-grain shaders.",
+        "presets": { "fine5245": "Fine 5245", "vision500t": "5218 500T", "bw": "B&W", "push": "Pushed" }
+      },
+      "glslFilmLook": {
+        "label": "Film Look",
+        "description": "GPU film print style color looks adapted from Flame film-look presets.",
+        "presets": { "kodak2395": "Kodak 2395", "agfa1978": "Agfa 1978", "polaroid": "Polaroid", "bw": "B&W" }
+      },
+      "glslFlicker": {
+        "label": "Flicker",
+        "description": "Animated exposure, saturation, and contrast flicker.",
+        "presets": { "projector": "Projector", "fluorescent": "Fluorescent", "unstable": "Unstable" }
+      },
+      "halation": {
+        "label": "Halation",
+        "description": "Warm red-orange glow around bright highlights, like film halation.",
+        "presets": { "subtle": "Subtle Film", "print": "Print Glow", "neonBleed": "Neon Bleed" }
+      },
+      "glow": {
+        "label": "Glow",
+        "description": "Soft diffusion / bloom. Threshold controls which brightness levels glow.",
+        "presets": { "dreamy": "Dreamy Diffusion", "soft": "Soft Glow", "bloom": "Bloom", "neon": "Neon" }
+      },
+      "glslVhsLook": {
+        "label": "VHS Look",
+        "description": "GPU VHS-style tape wave, scanlines, color bleed, and analog tint.",
+        "presets": { "clean": "Clean Tape", "analog": "Analog", "damaged": "Damaged" }
+      },
+      "glslDigitalGlitch": {
+        "label": "Digital Glitch",
+        "description": "GPU digital glitch with horizontal slices, RGB split, block noise, and scanline bursts.",
+        "presets": { "signalHit": "Signal Hit", "datamosh": "Datamosh", "corrupt": "Corrupt" }
+      },
+      "letterbox": {
+        "label": "Letterbox",
+        "description": "Crops to a target cinematic aspect ratio with black bars.",
+        "presets": { "cinemascope": "Cinemascope 2.39", "anamorphic": "Anamorphic 2.35", "widescreen": "Widescreen 1.85", "academy": "Academy 1.37", "square": "Square 1:1", "vertical": "Vertical 9:16" }
+      },
+      "glslVignette": {
+        "label": "Vignette",
+        "description": "GPU shader vignette with the same basic controls as the standard version.",
+        "presets": { "soft": "Soft", "cinematic": "Cinematic", "tunnel": "Tunnel" }
+      }
+    }
+  },
+  "export": {
+    "title": "Export",
+    "headerReady": "Queue + settings ready",
+    "ready": "Ready to export",
+    "settings": "Export Settings",
+    "savedForProject": "Saved for this project",
+    "presets": "Export presets",
+    "presetsHelp": "Presets change render settings only. Filename and range stay as-is.",
+    "reset": "Reset defaults",
+    "resetHelp": "Reset export settings to the default Velorn export setup",
+    "presetSummaries": {
+      "balanced-mp4": "Clean everyday export, project size, H.264.",
+      "fast-nvenc": "Fast H.264 delivery for NVIDIA systems.",
+      "proxy-review": "Quick review file using proxies and half-res.",
+      "small-h265": "Smaller MP4 for sharing, slower decode.",
+      "prores-hq": "Large editor-friendly MOV master."
+    },
+    "filename": "Filename",
+    "format": "Format",
+    "range": "Range",
+    "outputLocationHelp": "Output location will be chosen when export starts.",
+    "pngOutputLocationHelp": "Choose a parent location when export starts. Velorn will create {{name}}_png with frames named {{name}}_000001.png and onward.",
+    "render": "Render",
+    "singleClip": "Single clip",
+    "individualClips": "Individual clips",
+    "individualSoon": "Individual clips export is coming soon",
+    "video": "Video",
+    "imageSequence": "Image Sequence",
+    "imageSequenceHelp": "Exports one numbered, lossless PNG for every rendered timeline frame. Image sequences do not include audio.",
+    "useHardware": "Use {{hardware}}",
+    "hardwareEncoding": "Hardware encoding",
+    "fastPipe": "Fast FFmpeg pipe",
+    "fastPipeHelp": "Stream rendered frames directly into FFmpeg instead of writing PNG frames first",
+    "fastPipeShortHelp": "Skips PNG frame files during export",
+    "rtxUpscale": "NVIDIA RTX 4K upscale",
+    "rtxAfterRender": "Runs after the normal render. Target:",
+    "quality": "Quality",
+    "checkSetup": "Check setup",
+    "installRtx": "Install RTX runtime",
+    "videoCodec": "Video Codec",
+    "proresProfile": "ProRes Profile",
+    "encoderPreset": "Encoder Preset",
+    "nvencPreset": "NVENC Preset",
+    "qualityMode": "Quality Mode",
+    "bitrate": "Bitrate (kbps)",
+    "keyframes": "Keyframes",
+    "keyframeInterval": "Keyframe Interval",
+    "resolution": "Resolution",
+    "output": "Output",
+    "customSize": "Custom Size",
+    "evenPixelsHelp": "Values are rounded to even pixels for video encoders.",
+    "frameRate": "Frame Rate",
+    "useProxies": "Use video proxies",
+    "proxiesHelp": "Video proxies use low-res proxy files when available for faster draft exports.",
+    "proxyReady": "{{ready}}/{{total}} ready.",
+    "audio": "Audio",
+    "audioOnlyHelp": "Exports the program mix on its own — every track volume, pan, fade, and solo included. No video is rendered.",
+    "includeAudio": "Include Audio",
+    "audioCodec": "Audio Codec",
+    "audioBitrate": "Audio Bitrate (kbps)",
+    "sampleRate": "Sample Rate",
+    "channels": "Channels",
+    "normalizeLoudness": "Normalize Loudness",
+    "loudnessTarget": "Loudness Target",
+    "loudnessHelp": "EBU R128 loudness, true peak -1.5 dB.",
+    "measuring": "Measuring...",
+    "measureLoudness": "Measure Timeline Loudness",
+    "approximateMix": "approximate pre-export mix.",
+    "audioDisabled": "Audio is disabled for this export.",
+    "addToQueue": "Add to Queue",
+    "exporting": "Exporting...",
+    "exportingPngs": "Exporting PNGs...",
+    "queueRunning": "Queue Running",
+    "startExport": "Start Export",
+    "exportPngSequence": "Export PNG Sequence",
+    "stop": "Stop",
+    "eta": "ETA",
+    "renderSpeed": "Render speed",
+    "savedTo": "Saved to",
+    "savedPngSequenceTo": "Saved PNG image sequence to",
+    "pngFrameCount": "{{count}} PNG frame(s)",
+    "encoder": "Encoder",
+    "performanceHints": "Performance hints",
+    "queue": "Export Queue",
+    "pausingAfterCurrent": "Pausing after current...",
+    "running": "Running",
+    "paused": "Paused",
+    "idle": "Idle",
+    "itemCount": "{{count}} items",
+    "startQueue": "Start Queue",
+    "pause": "Pause",
+    "resume": "Resume",
+    "noQueued": "No exports queued yet",
+    "removeFromQueue": "Remove from queue",
+    "hardwareChecking": "Checking FFmpeg for hardware encoder support...",
+    "detectedGpu": "Detected GPU",
+    "ffmpegEnvironment": "Environment FFmpeg",
+    "ffmpegCustom": "Custom FFmpeg",
+    "ffmpegBundled": "Bundled FFmpeg",
+    "hardwareUnavailable": "{{hardware}} was not detected in FFmpeg. Hardware encoding will be unavailable.",
+    "hardwareReadySwitch": "{{hardware}} is ready for MP4 H.264/H.265 exports. Switch from WebM/VP9 to use it.",
+    "hardwareReadyProres": "{{hardware}} is ready for MP4 H.264/H.265 exports. ProRes always uses software encoding.",
+    "hardwareReadyCodec": "{{hardware}} is ready for faster {{codec}} exports.",
+    "codecUnavailable": "{{hardware}} was detected, but the current codec is not available in this FFmpeg build.",
+    "expectedEncoder": "Expected encoder",
+    "hints": {
+      "4k": "4K exports are heavy. Consider proxies or lower resolution for previews.",
+      "rtx": "RTX 4K runs after the normal render and streams one frame at a time to keep memory bounded.",
+      "pngDiskSpace": "PNG image sequences create one lossless file per frame and can use substantial disk space.",
+      "pngNoAudio": "PNG image sequences do not contain audio.",
+      "proxyCount": "Proxy export will use {{ready}}/{{total}} ready video proxies.",
+      "proxyMissing": "Proxy export is enabled, but no ready proxies were found; originals will be used.",
+      "60fps": "60fps export doubles frame workload. Lower FPS for faster renders.",
+      "nvenc": "Enable NVIDIA NVENC to speed up H.264/H.265 exports on supported NVIDIA GPUs.",
+      "nvencMissing": "NVENC was not detected in your FFmpeg build. GPU encoding will be unavailable.",
+      "vp9": "VP9/WebM encodes slower than H.264/H.265.",
+      "fastPipe": "Fast FFmpeg pipe skips writing PNG frames before encoding.",
+      "enableFastPipe": "Enable Fast FFmpeg pipe to avoid PNG frame files.",
+      "text": "Text overlays add compositing work; expect longer renders.",
+      "transitions": "Transitions require dual-frame compositing and add export time.",
+      "audio": "Audio mixdown runs offline; long timelines increase export time."
+    }
+  },
+  "topTabs": {
+    "editor": "Editor",
+    "generate": "Generate",
+    "agent": "Agent",
+    "flow-ai": "Flow AI",
+    "mog": "MoGraph",
+    "stock": "Stock",
+    "export": "Export"
   },
   "bottomBar": {
     "saveProject": "Save Project",
@@ -27,6 +319,20 @@
     "minimize": "Minimize",
     "maximize": "Maximize",
     "projectSelection": "Project Selection"
+  },
+  "inspector": {
+    "title": "Inspector",
+    "empty": {
+      "title": "No Selection",
+      "help": "Select a clip or transition on the timeline to edit its properties"
+    },
+    "panel": {
+      "unavailableFullHeight": "Unavailable while the left panel is full height",
+      "contract": "Contract panel (exit full height)",
+      "fullHeight": "Expand panel (full height)",
+      "collapse": "Collapse panel",
+      "expand": "Expand panel"
+    }
   },
   "welcome": {
     "browserUnsupported": "Browser Not Supported",
@@ -53,6 +359,8 @@
     "categories": "Categories",
     "pickArea": "Pick a settings area to edit.",
     "saveSettings": "Save Settings",
+    "saveHelp": "Some settings save as you edit. Use Save Settings to persist shared preferences and shortcuts.",
+    "saveHelpWorkflow": "Workflow installs happen in the panel above. Save Settings only persists shared preferences and shortcuts.",
     "languageLabel": "Display language",
     "languageHelp": "Choose the language used by Velorn. The change applies immediately.",
     "fallbackHelp": "Missing translations automatically fall back to English.",
@@ -70,6 +378,288 @@
       "hotkeys": { "title": "Hotkeys", "description": "Customize editor shortcuts and apply familiar keymap presets." },
       "project": { "title": "New Project Defaults", "description": "Set default resolution and frame rate for new projects." },
       "feedback": { "title": "Send Feedback", "description": "Report a bug or share an idea — it lands directly with the team." }
+    },
+    "storage": {
+      "projectsLocation": "Projects Location",
+      "projectsLocationHelp": "Where new projects are created",
+      "currentProject": "Current Project",
+      "projectSummary": "{{width}}×{{height}} @ {{fps}}fps",
+      "closeProject": "Close Project",
+      "autoSave": "Auto-save",
+      "autoSaveHelp": "Save every 30 sec",
+      "reopenLastProject": "Reopen last project on startup",
+      "reopenLastProjectHelp": "When off, Velorn opens to the project picker.",
+      "showHero": "Show hero background on project picker",
+      "showHeroHelp": "Cinematic image at the top of the project picker. Turn off for a minimal look.",
+      "cache": {
+        "title": "Video playback cache",
+        "description": "Rebuild edit-friendly playback files for videos in this project's Assets panel. Original files are not changed.",
+        "ready": "{{ready}}/{{total}} ready",
+        "encoding": "{{count}} encoding",
+        "failed": "{{count}} failed",
+        "unavailable": "{{count}} unavailable",
+        "rebuild": "Rebuild Video Cache",
+        "rebuilding": "Rebuilding...",
+        "confirmOne": "Rebuild playback cache for 1 video in this project?",
+        "confirmMany": "Rebuild playback cache for {{count}} videos in this project?",
+        "confirmHelp": "This may take a while on large projects. You can keep editing while each asset falls back to its original video.",
+        "startRebuild": "Start Rebuild",
+        "preparing": "Preparing video cache...",
+        "rebuildCompleteOne": "Playback cache rebuilt for 1 video{{failed}}.",
+        "rebuildCompleteMany": "Playback cache rebuilt for {{encoded}} videos{{failed}}.",
+        "failedSuffix": ", {{count}} failed",
+        "rebuildFailed": "Playback cache rebuild failed."
+      }
+    },
+    "connection": {
+      "localPort": "Local ComfyUI Port",
+      "localOnlyHelp": "Local-only mode. Remote/LAN ComfyUI is disabled in this build.",
+      "reset": "Reset",
+      "test": "Test",
+      "cloudKeyTitle": "Cloud Workflows · Comfy.org API key",
+      "cloudKeyHelp": "Unlocks {{count}} starter workflows that render in the cloud (Grok, Kling, Vidu, Nano Banana, Seedream). One key covers all of them.",
+      "keyReady": "Key saved and ready",
+      "noKey": "No key saved yet",
+      "changeKey": "Change key",
+      "addKey": "Add API key",
+      "getKey": "Get a key",
+      "autoImport": "Auto-import ComfyUI tab generations",
+      "autoImportHelpBefore": "When enabled, successful custom prompts observed while the embedded ComfyUI tab is active are imported into the current project's",
+      "autoImportHelpAfter": "folder. Detected frame sequences are stitched into a single MP4 at the project's framerate.",
+      "disableAutoImport": "Disable auto-import",
+      "enableAutoImport": "Enable auto-import",
+      "status": {
+        "endpoint": "Local endpoint: {{endpoint}}",
+        "loadFailed": "Could not load local ComfyUI port. Using {{port}}.",
+        "invalidConfiguration": "Invalid local ComfyUI configuration.",
+        "savedEndpoint": "Saved local endpoint: {{endpoint}}",
+        "invalidPort": "Invalid local ComfyUI port. Enter a number from 1 to 65535.",
+        "testing": "Testing {{endpoint}}...",
+        "connected": "Connected to {{endpoint}}",
+        "http403": "ComfyUI returned HTTP 403. Enable CORS or use Velorn's built-in launcher.",
+        "httpError": "ComfyUI returned HTTP {{status}}.",
+        "connectFailed": "Could not connect to {{endpoint}}.",
+        "resetFailed": "Could not reset local ComfyUI port.",
+        "resetEndpoint": "Reset to local endpoint: {{endpoint}}"
+      }
+    },
+    "agents": {
+      "serverDescription": "Local project access for AI agents. Agents can inspect and review the open project, troubleshoot local ComfyUI setup, use limited undoable timeline/text/effect actions, and start delivery exports."
+    },
+    "launcher": {
+      "desktopOnly": "ComfyUI Launcher is only available in the desktop build.",
+      "saveFailed": "Failed to save launcher settings.",
+      "actionFailed": "Action failed.",
+      "states": {
+        "unknown": "unknown",
+        "offline": "offline",
+        "starting": "starting...",
+        "running": "running",
+        "external": "external",
+        "stopping": "stopping...",
+        "stopped": "stopped",
+        "crashed": "crashed"
+      },
+      "status": {
+        "notRunning": "ComfyUI is not running.",
+        "notDetected": "ComfyUI was not detected.",
+        "appNotRunning": "ComfyUI.app is not running.",
+        "appNotDetected": "ComfyUI.app was not detected.",
+        "endpoint": "Endpoint: {{endpoint}}",
+        "noEndpoint": "No endpoint configured"
+      },
+      "start": "Start",
+      "stop": "Stop",
+      "restart": "Restart",
+      "refresh": "Re-probe ComfyUI",
+      "externalHelp": "ComfyUI is already running, but Velorn did not start it. Stop it from the window where you launched it, then select Start to let Velorn manage it. This enables automatic restarts after node-pack installs.",
+      "mode": "Launcher mode",
+      "macAppHelp": "Open the official Mac app and connect when it is ready.",
+      "script": "Script",
+      "scriptHelp": "Run a custom .sh launcher or standalone ComfyUI installation.",
+      "useDefault": "Use default",
+      "browse": "Browse...",
+      "noApp": "No app configured. Select ComfyUI.app to let Velorn open it for you.",
+      "macBehaviorHelp": "Velorn opens the Mac app, waits for the configured ComfyUI endpoint, and can ask macOS to quit or reopen it.",
+      "background": "Launch in background",
+      "backgroundHelp": "Open ComfyUI.app hidden so the embedded ComfyUI tab stays front and center.",
+      "backgroundToggle": "Toggle background launch for ComfyUI.app",
+      "launcherScript": "Launcher script",
+      "noLauncher": "No launcher configured. Pick your run_nvidia_gpu.bat (or equivalent) to let Velorn start ComfyUI for you.",
+      "detectedNearby": "Detected near your ComfyUI folder",
+      "behavior": "Behavior",
+      "autoStart": "Auto-start ComfyUI when Velorn launches",
+      "autoStartHelp": "Off by default. When enabled, Velorn starts ComfyUI automatically as soon as the app opens.",
+      "autoStartToggle": "Toggle auto-start",
+      "keepRunning": "Keep ComfyUI running after Velorn quits",
+      "keepRunningHelp": "When enabled, closing Velorn leaves ComfyUI open in the background without asking.",
+      "keepRunningToggle": "Toggle keeping ComfyUI running after quit",
+      "noBrowser": "Do not open ComfyUI in a browser tab on start",
+      "noBrowserHelpBefore": "On by default. Velorn passes",
+      "noBrowserHelpAfter": "so the classic ComfyUI tab does not steal focus each time it boots.",
+      "noBrowserToggle": "Toggle disabling auto-launch",
+      "advanced": "Advanced",
+      "timeout": "Startup timeout (seconds)",
+      "timeoutHelpBefore": "If ComfyUI has not responded on",
+      "timeoutHelpAfter": "within this many seconds after launch, Velorn will give up and stop the process.",
+      "extraArgs": "Extra arguments",
+      "extraArgsHelp": "Appended to the launcher script. Quoted strings are kept together.",
+      "logs": "Logs",
+      "openLogViewer": "Open log viewer",
+      "openLogFile": "Open log file",
+      "noLog": "No log file written this session yet.",
+      "connectionHelpBefore": "Velorn talks to ComfyUI on",
+      "connectionHelpMiddle": ". Change the port in",
+      "connectionHelpAfter": "if you need a different one.",
+      "working": "Working..."
+    },
+    "paths": {
+      "outputDirectory": "Output Directory",
+      "selectOutputDirectory": "Select Output Directory",
+      "workflowsDirectory": "Workflows Directory",
+      "selectWorkflowsDirectory": "Select Workflows Directory"
+    },
+    "workflowSetup": {
+      "manager": "Workflow Setup Manager",
+      "managerHelp": "Check every built-in workflow, download curated local models in-app, and surface the remaining manual steps when automation is unsafe.",
+      "recheckAll": "Re-check all",
+      "tracked": "Built-in workflows tracked",
+      "ready": "Ready right now",
+      "autoInstallWorkflows": "Workflows with auto installs",
+      "localConnection": "Local ComfyUI connection",
+      "connection": {
+        "saved": "Saved endpoint: {{endpoint}}",
+        "testing": "Testing {{endpoint}}...",
+        "connected": "Connected to {{endpoint}}",
+        "failed": "Could not connect to {{endpoint}}{{detail}}"
+      },
+      "comfyFolder": "ComfyUI Folder",
+      "comfyFolderHelp": "Auto-install needs the root of your local ComfyUI install so Velorn knows where to place custom nodes and models.",
+      "choose": "Choose",
+      "clear": "Clear",
+      "folderValid": "ComfyUI folder looks valid.",
+      "selectFolder": "Select your ComfyUI folder to enable installs.",
+      "installPlan": "Install Plan",
+      "installPlanHelp": "Select the workflows you want to prepare. The app only attempts curated installs; anything else stays visible as a manual follow-up.",
+      "selected": "Selected workflows",
+      "downloadableModels": "Downloadable models",
+      "installableNodes": "Installable node packs",
+      "manualFollowups": "Manual follow-ups",
+      "sectionId": "Section ID",
+      "installSelected": "Install selected",
+      "filters": "Workflow filters",
+      "filtersHelp": "Narrow the library by runtime, or show the small bundle needed for music video generation.",
+      "selectVisible": "Select installable in view",
+      "filterLabels": {
+        "all": "All workflows",
+        "local-workflows": "Local Workflows",
+        "cloud-workflows": "Cloud Workflows",
+        "music-video-kit": "Music Video Kit"
+      },
+      "filterTaglines": {
+        "local-workflows": "Workflows that run on the user's own ComfyUI install and local hardware.",
+        "cloud-workflows": "Workflows that use partner/API nodes and credits instead of local model downloads.",
+        "music-video-kit": "Timed lyrics, vocal prep, and LTX audio-conditioned shot generation."
+      },
+      "filterDescriptions": {
+        "local-workflows": "Show only local ComfyUI workflows and their local model/custom-node setup.",
+        "cloud-workflows": "Show only cloud workflows that need partner/API nodes, keys, or credits.",
+        "music-video-kit": "The fastest setup path for Director Mode music videos and lip-sync-oriented shot passes."
+      },
+      "library": "Workflow library",
+      "libraryHelp": "Browse bundled workflows in a visual grid, or switch to list view. Expand a row or card for full dependency details.",
+      "libraryFilteredHelp": "Browse {{count}} filtered workflows in a visual grid, or switch to list view. Expand a row or card for full dependency details.",
+      "gallery": "Gallery",
+      "list": "List"
+    },
+    "appearance": {
+      "theme": "Theme",
+      "active": "Active",
+      "themes": {
+        "velorn": "Default brand theme with deep blues, violet, and readable old-gold accents",
+        "midnight": "Neutral dark grey inspired by DaVinci Resolve",
+        "soft-dark": "Softer contrast with a subtle cool-purple tint",
+        "high-contrast": "Maximum readability with vivid blue accent",
+        "arctic": "Cool blue-grey palette inspired by Nordic editors",
+        "ember": "Warm dark tones with an amber accent"
+      },
+      "timelineThumbnails": "Timeline clip thumbnails",
+      "timelineThumbnailsHelp": "Turn off for heavy edits so clips draw as lightweight colored blocks."
+    },
+    "notifications": {
+      "completionSound": "Generation complete sound",
+      "completionSoundHelp": "Play a short sound when the Generate queue finishes.",
+      "volume": "Volume",
+      "volumeHelp": "0 is muted, 10 is loudest.",
+      "off": "Off",
+      "sound": "Sound",
+      "soundHelp": "Choose the completion sound style.",
+      "preview": "Preview",
+      "active": "Active",
+      "sounds": {
+        "soft-chime": { "label": "Soft chime", "description": "A gentle three-note finish sound." },
+        "clean-ding": { "label": "Clean ding", "description": "A brighter two-note alert." },
+        "subtle-beep": { "label": "Subtle beep", "description": "A short, minimal notification." }
+      }
+    },
+    "hotkeys": {
+      "introBefore": "Only editor-specific shortcuts are customizable in this first pass. Core shortcuts like",
+      "introAfter": "and copy/paste stay fixed.",
+      "recordHelpBefore": "Press a shortcut to record it. Press",
+      "recordHelpAfter": "while recording to clear an assignment.",
+      "presets": "Keymap presets",
+      "presetsHelp": "Apply familiar editor-style bindings to the configurable actions only.",
+      "currentPreset": "Current preset",
+      "custom": "Custom",
+      "active": "Active",
+      "presetDescriptions": {
+        "comfystudio": "Current default editor bindings.",
+        "premiere": "Ctrl+K split, Ctrl+Shift+K split all, M marker, S snapping.",
+        "resolve": "Ctrl+\\ split, Ctrl+Shift+\\ split all, M marker, N snapping.",
+        "final-cut": "Ctrl+B split, Ctrl+Shift+B split all, M marker, N snapping."
+      },
+      "actions": {
+        "timeline": {
+          "selectToEnd": "Select clips from playhead to end",
+          "selectFromStart": "Select clips from start to playhead",
+          "splitActive": "Split at playhead on active track",
+          "splitAll": "Split all tracks at playhead",
+          "toggleSnapping": "Toggle snapping",
+          "toggleRipple": "Toggle ripple edit",
+          "toggleClipEnabled": "Enable or disable selected clips",
+          "addMarker": "Add marker at playhead",
+          "previousClipBoundary": "Jump to previous visible clip boundary",
+          "nextClipBoundary": "Jump to next visible clip boundary",
+          "matchFrame": "Match frame (open clip source at the playhead frame)",
+          "revealInAssets": "Reveal clip asset in the Assets panel",
+          "previousMarker": "Jump to previous marker",
+          "nextMarker": "Jump to next marker",
+          "openMoveBy": "Open Move By dialog",
+          "openDurationBy": "Open Duration By dialog",
+          "addTextClip": "Add text clip at playhead",
+          "addTransition": "Add transition between selected clips",
+          "linkSelection": "Link selected clips",
+          "unlinkSelection": "Unlink selected clips"
+        }
+      },
+      "categories": {
+        "selection": "Timeline selection",
+        "editing": "Timeline editing",
+        "clipState": "Timeline clip state",
+        "navigation": "Timeline navigation",
+        "precision": "Precision editing",
+        "text": "Timeline text",
+        "transitions": "Timeline transitions",
+        "linking": "Timeline linking"
+      },
+      "pressShortcut": "Press shortcut...",
+      "restoreAction": "Restore default binding for this action",
+      "default": "Default",
+      "restoreAll": "Restore All Defaults"
+    },
+    "projectDefaults": {
+      "resolution": "Default Resolution",
+      "frameRate": "Default Frame Rate"
     }
   },
   "projectDialog": {
@@ -237,6 +827,221 @@
     "rolling": " (rolling buffer)",
     "pausedSuffix": " • paused",
     "lineSummary": "{{visible}} of {{total}} lines{{rolling}}{{paused}}"
+  },
+  "launcherChip": {
+    "states": { "unknown": "ComfyUI", "idle": "offline", "starting": "Starting…", "running": "Running", "external": "External", "stopping": "Stopping…", "stopped": "Stopped", "crashed": "Crashed" },
+    "summary": { "unavailable": "Launcher unavailable (not Electron).", "running": "Running • pid {{pid}}{{uptime}}", "up": "up", "external": "External process detected at {{endpoint}}", "notRunning": "ComfyUI is not running.", "unknown": "ComfyUI status unknown." },
+    "reprobeHelp": "Re-probe ComfyUI", "start": "Start", "stop": "Stop", "restart": "Restart", "script": "Launcher script", "pickScript": "Pick a .bat / .sh launcher script", "browse": "Browse", "logTail": "Log tail", "openViewerHelp": "Open the full log viewer with search and filters", "openViewer": "Open log viewer", "noLogFile": "No log file written yet", "openLogFile": "Open log file", "noLogs": "No log output yet. Logs appear when ComfyUI starts.", "manage": "Manage in Settings → ComfyUI Launcher", "apiKeySet": "API key set", "apiKeyNeeded": "API key needed", "apiKeySetHelp": "Cloud API key is set. Click to manage.", "apiKeyNeededHelp": "Set up your Comfy.org API key to unlock cloud workflows."
+  },
+  "preview": {
+    "title": "Preview", "escExit": "(Press ESC to exit)", "captureHelp": "Capture a still frame from the preview into project assets", "savingStill": "Saving Still...", "stillSaved": "Still Saved", "still": "Still", "hideInfo": "Hide Info Overlay", "showInfo": "Show Info Overlay", "info": "Info", "guides": "Guides", "guidesHelp": "Safe Guides & Letterbox", "safeGuides": "Safe Guides", "letterbox": "Letterbox Preview", "noLetterbox": "No Letterbox", "clear": "Clear preview", "hideTransform": "Hide transform handles", "showTransform": "Show transform handles", "selectVisual": "Select an active visual clip to toggle transform controls", "closePopout": "Close detached preview window", "openPopout": "Pop out preview to a separate window (drag it to another monitor; double-click it for fullscreen)", "exitFullscreen": "Exit Fullscreen (ESC)", "fullscreen": "Fullscreen", "emptyTitle": "No Preview Selected", "emptyHelp": "Generate a video or select from Assets", "previewTimeline": "Preview Timeline", "resetView": "Reset View (Home)", "zoomOut": "Zoom Out", "zoomIn": "Zoom In", "fit": "Fit",
+    "guide": {
+      "none": { "label": "No Guides", "description": "Hide all guides" },
+      "title-safe": { "label": "Title Safe", "description": "90% - Keep text inside" },
+      "action-safe": { "label": "Action Safe", "description": "93% - Keep action inside" },
+      "rule-of-thirds": { "label": "Rule of Thirds", "description": "3x3 grid overlay" },
+      "center": { "label": "Center Crosshair", "description": "Center point marker" },
+      "all-safe": { "label": "Title + Action Safe", "description": "Both safe zones" }
+    }
+  },
+  "generate": {
+    "mode": { "generate": "Generate", "director": "Director" },
+    "browser": {
+      "tabs": { "featured": "Featured", "custom": "My Workflows", "templates": "Templates" },
+      "searchTemplates": "Search ComfyUI templates, models, tags...",
+      "searchWorkflows": "Search workflows, providers, tags...",
+      "filters": { "all": "All", "image": "Image", "video": "Video", "image-to-video": "Image to Video", "text-to-video": "Text to Video", "text-to-image": "Text to Image", "image-edit": "Image Edit", "video-tools": "Video Tools", "audio": "Audio", "utility": "Utility" },
+      "sources": { "all": "All", "local": "Local", "cloud": "Cloud" },
+      "sort": { "popular": "Most used", "newest": "Newest" },
+      "showingWorkflows": "Showing {{count}} {{tab}} workflows"
+    },
+    "assets": {
+      "inputSource": "Input Source", "search": "Search assets...", "assets": "Assets", "searchingAll": "Searching all folders", "assignTo": "Assign selected asset to", "nothingSelected": "Nothing selected", "noMatches": "No matching assets", "noneHere": "No {{type}} assets here", "tryDifferent": "Try a different search or folder name", "importHelp": "Open another folder or import media in the Assets tab", "selectInput": "Select an input asset or use a timeline frame (right-click preview → Extend with AI)"
+    },
+    "queue": {
+      "title": "Queue", "expand": "Expand queue panel", "collapse": "Collapse panel", "clear": "Clear Queue", "video": "Queue Video", "image": "Queue Image", "audio": "Queue Audio", "keyframes": "Queue {{mode}} Keyframes"
+    },
+    "dependencies": {
+      "title": "Workflow Dependencies", "recheck": "Re-check", "recheckHelp": "Re-check required nodes/models", "offline": "ComfyUI is offline. Start ComfyUI to run dependency checks.", "checking": "Checking installed nodes and models...", "missing": "Missing required dependencies. Queueing is blocked until these are installed.", "missingNodes": "Missing nodes:", "missingModels": "Missing models:", "cloudKey": "This workflow runs on Comfy.org's API. Add your key to unlock it.", "setUpKey": "Set up key", "copyReport": "Copy report", "loadComfy": "Load in ComfyUI", "workflowSetup": "Workflow Setup", "openRegistry": "Open node registry", "notRunning": "ComfyUI is not running. Start it to generate."
+    },
+    "info": {
+      "title": "Workflow Info", "category": "Category", "workflow": "Workflow", "hardware": "Hardware tier", "unknown": "Unknown", "runtime": "Runtime", "cloudEstimate": "Cloud estimate / run", "needsInput": "Needs input", "yesImage": "Yes (image)", "no": "No", "output": "Output", "resolution": "Resolution", "seed": "Seed"
+    }
+  },
+  "stock": {
+    "title": "Stock",
+    "source": "Photos & videos from Pexels (free to use)",
+    "searchPlaceholder": "Search stock footage...",
+    "videos": "Videos",
+    "photos": "Photos",
+    "search": "Search",
+    "home": "Home",
+    "homeHelp": "Back to popular/trending",
+    "apiRequired": "Pexels API key required",
+    "apiInstructions": ", then add it in Settings (left panel → Settings).",
+    "refreshKey": "I've added my key — refresh",
+    "noResults": "No results. Try a different search.",
+    "enterSearch": "Enter a search term and click Search.",
+    "popularVideos": "Popular videos",
+    "trendingPhotos": "Trending photos",
+    "defaultHelp": "on Pexels — or search above for something specific.",
+    "preview": "Preview",
+    "previewVideo": "Preview video",
+    "addToProject": "Add to project",
+    "previous": "Previous",
+    "next": "Next",
+    "page": "Page {{page}} of {{pages}} ({{results}} results)",
+    "videoPreview": "Video preview",
+    "closePreview": "Close preview",
+    "providedBy": "Photos and videos provided by Pexels",
+    "attribution": " · Free to use, no attribution required."
+  },
+  "gettingStarted": {
+    "badge": "Getting Started",
+    "title": "Get from install to first generation",
+    "intro": "Velorn can run local, cloud, and hybrid AI workflows. This guide keeps the first-run path simple: choose how you want to connect, prepare the workflows you need, then start creating.",
+    "closeAria": "Close getting started",
+    "project": "Project",
+    "untitled": "Untitled",
+    "summary": "{{ready}}/4 ready-to-generate steps complete",
+    "reopen": "Reopen later from",
+    "setupChecklist": "Setup Checklist",
+    "quickTour": "Quick Tour",
+    "choosePath": "Choose your setup path",
+    "choosePathHelp": "Use Quick Start if you want Velorn to guide you through a starter kit. Use Bring Your Own ComfyUI if you already have a custom ComfyUI install and just need Velorn pointed at it.",
+    "quickStartSetup": "Quick Start Setup",
+    "bringComfy": "Bring Your Own ComfyUI",
+    "status": {
+      "ready": "Ready",
+      "next": "Next",
+      "needsSetup": "Needs setup",
+      "connected": "Connected",
+      "checkPort": "Check port",
+      "saved": "Saved"
+    },
+    "steps": {
+      "projects": "Projects Folder",
+      "projectsHelp": "Pick where projects and generated media live.",
+      "connection": "ComfyUI Connection",
+      "connectionHelp": "Connect to local ComfyUI or use cloud workflows.",
+      "workflow": "Workflow Setup",
+      "workflowHelp": "Open starter kits to prepare models and nodes by use case.",
+      "generate": "Ready To Generate",
+      "generateReady": "Local or cloud generation is available.",
+      "generateHelp": "Connect local ComfyUI or add a cloud API key."
+    },
+    "workspace": {
+      "title": "Workspace folder",
+      "description": "Projects, imported assets, and generated media live under your selected projects folder.",
+      "none": "No default projects folder selected yet."
+    },
+    "connection": {
+      "title": "Local ComfyUI connection",
+      "description": "Velorn talks to a local ComfyUI server on localhost only. If generations fail immediately, check the saved port first.",
+      "savedEndpoint": "Saved endpoint: {{endpoint}}",
+      "portHelp": "If your ComfyUI window uses a different port, update it in Settings before generating."
+    },
+    "workflow": {
+      "title": "Workflow requirements",
+      "description": "Each workflow can require custom nodes, models, or a partner API key even though the workflow file is already bundled in the app.",
+      "status": "Use Workflow Setup",
+      "help1": "Open Settings > Workflow Setup to scan every built-in workflow at once.",
+      "help2": "Use Generate for workflow-specific fallback tools such as Load in ComfyUI and per-workflow Re-check.",
+      "help3": "This is the fastest way to find why a workflow works on one machine but not another.",
+      "action": "Workflow Setup"
+    },
+    "cloud": {
+      "title": "Cloud Workflows API key",
+      "description": "One Comfy.org key unlocks the {{count}} cloud-rendered starter workflows: Grok, Kling, Vidu, Nano Banana, and Seedream.",
+      "saved": "Key saved",
+      "optional": "Optional but recommended",
+      "ready": "Cloud-powered workflows are ready to go.",
+      "detail": "Paste your key once and you can skip local GPU setup for these workflows.",
+      "help1": "Great for low-VRAM machines — cloud workflows run on Comfy.org and cost a few cents per generation.",
+      "help2": "You can skip this and come back any time.",
+      "changeKey": "Change key",
+      "addKey": "Add API key"
+    },
+    "stock": {
+      "title": "Stock setup",
+      "description": "The Stock tab uses Pexels. Add a key once and you can browse and import footage or photos directly into the project.",
+      "ready": "Pexels ready",
+      "optional": "Optional",
+      "detected": "Pexels API key detected.",
+      "notDetected": "No Pexels API key detected yet.",
+      "help": "You can skip this until you need stock content.",
+      "openSettings": "Open Stock Settings",
+      "openTab": "Open Stock Tab"
+    },
+    "tour": {
+      "intro": "This quick orientation answers where to go next. Detailed editing and prompting techniques can be learned from the videos.",
+      "editorTitle": "Editor workspace", "editorDescription": "This is the day-to-day editing view once media is inside the project.",
+      "editor1": "Assets panel: import videos, audio, and images, then drag them to the timeline.", "editor2": "Preview: review media and send a frame to Generate as a starting keyframe.", "editor3": "Timeline: trim, ripple, snap, markers, and arrange your cut.", "editor4": "Inspector: transform, crop, timing, effects, text, and adjustments for the selected item.", "openEditor": "Open Editor",
+      "generateTitle": "Generate", "generateDescription": "Create images, videos, or audio with local or cloud workflows.", "generate1": "Single mode is for one-off image, video, or audio jobs.", "generate2": "Director mode walks through Setup, Script, Keyframes, and Videos.", "generate3": "If a workflow is missing models or nodes, use Re-check before you queue anything.",
+      "stockTitle": "Stock", "stockDescription": "Search Pexels and import footage or stills directly into the current project.", "stock1": "Best used when you need quick placeholder footage, inspiration, or background plates.", "stock2": "Requires a Pexels API key in Settings.", "openStock": "Open Stock",
+      "exportTitle": "Export", "exportDescription": "Render the current timeline to a deliverable file and manage the export queue.", "export1": "Choose format, codec, render range, resolution, FPS, and audio settings.", "export2": "Queue multiple exports if you want a few output variants.", "openExport": "Open Export",
+      "settingsTitle": "Settings", "settingsDescription": "Return here whenever the machine-specific setup changes.", "settings1": "Projects folder, ComfyUI port, Comfy account API key, Pexels key, and new-project defaults all live here.", "settings2": "If something works on one machine and not another, this is the first place to compare."
+    },
+    "footer": "This in-app guide covers the essentials. See the videos for detailed editing and prompting techniques.",
+    "actions": {
+      "openSettings": "Open Settings",
+      "testing": "Testing...",
+      "testConnection": "Test Connection",
+      "connectionSettings": "Connection Settings",
+      "openGenerate": "Open Generate"
+    }
+  },
+  "timelineEditor": {
+    "tooltips": {
+      "addVideoTrack": "Add video track",
+      "addMonoAudioTrack": "Add mono audio track",
+      "addStereoAudioTrack": "Add stereo audio track",
+      "addMarker": "Add timeline marker at playhead ({{shortcut}})",
+      "addAdjustmentLayer": "Add adjustment layer on active video track",
+      "addText": "Add a text clip on {{track}} at the playhead ({{shortcut}})",
+      "addTextNeedsTrack": "Add a video track to create text at the playhead ({{shortcut}})",
+      "addShape": "Add a shape clip on {{track}} at the playhead",
+      "addShapeNeedsTrack": "Add a video track to create shapes at the playhead",
+      "addCaptions": "Transcribe the timeline's audio and add animated captions on a new top track",
+      "removeMarker": "Remove selected marker",
+      "splitAll": "Split all clips at the playhead across every track ({{shortcut}})",
+      "splitActive": "Split the clip under the playhead on the active track ({{shortcut}})",
+      "splitActiveUnavailable": "Set an active track and park the playhead over a clip to split it ({{shortcut}})",
+      "copy": "Copy the selected clips ({{shortcut}})",
+      "paste": "Paste copied clips at the playhead on the active track ({{shortcut}})",
+      "pasteUnavailable": "Copy clips first, then choose an active track to paste at the playhead ({{shortcut}})",
+      "enableSelected": "Enable the selected clips ({{shortcut}})",
+      "disableSelected": "Disable the selected clips ({{shortcut}})",
+      "toggleSelectedUnavailable": "Select clips to enable or disable them ({{shortcut}})",
+      "renderSelectedOne": "Render the selected clip to cache for smooth playback",
+      "renderSelectedMany": "Render {{count}} selected clips to cache for smooth playback",
+      "renderUnavailable": "Select clips to render them to cache",
+      "deleteSelected": "Delete the selected clips (Delete or Backspace)",
+      "rippleDeleteSelected": "Ripple delete the selected clips (Delete or Backspace)",
+      "deleteGap": "Delete the selected gap and close it (Delete or Backspace)",
+      "deleteTransition": "Delete the selected transition (Delete or Backspace)",
+      "deleteMarker": "Delete the selected marker (Delete or Backspace)",
+      "deleteUnavailable": "Select clips, a gap, a transition, or a marker to delete",
+      "toolAuto": "Smart edit tool: drag clip centers to move, drag clip edges to trim.",
+      "toolMove": "Move/select clips only. Use Auto to trim from clip edges without switching tools.",
+      "toolTrim": "Trim clip heads/tails from their edges.",
+      "toolRazor": "Click any clip to split it at the cursor.",
+      "toolSlip": "Drag inside a video/audio clip to slip source timing without moving it.",
+      "snapping": "Snapping {{state}} ({{shortcut}} to toggle)",
+      "ripple": "Ripple Edit {{state}} ({{shortcut}} to toggle) - Moving clips shifts subsequent clips",
+      "generateMusic": "Generate music with ACE-Step — duration prefills from the in/out range",
+      "selectFromStart": "Select clips from the start of the timeline to the playhead ({{shortcut}})",
+      "selectToEnd": "Select clips from the playhead to the end of the timeline ({{shortcut}})",
+      "moveBy": "Move selected clips by an exact signed timecode offset ({{shortcut}})",
+      "durationBy": "Change selected clip duration by an exact signed amount{{shortcut}}",
+      "moreTools": "More tools",
+      "frameAll": "Frame all – fit timeline or all clips in view",
+      "trackHeightCompact": "Compact tracks — fit the most tracks on screen",
+      "trackHeightNormal": "Normal track height",
+      "trackHeightTall": "Tall tracks — room for waveforms and keyframes",
+      "zoomOut": "Zoom Out",
+      "zoomIn": "Zoom In"
+    }
   },
   "apiKey": {
     "title": "Cloud Workflows · Comfy.org API key",

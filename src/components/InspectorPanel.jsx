@@ -41,6 +41,7 @@ import EffectsStack from './effects/EffectsStack'
 import ColorWheels from './ColorWheels'
 import { isManagedEffectType } from '../utils/effects'
 import { FRAME_RATE, TRANSITION_TYPES, TRANSITION_DEFAULT_SETTINGS } from '../constants/transitions'
+import { useI18n } from '../i18n/I18nContext'
 
 // Clip speed UI: the store accepts 0.1x-8x continuously (timelineStore
 // clamps in updateClipSpeed). The slider is log-scaled so the slow-motion
@@ -515,6 +516,7 @@ function KeyframeButton({ clipId, property, clip, playheadPosition }) {
 }
 
 function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, onToggleFullHeight, fullHeightDisabled = false }) {
+  const { t } = useI18n()
   const [clipInfoMenuOpen, setClipInfoMenuOpen] = useState(false)
   const [expandedSections, setExpandedSections] = useState(() => {
     try {
@@ -6432,9 +6434,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     return (
       <div className="h-full flex flex-col items-center justify-center text-center p-4">
         <Layers className="w-10 h-10 text-sf-dark-600 mb-3" />
-        <h3 className="text-sm font-medium text-sf-text-primary mb-1">No Selection</h3>
+        <h3 className="text-sm font-medium text-sf-text-primary mb-1">{t('inspector.empty.title')}</h3>
         <p className="text-xs text-sf-text-muted">
-          Select a clip or transition on the timeline to edit its properties
+          {t('inspector.empty.help')}
         </p>
       </div>
     )
@@ -6540,7 +6542,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
         <div className="flex-1 bg-sf-dark-900 border-l border-sf-dark-700 flex flex-col min-w-0 overflow-hidden">
           {/* Panel Header */}
           <div className="flex-shrink-0 h-9 bg-sf-dark-800 border-b border-sf-dark-700 flex items-center justify-between gap-2 px-3">
-            <span className="text-xs font-medium text-sf-text-primary">Inspector</span>
+            <span className="text-xs font-medium text-sf-text-primary">{t('inspector.title')}</span>
             <div className="flex items-center gap-1">
               {renderInspectorSettingsHeaderActions()}
             </div>
@@ -6564,7 +6566,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
                 ? 'text-sf-accent bg-sf-dark-800'
                 : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-800/50'
             }`}
-            title="Inspector"
+            title={t('inspector.title')}
           >
             {/* Active indicator bar (on right side for right panel) */}
             {isExpanded && (
@@ -6593,8 +6595,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
                   : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-800/50'
             }`}
             title={fullHeightDisabled
-              ? 'Unavailable while the left panel is full height'
-              : isFullHeight ? 'Contract panel (exit full height)' : 'Expand panel (full height)'}
+              ? t('inspector.panel.unavailableFullHeight')
+              : isFullHeight ? t('inspector.panel.contract') : t('inspector.panel.fullHeight')}
           >
             {isFullHeight ? (
               <PanelRightClose className="w-4 h-4" />
@@ -6607,7 +6609,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
           <button
             onClick={onToggleExpanded}
             className="w-full h-10 flex items-center justify-center text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-800/50 transition-colors"
-            title={isExpanded ? 'Collapse panel' : 'Expand panel'}
+            title={isExpanded ? t('inspector.panel.collapse') : t('inspector.panel.expand')}
           >
             {isExpanded ? (
               <ChevronRight className="w-4 h-4" />

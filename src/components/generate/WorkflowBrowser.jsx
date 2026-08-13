@@ -16,6 +16,7 @@ import {
 } from '../../services/customWorkflowLibrary'
 import WorkflowCard from './WorkflowCard'
 import TemplateCard from './TemplateCard'
+import { useI18n } from '../../i18n/I18nContext'
 
 // Browser tabs are a presentation layer over manifest routes: "featured"
 // shows the curated local+cloud manifests (Create mode and the Set up flow
@@ -108,6 +109,7 @@ export default function WorkflowBrowser({
   onSelectTemplate,
   selectedTemplateName = '',
 }) {
+  const { t } = useI18n()
   const [query, setQuery] = useState('')
   const [filterId, setFilterId] = useState('all')
   const [templateSort, setTemplateSort] = useState('popular')
@@ -292,7 +294,7 @@ export default function WorkflowBrowser({
                     : 'text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary'
                 }`}
               >
-                {ROUTE_LABELS[routeId] || routeId}
+                {t(`generate.browser.tabs.${routeId}`)}
               </button>
             ))}
           </div>
@@ -303,8 +305,8 @@ export default function WorkflowBrowser({
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={isTemplatesRoute
-                ? 'Search ComfyUI templates, models, tags...'
-                : 'Search workflows, providers, tags...'}
+                ? t('generate.browser.searchTemplates')
+                : t('generate.browser.searchWorkflows')}
               className="w-full rounded-lg border border-sf-dark-700 bg-sf-dark-800 py-2 pl-9 pr-3 text-xs text-sf-text-primary outline-none transition-colors placeholder:text-sf-text-muted focus:border-sf-accent"
             />
           </div>
@@ -324,7 +326,7 @@ export default function WorkflowBrowser({
                   : 'border-sf-dark-700 bg-sf-dark-800 text-sf-text-muted hover:border-sf-dark-500 hover:text-sf-text-primary'
               }`}
             >
-              {filter.label}
+              {t(`generate.browser.filters.${filter.id}`, {}, filter.label)}
             </button>
           ))}
           {isFeaturedRoute && (
@@ -340,7 +342,7 @@ export default function WorkflowBrowser({
                       : 'text-sf-text-muted hover:text-sf-text-primary'
                   }`}
                 >
-                  {option.label}
+                  {t(`generate.browser.sources.${option.id}`)}
                 </button>
               ))}
             </div>
@@ -362,7 +364,7 @@ export default function WorkflowBrowser({
                     : 'text-sf-text-muted hover:text-sf-text-primary'
                 }`}
               >
-                {option.label}
+                {t(`generate.browser.sources.${option.id}`)}
               </button>
             ))}
           </div>
@@ -378,7 +380,7 @@ export default function WorkflowBrowser({
                     : 'text-sf-text-muted hover:text-sf-text-primary'
                 }`}
               >
-                {option.label}
+                {t(`generate.browser.sort.${option.id}`)}
               </button>
             ))}
           </div>
@@ -395,7 +397,7 @@ export default function WorkflowBrowser({
                 : `Showing ${filteredTemplates.length} of ${templateCatalog.templates.length} ComfyUI templates`)
               : isCustomRoute
               ? `Showing ${customLibrary.workflows.length} saved workflow${customLibrary.workflows.length === 1 ? '' : 's'}`
-              : `Showing ${filteredWorkflows.length} ${(ROUTE_LABELS[route] || route).toLowerCase()} workflow${filteredWorkflows.length === 1 ? '' : 's'}`}
+              : t('generate.browser.showingWorkflows', { count: filteredWorkflows.length, tab: t(`generate.browser.tabs.${route}`) })}
         </span>
         {isTemplatesRoute && !templatesLoading && (
           <span className="inline-flex shrink-0 items-center gap-2">

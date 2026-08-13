@@ -63,6 +63,16 @@ const OUTPUT_DIRECTORY_SETTING_KEY = 'outputDirectory'
 const WORKFLOWS_DIRECTORY_SETTING_KEY = 'workflowsDirectory'
 const OUTPUT_DIRECTORY_PLACEHOLDER = 'C:\\Users\\...\\Velorn\\outputs'
 const WORKFLOWS_DIRECTORY_PLACEHOLDER = 'C:\\Users\\...\\ComfyUI\\workflow_API'
+const HOTKEY_CATEGORY_KEY = {
+  'Timeline selection': 'selection',
+  'Timeline editing': 'editing',
+  'Timeline clip state': 'clipState',
+  'Timeline navigation': 'navigation',
+  'Precision editing': 'precision',
+  'Timeline text': 'text',
+  'Timeline transitions': 'transitions',
+  'Timeline linking': 'linking',
+}
 
 const SETTINGS_SECTIONS = [
   {
@@ -187,7 +197,8 @@ function GeneralTab({ initialSection = null }) {
   const [comfyPortInput, setComfyPortInput] = useState(String(initialComfyConnection.port || DEFAULT_COMFY_PORT))
   const [comfyConnectionState, setComfyConnectionState] = useState({
     status: 'idle',
-    message: `Local endpoint: ${initialComfyConnection.httpBase}`,
+    messageKey: 'settings.connection.status.endpoint',
+    values: { endpoint: initialComfyConnection.httpBase },
   })
   const [outputPath, setOutputPath] = useState('')
   const [workflowPath, setWorkflowPath] = useState('')
@@ -300,12 +311,14 @@ function GeneralTab({ initialSection = null }) {
         setComfyPortInput(String(connection.port || DEFAULT_COMFY_PORT))
         setComfyConnectionState({
           status: 'idle',
-          message: `Local endpoint: ${connection.httpBase}`,
+          messageKey: 'settings.connection.status.endpoint',
+          values: { endpoint: connection.httpBase },
         })
       } catch {
         setComfyConnectionState({
           status: 'error',
-          message: `Could not load local ComfyUI port. Using ${DEFAULT_COMFY_PORT}.`,
+          messageKey: 'settings.connection.status.loadFailed',
+          values: { port: DEFAULT_COMFY_PORT },
         })
       }
     })()
@@ -458,7 +471,7 @@ function GeneralTab({ initialSection = null }) {
     if (!result.success) {
       setComfyConnectionState({
         status: 'error',
-        message: result.error || 'Invalid local ComfyUI configuration.',
+        messageKey: 'settings.connection.status.invalidConfiguration',
       })
       return false
     }
@@ -466,7 +479,8 @@ function GeneralTab({ initialSection = null }) {
     setComfyPortInput(String(result.config.port))
     setComfyConnectionState({
       status: 'idle',
-      message: `Saved local endpoint: ${result.config.httpBase}`,
+      messageKey: 'settings.connection.status.savedEndpoint',
+      values: { endpoint: result.config.httpBase },
     })
     return true
   }
@@ -476,28 +490,38 @@ function GeneralTab({ initialSection = null }) {
     if (!parsed.success) {
       setComfyConnectionState({
         status: 'error',
-        message: parsed.error || 'Invalid local ComfyUI port.',
+        messageKey: 'settings.connection.status.invalidPort',
       })
       return
     }
 
     setComfyConnectionState({
       status: 'testing',
-      message: `Testing localhost:${parsed.port}...`,
+      messageKey: 'settings.connection.status.testing',
+      values: { endpoint: `localhost:${parsed.port}` },
     })
 
     const testResult = await checkLocalComfyConnection({ port: parsed.port })
     if (testResult.ok) {
       setComfyConnectionState({
         status: 'success',
-        message: `Connected to ${testResult.httpBase}`,
+        messageKey: 'settings.connection.status.connected',
+        values: { endpoint: testResult.httpBase },
       })
       return
     }
 
     setComfyConnectionState({
       status: 'error',
-      message: testResult.error || `Could not connect to localhost:${parsed.port}.`,
+      messageKey: testResult.status === 403
+        ? 'settings.connection.status.http403'
+        : testResult.status
+          ? 'settings.connection.status.httpError'
+          : 'settings.connection.status.connectFailed',
+      values: {
+        endpoint: testResult.httpBase || `http://127.0.0.1:${parsed.port}`,
+        status: testResult.status,
+      },
     })
   }
 
@@ -507,13 +531,14 @@ function GeneralTab({ initialSection = null }) {
     if (!result.success) {
       setComfyConnectionState({
         status: 'error',
-        message: result.error || 'Could not reset local ComfyUI port.',
+        messageKey: 'settings.connection.status.resetFailed',
       })
       return
     }
     setComfyConnectionState({
       status: 'idle',
-      message: `Reset to local endpoint: ${result.config.httpBase}`,
+      messageKey: 'settings.connection.status.resetEndpoint',
+      values: { endpoint: result.config.httpBase },
     })
   }
 
@@ -725,11 +750,16 @@ function GeneralTab({ initialSection = null }) {
 
       setPlaybackCacheMessage(
         summary?.success
-          ? `Playback cache rebuilt for ${summary.encoded} video${summary.encoded === 1 ? '' : 's'}${summary.failed ? `, ${summary.failed} failed` : ''}.`
-          : (summary?.error || 'Playback cache rebuild failed.')
+          ? t(summary.encoded === 1 ? 'settings.storage.cache.rebuildCompleteOne' : 'settings.storage.cache.rebuildCompleteMany', {
+              encoded: summary.encoded,
+              failed: summary.failed
+                ? t('settings.storage.cache.failedSuffix', { count: summary.failed })
+                : '',
+            })
+          : (summary?.error || t('settings.storage.cache.rebuildFailed'))
       )
     } catch (error) {
-      setPlaybackCacheMessage(error?.message || 'Playback cache rebuild failed.')
+      setPlaybackCacheMessage(error?.message || t('settings.storage.cache.rebuildFailed'))
     } finally {
       setPlaybackCacheBusy(false)
       setPlaybackCacheProgress({ completed: 0, total: 0, currentName: '' })
@@ -754,35 +784,39 @@ function GeneralTab({ initialSection = null }) {
       activeSectionContent = (
         <div className="space-y-5">
           <div>
-            <label className="block text-xs text-sf-text-muted mb-1">Projects Location</label>
+            <label className="block text-xs text-sf-text-muted mb-1">{t('settings.storage.projectsLocation')}</label>
             <div className="flex gap-2">
               <div className="flex-1 min-w-0 bg-sf-dark-800 border border-sf-dark-600 rounded px-3 py-2 text-xs text-sf-text-primary truncate">
-                {defaultProjectsLocation || 'Not set'}
+                {defaultProjectsLocation || t('common.notSet')}
               </div>
               <button
                 onClick={selectDefaultProjectsLocation}
                 className="px-3 py-2 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-xs text-sf-text-secondary transition-colors flex-shrink-0"
               >
-                Change
+                {t('common.change')}
               </button>
             </div>
-            <p className="text-[10px] text-sf-text-muted mt-1">Where new projects are created</p>
+            <p className="text-[10px] text-sf-text-muted mt-1">{t('settings.storage.projectsLocationHelp')}</p>
           </div>
 
           {currentProject && (
             <div>
-              <label className="block text-xs text-sf-text-muted mb-1">Current Project</label>
+              <label className="block text-xs text-sf-text-muted mb-1">{t('settings.storage.currentProject')}</label>
               <div className="bg-sf-dark-800 border border-sf-dark-600 rounded px-3 py-2">
                 <p className="text-sm text-sf-text-primary truncate">{currentProject.name}</p>
                 <p className="text-[10px] text-sf-text-muted mt-0.5">
-                  {currentProject.settings?.width}x{currentProject.settings?.height} @ {currentProject.settings?.fps}fps
+                  {t('settings.storage.projectSummary', {
+                    width: currentProject.settings?.width,
+                    height: currentProject.settings?.height,
+                    fps: currentProject.settings?.fps,
+                  })}
                 </p>
               </div>
               <button
                 onClick={closeProject}
                 className="mt-2 w-full px-3 py-2 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-xs text-sf-text-secondary transition-colors"
               >
-                Close Project
+                {t('settings.storage.closeProject')}
               </button>
             </div>
           )}
@@ -790,27 +824,30 @@ function GeneralTab({ initialSection = null }) {
           <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
-                <label className="text-sm text-sf-text-primary">Video playback cache</label>
+                <label className="text-sm text-sf-text-primary">{t('settings.storage.cache.title')}</label>
                 <p className="mt-1 text-[10px] text-sf-text-muted">
-                  Rebuild edit-friendly playback files for videos in this project&apos;s Assets panel. Original files are not changed.
+                  {t('settings.storage.cache.description')}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
                   <span className="rounded bg-sf-dark-800 px-2 py-1 text-sf-text-secondary">
-                    {playbackCacheCoverage.ready}/{playbackCacheCoverage.total} ready
+                    {t('settings.storage.cache.ready', {
+                      ready: playbackCacheCoverage.ready,
+                      total: playbackCacheCoverage.total,
+                    })}
                   </span>
                   {playbackCacheCoverage.encoding > 0 && (
                     <span className="rounded bg-blue-900/40 px-2 py-1 text-blue-200">
-                      {playbackCacheCoverage.encoding} encoding
+                      {t('settings.storage.cache.encoding', { count: playbackCacheCoverage.encoding })}
                     </span>
                   )}
                   {playbackCacheCoverage.failed > 0 && (
                     <span className="rounded bg-amber-900/40 px-2 py-1 text-amber-200">
-                      {playbackCacheCoverage.failed} failed
+                      {t('settings.storage.cache.failed', { count: playbackCacheCoverage.failed })}
                     </span>
                   )}
                   {playbackCacheCoverage.unavailable > 0 && (
                     <span className="rounded bg-sf-dark-800 px-2 py-1 text-sf-text-muted">
-                      {playbackCacheCoverage.unavailable} unavailable
+                      {t('settings.storage.cache.unavailable', { count: playbackCacheCoverage.unavailable })}
                     </span>
                   )}
                 </div>
@@ -829,17 +866,22 @@ function GeneralTab({ initialSection = null }) {
                 ) : (
                   <RefreshCcw className="h-3.5 w-3.5" />
                 )}
-                {playbackCacheBusy ? 'Rebuilding...' : 'Rebuild Video Cache'}
+                {playbackCacheBusy ? t('settings.storage.cache.rebuilding') : t('settings.storage.cache.rebuild')}
               </button>
             </div>
 
             {playbackCacheConfirmOpen && !playbackCacheBusy && (
               <div className="mt-3 rounded border border-amber-700/40 bg-amber-950/30 px-3 py-3">
                 <p className="text-xs text-amber-100">
-                  Rebuild playback cache for {playbackCacheCoverage.rebuildable} video{playbackCacheCoverage.rebuildable === 1 ? '' : 's'} in this project?
+                  {t(
+                    playbackCacheCoverage.rebuildable === 1
+                      ? 'settings.storage.cache.confirmOne'
+                      : 'settings.storage.cache.confirmMany',
+                    { count: playbackCacheCoverage.rebuildable }
+                  )}
                 </p>
                 <p className="mt-1 text-[10px] text-amber-200/80">
-                  This may take a while on large projects. You can keep editing while each asset falls back to its original video.
+                  {t('settings.storage.cache.confirmHelp')}
                 </p>
                 <div className="mt-3 flex justify-end gap-2">
                   <button
@@ -847,14 +889,14 @@ function GeneralTab({ initialSection = null }) {
                     onClick={() => setPlaybackCacheConfirmOpen(false)}
                     className="rounded bg-sf-dark-800 px-3 py-1.5 text-xs text-sf-text-secondary hover:bg-sf-dark-700"
                   >
-                    Cancel
+                    {t('common.cancel')}
                   </button>
                   <button
                     type="button"
                     onClick={() => { void handleRebuildVideoPlaybackCache() }}
                     className="rounded bg-sf-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-sf-accent-hover"
                   >
-                    Start Rebuild
+                    {t('settings.storage.cache.startRebuild')}
                   </button>
                 </div>
               </div>
@@ -864,7 +906,7 @@ function GeneralTab({ initialSection = null }) {
               <div className="mt-3">
                 <div className="mb-1 flex items-center justify-between gap-3 text-[10px] text-sf-text-muted">
                   <span className="truncate">
-                    {playbackCacheProgress.currentName || 'Preparing video cache...'}
+                    {playbackCacheProgress.currentName || t('settings.storage.cache.preparing')}
                   </span>
                   <span className="flex-shrink-0">
                     {playbackCacheProgress.completed}/{playbackCacheProgress.total || playbackCacheCoverage.rebuildable}
@@ -910,8 +952,8 @@ function GeneralTab({ initialSection = null }) {
 
           <div className="flex items-center justify-between rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
             <div>
-              <label className="text-sm text-sf-text-primary">Auto-save</label>
-              <p className="text-[10px] text-sf-text-muted">Save every 30 sec</p>
+              <label className="text-sm text-sf-text-primary">{t('settings.storage.autoSave')}</label>
+              <p className="text-[10px] text-sf-text-muted">{t('settings.storage.autoSaveHelp')}</p>
             </div>
             <button
               onClick={() => setAutoSaveEnabled(!autoSaveEnabled)}
@@ -923,8 +965,8 @@ function GeneralTab({ initialSection = null }) {
 
           <div className="flex items-center justify-between rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
             <div>
-              <label className="text-sm text-sf-text-primary">Reopen last project on startup</label>
-              <p className="text-[10px] text-sf-text-muted">When off, Velorn opens to the project picker.</p>
+              <label className="text-sm text-sf-text-primary">{t('settings.storage.reopenLastProject')}</label>
+              <p className="text-[10px] text-sf-text-muted">{t('settings.storage.reopenLastProjectHelp')}</p>
             </div>
             <button
               onClick={() => setReopenLastProjectOnStartup(!reopenLastProjectOnStartup)}
@@ -936,8 +978,8 @@ function GeneralTab({ initialSection = null }) {
 
           <div className="flex items-center justify-between rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
             <div>
-              <label className="text-sm text-sf-text-primary">Show hero background on project picker</label>
-              <p className="text-[10px] text-sf-text-muted">Cinematic image at the top of the project picker. Turn off for a minimal look.</p>
+              <label className="text-sm text-sf-text-primary">{t('settings.storage.showHero')}</label>
+              <p className="text-[10px] text-sf-text-muted">{t('settings.storage.showHeroHelp')}</p>
             </div>
             <button
               onClick={() => setShowHeroBackground(!showHeroBackground)}
@@ -977,7 +1019,7 @@ function GeneralTab({ initialSection = null }) {
       activeSectionContent = (
         <div className="space-y-4">
           <div>
-            <label className="block text-xs text-sf-text-muted mb-1">Local ComfyUI Port</label>
+            <label className="block text-xs text-sf-text-muted mb-1">{t('settings.connection.localPort')}</label>
             <input
               type="number"
               min={1}
@@ -990,7 +1032,7 @@ function GeneralTab({ initialSection = null }) {
               className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-3 py-2 text-sm text-sf-text-primary focus:outline-none focus:border-sf-accent"
             />
             <p className="text-[10px] text-sf-text-muted mt-1">
-              Local-only mode. Remote/LAN ComfyUI is disabled in this build.
+              {t('settings.connection.localOnlyHelp')}
             </p>
           </div>
 
@@ -1005,7 +1047,9 @@ function GeneralTab({ initialSection = null }) {
                       ? 'bg-yellow-400 animate-pulse'
                       : 'bg-sf-dark-500'
               }`} />
-              <span className="text-xs text-sf-text-muted truncate">{comfyConnectionState.message}</span>
+              <span className="text-xs text-sf-text-muted truncate">
+                {t(comfyConnectionState.messageKey, comfyConnectionState.values)}
+              </span>
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">
               <button
@@ -1013,14 +1057,14 @@ function GeneralTab({ initialSection = null }) {
                 onClick={() => { void handleResetComfyConnection() }}
                 className="px-3 py-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-xs text-sf-text-secondary transition-colors"
               >
-                Reset
+                {t('settings.connection.reset')}
               </button>
               <button
                 type="button"
                 onClick={() => { void handleTestComfyConnection() }}
                 className="px-3 py-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-xs text-sf-text-secondary transition-colors"
               >
-                Test
+                {t('settings.connection.test')}
               </button>
             </div>
           </div>
@@ -1032,18 +1076,18 @@ function GeneralTab({ initialSection = null }) {
                   <KeyRound className="h-4 w-4 text-sf-accent" />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-sm font-medium text-sf-text-primary">Cloud Workflows · Comfy.org API key</div>
+                  <div className="text-sm font-medium text-sf-text-primary">{t('settings.connection.cloudKeyTitle')}</div>
                   <div className="mt-0.5 text-[11px] text-sf-text-muted">
-                    Unlocks {COMFY_PARTNER_WORKFLOWS.length} starter workflows that render in the cloud (Grok, Kling, Vidu, Nano Banana, Seedream). One key covers all of them.
+                    {t('settings.connection.cloudKeyHelp', { count: COMFY_PARTNER_WORKFLOWS.length })}
                   </div>
                   <div className="mt-1.5 text-[11px]">
                     {comfyOrgApiKey ? (
                       <span className="inline-flex items-center gap-1 text-green-400">
                         <CheckCircle2 className="h-3 w-3" />
-                        Key saved and ready
+                        {t('settings.connection.keyReady')}
                       </span>
                     ) : (
-                      <span className="text-yellow-300">No key saved yet</span>
+                      <span className="text-yellow-300">{t('settings.connection.noKey')}</span>
                     )}
                   </div>
                 </div>
@@ -1054,7 +1098,7 @@ function GeneralTab({ initialSection = null }) {
                   onClick={() => setApiKeyDialogOpen(true)}
                   className="rounded bg-sf-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-sf-accent/90"
                 >
-                  {comfyOrgApiKey ? 'Change key' : 'Add API key'}
+                  {comfyOrgApiKey ? t('settings.connection.changeKey') : t('settings.connection.addKey')}
                 </button>
                 <button
                   type="button"
@@ -1062,7 +1106,7 @@ function GeneralTab({ initialSection = null }) {
                   className="inline-flex items-center gap-1 text-[11px] text-sf-text-muted hover:text-sf-text-primary"
                 >
                   <ExternalLink className="h-3 w-3" />
-                  Get a key
+                  {t('settings.connection.getKey')}
                 </button>
               </div>
             </div>
@@ -1070,9 +1114,9 @@ function GeneralTab({ initialSection = null }) {
 
           <div className="flex items-center justify-between rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
             <div className="pr-4">
-              <label className="text-sm text-sf-text-primary">Auto-import ComfyUI tab generations</label>
+              <label className="text-sm text-sf-text-primary">{t('settings.connection.autoImport')}</label>
               <p className="text-[10px] text-sf-text-muted">
-                When enabled, successful custom prompts observed while the embedded ComfyUI tab is active are imported into the current project&apos;s <span className="text-sf-text-secondary">Imported from ComfyUI/</span> folder. Detected frame sequences are stitched into a single MP4 at the project&apos;s framerate.
+                {t('settings.connection.autoImportHelpBefore')} <span className="text-sf-text-secondary">Imported from ComfyUI/</span> {t('settings.connection.autoImportHelpAfter')}
               </p>
             </div>
             <button
@@ -1081,7 +1125,7 @@ function GeneralTab({ initialSection = null }) {
               aria-checked={autoImportComfyOutputs}
               onClick={handleToggleAutoImportComfyOutputs}
               className={`w-10 h-5 rounded-full transition-colors flex-shrink-0 relative ${autoImportComfyOutputs ? 'bg-sf-accent' : 'bg-sf-dark-600'}`}
-              title={autoImportComfyOutputs ? 'Disable auto-import' : 'Enable auto-import'}
+              title={autoImportComfyOutputs ? t('settings.connection.disableAutoImport') : t('settings.connection.enableAutoImport')}
             >
               <span
                 className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${autoImportComfyOutputs ? 'left-[calc(100%-1.25rem)]' : 'left-0.5'}`}
@@ -1106,7 +1150,7 @@ function GeneralTab({ initialSection = null }) {
               <div className="min-w-0">
                 <div className="text-sm font-medium text-sf-text-primary">Velorn MCP server</div>
                 <p className="mt-1 text-[11px] text-sf-text-muted">
-                  Local project access for AI agents. Agents can inspect and review the open project, troubleshoot local ComfyUI setup, use limited undoable timeline/text/effect actions, and start delivery exports.
+                  {t('settings.agents.serverDescription')}
                 </p>
               </div>
               <span className={`inline-flex flex-shrink-0 items-center gap-1.5 rounded px-2 py-1 text-[10px] font-medium ${
@@ -1192,7 +1236,7 @@ function GeneralTab({ initialSection = null }) {
       activeSectionContent = (
         <div className="space-y-5">
           <div>
-            <label className="block text-xs text-sf-text-muted mb-1">Output Directory</label>
+            <label className="block text-xs text-sf-text-muted mb-1">{t('settings.paths.outputDirectory')}</label>
             <div className="flex gap-2">
               <input
                 type="text"
@@ -1205,7 +1249,7 @@ function GeneralTab({ initialSection = null }) {
                 type="button"
                 onClick={() => {
                   void handleChooseDirectory({
-                    title: 'Select Output Directory',
+                    title: t('settings.paths.selectOutputDirectory'),
                     currentPath: outputPath,
                     onSelect: setOutputPath,
                   })
@@ -1217,7 +1261,7 @@ function GeneralTab({ initialSection = null }) {
             </div>
           </div>
           <div>
-            <label className="block text-xs text-sf-text-muted mb-1">Workflows Directory</label>
+            <label className="block text-xs text-sf-text-muted mb-1">{t('settings.paths.workflowsDirectory')}</label>
             <div className="flex gap-2">
               <input
                 type="text"
@@ -1230,7 +1274,7 @@ function GeneralTab({ initialSection = null }) {
                 type="button"
                 onClick={() => {
                   void handleChooseDirectory({
-                    title: 'Select Workflows Directory',
+                    title: t('settings.paths.selectWorkflowsDirectory'),
                     currentPath: workflowPath,
                     onSelect: setWorkflowPath,
                   })
@@ -1382,7 +1426,7 @@ function GeneralTab({ initialSection = null }) {
       activeSectionContent = (
         <div className="space-y-4">
           <div>
-            <label className="block text-xs text-sf-text-muted">Theme</label>
+            <label className="block text-xs text-sf-text-muted">{t('settings.appearance.theme')}</label>
             <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
               {THEMES.map((theme) => {
                 const isActive = theme.id === activeThemeId
@@ -1411,10 +1455,10 @@ function GeneralTab({ initialSection = null }) {
                         <div className="flex items-center gap-1.5">
                           <span className="text-sm text-sf-text-primary font-medium">{theme.label}</span>
                           {isActive && (
-                            <span className="text-[10px] text-sf-accent font-medium">Active</span>
+                            <span className="text-[10px] text-sf-accent font-medium">{t('settings.appearance.active')}</span>
                           )}
                         </div>
-                        <p className="text-[10px] text-sf-text-muted truncate">{theme.description}</p>
+                        <p className="text-[10px] text-sf-text-muted truncate">{t(`settings.appearance.themes.${theme.id}`)}</p>
                       </div>
                     </div>
                   </button>
@@ -1425,8 +1469,8 @@ function GeneralTab({ initialSection = null }) {
 
           <div className="flex items-center justify-between rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
             <div>
-              <label className="text-sm text-sf-text-primary">Timeline clip thumbnails</label>
-              <p className="text-[10px] text-sf-text-muted">Turn off for heavy edits so clips draw as lightweight colored blocks.</p>
+              <label className="text-sm text-sf-text-primary">{t('settings.appearance.timelineThumbnails')}</label>
+              <p className="text-[10px] text-sf-text-muted">{t('settings.appearance.timelineThumbnailsHelp')}</p>
             </div>
             <button
               type="button"
@@ -1446,8 +1490,8 @@ function GeneralTab({ initialSection = null }) {
         <div className="space-y-4">
           <div className="flex items-center justify-between rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
             <div>
-              <label className="text-sm text-sf-text-primary">Generation complete sound</label>
-              <p className="text-[10px] text-sf-text-muted">Play a short sound when the Generate queue finishes.</p>
+              <label className="text-sm text-sf-text-primary">{t('settings.notifications.completionSound')}</label>
+              <p className="text-[10px] text-sf-text-muted">{t('settings.notifications.completionSoundHelp')}</p>
             </div>
             <button
               type="button"
@@ -1463,11 +1507,11 @@ function GeneralTab({ initialSection = null }) {
           <div className={`rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3 ${soundEnabled ? '' : 'opacity-60'}`}>
             <div className="flex items-center justify-between gap-3">
               <div>
-                <label className="text-sm text-sf-text-primary">Volume</label>
-                <p className="text-[10px] text-sf-text-muted">0 is muted, 10 is loudest.</p>
+                <label className="text-sm text-sf-text-primary">{t('settings.notifications.volume')}</label>
+                <p className="text-[10px] text-sf-text-muted">{t('settings.notifications.volumeHelp')}</p>
               </div>
               <div className="rounded bg-sf-dark-800 px-2 py-1 text-xs text-sf-text-secondary">
-                {soundVolume === 0 ? 'Off' : `${soundVolume}/10`}
+                {soundVolume === 0 ? t('settings.notifications.off') : `${soundVolume}/10`}
               </div>
             </div>
             <input
@@ -1485,8 +1529,8 @@ function GeneralTab({ initialSection = null }) {
           <div className={`rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3 ${soundEnabled ? '' : 'opacity-60'}`}>
             <div className="flex items-center justify-between gap-3">
               <div>
-                <label className="text-sm text-sf-text-primary">Sound</label>
-                <p className="text-[10px] text-sf-text-muted">Choose the completion sound style.</p>
+                <label className="text-sm text-sf-text-primary">{t('settings.notifications.sound')}</label>
+                <p className="text-[10px] text-sf-text-muted">{t('settings.notifications.soundHelp')}</p>
               </div>
               <button
                 type="button"
@@ -1495,7 +1539,7 @@ function GeneralTab({ initialSection = null }) {
                 className="inline-flex items-center gap-1.5 rounded bg-sf-dark-700 px-3 py-1.5 text-xs text-sf-text-secondary transition-colors hover:bg-sf-dark-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Play className="h-3.5 w-3.5" />
-                Preview
+                {t('settings.notifications.preview')}
               </button>
             </div>
 
@@ -1514,12 +1558,12 @@ function GeneralTab({ initialSection = null }) {
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-medium text-sf-text-primary">{option.label}</span>
+                      <span className="text-sm font-medium text-sf-text-primary">{t(`settings.notifications.sounds.${option.id}.label`)}</span>
                       {isSelected && (
-                        <span className="text-[10px] text-sf-accent">Active</span>
+                        <span className="text-[10px] text-sf-accent">{t('settings.notifications.active')}</span>
                       )}
                     </div>
-                    <p className="mt-1 text-[10px] text-sf-text-muted">{option.description}</p>
+                    <p className="mt-1 text-[10px] text-sf-text-muted">{t(`settings.notifications.sounds.${option.id}.description`)}</p>
                   </button>
                 )
               })}
@@ -1534,25 +1578,25 @@ function GeneralTab({ initialSection = null }) {
         <div className="space-y-5">
           <div className="rounded border border-sf-dark-700 bg-sf-dark-800/60 px-3 py-2">
             <p className="text-xs text-sf-text-secondary">
-              Only editor-specific shortcuts are customizable in this first pass. Core shortcuts like <code>Space</code>, <code>Arrow Left/Right</code>, <code>Undo/Redo</code>, <code>Delete</code>, and copy/paste stay fixed.
+              {t('settings.hotkeys.introBefore')} <code>Space</code>, <code>Arrow Left/Right</code>, <code>Undo/Redo</code>, <code>Delete</code>, {t('settings.hotkeys.introAfter')}
             </p>
             <p className="mt-1 text-[10px] text-sf-text-muted">
-              Press a shortcut to record it. Press <code>Delete</code> while recording to clear an assignment.
+              {t('settings.hotkeys.recordHelpBefore')} <code>Delete</code> {t('settings.hotkeys.recordHelpAfter')}
             </p>
           </div>
 
           <div className="rounded border border-sf-dark-700 bg-sf-dark-800/60 px-3 py-3">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-sm text-sf-text-primary">Keymap presets</p>
+                <p className="text-sm text-sf-text-primary">{t('settings.hotkeys.presets')}</p>
                 <p className="text-[10px] text-sf-text-muted">
-                  Apply familiar editor-style bindings to the configurable actions only.
+                  {t('settings.hotkeys.presetsHelp')}
                 </p>
               </div>
               <div className="rounded bg-sf-dark-900 px-2 py-1 text-[10px] text-sf-text-secondary">
-                Current preset: {currentHotkeyPresetId === 'custom'
-                  ? 'Custom'
-                  : (EDITOR_HOTKEY_PRESETS.find((preset) => preset.id === currentHotkeyPresetId)?.label || 'Custom')}
+                {t('settings.hotkeys.currentPreset')}: {currentHotkeyPresetId === 'custom'
+                  ? t('settings.hotkeys.custom')
+                  : (EDITOR_HOTKEY_PRESETS.find((preset) => preset.id === currentHotkeyPresetId)?.label || t('settings.hotkeys.custom'))}
               </div>
             </div>
 
@@ -1577,10 +1621,10 @@ function GeneralTab({ initialSection = null }) {
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-sm text-sf-text-primary">{preset.label}</span>
                       {isActive && (
-                        <span className="text-[10px] text-sf-accent">Active</span>
+                        <span className="text-[10px] text-sf-accent">{t('settings.hotkeys.active')}</span>
                       )}
                     </div>
-                    <p className="mt-1 text-[10px] text-sf-text-muted">{preset.description}</p>
+                    <p className="mt-1 text-[10px] text-sf-text-muted">{t(`settings.hotkeys.presetDescriptions.${preset.id}`)}</p>
                   </button>
                 )
               })}
@@ -1594,8 +1638,8 @@ function GeneralTab({ initialSection = null }) {
                 className="flex items-center justify-between gap-3 rounded border border-sf-dark-700 bg-sf-dark-800 px-3 py-2"
               >
                 <div className="min-w-0">
-                  <div className="text-sm text-sf-text-primary">{definition.label}</div>
-                  <div className="text-[10px] text-sf-text-muted">{definition.description}</div>
+                  <div className="text-sm text-sf-text-primary">{t(`settings.hotkeys.actions.${definition.id}`)}</div>
+                  <div className="text-[10px] text-sf-text-muted">{t(`settings.hotkeys.categories.${HOTKEY_CATEGORY_KEY[definition.description]}`)}</div>
                 </div>
 
                 <div className="flex items-center gap-2 flex-shrink-0">
@@ -1611,7 +1655,7 @@ function GeneralTab({ initialSection = null }) {
                         : 'border-sf-dark-600 bg-sf-dark-700 text-sf-text-secondary hover:bg-sf-dark-600'
                     }`}
                   >
-                    {recordingHotkeyId === definition.id ? 'Press shortcut...' : formatEditorHotkey(editorHotkeys[definition.id])}
+                    {recordingHotkeyId === definition.id ? t('settings.hotkeys.pressShortcut') : formatEditorHotkey(editorHotkeys[definition.id])}
                   </button>
                   <button
                     type="button"
@@ -1620,9 +1664,9 @@ function GeneralTab({ initialSection = null }) {
                       setHotkeysError('')
                     }}
                     className="rounded bg-sf-dark-700 px-2.5 py-1.5 text-[10px] text-sf-text-muted transition-colors hover:bg-sf-dark-600"
-                    title="Restore default binding for this action"
+                    title={t('settings.hotkeys.restoreAction')}
                   >
-                    Default
+                    {t('settings.hotkeys.default')}
                   </button>
                 </div>
               </div>
@@ -1643,7 +1687,7 @@ function GeneralTab({ initialSection = null }) {
               }}
               className="rounded bg-sf-dark-700 px-3 py-1.5 text-xs text-sf-text-secondary transition-colors hover:bg-sf-dark-600"
             >
-              Restore All Defaults
+              {t('settings.hotkeys.restoreAll')}
             </button>
           </div>
         </div>
@@ -1653,7 +1697,7 @@ function GeneralTab({ initialSection = null }) {
       activeSectionContent = (
         <div className="space-y-5">
           <div>
-            <label className="block text-xs text-sf-text-muted mb-1">Default Resolution</label>
+            <label className="block text-xs text-sf-text-muted mb-1">{t('settings.projectDefaults.resolution')}</label>
             <select
               value={defaultResolution || 'HD 1080p'}
               onChange={(e) => setDefaultProjectSettings(e.target.value, defaultFps)}
@@ -1667,7 +1711,7 @@ function GeneralTab({ initialSection = null }) {
             </select>
           </div>
           <div>
-            <label className="block text-xs text-sf-text-muted mb-1">Default Frame Rate</label>
+            <label className="block text-xs text-sf-text-muted mb-1">{t('settings.projectDefaults.frameRate')}</label>
             <select
               value={defaultFps ?? 24}
               onChange={(e) => setDefaultProjectSettings(defaultResolution, Number(e.target.value))}
@@ -1742,8 +1786,8 @@ function GeneralTab({ initialSection = null }) {
       <div className="flex items-center justify-between gap-4 border-t border-sf-dark-700 px-5 py-4">
         <p className="text-[11px] text-sf-text-muted">
           {isWorkflowSetupActive
-            ? 'Workflow installs happen in the panel above. Save Settings only persists shared preferences and shortcuts.'
-            : 'Some settings save as you edit. Use Save Settings to persist shared preferences and shortcuts.'}
+            ? t('settings.saveHelpWorkflow')
+            : t('settings.saveHelp')}
         </p>
         <button
           onClick={handleSaveAllSettings}

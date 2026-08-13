@@ -26,6 +26,7 @@ import {
   RTX_VIDEO_UPSCALE_QUALITY_OPTIONS,
   resolveRtx4kDimensions,
 } from '../config/rtxVideoUpscaleConfig'
+import { useI18n } from '../i18n/I18nContext'
 
 const EXPORT_SETTINGS_STORAGE_PREFIX = 'comfystudio-export-settings-v1'
 
@@ -361,6 +362,7 @@ function sanitizeExportBaseName(value) {
 }
 
 function ExportPanel() {
+  const { t } = useI18n()
   const {
     currentProject,
     currentProjectHandle,
@@ -820,37 +822,37 @@ function ExportPanel() {
   }, [settings.format, settings.videoCodec, nvencStatus, hardwareLabel])
   const nvencSummaryText = useMemo(() => {
     if (!nvencStatus.checked) {
-      return 'Checking FFmpeg for hardware encoder support...'
+      return t('export.hardwareChecking')
     }
 
     const gpuPrefix = nvencStatus.gpuName
-      ? `Detected GPU: ${nvencStatus.gpuName}. `
+      ? `${t('export.detectedGpu')}: ${nvencStatus.gpuName}. `
       : ''
     const ffmpegSourcePrefix = nvencStatus.ffmpegSource === 'environment'
-      ? 'Environment FFmpeg. '
+      ? `${t('export.ffmpegEnvironment')}. `
       : nvencStatus.ffmpegSource === 'setting'
-        ? 'Custom FFmpeg. '
-        : 'Bundled FFmpeg. '
+        ? `${t('export.ffmpegCustom')}. `
+        : `${t('export.ffmpegBundled')}. `
     const warningSuffix = nvencStatus.ffmpegWarning ? ` ${nvencStatus.ffmpegWarning}` : ''
 
     if (!nvencStatus.available) {
-      return ffmpegSourcePrefix + gpuPrefix + (nvencStatus.error || `${hardwareLabel} not detected in FFmpeg. Hardware encoding will be unavailable.`)
+      return ffmpegSourcePrefix + gpuPrefix + (nvencStatus.error || t('export.hardwareUnavailable', { hardware: hardwareLabel }))
     }
 
     if (settings.format === 'webm' || settings.videoCodec === 'vp9') {
-      return `${ffmpegSourcePrefix}${gpuPrefix}${hardwareLabel} is ready for MP4 H.264/H.265 exports. Switch from WebM/VP9 to use it.${warningSuffix}`
+      return `${ffmpegSourcePrefix}${gpuPrefix}${t('export.hardwareReadySwitch', { hardware: hardwareLabel })}${warningSuffix}`
     }
 
     if (settings.format === 'prores') {
-      return `${ffmpegSourcePrefix}${gpuPrefix}${hardwareLabel} is ready for MP4 H.264/H.265 exports. ProRes always uses software encoding.${warningSuffix}`
+      return `${ffmpegSourcePrefix}${gpuPrefix}${t('export.hardwareReadyProres', { hardware: hardwareLabel })}${warningSuffix}`
     }
 
     if (selectedNvencCodecSupported) {
-      return `${ffmpegSourcePrefix}${gpuPrefix}${hardwareLabel} is ready for faster ${settings.videoCodec === 'h265' ? 'H.265' : 'H.264'} exports.${warningSuffix}`
+      return `${ffmpegSourcePrefix}${gpuPrefix}${t('export.hardwareReadyCodec', { hardware: hardwareLabel, codec: settings.videoCodec === 'h265' ? 'H.265' : 'H.264' })}${warningSuffix}`
     }
 
-    return `${ffmpegSourcePrefix}${gpuPrefix}${hardwareLabel} is detected, but the current codec is not available in this FFmpeg build.${warningSuffix}`
-  }, [nvencStatus, selectedNvencCodecSupported, settings.format, settings.videoCodec, hardwareLabel])
+    return `${ffmpegSourcePrefix}${gpuPrefix}${t('export.codecUnavailable', { hardware: hardwareLabel })}${warningSuffix}`
+  }, [nvencStatus, selectedNvencCodecSupported, settings.format, settings.videoCodec, hardwareLabel, t])
   const nvencExpectedEncoder = settings.useHardwareEncoder && selectedNvencCodecSupported
     ? (settings.videoCodec === 'h265'
       ? (hardwareKind === 'videotoolbox' ? 'hevc_videotoolbox' : 'hevc_nvenc')
@@ -1055,57 +1057,57 @@ function ExportPanel() {
     const pixelCount = (resolution.width || 1920) * (resolution.height || 1080)
     
     if (pixelCount >= 3840 * 2160) {
-      hints.push('4K exports are heavy. Consider proxies or lower resolution for previews.')
+      hints.push(t('export.hints.4k'))
     }
     if (settings.postProcessUpscale === 'rtx-4k') {
       if (!isPngSequence) {
-        hints.push('RTX 4K runs after the normal render and streams one frame at a time to keep memory bounded.')
+        hints.push(t('export.hints.rtx'))
       }
     }
     if (settings.useProxyMedia && proxyCoverage.ready > 0) {
-      hints.push(`Proxy export will use ${proxyCoverage.ready}/${proxyCoverage.total} ready video prox${proxyCoverage.ready === 1 ? 'y' : 'ies'}.`)
+      hints.push(t('export.hints.proxyCount', { ready: proxyCoverage.ready, total: proxyCoverage.total }))
     } else if (settings.useProxyMedia && proxyCoverage.total > 0) {
-      hints.push('Proxy export is enabled, but no ready proxies were found; originals will be used.')
+      hints.push(t('export.hints.proxyMissing'))
     }
     if (effectiveFps >= 60) {
-      hints.push('60fps export doubles frame workload. Lower FPS for faster renders.')
+      hints.push(t('export.hints.60fps'))
     }
     if (isPngSequence) {
-      hints.push('PNG image sequences create one lossless file per frame and can use substantial disk space.')
-      hints.push('PNG image sequences do not contain audio.')
+      hints.push(t('export.hints.pngDiskSpace'))
+      hints.push(t('export.hints.pngNoAudio'))
     } else {
       if (!settings.useHardwareEncoder && settings.format === 'mp4' && settings.videoCodec !== 'vp9') {
-        hints.push('Enable NVIDIA NVENC to speed up H.264/H.265 exports on supported NVIDIA GPUs.')
+        hints.push(t('export.hints.nvenc'))
       }
       if (nvencStatus.checked && !nvencStatus.available) {
-        hints.push('NVENC not detected in your FFmpeg build. GPU encoding will be unavailable.')
+        hints.push(t('export.hints.nvencMissing'))
       }
       if (settings.format === 'webm' || settings.videoCodec === 'vp9') {
-        hints.push('VP9/WebM encodes slower than H.264/H.265.')
+        hints.push(t('export.hints.vp9'))
       }
       if (settings.useDirectFramePipe) {
-        hints.push('Fast FFmpeg pipe skips writing PNG frames before encoding.')
+        hints.push(t('export.hints.fastPipe'))
       } else {
-        hints.push('Enable Fast FFmpeg pipe to avoid PNG frame files.')
+        hints.push(t('export.hints.enableFastPipe'))
       }
     }
     
     const textClips = clips.filter(clip => clip.type === 'text')
     if (textClips.length > 0) {
-      hints.push('Text overlays add compositing work; expect longer renders.')
+      hints.push(t('export.hints.text'))
     }
     if (transitions.length > 0) {
-      hints.push('Transitions require dual-frame compositing and add export time.')
+      hints.push(t('export.hints.transitions'))
     }
     
     const audioClips = clips.filter(clip => clip.type === 'audio')
     const activeAudioTracks = tracks.filter(track => track.type === 'audio' && track.visible && !track.muted)
     if (!isPngSequence && settings.includeAudio && audioClips.length > 0 && activeAudioTracks.length > 0) {
-      hints.push('Audio mixdown runs offline; long timelines increase export time.')
+      hints.push(t('export.hints.audio'))
     }
     
     return hints.slice(0, 5)
-  }, [clips, transitions, tracks, settings, getCurrentTimelineSettings, nvencStatus, proxyCoverage])
+  }, [clips, transitions, tracks, settings, getCurrentTimelineSettings, nvencStatus, proxyCoverage, t])
 
   const runExportJob = async (jobSettings, labelOverride = null) => {
     const isPngSequence = jobSettings.format === 'png-seq'
@@ -1469,11 +1471,11 @@ function ExportPanel() {
       <div className="h-12 flex items-center justify-between px-4 border-b border-sf-dark-700">
         <div className="flex items-center gap-2">
           <Download className="w-4 h-4 text-sf-accent" />
-          <span className="text-sm font-semibold text-sf-text-primary">Export</span>
-          <span className="text-[10px] text-sf-text-muted">Queue + settings ready</span>
+          <span className="text-sm font-semibold text-sf-text-primary">{t('export.title')}</span>
+          <span className="text-[10px] text-sf-text-muted">{t('export.headerReady')}</span>
         </div>
         <div className="text-[10px] text-sf-text-muted">
-          {isExporting ? exportStatus : 'Ready to export'}
+          {isExporting ? exportStatus : t('export.ready')}
         </div>
       </div>
       
@@ -1483,27 +1485,27 @@ function ExportPanel() {
         <div className="col-span-7 flex min-h-0 flex-col overflow-hidden bg-sf-dark-900 border border-sf-dark-700 rounded-lg p-3">
           <div className="flex items-center gap-2 mb-3 shrink-0">
             <Settings className="w-4 h-4 text-sf-text-muted" />
-            <span className="text-xs font-semibold text-sf-text-primary uppercase tracking-wider">Export Settings</span>
-            <span className="ml-auto text-[10px] text-sf-text-muted">Saved for this project</span>
+            <span className="text-xs font-semibold text-sf-text-primary uppercase tracking-wider">{t('export.settings')}</span>
+            <span className="ml-auto text-[10px] text-sf-text-muted">{t('export.savedForProject')}</span>
           </div>
 
           {settings.format !== 'png-seq' && (
           <div className="mb-3 shrink-0 rounded-lg border border-sf-dark-700 bg-sf-dark-950/45 p-2">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div>
-                <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">Export presets</div>
+                <div className="text-[10px] uppercase tracking-wider text-sf-text-muted">{t('export.presets')}</div>
                 <div className="text-[10px] text-sf-text-secondary">
-                  Presets change render settings only. Filename and range stay as-is.
+                  {t('export.presetsHelp')}
                 </div>
               </div>
               <button
                 type="button"
                 onClick={handleResetSettings}
                 className="flex items-center gap-1 rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-1 text-[10px] text-sf-text-muted transition-colors hover:border-sf-dark-500 hover:text-sf-text-primary"
-                title="Reset export settings to the default Velorn export setup"
+                title={t('export.resetHelp')}
               >
                 <RotateCcw className="h-3 w-3" />
-                Reset defaults
+                {t('export.reset')}
               </button>
             </div>
             <div className="grid grid-cols-5 gap-2">
@@ -1519,11 +1521,11 @@ function ExportPanel() {
                         ? 'border-sf-accent bg-sf-accent/15 text-sf-text-primary'
                         : 'border-sf-dark-700 bg-sf-dark-900 text-sf-text-secondary hover:border-sf-dark-500 hover:bg-sf-dark-800'
                     }`}
-                    title={exportPreset.summary}
+                    title={t(`export.presetSummaries.${exportPreset.id}`)}
                   >
                     <div className="text-[11px] font-semibold">{exportPreset.label.split('NVENC').join(hardwareLabel)}</div>
                     <div className="mt-1 text-[9px] leading-snug text-sf-text-muted">
-                      {exportPreset.summary.split('NVENC').join(hardwareLabel)}
+                      {t(`export.presetSummaries.${exportPreset.id}`, { hardware: hardwareLabel })}
                     </div>
                   </button>
                 )
@@ -1534,7 +1536,7 @@ function ExportPanel() {
           
           <div className="grid grid-cols-2 gap-3 shrink-0">
             <div>
-              <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Filename</label>
+              <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.filename')}</label>
               <input
                 type="text"
                 value={settings.filename}
@@ -1545,7 +1547,7 @@ function ExportPanel() {
             </div>
             
             <div>
-              <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Format</label>
+              <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.format')}</label>
               <select
                 value={settings.format}
                 onChange={(e) => handleSettingChange('format', e.target.value)}
@@ -1558,7 +1560,7 @@ function ExportPanel() {
             </div>
 
             <div>
-              <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Range</label>
+              <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.range')}</label>
               <select
                 value={settings.range}
                 onChange={(e) => handleSettingChange('range', e.target.value)}
@@ -1577,13 +1579,13 @@ function ExportPanel() {
           </div>
           <p className="mt-1 text-[10px] text-sf-text-muted shrink-0">
             {settings.format === 'png-seq'
-              ? `Choose a parent location when export starts. Velorn will create ${sanitizePngSequenceBaseName(settings.filename || defaultFilename)}_png with frames named ${sanitizePngSequenceBaseName(settings.filename || defaultFilename)}_000001.png and onward.`
-              : 'Output location will be chosen when export starts.'}
+              ? t('export.pngOutputLocationHelp', { name: sanitizePngSequenceBaseName(settings.filename || defaultFilename) })
+              : t('export.outputLocationHelp')}
           </p>
           
           {settings.format !== 'png-seq' && (
           <div className="mt-2 flex items-center gap-2 text-[10px] text-sf-text-muted shrink-0">
-            <span className="uppercase tracking-wider">Render</span>
+            <span className="uppercase tracking-wider">{t('export.render')}</span>
             <button
               onClick={() => handleSettingChange('renderMode', 'single')}
               className={`px-2 py-0.5 rounded border transition-colors ${
@@ -1592,14 +1594,14 @@ function ExportPanel() {
                   : 'bg-sf-dark-800 text-sf-text-muted border-sf-dark-600'
               }`}
             >
-              Single clip
+              {t('export.singleClip')}
             </button>
             <button
               disabled
               className="px-2 py-0.5 rounded border border-sf-dark-700 text-sf-text-muted/60 cursor-not-allowed"
-              title="Individual clips export is coming soon"
+              title={t('export.individualSoon')}
             >
-              Individual clips
+              {t('export.individualClips')}
             </button>
           </div>
           )}
@@ -1609,12 +1611,12 @@ function ExportPanel() {
             {settings.format !== 'audio' && (
             <div>
               <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">
-                {settings.format === 'png-seq' ? 'Image Sequence' : 'Video'}
+                {settings.format === 'png-seq' ? t('export.imageSequence') : t('export.video')}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 {settings.format === 'png-seq' && (
                   <div className="col-span-2 rounded border border-sf-dark-700 bg-sf-dark-950/45 p-2 text-xs text-sf-text-secondary">
-                    Exports one numbered, lossless PNG for every rendered timeline frame. Image sequences do not include audio.
+                    {t('export.imageSequenceHelp')}
                   </div>
                 )}
                 {settings.format !== 'png-seq' && (
@@ -1631,10 +1633,10 @@ function ExportPanel() {
                       } ${nvencToggleDisabledReason ? 'opacity-50 cursor-not-allowed' : ''}`}
                       title={nvencToggleDisabledReason || `Use ${hardwareVendorLabel} for faster MP4 exports`}
                     >
-                      Use {hardwareVendorLabel}
+                      {t('export.useHardware', { hardware: hardwareVendorLabel })}
                     </button>
                     <span className="text-[10px] text-sf-text-muted">
-                      Hardware encoding
+                      {t('export.hardwareEncoding')}
                     </span>
                   </div>
                   <div className={`mt-1 text-[10px] ${
@@ -1665,7 +1667,7 @@ function ExportPanel() {
                   </div>
                   {nvencExpectedEncoder && (
                     <div className="mt-1 text-[10px] text-sf-accent font-mono">
-                      Expected encoder: {nvencExpectedEncoder}
+                      {t('export.expectedEncoder')}: {nvencExpectedEncoder}
                     </div>
                   )}
                   <div className="mt-3 flex items-center gap-2">
@@ -1676,12 +1678,12 @@ function ExportPanel() {
                           ? 'bg-sf-accent text-white border-sf-accent'
                           : 'bg-sf-dark-800 text-sf-text-muted border-sf-dark-600'
                       }`}
-                      title="Stream rendered frames directly into FFmpeg instead of writing PNG frames first"
+                      title={t('export.fastPipeHelp')}
                     >
-                      Fast FFmpeg pipe
+                      {t('export.fastPipe')}
                     </button>
                     <span className="text-[10px] text-sf-text-muted">
-                      Skips PNG frame files during export
+                      {t('export.fastPipeShortHelp')}
                     </span>
                   </div>
 
@@ -1689,7 +1691,7 @@ function ExportPanel() {
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-sf-text-primary">
                         <Sparkles className="h-3.5 w-3.5 shrink-0 text-sf-accent" />
-                        <span>NVIDIA RTX 4K upscale</span>
+                        <span>{t('export.rtxUpscale')}</span>
                       </div>
                       <button
                         type="button"
@@ -1711,13 +1713,13 @@ function ExportPanel() {
                       </button>
                     </div>
                     <div className="mt-0.5 text-[10px] text-sf-text-muted">
-                      Runs after the normal render. Target: {rtxTargetResolution.width}x{rtxTargetResolution.height}.
+                      {t('export.rtxAfterRender')} {rtxTargetResolution.width}x{rtxTargetResolution.height}.
                     </div>
 
                     {rtxUpscaleEnabled && (
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <label className="text-[10px] uppercase tracking-wider text-sf-text-muted" htmlFor="rtx-upscale-quality">
-                          Quality
+                          {t('export.quality')}
                         </label>
                         <select
                           id="rtx-upscale-quality"
@@ -1736,7 +1738,7 @@ function ExportPanel() {
                           disabled={rtxReadiness.status === 'checking' || rtxReadiness.status === 'installing'}
                           className="text-[10px] text-sf-accent hover:text-sf-accent-hover disabled:opacity-50"
                         >
-                          Check setup
+                          {t('export.checkSetup')}
                         </button>
                         {rtxReadiness.status === 'error' && rtxReadiness.installAvailable && (
                           <button
@@ -1744,7 +1746,7 @@ function ExportPanel() {
                             onClick={() => void handleInstallRtxRuntime()}
                             className="rounded border border-sf-accent/50 bg-sf-accent/10 px-2 py-1 text-[10px] font-medium text-sf-accent hover:bg-sf-accent/20"
                           >
-                            Install RTX runtime
+                            {t('export.installRtx')}
                           </button>
                         )}
                       </div>
@@ -1771,7 +1773,7 @@ function ExportPanel() {
                 </div>
                 
                 <div>
-                  <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Video Codec</label>
+                  <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.videoCodec')}</label>
                   <select
                     value={settings.videoCodec}
                     onChange={(e) => handleSettingChange('videoCodec', e.target.value)}
@@ -1785,7 +1787,7 @@ function ExportPanel() {
                 
                 {settings.format === 'prores' && (
                   <div>
-                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">ProRes Profile</label>
+                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.proresProfile')}</label>
                     <select
                       value={settings.proresProfile}
                       onChange={(e) => handleSettingChange('proresProfile', e.target.value)}
@@ -1800,7 +1802,7 @@ function ExportPanel() {
                 
                 {settings.format !== 'prores' && (
                 <div>
-                  <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Encoder Preset</label>
+                  <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.encoderPreset')}</label>
                   <select
                     value={settings.preset}
                     onChange={(e) => handleSettingChange('preset', e.target.value)}
@@ -1815,7 +1817,7 @@ function ExportPanel() {
 
                 {settings.format !== 'prores' && settings.useHardwareEncoder && hardwareKind === 'nvenc' && (
                   <div>
-                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">NVENC Preset</label>
+                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.nvencPreset')}</label>
                     <select
                       value={settings.nvencPreset}
                       onChange={(e) => handleSettingChange('nvencPreset', e.target.value)}
@@ -1830,7 +1832,7 @@ function ExportPanel() {
                 
                 {settings.format !== 'prores' && (
                 <div>
-                  <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Quality Mode</label>
+                  <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.qualityMode')}</label>
                   <select
                     value={settings.qualityMode}
                     onChange={(e) => handleSettingChange('qualityMode', e.target.value)}
@@ -1846,7 +1848,7 @@ function ExportPanel() {
                 {settings.format !== 'prores' && (
                 <div>
                   <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">
-                    {settings.qualityMode === 'crf' ? 'CRF' : 'Bitrate (kbps)'}
+                    {settings.qualityMode === 'crf' ? 'CRF' : t('export.bitrate')}
                   </label>
                   <input
                     type="number"
@@ -1865,7 +1867,7 @@ function ExportPanel() {
                 {settings.format !== 'prores' && (
                 <>
                   <div>
-                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Keyframes</label>
+                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.keyframes')}</label>
                     <select
                       value={settings.keyframeMode}
                       onChange={(e) => handleSettingChange('keyframeMode', e.target.value)}
@@ -1877,7 +1879,7 @@ function ExportPanel() {
                     </select>
                   </div>
                   <div>
-                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Keyframe Interval</label>
+                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.keyframeInterval')}</label>
                     <input
                       type="number"
                       min={1}
@@ -1893,7 +1895,7 @@ function ExportPanel() {
                 )}
                 
                 <div>
-                  <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Resolution</label>
+                  <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.resolution')}</label>
                   <select
                     value={settings.resolution}
                     onChange={(e) => handleSettingChange('resolution', e.target.value)}
@@ -1909,13 +1911,13 @@ function ExportPanel() {
                     ))}
                   </select>
                   <div className="mt-1 text-[10px] text-sf-text-muted">
-                    Output: {getResolutionLabel()}
+                    {t('export.output')}: {getResolutionLabel()}
                   </div>
                 </div>
 
                 {settings.resolution === 'custom' && (
                   <div>
-                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Custom Size</label>
+                    <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.customSize')}</label>
                     <div className="mt-1 grid grid-cols-[1fr_auto_1fr] items-center gap-1">
                       <input
                         type="number"
@@ -1939,14 +1941,14 @@ function ExportPanel() {
                     </div>
                     {settings.format !== 'png-seq' && (
                       <div className="mt-1 text-[10px] text-sf-text-muted">
-                        Values are rounded to even pixels for video encoders.
+                        {t('export.evenPixelsHelp')}
                       </div>
                     )}
                   </div>
                 )}
                 
                 <div>
-                  <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Frame Rate</label>
+                  <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.frameRate')}</label>
                   <select
                     value={settings.fps}
                     onChange={(e) => handleSettingChange('fps', e.target.value)}
@@ -1973,14 +1975,14 @@ function ExportPanel() {
                           : 'bg-sf-dark-800 text-sf-text-muted border-sf-dark-600'
                       } ${proxyCoverage.total === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
-                      Use video proxies
+                      {t('export.useProxies')}
                     </button>
                   </div>
                   <div className="mt-1 text-[10px] text-sf-text-muted">
-                    Video proxies use low-res proxy files when available for faster draft exports.
+                    {t('export.proxiesHelp')}
                     {settings.useProxyMedia && proxyCoverage.total > 0 && (
                       <span className="ml-1 text-sf-accent">
-                        {proxyCoverage.ready}/{proxyCoverage.total} ready.
+                        {t('export.proxyReady', { ready: proxyCoverage.ready, total: proxyCoverage.total })}
                       </span>
                     )}
                   </div>
@@ -1992,12 +1994,12 @@ function ExportPanel() {
             {/* Audio */}
             {settings.format !== 'png-seq' && (
             <div>
-              <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">Audio</div>
+              <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">{t('export.audio')}</div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
                   {settings.format === 'audio' ? (
                     <div className="text-xs text-sf-text-muted">
-                      Exports the program mix on its own — every track volume, pan, fade, and solo included. No video is rendered.
+                      {t('export.audioOnlyHelp')}
                     </div>
                   ) : (
                   <button
@@ -2008,7 +2010,7 @@ function ExportPanel() {
                         : 'bg-sf-dark-800 text-sf-text-muted border-sf-dark-600'
                     }`}
                   >
-                    Include Audio
+                    {t('export.includeAudio')}
                   </button>
                   )}
                 </div>
@@ -2016,7 +2018,7 @@ function ExportPanel() {
                 {(settings.includeAudio || settings.format === 'audio') ? (
                   <>
                     <div>
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Audio Codec</label>
+                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.audioCodec')}</label>
                       <select
                         value={settings.audioCodec}
                         onChange={(e) => handleSettingChange('audioCodec', e.target.value)}
@@ -2030,7 +2032,7 @@ function ExportPanel() {
                     
                     {!(settings.format === 'audio' && settings.audioCodec === 'wav') && (
                     <div>
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Audio Bitrate (kbps)</label>
+                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.audioBitrate')}</label>
                       <input
                         type="number"
                         min={32}
@@ -2043,7 +2045,7 @@ function ExportPanel() {
                     )}
                     
                     <div>
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Sample Rate</label>
+                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.sampleRate')}</label>
                       <select
                         value={settings.audioSampleRate}
                         onChange={(e) => handleSettingChange('audioSampleRate', Number(e.target.value))}
@@ -2056,7 +2058,7 @@ function ExportPanel() {
                     </div>
                     
                     <div>
-                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Channels</label>
+                      <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.channels')}</label>
                       <select
                         value={settings.audioChannels}
                         onChange={(e) => handleSettingChange('audioChannels', Number(e.target.value))}
@@ -2077,13 +2079,13 @@ function ExportPanel() {
                             : 'bg-sf-dark-800 text-sf-text-muted border-sf-dark-600'
                         }`}
                       >
-                        Normalize Loudness
+                        {t('export.normalizeLoudness')}
                       </button>
                     </div>
 
                     {settings.normalizeAudio ? (
                       <div className="col-span-2">
-                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">Loudness Target</label>
+                        <label className="text-[10px] text-sf-text-muted uppercase tracking-wider">{t('export.loudnessTarget')}</label>
                         <select
                           value={settings.loudnessTarget}
                           onChange={(e) => handleSettingChange('loudnessTarget', Number(e.target.value))}
@@ -2093,7 +2095,7 @@ function ExportPanel() {
                           <option value={-16}>Podcast / Web (-16 LUFS)</option>
                           <option value={-23}>Broadcast (-23 LUFS)</option>
                         </select>
-                        <div className="mt-1 text-[10px] text-sf-text-muted">EBU R128 loudness, true peak -1.5 dB.</div>
+                        <div className="mt-1 text-[10px] text-sf-text-muted">{t('export.loudnessHelp')}</div>
                       </div>
                     ) : null}
 
@@ -2103,7 +2105,7 @@ function ExportPanel() {
                         disabled={loudnessCheck.status === 'measuring'}
                         className="px-2 py-1 text-xs rounded border bg-sf-dark-800 text-sf-text-muted border-sf-dark-600 hover:border-sf-accent hover:text-sf-text-primary transition-colors disabled:opacity-50 disabled:cursor-default"
                       >
-                        {loudnessCheck.status === 'measuring' ? 'Measuring…' : 'Measure Timeline Loudness'}
+                        {loudnessCheck.status === 'measuring' ? t('export.measuring') : t('export.measureLoudness')}
                       </button>
                       {loudnessCheck.status === 'done' && loudnessCheck.result && (
                         <div className="mt-1 text-[10px] text-sf-text-secondary">
@@ -2118,7 +2120,7 @@ function ExportPanel() {
                               {(loudnessCheck.result.integratedLufsApprox - Number(settings.loudnessTarget)).toFixed(1)} LU vs {settings.loudnessTarget} target)
                             </span>
                           )}
-                          <span className="text-sf-text-muted"> — approximate pre-export mix.</span>
+                          <span className="text-sf-text-muted"> — {t('export.approximateMix')}</span>
                         </div>
                       )}
                       {loudnessCheck.status === 'error' && (
@@ -2128,7 +2130,7 @@ function ExportPanel() {
                   </>
                 ) : (
                   <div className="col-span-2 text-[10px] text-sf-text-muted">
-                    Audio is disabled for this export.
+                    {t('export.audioDisabled')}
                   </div>
                 )}
               </div>
@@ -2143,7 +2145,7 @@ function ExportPanel() {
               className="px-3 py-1.5 text-xs rounded bg-sf-dark-700 text-sf-text-primary hover:bg-sf-dark-600 transition-colors flex items-center gap-1.5"
             >
               <Plus className="w-3 h-3" />
-              Add to Queue
+              {t('export.addToQueue')}
             </button>
             <button
               onClick={handleStartExport}
@@ -2156,12 +2158,12 @@ function ExportPanel() {
             >
               <Play className="w-3 h-3" />
               {isExporting
-                ? (settings.format === 'png-seq' ? 'Exporting PNGs...' : 'Exporting...')
+                ? (settings.format === 'png-seq' ? t('export.exportingPngs') : t('export.exporting'))
                 : queueRunning
-                  ? 'Queue Running'
+                  ? t('export.queueRunning')
                   : settings.format === 'png-seq'
-                    ? 'Export PNG Sequence'
-                    : 'Start Export'}
+                    ? t('export.exportPngSequence')
+                    : t('export.startExport')}
             </button>
             {isExporting && (
               <button
@@ -2169,7 +2171,7 @@ function ExportPanel() {
                 className="px-3 py-1.5 text-xs rounded border border-red-500/60 text-red-400 hover:bg-red-500/10 transition-colors flex items-center gap-1.5"
               >
                 <Square className="w-3 h-3" />
-                Stop
+                {t('export.stop')}
               </button>
             )}
             <div className="flex items-center">
@@ -2203,8 +2205,8 @@ function ExportPanel() {
           {(isExporting || exportProgress > 0) && (
             <div className="mt-3 shrink-0">
               <div className="flex items-center justify-between text-[10px] text-sf-text-muted mb-1">
-                <span>{exportStatus || 'Exporting...'}</span>
-                <span>{Math.round(exportProgress)}% • ETA {formatDuration(etaSeconds)}</span>
+                <span>{exportStatus || t('export.exporting')}</span>
+                <span>{Math.round(exportProgress)}% • {t('export.eta')} {formatDuration(etaSeconds)}</span>
               </div>
               <div className="h-1.5 bg-sf-dark-800 rounded-full overflow-hidden">
                 <div
@@ -2214,7 +2216,7 @@ function ExportPanel() {
               </div>
               {renderFps && (
                 <div className="mt-1 text-[10px] text-sf-text-muted">
-                  Render speed: {renderFps.toFixed(1)} fps
+                  {t('export.renderSpeed')}: {renderFps.toFixed(1)} fps
                 </div>
               )}
             </div>
@@ -2241,23 +2243,23 @@ function ExportPanel() {
           {exportResult?.outputPath && !exportError && (
             <div className="mt-2 shrink-0 text-[11px] text-sf-text-secondary">
               {exportResult.format === 'png-seq' || exportResult.encoderUsed === 'png-sequence'
-                ? `Saved PNG image sequence to: ${exportResult.outputPath}`
-                : `Saved to: ${exportResult.outputPath}`}
+                ? `${t('export.savedPngSequenceTo')}: ${exportResult.outputPath}`
+                : `${t('export.savedTo')}: ${exportResult.outputPath}`}
               {(exportResult.format === 'png-seq' || exportResult.encoderUsed === 'png-sequence') && Number.isFinite(exportResult.frameCount) && (
-                <div>{exportResult.frameCount} PNG frame{exportResult.frameCount === 1 ? '' : 's'}</div>
+                <div>{t('export.pngFrameCount', { count: exportResult.frameCount })}</div>
               )}
               {exportResult.cleanupWarning && (
                 <div className="text-sf-warning">{exportResult.cleanupWarning}</div>
               )}
               {exportResult.encoderUsed && exportResult.format !== 'png-seq' && exportResult.encoderUsed !== 'png-sequence' && (
-                <div>Encoder: {exportResult.encoderUsed}</div>
+                <div>{t('export.encoder')}: {exportResult.encoderUsed}</div>
               )}
             </div>
           )}
           
           {performanceHints.length > 0 && (
             <div className="mt-3 border-t border-sf-dark-700 pt-2 shrink-0 max-h-24 overflow-y-auto">
-              <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-1">Performance hints</div>
+              <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-1">{t('export.performanceHints')}</div>
               <div className="space-y-0.5">
                 {performanceHints.map((hint) => (
                   <div key={hint} className="text-[10px] text-sf-text-muted">
@@ -2273,12 +2275,12 @@ function ExportPanel() {
         <div className="col-span-5 bg-sf-dark-900 border border-sf-dark-700 rounded-lg p-4 flex min-h-0 flex-col overflow-hidden">
           <div className="flex items-center gap-2 mb-4">
             <Film className="w-4 h-4 text-sf-text-muted" />
-            <span className="text-xs font-semibold text-sf-text-primary uppercase tracking-wider">Export Queue</span>
+            <span className="text-xs font-semibold text-sf-text-primary uppercase tracking-wider">{t('export.queue')}</span>
             <span className="ml-auto text-[10px] text-sf-text-muted">
               {queueRunning
-                ? (queuePauseRequested ? 'Pausing after current…' : 'Running')
-                : (queuePaused ? 'Paused' : 'Idle')}
-              {' '}• {queue.length} item{queue.length !== 1 ? 's' : ''}
+                ? (queuePauseRequested ? t('export.pausingAfterCurrent') : t('export.running'))
+                : (queuePaused ? t('export.paused') : t('export.idle'))}
+              {' '}• {t('export.itemCount', { count: queue.length })}
             </span>
           </div>
           
@@ -2292,7 +2294,7 @@ function ExportPanel() {
                   : 'bg-sf-dark-700 text-sf-text-primary border-sf-dark-500 hover:bg-sf-dark-600'
               }`}
             >
-              Start Queue
+              {t('export.startQueue')}
             </button>
             <button
               onClick={handlePauseQueue}
@@ -2303,7 +2305,7 @@ function ExportPanel() {
                   : 'bg-sf-dark-700 text-sf-text-primary border-sf-dark-500 hover:bg-sf-dark-600'
               }`}
             >
-              Pause
+              {t('export.pause')}
             </button>
             <button
               onClick={handleResumeQueue}
@@ -2314,14 +2316,14 @@ function ExportPanel() {
                   : 'bg-sf-dark-800 text-sf-text-muted border-sf-dark-600 cursor-not-allowed'
               }`}
             >
-              Resume
+              {t('export.resume')}
             </button>
           </div>
           
           <div className="flex-1 overflow-auto space-y-2">
             {queue.length === 0 && (
               <div className="text-center text-[11px] text-sf-text-muted py-8">
-                No exports queued yet
+                {t('export.noQueued')}
               </div>
             )}
             {queue.map((item) => (
@@ -2337,13 +2339,13 @@ function ExportPanel() {
                           : `${item.settings.format.toUpperCase()} • ${item.settings.videoCodec?.toUpperCase()} • ${getResolutionLabel(item.settings)} • ${item.settings.fps === 'project' ? 'Project FPS' : `${item.settings.fps} fps`}`}
                     </div>
                     <div className="text-[10px] text-sf-text-muted">
-                      Range: {item.settings.range}
+                      {t('export.range')}: {item.settings.range}
                     </div>
                   </div>
                   <button
                     onClick={() => handleRemoveFromQueue(item.id)}
                     className="p-1 hover:bg-sf-dark-700 rounded"
-                    title="Remove from queue"
+                    title={t('export.removeFromQueue')}
                   >
                     <Trash2 className="w-3 h-3 text-sf-text-muted" />
                   </button>

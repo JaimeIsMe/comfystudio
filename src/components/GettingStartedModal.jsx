@@ -28,6 +28,7 @@ import {
   COMFY_PARTNER_WORKFLOWS,
   getComfyPartnerApiKey,
 } from '../services/comfyPartnerAuth'
+import { useI18n } from '../i18n/I18nContext'
 
 function StatusPill({ tone = 'neutral', children }) {
   const toneClassName = {
@@ -150,6 +151,7 @@ export default function GettingStartedModal({
   onOpenSettings,
   onNavigate,
 }) {
+  const { t } = useI18n()
   const [activeTab, setActiveTab] = useState('setup')
   const [comfyConnection, setComfyConnection] = useState(() => getLocalComfyConnectionSync())
   const [connectionState, setConnectionState] = useState({
@@ -278,31 +280,31 @@ export default function GettingStartedModal({
       connectionState.status === 'success' || partnerKeyConfigured,
     ].filter(Boolean).length
 
-    return `${readyCount}/4 ready-to-generate steps complete`
-  }, [connectionState.status, defaultProjectsLocation, partnerKeyConfigured])
+    return t('gettingStarted.summary', { ready: readyCount })
+  }, [connectionState.status, defaultProjectsLocation, partnerKeyConfigured, t])
 
   const readyPathSteps = useMemo(() => ([
     {
-      label: 'Projects Folder',
+      label: t('gettingStarted.steps.projects'),
       ready: Boolean(defaultProjectsLocation),
-      detail: defaultProjectsLocation ? 'Ready' : 'Pick where projects and generated media live.',
+      detail: defaultProjectsLocation ? t('gettingStarted.status.ready') : t('gettingStarted.steps.projectsHelp'),
     },
     {
-      label: 'ComfyUI Connection',
+      label: t('gettingStarted.steps.connection'),
       ready: connectionState.status === 'success',
-      detail: connectionState.status === 'success' ? 'Connected' : 'Connect to local ComfyUI or use cloud workflows.',
+      detail: connectionState.status === 'success' ? t('gettingStarted.status.connected') : t('gettingStarted.steps.connectionHelp'),
     },
     {
-      label: 'Workflow Setup',
+      label: t('gettingStarted.steps.workflow'),
       ready: true,
-      detail: 'Open starter kits to prepare models and nodes by use case.',
+      detail: t('gettingStarted.steps.workflowHelp'),
     },
     {
-      label: 'Ready To Generate',
+      label: t('gettingStarted.steps.generate'),
       ready: connectionState.status === 'success' || partnerKeyConfigured,
-      detail: connectionState.status === 'success' || partnerKeyConfigured ? 'Local or cloud generation is available.' : 'Connect local ComfyUI or add a cloud API key.',
+      detail: connectionState.status === 'success' || partnerKeyConfigured ? t('gettingStarted.steps.generateReady') : t('gettingStarted.steps.generateHelp'),
     },
-  ]), [connectionState.status, defaultProjectsLocation, partnerKeyConfigured])
+  ]), [connectionState.status, defaultProjectsLocation, partnerKeyConfigured, t])
 
   if (!isOpen) return null
 
@@ -320,20 +322,20 @@ export default function GettingStartedModal({
             <div>
               <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-sf-dark-700 bg-sf-dark-900 px-3 py-1 text-[10px] uppercase tracking-[0.18em] text-sf-text-muted">
                 <Rocket className="h-3 w-3 text-sf-accent" />
-                Getting Started
+                {t('gettingStarted.badge')}
               </div>
               <h2 className="text-xl font-semibold text-sf-text-primary">
-                Get from install to first generation
+                {t('gettingStarted.title')}
               </h2>
               <p className="mt-2 max-w-3xl text-sm text-sf-text-muted">
-                Velorn can run local, cloud, and hybrid AI workflows. This guide keeps the first-run path simple: choose how you want to connect, prepare the workflows you need, then start creating.
+                {t('gettingStarted.intro')}
               </p>
             </div>
             <button
               type="button"
               onClick={onClose}
               className="rounded-lg p-2 text-sf-text-muted transition-colors hover:bg-sf-dark-800 hover:text-sf-text-primary"
-              aria-label="Close getting started"
+              aria-label={t('gettingStarted.closeAria')}
             >
               <X className="h-5 w-5" />
             </button>
@@ -341,13 +343,13 @@ export default function GettingStartedModal({
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <div className="rounded-full border border-sf-dark-700 bg-sf-dark-900 px-3 py-1 text-xs text-sf-text-secondary">
-              Project: <span className="text-sf-text-primary">{projectName || 'Untitled'}</span>
+              {t('gettingStarted.project')}: <span className="text-sf-text-primary">{projectName || t('gettingStarted.untitled')}</span>
             </div>
             <div className="rounded-full border border-sf-dark-700 bg-sf-dark-900 px-3 py-1 text-xs text-sf-text-secondary">
               {setupSummary}
             </div>
             <div className="rounded-full border border-sf-dark-700 bg-sf-dark-900 px-3 py-1 text-xs text-sf-text-secondary">
-              Reopen later from <span className="text-sf-text-primary">Velorn &gt; Getting Started</span>
+              {t('gettingStarted.reopen')} <span className="text-sf-text-primary">Velorn &gt; {t('gettingStarted.badge')}</span>
             </div>
           </div>
         </div>
@@ -363,7 +365,7 @@ export default function GettingStartedModal({
                   : 'text-sf-text-muted hover:bg-sf-dark-800 hover:text-sf-text-primary'
               }`}
             >
-              Setup Checklist
+              {t('gettingStarted.setupChecklist')}
             </button>
             <button
               type="button"
@@ -374,7 +376,7 @@ export default function GettingStartedModal({
                   : 'text-sf-text-muted hover:bg-sf-dark-800 hover:text-sf-text-primary'
               }`}
             >
-              Quick Tour
+              {t('gettingStarted.quickTour')}
             </button>
           </div>
         </div>
@@ -385,9 +387,9 @@ export default function GettingStartedModal({
               <div className="rounded-xl border border-sf-accent/30 bg-sf-accent/10 px-4 py-4">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div className="max-w-2xl">
-                    <div className="text-sm font-semibold text-sf-text-primary">Choose your setup path</div>
+                    <div className="text-sm font-semibold text-sf-text-primary">{t('gettingStarted.choosePath')}</div>
                     <p className="mt-1 text-xs leading-relaxed text-sf-text-secondary">
-                      Use <span className="text-sf-text-primary">Quick Start</span> if you want Velorn to guide you through a starter kit. Use <span className="text-sf-text-primary">Bring Your Own ComfyUI</span> if you already have a custom ComfyUI install and just need Velorn pointed at it.
+                      {t('gettingStarted.choosePathHelp')}
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -396,14 +398,14 @@ export default function GettingStartedModal({
                       onClick={() => handleOpenSettings(WORKFLOW_SETUP_SECTION_ID)}
                       className="rounded-lg bg-sf-accent px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-sf-accent-hover"
                     >
-                      Quick Start Setup
+                      {t('gettingStarted.quickStartSetup')}
                     </button>
                     <button
                       type="button"
                       onClick={() => handleOpenSettings('connection')}
                       className="rounded-lg border border-sf-dark-500 bg-sf-dark-900 px-3 py-2 text-xs font-semibold text-sf-text-secondary transition-colors hover:border-sf-dark-400 hover:text-sf-text-primary"
                     >
-                      Bring Your Own ComfyUI
+                      {t('gettingStarted.bringComfy')}
                     </button>
                   </div>
                 </div>
@@ -418,7 +420,7 @@ export default function GettingStartedModal({
                       }`}
                     >
                       <div className={`text-[10px] font-semibold uppercase tracking-[0.16em] ${step.ready ? 'text-green-400' : 'text-sf-text-muted'}`}>
-                        {step.ready ? 'Ready' : 'Next'}
+                        {step.ready ? t('gettingStarted.status.ready') : t('gettingStarted.status.next')}
                       </div>
                       <div className="mt-1 text-xs font-medium text-sf-text-primary">{step.label}</div>
                       <div className="mt-1 text-[10px] leading-relaxed text-sf-text-muted">{step.detail}</div>
@@ -430,79 +432,76 @@ export default function GettingStartedModal({
               <div className="grid gap-4 lg:grid-cols-2">
                 <ChecklistCard
                   icon={FolderOpen}
-                  title="Workspace folder"
-                  description="Projects, imported assets, and generated media live under your selected projects folder."
+                  title={t('gettingStarted.workspace.title')}
+                  description={t('gettingStarted.workspace.description')}
                   statusTone={defaultProjectsLocation ? 'success' : 'warning'}
-                  statusLabel={defaultProjectsLocation ? 'Ready' : 'Needs setup'}
-                  detail={defaultProjectsLocation || 'No default projects folder selected yet.'}
+                  statusLabel={defaultProjectsLocation ? t('gettingStarted.status.ready') : t('gettingStarted.status.needsSetup')}
+                  detail={defaultProjectsLocation || t('gettingStarted.workspace.none')}
                   actions={[
-                    { label: 'Open Settings', onClick: () => handleOpenSettings('storage') },
+                    { label: t('gettingStarted.actions.openSettings'), onClick: () => handleOpenSettings('storage') },
                   ]}
                 />
 
                 <ChecklistCard
                   icon={Server}
-                  title="Local ComfyUI connection"
-                  description="Velorn talks to a local ComfyUI server on localhost only. If generations fail immediately, check the saved port first."
+                  title={t('gettingStarted.connection.title')}
+                  description={t('gettingStarted.connection.description')}
                   statusTone={connectionState.status === 'success' ? 'success' : connectionState.status === 'warning' ? 'warning' : 'neutral'}
-                  statusLabel={connectionState.status === 'success' ? 'Connected' : connectionState.status === 'warning' ? 'Check port' : 'Saved'}
+                  statusLabel={connectionState.status === 'success' ? t('gettingStarted.status.connected') : connectionState.status === 'warning' ? t('gettingStarted.status.checkPort') : t('gettingStarted.status.saved')}
                   detail={connectionState.message}
                   helperLines={[
-                    `Saved endpoint: ${comfyConnection.httpBase}`,
-                    'If your ComfyUI window uses a different port, update it in Settings before generating.',
+                    t('gettingStarted.connection.savedEndpoint', { endpoint: comfyConnection.httpBase }),
+                    t('gettingStarted.connection.portHelp'),
                   ]}
                   actions={[
-                    { label: testingConnection ? 'Testing...' : 'Test Connection', onClick: handleTestConnection, primary: true, disabled: testingConnection },
-                    { label: 'Connection Settings', onClick: () => handleOpenSettings('connection') },
+                    { label: testingConnection ? t('gettingStarted.actions.testing') : t('gettingStarted.actions.testConnection'), onClick: handleTestConnection, primary: true, disabled: testingConnection },
+                    { label: t('gettingStarted.actions.connectionSettings'), onClick: () => handleOpenSettings('connection') },
                   ]}
                 />
 
                 <ChecklistCard
                   icon={Clapperboard}
-                  title="Workflow requirements"
-                  description="Each workflow can require custom nodes, models, or a partner API key even though the workflow file is already bundled in the app."
+                  title={t('gettingStarted.workflow.title')}
+                  description={t('gettingStarted.workflow.description')}
                   statusTone="neutral"
-                  statusLabel="Use Workflow Setup"
+                  statusLabel={t('gettingStarted.workflow.status')}
                   helperLines={[
-                    'Open Settings > Workflow Setup to scan every built-in workflow at once.',
-                    'Use Generate when you want workflow-specific fallback tools like Load in ComfyUI and per-workflow Re-check.',
-                    'This is the fastest way to answer: why does this workflow work on one machine but not another?',
+                    t('gettingStarted.workflow.help1'), t('gettingStarted.workflow.help2'), t('gettingStarted.workflow.help3'),
                   ]}
                   actions={[
-                    { label: 'Workflow Setup', onClick: () => handleOpenSettings(WORKFLOW_SETUP_SECTION_ID), primary: true },
-                    { label: 'Open Generate', onClick: () => handleNavigate('generate') },
+                    { label: t('gettingStarted.workflow.action'), onClick: () => handleOpenSettings(WORKFLOW_SETUP_SECTION_ID), primary: true },
+                    { label: t('gettingStarted.actions.openGenerate'), onClick: () => handleNavigate('generate') },
                   ]}
                 />
 
                 <ChecklistCard
                   icon={KeyRound}
-                  title="Cloud Workflows API key"
-                  description={`One Comfy.org key unlocks the ${COMFY_PARTNER_WORKFLOWS.length} cloud-rendered starter workflows: Grok, Kling, Vidu, Nano Banana, and Seedream.`}
+                  title={t('gettingStarted.cloud.title')}
+                  description={t('gettingStarted.cloud.description', { count: COMFY_PARTNER_WORKFLOWS.length })}
                   statusTone={partnerKeyConfigured ? 'success' : 'warning'}
-                  statusLabel={partnerKeyConfigured ? 'Key saved' : 'Optional but recommended'}
-                  detail={partnerKeyConfigured ? 'Cloud-powered workflows are ready to go.' : 'Paste your key once and you can skip local GPU setup for these workflows.'}
+                  statusLabel={partnerKeyConfigured ? t('gettingStarted.cloud.saved') : t('gettingStarted.cloud.optional')}
+                  detail={partnerKeyConfigured ? t('gettingStarted.cloud.ready') : t('gettingStarted.cloud.detail')}
                   helperLines={[
-                    'Great for low-VRAM machines — cloud workflows run on Comfy.org and cost a few cents per generation.',
-                    'You can skip this and come back any time.',
+                    t('gettingStarted.cloud.help1'), t('gettingStarted.cloud.help2'),
                   ]}
                   actions={[
-                    { label: partnerKeyConfigured ? 'Change key' : 'Add API key', onClick: () => setApiKeyDialogOpen(true), primary: true },
+                    { label: partnerKeyConfigured ? t('gettingStarted.cloud.changeKey') : t('gettingStarted.cloud.addKey'), onClick: () => setApiKeyDialogOpen(true), primary: true },
                   ]}
                 />
 
                 <ChecklistCard
                   icon={ImageIcon}
-                  title="Stock setup"
-                  description="The Stock tab uses Pexels. Add a key once and you can browse and import footage or photos directly into the project."
+                  title={t('gettingStarted.stock.title')}
+                  description={t('gettingStarted.stock.description')}
                   statusTone={pexelsConfigured ? 'success' : 'neutral'}
-                  statusLabel={pexelsConfigured ? 'Pexels ready' : 'Optional'}
-                  detail={pexelsConfigured ? 'Pexels API key detected.' : 'No Pexels API key detected yet.'}
+                  statusLabel={pexelsConfigured ? t('gettingStarted.stock.ready') : t('gettingStarted.stock.optional')}
+                  detail={pexelsConfigured ? t('gettingStarted.stock.detected') : t('gettingStarted.stock.notDetected')}
                   helperLines={[
-                    'You can skip this until you need stock content.',
+                    t('gettingStarted.stock.help'),
                   ]}
                   actions={[
-                    { label: 'Open Stock Settings', onClick: () => handleOpenSettings('stock') },
-                    { label: 'Open Stock Tab', onClick: () => handleNavigate('stock') },
+                    { label: t('gettingStarted.stock.openSettings'), onClick: () => handleOpenSettings('stock') },
+                    { label: t('gettingStarted.stock.openTab'), onClick: () => handleNavigate('stock') },
                   ]}
                 />
 
@@ -511,70 +510,62 @@ export default function GettingStartedModal({
           ) : (
             <div className="space-y-4">
               <div className="rounded-xl border border-sf-dark-700 bg-sf-dark-900/70 px-4 py-3 text-sm text-sf-text-secondary">
-                This is the quick orientation layer. It is meant to answer “where do I go next?” while your videos can explain the deeper editing and prompting techniques in detail.
+                {t('gettingStarted.tour.intro')}
               </div>
 
               <div className="grid gap-4 lg:grid-cols-2">
                 <TourCard
                   icon={Sparkles}
-                  title="Editor workspace"
-                  description="This is the day-to-day editing view once media is inside the project."
+                  title={t('gettingStarted.tour.editorTitle')}
+                  description={t('gettingStarted.tour.editorDescription')}
                   helperLines={[
-                    'Assets panel: import videos, audio, and images, then drag them to the timeline.',
-                    'Preview: review media and send a frame to Generate as a starting keyframe.',
-                    'Timeline: trim, ripple, snap, markers, and arrange your cut.',
-                    'Inspector: transform, crop, timing, effects, text, and adjustments for the selected item.',
+                    t('gettingStarted.tour.editor1'), t('gettingStarted.tour.editor2'), t('gettingStarted.tour.editor3'), t('gettingStarted.tour.editor4'),
                   ]}
-                  actionLabel="Open Editor"
+                  actionLabel={t('gettingStarted.tour.openEditor')}
                   onAction={() => handleNavigate('editor')}
                 />
 
                 <TourCard
                   icon={Rocket}
-                  title="Generate"
-                  description="Create images, videos, or audio with local or cloud workflows."
+                  title={t('gettingStarted.tour.generateTitle')}
+                  description={t('gettingStarted.tour.generateDescription')}
                   helperLines={[
-                    'Single mode is for one-off image, video, or audio jobs.',
-                    'Director mode walks through Setup, Script, Keyframes, and Videos.',
-                    'If a workflow is missing models or nodes, use Re-check before you queue anything.',
+                    t('gettingStarted.tour.generate1'), t('gettingStarted.tour.generate2'), t('gettingStarted.tour.generate3'),
                   ]}
-                  actionLabel="Open Generate"
+                  actionLabel={t('gettingStarted.actions.openGenerate')}
                   onAction={() => handleNavigate('generate')}
                 />
 
                 <TourCard
                   icon={ImageIcon}
-                  title="Stock"
-                  description="Search Pexels and import footage or stills directly into the current project."
+                  title={t('gettingStarted.tour.stockTitle')}
+                  description={t('gettingStarted.tour.stockDescription')}
                   helperLines={[
-                    'Best used when you need quick placeholder footage, inspiration, or background plates.',
-                    'Requires a Pexels API key in Settings.',
+                    t('gettingStarted.tour.stock1'), t('gettingStarted.tour.stock2'),
                   ]}
-                  actionLabel="Open Stock"
+                  actionLabel={t('gettingStarted.tour.openStock')}
                   onAction={() => handleNavigate('stock')}
                 />
 
                 <TourCard
                   icon={Download}
-                  title="Export"
-                  description="Render the current timeline to a deliverable file and manage the export queue."
+                  title={t('gettingStarted.tour.exportTitle')}
+                  description={t('gettingStarted.tour.exportDescription')}
                   helperLines={[
-                    'Choose format, codec, render range, resolution, FPS, and audio settings.',
-                    'Queue multiple exports if you want a few output variants.',
+                    t('gettingStarted.tour.export1'), t('gettingStarted.tour.export2'),
                   ]}
-                  actionLabel="Open Export"
+                  actionLabel={t('gettingStarted.tour.openExport')}
                   onAction={() => handleNavigate('export')}
                 />
 
                 <TourCard
                   icon={Settings}
-                  title="Settings"
-                  description="Return here whenever the machine-specific setup changes."
+                  title={t('gettingStarted.tour.settingsTitle')}
+                  description={t('gettingStarted.tour.settingsDescription')}
                   helperLines={[
-                    'Projects folder, ComfyUI port, Comfy account API key, Pexels key, and new-project defaults all live here.',
-                    'If something works on one machine and not another, this is the first place to compare.',
+                    t('gettingStarted.tour.settings1'), t('gettingStarted.tour.settings2'),
                   ]}
-                  actionLabel="Open Settings"
+                  actionLabel={t('gettingStarted.actions.openSettings')}
                   onAction={() => handleOpenSettings('connection')}
                 />
               </div>
@@ -584,7 +575,7 @@ export default function GettingStartedModal({
 
         <div className="flex items-center justify-between gap-3 border-t border-sf-dark-700 px-5 py-4">
           <div className="text-xs text-sf-text-muted">
-            Keep the in-app guide short. Save the deep “how to edit” and “how to prompt” teaching for videos.
+            {t('gettingStarted.footer')}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -592,7 +583,7 @@ export default function GettingStartedModal({
               onClick={onClose}
               className="rounded-lg bg-sf-dark-800 px-4 py-2 text-sm text-sf-text-secondary transition-colors hover:bg-sf-dark-700"
             >
-              Close
+              {t('common.close')}
             </button>
           </div>
         </div>

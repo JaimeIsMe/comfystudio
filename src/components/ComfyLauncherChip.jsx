@@ -14,6 +14,7 @@ import {
   Maximize2,
 } from 'lucide-react'
 import ComfyLauncherLogViewer from './ComfyLauncherLogViewer'
+import { useI18n } from '../i18n/I18nContext'
 
 import {
   isComfyLauncherAvailable,
@@ -71,6 +72,7 @@ function usePopoverClickAway(ref, onDismiss, isOpen) {
 }
 
 function ComfyLauncherChip() {
+  const { t } = useI18n()
   const available = isComfyLauncherAvailable()
   const [state, setState] = useState(() => getComfyLauncherSnapshot())
   const [config, setConfig] = useState(() => getComfyLauncherConfig())
@@ -168,29 +170,30 @@ function ComfyLauncherChip() {
   }, [open])
 
   const stateStyle = STATE_STYLES[state.state] || STATE_STYLES.unknown
+  const stateLabel = t(`launcherChip.states.${STATE_STYLES[state.state] ? state.state : 'unknown'}`)
   const isMacPlatform = window?.electronAPI?.platform === 'darwin'
   const launcherMode = config.launcherMode === 'mac-app' ? 'mac-app' : 'script'
 
   const summary = useMemo(() => {
-    if (!available) return 'Launcher unavailable (not Electron).'
+    if (!available) return t('launcherChip.summary.unavailable')
     if (state.state === 'running' && state.ownership === 'app') {
       const uptime = formatUptime(state.uptimeMs || Math.max(0, Date.now() - state.startedAt))
       return `Running via ComfyUI.app${uptime ? ` - up ${uptime}` : ''}`
     }
     if (state.state === 'running' && state.ownership === 'ours') {
       const uptime = formatUptime(state.uptimeMs || Math.max(0, Date.now() - state.startedAt))
-      return `Running • pid ${state.pid ?? '?'}${uptime ? ` • up ${uptime}` : ''}`
+      return t('launcherChip.summary.running', { pid: state.pid ?? '?', uptime: uptime ? ` • ${t('launcherChip.summary.up')} ${uptime}` : '' })
     }
     if (state.state === 'external') {
-      return `External process detected at ${state.httpBase || 'local ComfyUI'}`
+      return t('launcherChip.summary.external', { endpoint: state.httpBase || 'local ComfyUI' })
     }
     if (state.state === 'starting') return state.statusMessage || 'Starting ComfyUI…'
     if (state.state === 'stopping') return state.statusMessage || 'Stopping ComfyUI…'
     if (state.state === 'crashed') return state.statusMessage || 'ComfyUI exited unexpectedly.'
     if (state.state === 'stopped') return state.statusMessage || 'ComfyUI is stopped.'
-    if (state.state === 'idle') return state.statusMessage || 'ComfyUI is not running.'
-    return 'ComfyUI status unknown.'
-  }, [available, state])
+    if (state.state === 'idle') return t('launcherChip.summary.notRunning')
+    return t('launcherChip.summary.unknown')
+  }, [available, state, t])
 
   const wrap = async (action) => {
     setBusy(true)
@@ -254,7 +257,7 @@ function ComfyLauncherChip() {
         className="flex items-center gap-1.5 h-7 px-2.5 mr-1 rounded-md bg-sf-dark-800 hover:bg-sf-dark-700 text-sf-text-primary text-[11px] font-medium transition-colors border border-sf-dark-700"
       >
         <span className={`w-2 h-2 rounded-full ${stateStyle.dot}`} />
-        <span className="whitespace-nowrap">{stateStyle.label}</span>
+        <span className="whitespace-nowrap">{state.state === 'unknown' ? stateLabel : `ComfyUI ${stateLabel}`}</span>
         <ChevronDown className="w-3 h-3 text-sf-text-muted" />
       </button>
 
@@ -264,7 +267,7 @@ function ComfyLauncherChip() {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className={`w-2 h-2 rounded-full ${stateStyle.dot}`} />
-                <div className="text-sm font-semibold text-sf-text-primary">ComfyUI {stateStyle.label.toLowerCase()}</div>
+                <div className="text-sm font-semibold text-sf-text-primary">ComfyUI {stateLabel}</div>
               </div>
               <div className="mt-1 text-[11px] text-sf-text-muted truncate">{summary}</div>
             </div>
@@ -272,7 +275,7 @@ function ComfyLauncherChip() {
               type="button"
               onClick={handleRefresh}
               disabled={busy}
-              title="Re-probe ComfyUI"
+              title={t('launcherChip.reprobeHelp')}
               className="p-1 rounded hover:bg-sf-dark-700 text-sf-text-muted hover:text-sf-text-primary disabled:opacity-50"
             >
               <Loader2 className={`w-3.5 h-3.5 ${busy ? 'animate-spin' : ''}`} />
@@ -288,7 +291,7 @@ function ComfyLauncherChip() {
                 className="flex-1 flex items-center justify-center gap-1.5 h-8 rounded-md bg-emerald-500/90 hover:bg-emerald-500 disabled:bg-sf-dark-700 disabled:text-sf-text-muted text-white text-[11px] font-semibold transition-colors"
               >
                 <Play className="w-3.5 h-3.5" />
-                Start
+                {t('launcherChip.start')}
               </button>
               <button
                 type="button"
@@ -297,7 +300,7 @@ function ComfyLauncherChip() {
                 className="flex-1 flex items-center justify-center gap-1.5 h-8 rounded-md bg-red-500/90 hover:bg-red-500 disabled:bg-sf-dark-700 disabled:text-sf-text-muted text-white text-[11px] font-semibold transition-colors"
               >
                 <StopCircle className="w-3.5 h-3.5" />
-                Stop
+                {t('launcherChip.stop')}
               </button>
               <button
                 type="button"
@@ -306,7 +309,7 @@ function ComfyLauncherChip() {
                 className="flex-1 flex items-center justify-center gap-1.5 h-8 rounded-md bg-sky-500/90 hover:bg-sky-500 disabled:bg-sf-dark-700 disabled:text-sf-text-muted text-white text-[11px] font-semibold transition-colors"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                Restart
+                {t('launcherChip.restart')}
               </button>
             </div>
 
@@ -444,16 +447,16 @@ function ComfyLauncherChip() {
           {!(isMacPlatform && launcherMode === 'mac-app') && (
           <div className="px-3.5 py-3 space-y-2 border-b border-sf-dark-700">
             <div className="flex items-center justify-between">
-              <div className="text-[10px] uppercase tracking-wider text-sf-text-muted font-semibold">Launcher script</div>
+              <div className="text-[10px] uppercase tracking-wider text-sf-text-muted font-semibold">{t('launcherChip.script')}</div>
               <div className="flex items-center gap-1">
                 <button
                   type="button"
                   onClick={handlePickLauncher}
                   className="flex items-center gap-1 px-2 py-0.5 rounded bg-sf-dark-800 hover:bg-sf-dark-700 text-[10px] text-sf-text-primary"
-                  title="Pick a .bat / .sh launcher script"
+                  title={t('launcherChip.pickScript')}
                 >
                   <FolderOpen className="w-3 h-3" />
-                  Browse
+                  {t('launcherChip.browse')}
                 </button>
               </div>
             </div>
@@ -496,26 +499,26 @@ function ComfyLauncherChip() {
             <div className="flex items-center justify-between mb-1.5">
               <div className="text-[10px] uppercase tracking-wider text-sf-text-muted font-semibold flex items-center gap-1">
                 <FileText className="w-3 h-3" />
-                Log tail
+                {t('launcherChip.logTail')}
               </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => { setOpen(false); setLogViewerOpen(true) }}
                   className="inline-flex items-center gap-1 text-[10px] text-sf-accent hover:text-sf-accent-hover"
-                  title="Open the full log viewer with search and filters"
+                  title={t('launcherChip.openViewerHelp')}
                 >
                   <Maximize2 className="w-3 h-3" />
-                  Open log viewer
+                  {t('launcherChip.openViewer')}
                 </button>
                 <button
                   type="button"
                   onClick={handleOpenLogFile}
                   disabled={!state.logFilePath}
                   className="text-[10px] text-sf-accent hover:text-sf-accent-hover disabled:text-sf-text-muted"
-                  title={state.logFilePath || 'No log file written yet'}
+                  title={state.logFilePath || t('launcherChip.noLogFile')}
                 >
-                  Open log file
+                  {t('launcherChip.openLogFile')}
                 </button>
               </div>
             </div>
@@ -524,7 +527,7 @@ function ComfyLauncherChip() {
               className="h-[160px] overflow-y-auto bg-black/60 border border-sf-dark-700 rounded-md px-2 py-1.5 font-mono text-[10.5px] text-sf-text-secondary leading-snug"
             >
               {logs.length === 0 ? (
-                <div className="text-sf-text-muted italic">No log output yet. Logs appear when ComfyUI starts.</div>
+                <div className="text-sf-text-muted italic">{t('launcherChip.noLogs')}</div>
               ) : (
                 logs.slice(-200).map((entry, idx) => (
                   <div
@@ -542,7 +545,7 @@ function ComfyLauncherChip() {
             <span>{state.httpBase || '—'}</span>
             <span className="flex items-center gap-1">
               <SettingsIcon className="w-3 h-3" />
-              Manage in Settings → ComfyUI Launcher
+              {t('launcherChip.manage')}
             </span>
           </div>
         </div>

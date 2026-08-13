@@ -3,6 +3,7 @@ import { Copy, LayoutTemplate, Minus, PanelLeft, Square, X } from 'lucide-react'
 import ComfyLauncherChip from './ComfyLauncherChip'
 import CreditsChip from './CreditsChip'
 import GenerationMonitorChip from './GenerationMonitorChip'
+import { useI18n } from '../i18n/I18nContext'
 
 const EDITOR_LAYOUTS = [
   { id: 'default', Icon: LayoutTemplate, label: 'Default layout' },
@@ -33,6 +34,7 @@ function TitleBar({
   editorLayout = 'default',
   onEditorLayoutChange,
 }) {
+  const { t } = useI18n()
   const tabs = TOP_TABS.filter((tab) => !HIDDEN_TOP_TAB_IDS.has(tab.id))
   const [windowState, setWindowState] = useState({
     isMaximized: false,
@@ -115,7 +117,7 @@ function TitleBar({
                       : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700'
                   }`}
                 >
-                  {tab.label}
+              {tab.id === 'comfyui' ? tab.label : t(`topTabs.${tab.id}`)}
                 </button>
                 {tab.id === 'mog' && activeTab === 'mog' && (
                   <div className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 rounded-full bg-pink-300/12 px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.18em] text-pink-200/65 shadow-[0_0_10px_rgba(244,114,182,0.12)]">

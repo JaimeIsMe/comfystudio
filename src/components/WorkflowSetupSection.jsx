@@ -26,6 +26,7 @@ import {
   X,
 } from 'lucide-react'
 import ApiKeyDialog from './ApiKeyDialog'
+import { useI18n } from '../i18n/I18nContext'
 import { COMFY_PARTNER_KEY_CHANGED_EVENT } from '../services/comfyPartnerAuth'
 import { WORKFLOW_SETUP_STARTER_KITS, getWorkflowSetupGalleryMeta } from '../config/workflowSetupGallery'
 import { checkLocalComfyConnection, getLocalComfyConnectionSync } from '../services/localComfyConnection'
@@ -427,6 +428,7 @@ function InstallSummaryRow({ label, value, tone = 'text-sf-text-secondary' }) {
 }
 
 const WorkflowSetupSection = memo(function WorkflowSetupSection() {
+  const { t } = useI18n()
   const [comfyRootPath, setComfyRootPath] = useState('')
   const [rootValidation, setRootValidation] = useState({
     success: false,
@@ -461,6 +463,18 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
   // { installs: [{ label, source }], since } — cleared once ComfyUI restarts.
   const [pendingRestart, setPendingRestart] = useState(null)
   const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false)
+  const connectionDisplayMessage = useMemo(() => {
+    const message = String(connectionState.message || '')
+    const saved = message.match(/^Saved endpoint: (.+)$/)
+    if (saved) return t('settings.workflowSetup.connection.saved', { endpoint: saved[1] })
+    const testing = message.match(/^Testing (.+)\.\.\.$/)
+    if (testing) return t('settings.workflowSetup.connection.testing', { endpoint: testing[1] })
+    const connected = message.match(/^Connected to (.+)$/)
+    if (connected) return t('settings.workflowSetup.connection.connected', { endpoint: connected[1] })
+    const failed = message.match(/^Could not connect to ([^:]+:\/\/[^:]+:\d+)(?:: (.+))?$/)
+    if (failed) return t('settings.workflowSetup.connection.failed', { endpoint: failed[1], detail: failed[2] ? `: ${failed[2]}` : '' })
+    return message
+  }, [connectionState.message, t])
 
   useEffect(() => {
     if (!isComfyLauncherAvailable()) return undefined
@@ -1221,10 +1235,10 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
           <div>
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-sf-accent" />
-              <span className="text-sm font-medium text-sf-text-primary">Workflow Setup Manager</span>
+              <span className="text-sm font-medium text-sf-text-primary">{t('settings.workflowSetup.manager')}</span>
             </div>
             <p className="mt-1 text-[11px] text-sf-text-secondary">
-              Check every built-in workflow, download curated local models in-app, and surface the remaining manual steps when automation is unsafe.
+              {t('settings.workflowSetup.managerHelp')}
             </p>
           </div>
           <button
@@ -1238,17 +1252,17 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
             }`}
           >
             {scanState === 'checking' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-            Re-check all
+            {t('settings.workflowSetup.recheckAll')}
           </button>
         </div>
 
         <div className="mt-3 grid gap-2 md:grid-cols-2">
-          <InstallSummaryRow label="Built-in workflows tracked" value={String(workflowCount)} />
-          <InstallSummaryRow label="Ready right now" value={String(readyWorkflowCount)} tone="text-green-400" />
-          <InstallSummaryRow label="Workflows with auto installs" value={String(actionableWorkflowCount)} tone="text-orange-300" />
+          <InstallSummaryRow label={t('settings.workflowSetup.tracked')} value={String(workflowCount)} />
+          <InstallSummaryRow label={t('settings.workflowSetup.ready')} value={String(readyWorkflowCount)} tone="text-green-400" />
+          <InstallSummaryRow label={t('settings.workflowSetup.autoInstallWorkflows')} value={String(actionableWorkflowCount)} tone="text-orange-300" />
           <InstallSummaryRow
-            label="Local ComfyUI connection"
-            value={connectionState.message}
+            label={t('settings.workflowSetup.localConnection')}
+            value={connectionDisplayMessage}
             tone={connectionState.status === 'success' ? 'text-green-400' : connectionState.status === 'offline' ? 'text-sf-error' : 'text-sf-text-secondary'}
           />
         </div>
@@ -1304,11 +1318,11 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
       <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 p-3">
         <div className="flex items-center gap-2">
           <FolderSearch className="w-4 h-4 text-sf-text-muted" />
-          <span className="text-sm font-medium text-sf-text-primary">ComfyUI Folder</span>
+          <span className="text-sm font-medium text-sf-text-primary">{t('settings.workflowSetup.comfyFolder')}</span>
         </div>
 
         <p className="mt-1 text-[11px] text-sf-text-secondary">
-          Auto-install needs the root of your local ComfyUI install so Velorn knows where to place custom nodes and models.
+          {t('settings.workflowSetup.comfyFolderHelp')}
         </p>
 
         <div className="mt-3 flex gap-2">
@@ -1325,21 +1339,21 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
             onClick={() => { void handleChooseRoot() }}
             className="px-3 py-2 rounded bg-sf-dark-700 hover:bg-sf-dark-600 text-xs text-sf-text-secondary transition-colors"
           >
-            Choose
+            {t('settings.workflowSetup.choose')}
           </button>
           <button
             type="button"
             onClick={() => { void handleClearRootPath() }}
             className="px-3 py-2 rounded bg-sf-dark-700 hover:bg-sf-dark-600 text-xs text-sf-text-secondary transition-colors"
           >
-            Clear
+            {t('settings.workflowSetup.clear')}
           </button>
         </div>
 
         <div className="mt-3 space-y-1.5 text-[11px]">
           <div className={`flex items-center gap-2 ${rootValidation.isValid ? 'text-green-400' : 'text-yellow-300'}`}>
             {rootValidation.isValid ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
-            <span>{rootValidation.isValid ? 'ComfyUI folder looks valid.' : (rootValidation.error || 'Select your ComfyUI folder to enable installs.')}</span>
+            <span>{rootValidation.isValid ? t('settings.workflowSetup.folderValid') : (rootValidation.error || t('settings.workflowSetup.selectFolder'))}</span>
           </div>
           {rootValidation.normalizedPath && (
             <div className="text-sf-text-muted">Root: {rootValidation.normalizedPath}</div>
@@ -1367,18 +1381,18 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
       <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 p-3">
         <div className="flex items-center gap-2">
           <Download className="w-4 h-4 text-sf-text-muted" />
-          <span className="text-sm font-medium text-sf-text-primary">Install Plan</span>
+          <span className="text-sm font-medium text-sf-text-primary">{t('settings.workflowSetup.installPlan')}</span>
         </div>
 
         <p className="mt-1 text-[11px] text-sf-text-secondary">
-          Select the workflows you want to prepare. The app only attempts curated installs; anything else stays visible as a manual follow-up.
+          {t('settings.workflowSetup.installPlanHelp')}
         </p>
 
         <div className="mt-3 grid gap-2 md:grid-cols-2">
-          <InstallSummaryRow label="Selected workflows" value={String(selectedWorkflowIds.length)} />
-          <InstallSummaryRow label="Downloadable models" value={String(installPlan.models.length)} tone="text-orange-300" />
-          <InstallSummaryRow label="Installable node packs" value={String(installPlan.nodePacks.length)} tone="text-orange-300" />
-          <InstallSummaryRow label="Manual follow-ups" value={String(installPlan.manualNodes.length + installPlan.manualModels.length + installPlan.coreNodes.length + installPlan.authWorkflows.length)} tone="text-yellow-300" />
+          <InstallSummaryRow label={t('settings.workflowSetup.selected')} value={String(selectedWorkflowIds.length)} />
+          <InstallSummaryRow label={t('settings.workflowSetup.downloadableModels')} value={String(installPlan.models.length)} tone="text-orange-300" />
+          <InstallSummaryRow label={t('settings.workflowSetup.installableNodes')} value={String(installPlan.nodePacks.length)} tone="text-orange-300" />
+          <InstallSummaryRow label={t('settings.workflowSetup.manualFollowups')} value={String(installPlan.manualNodes.length + installPlan.manualModels.length + installPlan.coreNodes.length + installPlan.authWorkflows.length)} tone="text-yellow-300" />
         </div>
 
         {installPlan.hasActionableTasks && (
@@ -1405,7 +1419,7 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
 
         <div className="mt-3 flex items-center justify-between gap-2">
           <div className="text-[11px] text-sf-text-muted">
-            Section ID: <code>{WORKFLOW_SETUP_SECTION_ID}</code>
+            {t('settings.workflowSetup.sectionId')}: <code>{WORKFLOW_SETUP_SECTION_ID}</code>
           </div>
           <button
             type="button"
@@ -1418,7 +1432,7 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
             }`}
           >
             {installing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wrench className="w-3.5 h-3.5" />}
-            Install selected
+            {t('settings.workflowSetup.installSelected')}
           </button>
         </div>
       </div>
@@ -1428,10 +1442,10 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-sf-accent" />
-              <span className="text-sm font-medium text-sf-text-primary">Workflow filters</span>
+              <span className="text-sm font-medium text-sf-text-primary">{t('settings.workflowSetup.filters')}</span>
             </div>
             <p className="mt-1 max-w-3xl text-[11px] text-sf-text-secondary">
-              Narrow the library by runtime, or show the small bundle needed for music video generation.
+              {t('settings.workflowSetup.filtersHelp')}
             </p>
           </div>
           <button
@@ -1441,7 +1455,7 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
             className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded border border-sf-dark-600 px-3 py-2 text-xs font-medium text-sf-text-secondary transition-colors hover:border-sf-dark-500 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Wrench className="h-3.5 w-3.5" />
-            Select installable in view
+            {t('settings.workflowSetup.selectVisible')}
           </button>
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
@@ -1454,27 +1468,27 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
                 : 'border-sf-dark-600 text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary'
             }`}
           >
-            All workflows
+            {t('settings.workflowSetup.filterLabels.all')}
           </button>
           {WORKFLOW_SETUP_STARTER_KITS.map((kit) => (
             <button
               key={kit.id}
               type="button"
               onClick={() => handleWorkflowFilterChange(kit.id)}
-              title={kit.description}
+              title={t(`settings.workflowSetup.filterDescriptions.${kit.id}`)}
               className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
                 activeWorkflowFilterId === kit.id
                   ? 'border-sf-accent bg-sf-accent/15 text-sf-text-primary'
                   : 'border-sf-dark-600 text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary'
               }`}
             >
-              {kit.label}
+              {t(`settings.workflowSetup.filterLabels.${kit.id}`)}
             </button>
           ))}
         </div>
         {activeWorkflowFilter && (
           <div className="mt-3 rounded border border-sf-dark-700 bg-sf-dark-950/60 px-3 py-2 text-[11px] text-sf-text-secondary">
-            <span className="font-medium text-sf-text-primary">{activeWorkflowFilter.label}:</span> {activeWorkflowFilter.tagline}
+            <span className="font-medium text-sf-text-primary">{t(`settings.workflowSetup.filterLabels.${activeWorkflowFilter.id}`)}:</span> {t(`settings.workflowSetup.filterTaglines.${activeWorkflowFilter.id}`)}
           </div>
         )}
       </div>
@@ -1482,9 +1496,11 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
       <div className="space-y-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <div className="text-sm font-medium text-sf-text-primary">Workflow library</div>
+            <div className="text-sm font-medium text-sf-text-primary">{t('settings.workflowSetup.library')}</div>
             <p className="mt-0.5 max-w-2xl text-[11px] text-sf-text-secondary">
-              Browse {activeWorkflowFilter ? `${visibleWorkflowResults.length} filtered` : 'bundled'} workflows in a visual grid, or switch to list view. Expand a row or card for full dependency details.
+              {activeWorkflowFilter
+                ? t('settings.workflowSetup.libraryFilteredHelp', { count: visibleWorkflowResults.length })
+                : t('settings.workflowSetup.libraryHelp')}
             </p>
           </div>
           <div className="inline-flex shrink-0 rounded-lg border border-sf-dark-600 p-0.5">
@@ -1498,7 +1514,7 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
               }`}
             >
               <LayoutGrid className="h-3.5 w-3.5" />
-              Gallery
+              {t('settings.workflowSetup.gallery')}
             </button>
             <button
               type="button"
@@ -1510,7 +1526,7 @@ const WorkflowSetupSection = memo(function WorkflowSetupSection() {
               }`}
             >
               <List className="h-3.5 w-3.5" />
-              List
+              {t('settings.workflowSetup.list')}
             </button>
           </div>
         </div>

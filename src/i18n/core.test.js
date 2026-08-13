@@ -55,6 +55,59 @@ test('ComfyUI workflow names and categories remain in English', () => {
   }
 })
 
+test('Effects GUI dictionaries cover stable transition and effect ids', () => {
+  const english = JSON.parse(readFileSync(new URL('../../public/lang/lang_en.json', import.meta.url), 'utf8'))
+  const transitionSource = readFileSync(new URL('../constants/transitions.js', import.meta.url), 'utf8')
+  const effectSource = readFileSync(new URL('../utils/effects.js', import.meta.url), 'utf8')
+
+  const transitionIds = [...transitionSource.matchAll(/\{ id: '([^']+)', name:/g)]
+    .map((match) => match[1])
+    .sort()
+  assert.deepEqual(Object.keys(english.effectsPanel.transitions.items).sort(), transitionIds)
+
+  const pickerDefinitionSource = effectSource
+    .split('const EFFECT_PICKER_CATEGORY_DEFINITIONS')[1]
+    .split('export const EFFECT_PICKER_GROUPS')[0]
+  const pickerEffectIds = [...pickerDefinitionSource.matchAll(/effectIds:\s*\[([^\]]+)\]/g)]
+    .flatMap((match) => [...match[1].matchAll(/'([^']+)'/g)].map((idMatch) => idMatch[1]))
+    .sort()
+  assert.deepEqual(Object.keys(english.effectsPanel.catalog).sort(), pickerEffectIds)
+})
+
+test('Effects product and film-stock preset names remain unchanged', () => {
+  const english = JSON.parse(readFileSync(new URL('../../public/lang/lang_en.json', import.meta.url), 'utf8'))
+  const japanese = JSON.parse(readFileSync(new URL('../../public/lang/lang_jp.json', import.meta.url), 'utf8'))
+  const protectedPaths = [
+    'effectsPanel.catalog.glslFilmGrain.presets.fine5245',
+    'effectsPanel.catalog.glslFilmGrain.presets.vision500t',
+    'effectsPanel.catalog.glslFilmLook.presets.kodak2395',
+    'effectsPanel.catalog.glslFilmLook.presets.agfa1978',
+    'effectsPanel.catalog.glslFilmLook.presets.polaroid',
+  ]
+  for (const path of protectedPaths) {
+    assert.equal(getNestedValueForTest(japanese, path), getNestedValueForTest(english, path), path)
+  }
+})
+
+test('ComfyUI launcher technical values remain literal and outside translations', () => {
+  const source = readFileSync(new URL('../components/ComfyLauncherSettingsSection.jsx', import.meta.url), 'utf8')
+  assert.match(source, /placeholder="e\.g\. --listen 127\.0\.0\.1 --port 8188"/)
+  assert.match(source, />--disable-auto-launch</)
+  assert.match(source, />\/system_stats</)
+  assert.match(source, /'http:\/\/127\.0\.0\.1:8188'/)
+})
+
+test('Hotkey action dictionaries cover stable ids without translating bindings', () => {
+  const english = JSON.parse(readFileSync(new URL('../../public/lang/lang_en.json', import.meta.url), 'utf8'))
+  const source = readFileSync(new URL('../services/editorHotkeys.js', import.meta.url), 'utf8')
+  const idEntries = [...source.matchAll(/^\s+([A-Z_]+): '([^']+)',?$/gm)]
+  for (const [, , id] of idEntries) {
+    assert.equal(typeof getNestedValueForTest(english.settings.hotkeys.actions, id), 'string', id)
+  }
+  assert.match(source, /defaultBinding: 'Ctrl\+Shift\+M'/)
+  assert.match(source, /defaultBinding: 'Shift\+ArrowDown'/)
+})
+
 function getNestedValueForTest(dictionary, key) {
   return key.split('.').reduce((value, part) => value[part], dictionary)
 }

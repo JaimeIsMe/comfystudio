@@ -570,7 +570,7 @@ function WelcomeScreen() {
           <button
             type="button"
             onClick={() => setApiKeyDialogOpen(true)}
-            title={partnerKeyConfigured ? 'Cloud API key is set. Click to manage.' : 'Set up your Comfy.org API key to unlock cloud workflows.'}
+            title={partnerKeyConfigured ? t('launcherChip.apiKeySetHelp') : t('launcherChip.apiKeyNeededHelp')}
             className={`flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[11px] font-medium transition-colors border ${partnerKeyConfigured
               ? 'bg-sf-dark-800 hover:bg-sf-dark-700 border-sf-dark-700 text-sf-text-primary'
               : 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/40 text-amber-100'
@@ -579,12 +579,12 @@ function WelcomeScreen() {
             {partnerKeyConfigured ? (
               <>
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>API key set</span>
+                <span>{t('launcherChip.apiKeySet')}</span>
               </>
             ) : (
               <>
                 <KeyRound className="w-3.5 h-3.5" />
-                <span>API key needed</span>
+                <span>{t('launcherChip.apiKeyNeeded')}</span>
               </>
             )}
           </button>
