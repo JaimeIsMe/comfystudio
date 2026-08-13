@@ -7,7 +7,6 @@ This is the live state for moving Velorn development from the old Windows checko
 ## Merged Migration
 
 - Worktree: `C:\Users\papa\Documents\coding_projects\general\velorn-migration-cleanup`
-- Current local branch: `codex/post-merge-cleanup`, tracking `origin/main`
 - PR: `#99` - merged into `main` on 2026-08-12
 - Merge commit: `c4be213`
 - Latest release remains `v0.3.25`; the recovered changes are on `main` but have not been released yet.
@@ -52,13 +51,29 @@ Do not reset, pull, delete, or repurpose the old checkout until the maintainer h
 - Generated timeline contact sheets, output media, mockups, marketing drafts, and old handoff notes were not brought into the clean branch.
 - No dirty old worktree has been deleted.
 
+Clean, fully superseded worktrees removed on 2026-08-12:
+
+- `comfystudio-license-gplv3`
+- `velorn-long-source-export`
+- `velorn-my-workflows-mcp`
+- `velorn-native-rtx-upscale`
+
+Old worktrees retained because they contain uncommitted or unique work:
+
+- `comfystudio-joao-16gb-preview` - modified project loading plus review screenshots and a long detached feature history.
+- `comfystudio-pr49` - one modified Generate file on a detached PR test.
+- `comfystudio-pr49-local-test` - staged and unstaged ASR/music-video test changes.
+- `comfyui_pr50_merge_check` - staged custom-workflow/media changes, two untracked covers, and two commits not represented in `main`.
+- `velorn-infinite-canvas` - uncommitted canvas UI, schema, store, and test work.
+
+Do not delete those retained worktrees without a separate review and explicit maintainer approval.
+
 ## Remaining Work
 
-1. Commit and merge this post-merge handoff update.
-2. On Ubuntu, clone `main` fresh; do not copy `node_modules` or the Windows `.codex` directory.
-3. Run the Ubuntu startup commands below and verify Velorn opens.
-4. Keep Windows available for Windows packaging, Azure signing behavior, and NVIDIA RTX export testing.
-5. Remove old worktrees and generated files only after their dirty/unique state has been audited and the maintainer explicitly approves deletion.
+1. On Ubuntu, clone `main` fresh; do not copy `node_modules` or the Windows `.codex` directory.
+2. Run the Ubuntu startup commands below and verify Velorn opens.
+3. Keep Windows available for Windows packaging, Azure signing behavior, and NVIDIA RTX export testing.
+4. Review retained worktrees individually before any further deletion.
 
 ## Ubuntu First Session
 
