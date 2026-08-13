@@ -6,6 +6,10 @@ import {
   COMFY_PARTNER_CREDITS_LOW_EVENT,
 } from '../services/comfyPartnerAuth'
 import { comfyui } from '../services/comfyui'
+import {
+  CLOUD_CREDIT_DISPLAY_CHANGED_EVENT,
+  getShowCloudCreditBalance,
+} from '../services/cloudCreditDisplaySettings'
 
 /**
  * CreditsChip
@@ -23,6 +27,7 @@ import { comfyui } from '../services/comfyui'
  *     "Out of credits" state immediately.
  */
 function CreditsChip({ className = '', size = 'sm' }) {
+  const [showCreditBalance, setShowCreditBalance] = useState(() => getShowCloudCreditBalance())
   const [hasKey, setHasKey] = useState(false)
   const [balance, setBalance] = useState({
     status: 'idle', // 'idle' | 'loading' | 'ok' | 'unknown' | 'low'
@@ -34,6 +39,14 @@ function CreditsChip({ className = '', size = 'sm' }) {
   const refreshInFlightRef = useRef(false)
   const hasEmbeddedBalanceSupport = typeof window !== 'undefined'
     && typeof window?.electronAPI?.getComfyCloudCreditBalance === 'function'
+
+  useEffect(() => {
+    const onDisplayChanged = (event) => {
+      setShowCreditBalance(event?.detail?.show !== false)
+    }
+    window.addEventListener(CLOUD_CREDIT_DISPLAY_CHANGED_EVENT, onDisplayChanged)
+    return () => window.removeEventListener(CLOUD_CREDIT_DISPLAY_CHANGED_EVENT, onDisplayChanged)
+  }, [])
 
   const refreshBalance = useCallback(async () => {
     if (refreshInFlightRef.current) return
@@ -121,7 +134,7 @@ function CreditsChip({ className = '', size = 'sm' }) {
   // Poll when either balance source is available. The embedded ComfyUI source
   // gracefully returns "not-authenticated" until the user logs in.
   useEffect(() => {
-    const canQueryBalance = hasKey || hasEmbeddedBalanceSupport
+    const canQueryBalance = showCreditBalance && (hasKey || hasEmbeddedBalanceSupport)
 
     if (!canQueryBalance) {
       setBalance({ status: 'idle', credits: null })
@@ -140,7 +153,7 @@ function CreditsChip({ className = '', size = 'sm' }) {
         pollTimerRef.current = null
       }
     }
-  }, [hasKey, hasEmbeddedBalanceSupport, refreshBalance])
+  }, [hasKey, hasEmbeddedBalanceSupport, refreshBalance, showCreditBalance])
 
   // Flip into "low" state the moment any surface dispatches the event.
   useEffect(() => {
@@ -178,7 +191,7 @@ function CreditsChip({ className = '', size = 'sm' }) {
     }
   }, [balance, isRefreshing])
 
-  if (!hasKey && !hasEmbeddedBalanceSupport) return null
+  if (!showCreditBalance || (!hasKey && !hasEmbeddedBalanceSupport)) return null
 
   const isLow = balance.status === 'low'
   const isLive = balance.status === 'ok'

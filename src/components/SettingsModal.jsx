@@ -52,6 +52,10 @@ import {
   playGenerationCompletionSound,
   setGenerationCompletionSoundSettings,
 } from '../services/generationCompletionSoundSettings'
+import {
+  getShowCloudCreditBalance,
+  setShowCloudCreditBalance,
+} from '../services/cloudCreditDisplaySettings'
 
 const AUTO_IMPORT_KEY = 'comfystudio-auto-import-comfy-outputs'
 const OUTPUT_DIRECTORY_SETTING_KEY = 'outputDirectory'
@@ -183,6 +187,7 @@ function GeneralTab({ initialSection = null }) {
   const [generationCompletionSoundSettings, setGenerationCompletionSoundSettingsState] = useState(() => (
     getGenerationCompletionSoundSettings()
   ))
+  const [showCloudCreditBalance, setShowCloudCreditBalanceState] = useState(() => getShowCloudCreditBalance())
   const [pexelsApiKey, setPexelsApiKeyLocal] = useState('')
   const [comfyOrgApiKey, setComfyOrgApiKey] = useState('')
   const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false)
@@ -398,6 +403,11 @@ function GeneralTab({ initialSection = null }) {
       ...updates,
     })
     setGenerationCompletionSoundSettingsState(next)
+  }
+
+  const handleToggleCloudCreditBalance = () => {
+    const next = setShowCloudCreditBalance(!showCloudCreditBalance)
+    setShowCloudCreditBalanceState(next)
   }
 
   const handleCopyMcpText = async (id, text) => {
@@ -732,6 +742,28 @@ function GeneralTab({ initialSection = null }) {
             {playbackCacheMessage && !playbackCacheBusy && (
               <p className="mt-3 text-[10px] text-sf-text-muted">{playbackCacheMessage}</p>
             )}
+          </div>
+
+          <div className="flex items-center justify-between rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
+            <div className="pr-4">
+              <label className="text-sm text-sf-text-primary">Show cloud credit balance</label>
+              <p className="text-[10px] text-sf-text-muted">
+                Display Comfy.org credits in the app header. Turning this off does not disable cloud workflows.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={showCloudCreditBalance}
+              onClick={handleToggleCloudCreditBalance}
+              className={`relative h-5 w-10 flex-shrink-0 rounded-full transition-colors ${showCloudCreditBalance ? 'bg-sf-accent' : 'bg-sf-dark-600'}`}
+              title={showCloudCreditBalance ? 'Hide cloud credit balance' : 'Show cloud credit balance'}
+            >
+              <span
+                className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${showCloudCreditBalance ? 'left-[calc(100%-1.25rem)]' : 'left-0.5'}`}
+                aria-hidden
+              />
+            </button>
           </div>
 
           <div className="flex items-center justify-between rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
