@@ -23,7 +23,9 @@ English · [Español](docs/i18n/README.es.md) · [简体中文](docs/i18n/README
 <p align="center"><img src="docs/readme/agent-editing.gif" alt="One prompt: Claude builds the edit in Velorn via MCP" width="860"></p>
 <p align="center"><i>One prompt. The agent generates media, builds the timeline, and mixes the audio — live, via MCP.</i></p>
 
-Velorn is an open-source desktop AI video workstation for creators who use ComfyUI. It brings planning, generation, asset management, timeline editing, captions, effects, and export into one project-based app.
+Velorn is an open-source desktop video editor and AI video workstation. It brings planning, generation, asset management, timeline editing, captions, effects, and export into one project-based app.
+
+Editing, captions, export, project management, and MCP editorial tools work without ComfyUI. All current generation features require a locally running ComfyUI instance.
 
 Use built-in local and cloud workflows, bring your own ComfyUI API workflow JSON, or install the bundled Velorn Bridge so a graph open in ComfyUI can be sent back into Velorn.
 
@@ -40,7 +42,7 @@ Use built-in local and cloud workflows, bring your own ComfyUI API workflow JSON
 - Editing generated clips with tracks, transitions, effects, captions, proxy/cache tools, and export.
 - Keeping generated media, prompts, workflow outputs, and timelines organized inside a project.
 
-Velorn is not a replacement for ComfyUI. It is the production layer around ComfyUI: plan the work, send jobs to ComfyUI, collect the outputs, and finish the edit.
+For generation, Velorn is not a replacement for ComfyUI. It is the production layer around ComfyUI: plan the work, send jobs to ComfyUI, collect the outputs, and finish the edit.
 
 <p align="center">
   <img src="docs/readme/create-workflows.png" alt="Velorn Create workspace with UGC, business ad, music video, and short film creators" />
@@ -174,7 +176,7 @@ Agents can inspect the open project, review timeline frames and visible shots, t
 
 Agents can also bring in community ComfyUI workflows: hand one a workflow link or file, and it analyzes the graph, reports missing custom nodes and models, installs them after your approval, and runs the workflow on your timeline assets.
 
-Write tools preview their plan first and apply only after approval, on Velorn's normal undo stack. MCP is the recommended automation path for agent-assisted review, timeline operations, graphics polish, and generation workflows.
+Most MCP write tools support a preview step, and many default to preview-first behavior. Normal timeline edits participate in Velorn's undo system. Imports, exports, generated files, project creation, and other filesystem changes are not universally undoable, so agents should get explicit approval before applying them. MCP is the recommended automation path for agent-assisted review, timeline operations, graphics polish, and generation workflows.
 
 <p align="center">
   <img src="docs/readme/agents-mcp.png" alt="Velorn Agents (MCP) settings with the running local server, connect commands, and the full tool list" />
@@ -215,14 +217,19 @@ If an endpoint is present, Velorn can inject that value. If an endpoint is not p
 
 ## Requirements
 
-Minimum for normal app use:
+Normal editing:
 
-- A separately installed local ComfyUI.
-- Enough disk space for generated media and project assets.
+- No ComfyUI installation or Comfy account is required.
+- Allow enough disk space for project assets, cache files, and exports.
+
+Generation:
+
+- A separately installed local ComfyUI running on the same machine is required for all current generation workflows.
+- Local workflows may require compatible hardware, models, and custom nodes.
+- Partner-node workflows require the appropriate Comfy.org credentials and credits.
 
 Optional integrations:
 
-- Comfy account login or API key for paid partner-node workflows.
 - Pexels API key for the Stock tab.
 - LM Studio for the local LLM Assistant.
 
@@ -233,10 +240,9 @@ Local workflow requirements vary by model. Some workflows can run on modest GPUs
 1. Install and launch Velorn.
 2. Choose a projects folder.
 3. Create or open a project.
-4. Configure ComfyUI in `Settings > ComfyUI Connection`.
-5. Use `Velorn > Getting Started` from the bottom menu if you want the guided setup path.
+4. Use `Velorn > Getting Started` from the bottom menu if you want the guided setup path.
 
-If ComfyUI is running on a non-default port, update the endpoint in Settings and run the connection test.
+To use generation, configure your local ComfyUI instance in `Settings > ComfyUI Connection`. This step is optional for editing, captions, export, project management, and MCP editorial tools. If ComfyUI is running on a non-default port, update the endpoint in Settings and run the connection test.
 
 ## ComfyUI Setup Notes
 
