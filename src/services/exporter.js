@@ -55,6 +55,13 @@ import { applyTransitionClip, getFadeOverlayInfo, getTransitionCanvasStyle } fro
 import { isFullBakeFresh } from '../utils/clipBakeSignature'
 import { createGpuCompositor, isGpuExportEnabled } from './gpuCompositor'
 import { isAbsoluteRecordedPath } from './assetRelinkFallback'
+import {
+  cleanupCompletedPngSequenceTemp,
+  getPngSequenceFrameFilename,
+  getPngSequenceFramePattern,
+  sanitizePngSequenceBaseName,
+  withOwnedPngSequenceOutput,
+} from './pngSequenceExport.mjs'
 
 const DEFAULT_SAMPLE_RATE = 44100
 const AUDIO_FETCH_TIMEOUT_MS = 15000
@@ -1103,7 +1110,7 @@ const formatAudioMixDropError = (skipped, includedCount, expectedCount) => {
   return `${head} Dropped: ${details.join('; ')}`
 }
 
-export const exportTimeline = async (options = {}, onProgress = () => {}) => {
+const runExportTimeline = async (options = {}, onProgress = () => {}) => {
   const timelineState = useTimelineStore.getState()
   const assetsState = useAssetsStore.getState()
   const projectState = useProjectStore.getState()
@@ -1118,7 +1125,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     rangeStart = 0,
     rangeEnd = timelineState.getTimelineEndTime(),
     format = 'mp4',
-    includeAudio = true,
+    includeAudio: requestedIncludeAudio = true,
     filename = 'export',
     videoCodec = 'h264',
     audioCodec = 'aac',
@@ -1140,7 +1147,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     useCachedRenders = true,
     useProxyMedia = false,
     fastSeek = true,
-    useDirectFramePipe = true,
+    useDirectFramePipe: requestedDirectFramePipe = true,
     deliveryFraming = 'fit',
     glslQualityScale = 1,
     // Final exports sample each frame at its temporal center (pairs with
@@ -1154,8 +1161,18 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     // transitions) over the range, onto a transparent canvas so the baked
     // file still composites over lower layers.
     soloClipIds = null,
-    transparent = false,
+    transparent: requestedTransparency = false,
   } = options
+  const pngSequenceExport = format === 'png-seq'
+  // An image sequence is a visual-only delivery. Keep this defensive in the
+  // renderer even though the export panel also hides/disables video/audio
+  // encoder settings for the format.
+  const includeAudio = pngSequenceExport ? false : requestedIncludeAudio
+  const useDirectFramePipe = pngSequenceExport ? false : requestedDirectFramePipe
+  const transparent = pngSequenceExport ? false : requestedTransparency
+  const pngSequenceBaseName = pngSequenceExport
+    ? sanitizePngSequenceBaseName(filename)
+    : null
   const soloClipSet = Array.isArray(soloClipIds) && soloClipIds.length > 0
     ? new Set(soloClipIds)
     : null
@@ -1167,6 +1184,12 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   
   const totalDuration = Math.max(0, rangeEnd - rangeStart)
   const totalFrames = Math.ceil(totalDuration * fps)
+  if (pngSequenceExport && (!Number.isFinite(Number(fps)) || Number(fps) <= 0 || totalFrames <= 0)) {
+    throw new Error('The PNG sequence export range must contain at least one frame at a valid FPS.')
+  }
+  if (pngSequenceExport && (!Number.isFinite(Number(width)) || Number(width) <= 0 || !Number.isFinite(Number(height)) || Number(height) <= 0)) {
+    throw new Error('The PNG sequence export dimensions must be greater than zero.')
+  }
   const normalizedDeliveryFraming = ['fill', 'cover', 'center_crop', 'center-crop'].includes(String(deliveryFraming || '').toLowerCase())
     ? 'fill'
     : 'fit'
@@ -1199,18 +1222,18 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   }
   
   const outputFolder = await window.electronAPI.pathJoin(projectState.currentProjectHandle, 'renders')
-  await window.electronAPI.createDirectory(outputFolder)
-  
-  const tempFolder = await window.electronAPI.pathJoin(outputFolder, `export_${Date.now()}`)
-  await window.electronAPI.createDirectory(tempFolder)
-  const framesFolder = await window.electronAPI.pathJoin(tempFolder, 'frames')
-  await window.electronAPI.createDirectory(framesFolder)
-  
+  if (!pngSequenceExport) {
+    await window.electronAPI.createDirectory(outputFolder)
+  }
+
   const audioOnlyExport = format === 'audio'
   const outputExtension = audioOnlyExport
     ? (audioCodec === 'mp3' ? 'mp3' : (audioCodec === 'wav' ? 'wav' : 'm4a'))
     : (format === 'webm' ? 'webm' : (format === 'prores' ? 'mov' : 'mp4'))
   let outputPath = options.outputPath
+  if (pngSequenceExport && !outputPath) {
+    throw new Error('Choose an output folder for the PNG sequence.')
+  }
   if (!outputPath) {
     const defaultOutputPath = await window.electronAPI.pathJoin(
       outputFolder,
@@ -1228,7 +1251,32 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     }
     outputPath = saveDialog
   }
-  const framePattern = await window.electronAPI.pathJoin(framesFolder, 'frame_%06d.png')
+
+  // The wrapper creates and owns the fresh sequence directory. Temporary
+  // prepared sources live under that owned directory so a failed/cancelled
+  // export can remove everything without ever touching the selected parent.
+  const tempFolder = pngSequenceExport
+    ? await window.electronAPI.pathJoin(outputPath, '.velorn-export-temp')
+    : await window.electronAPI.pathJoin(outputFolder, `export_${Date.now()}`)
+  if (pngSequenceExport) {
+    const tempFolderResult = await window.electronAPI.createDirectory(tempFolder, { recursive: false })
+    if (!tempFolderResult?.success) {
+      throw new Error(tempFolderResult?.error || 'Failed to create the export temporary folder.')
+    }
+  } else {
+    await window.electronAPI.createDirectory(tempFolder)
+  }
+  const framesFolder = pngSequenceExport
+    ? outputPath
+    : await window.electronAPI.pathJoin(tempFolder, 'frames')
+  if (!pngSequenceExport) {
+    await window.electronAPI.createDirectory(framesFolder)
+  }
+
+  const framePattern = await window.electronAPI.pathJoin(
+    framesFolder,
+    pngSequenceExport ? getPngSequenceFramePattern(pngSequenceBaseName) : 'frame_%06d.png'
+  )
   const audioPath = await window.electronAPI.pathJoin(tempFolder, 'audio.wav')
 
   // ---- Audio-only export: the exact program mix a video export bakes in,
@@ -3159,18 +3207,39 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       exportPerf.yieldMs += performance.now() - taskYieldStart
     } else {
       const frameBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'))
+      if (!frameBlob) {
+        throw new Error(`Failed to encode PNG frame ${frameIndex + 1}.`)
+      }
       const frameBuffer = await frameBlob.arrayBuffer()
-      const framePath = await window.electronAPI.pathJoin(framesFolder, `frame_${formatFrameNumber(frameIndex + 1)}.png`)
-      await window.electronAPI.writeFileFromArrayBuffer(framePath, frameBuffer)
+      const frameFilename = pngSequenceExport
+        ? getPngSequenceFrameFilename(pngSequenceBaseName, frameIndex + 1)
+        : `frame_${formatFrameNumber(frameIndex + 1)}.png`
+      const framePath = await window.electronAPI.pathJoin(framesFolder, frameFilename)
+      const writeResult = await window.electronAPI.writeFileFromArrayBuffer(framePath, frameBuffer)
+      if (!writeResult?.success) {
+        throw new Error(writeResult?.error || `Failed to write PNG frame ${frameIndex + 1}.`)
+      }
     }
     
     if (frameIndex % 5 === 0) {
-      const progress = 5 + Math.floor((frameIndex / totalFrames) * 70)
-      onProgress({ 
-        status: EXPORT_STATUS.rendering, 
+      const progress = pngSequenceExport
+        ? Math.max(1, Math.min(99, Math.floor(((frameIndex + 1) / totalFrames) * 99)))
+        : 5 + Math.floor((frameIndex / totalFrames) * 70)
+      onProgress({
+        status: pngSequenceExport ? 'Writing PNG image sequence...' : EXPORT_STATUS.rendering,
         progress,
         frame: frameIndex + 1,
-        totalFrames
+        totalFrames,
+        ...(pngSequenceExport
+          ? {
+            frameCount: totalFrames,
+            fps,
+            width,
+            height,
+            dimensions: { width, height },
+            framePattern,
+          }
+          : {}),
       })
     }
     if (frameIndex > 0 && frameIndex % 10 === 0) {
@@ -3227,6 +3296,67 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       framePipeSessionId = null
     }
     throw err
+  }
+
+  if (pngSequenceExport) {
+    throwIfCancelled()
+    const cleanupWarning = await cleanupCompletedPngSequenceTemp({
+      api: window.electronAPI,
+      tempFolder,
+    })
+    if (cleanupWarning) {
+      console.warn('PNG sequence frames completed, but temporary files could not be removed:', cleanupWarning)
+    }
+    const completion = {
+      status: EXPORT_STATUS.done,
+      progress: 100,
+      frame: totalFrames,
+      totalFrames,
+      frameCount: totalFrames,
+      fps,
+      width,
+      height,
+      dimensions: { width, height },
+      framePattern,
+    }
+    onProgress(completion)
+    const perFrameMs = (ms) => (totalFrames > 0 ? Number((ms / totalFrames).toFixed(2)) : 0)
+    return {
+      format: 'png-seq',
+      outputPath,
+      encoderUsed: 'png-sequence',
+      frameCount: totalFrames,
+      fps,
+      width,
+      height,
+      dimensions: { width, height },
+      framePattern,
+      cleanupWarning: cleanupWarning
+        ? `PNG frames were saved, but temporary files could not be removed: ${cleanupWarning}`
+        : null,
+      hardwareFallback: false,
+      hardwareFfmpeg: null,
+      frameSources: webCodecsEnabled
+        ? {
+          webcodecs: webCodecsClipCount,
+          element: elementPathClipCount,
+          sourcePreparation,
+        }
+        : null,
+      perf: {
+        frames: totalFrames,
+        gpuCompositing: false,
+        perFrameMs: {
+          mediaSample: perFrameMs(exportPerf.sampleMs),
+          layerComposite: perFrameMs(exportPerf.layersMs - exportPerf.sampleMs),
+          readback: perFrameMs(exportPerf.readbackMs),
+          pipeWrite: 0,
+          uiYield: perFrameMs(exportPerf.yieldMs),
+        },
+        preSeek: { batches: exportPerf.preSeekBatches, clips: exportPerf.preSeekClips },
+        frameSource: getFrameSourceStats(),
+      },
+    }
   }
 
   if (framePipeSessionId) {
@@ -3837,6 +3967,30 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       frameSource: getFrameSourceStats(),
     },
   }
+}
+
+/**
+ * PNG sequences are written into a new, caller-selected child directory.
+ * This wrapper is the ownership boundary: it creates that directory with an
+ * exclusive mkdir and removes exactly that directory if any later step fails
+ * or is cancelled. Existing folders (including the selected parent) are
+ * rejected and are never cleanup targets.
+ */
+export const exportTimeline = async (options = {}, onProgress = () => {}) => {
+  if (options.format !== 'png-seq') {
+    return runExportTimeline(options, onProgress)
+  }
+
+  const api = typeof window !== 'undefined' ? window.electronAPI : null
+  if (!api?.exists || !api?.createDirectory || !api?.deleteDirectory || !api?.pathJoin || !api?.writeFileFromArrayBuffer) {
+    throw new Error('PNG sequence export requires the Velorn desktop app.')
+  }
+
+  return withOwnedPngSequenceOutput({
+    api,
+    outputPath: options.outputPath,
+    run: outputPath => runExportTimeline({ ...options, outputPath }, onProgress),
+  })
 }
 
 export default exportTimeline

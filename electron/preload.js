@@ -125,13 +125,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('export:cancel-job', () => cb())
   },
   onExportProgress: (cb) => {
-    ipcRenderer.on('export:progress', (_, data) => cb(data))
+    const handler = (_, data, metadata) => cb(data, metadata)
+    ipcRenderer.on('export:progress', handler)
+    return () => ipcRenderer.removeListener('export:progress', handler)
   },
   onExportComplete: (cb) => {
-    ipcRenderer.on('export:complete', (_, data) => cb(data))
+    const handler = (_, data, metadata) => cb(data, metadata)
+    ipcRenderer.on('export:complete', handler)
+    return () => ipcRenderer.removeListener('export:complete', handler)
   },
   onExportError: (cb) => {
-    ipcRenderer.on('export:error', (_, err) => cb(err))
+    const handler = (_, err, metadata) => cb(err, metadata)
+    ipcRenderer.on('export:error', handler)
+    return () => ipcRenderer.removeListener('export:error', handler)
   },
   onExportJob: (cb) => {
     ipcRenderer.once('export:job', (_, job) => cb(job))

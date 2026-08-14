@@ -24,6 +24,7 @@
     "test:music-visual-style": "node --experimental-default-type=module --test ./src/utils/musicVisualStyle.test.js",
     "test:dirty-tracker": "node --experimental-default-type=module --test ./src/services/projectDirtyTracker.test.js",
     "test:premiere-xml": "node --experimental-default-type=module --test ./src/services/premiereXmlExporter.test.js",
+    "test:png-sequence-export": "node --test ./src/services/pngSequenceExport.test.mjs",
     "test:export-frame-source": "node --experimental-default-type=module --test ./src/services/exportFrameSource.test.js",
     "test:export-source-preparation": "node --test ./tests/exportSourcePreparation.test.js",
     "test:audio-mix-eligibility": "node --test ./tests/audioMixEligibility.test.mjs",
