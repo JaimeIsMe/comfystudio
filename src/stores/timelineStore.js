@@ -8,6 +8,7 @@ import { normalizeAudioClipGainDb } from '../utils/audioClipGain'
 import { clampTrackPan, clampTrackVolume } from '../utils/audioTrackAudibility'
 import { hasVideoSolo, isVideoTrackVisible } from '../utils/videoTrackVisibility'
 import { normalizeAudioInserts } from '../utils/audioInserts'
+import { normalizeVideoBackedAudioClips } from '../utils/audioClipSplit'
 import { CLIP_COMPOSITE_MODE, normalizeClipCompositeMode } from '../utils/layerCompositing'
 import { getKeyframeTimeTolerance } from '../utils/keyframes'
 import { DEFAULT_SHAPE_MASK, normalizeShapeMask } from '../utils/shapeMask'
@@ -1208,7 +1209,7 @@ export const useTimelineStore = create(
    * @param {object} asset
    * @param {number|null} startTime
    * @param {number|null} timelineFps
-   * @param {object} [options] - Optional overrides for split/second-half: { duration, trimStart, trimEnd }
+   * @param {object} [options] - Optional overrides for split/second-half, including duration, trim, and retime state
    */
   addClip: (trackId, asset, startTime = null, timelineFps = null, options = null) => {
     const state = get()
@@ -1236,6 +1237,10 @@ export const useTimelineStore = create(
     const sourceDuration = isImage ? Infinity : (assetDuration || 5)
     const sourceFps = isVideo ? Number(asset.settings?.fps ?? asset.fps) : null
     const normalizedTimelineFps = Number(timelineFps)
+    const optionSourceFps = Number(options?.sourceFps)
+    const optionTimelineFps = Number(options?.timelineFps)
+    const optionSourceTimeScale = Number(options?.sourceTimeScale)
+    const optionSpeed = Number(options?.speed)
     const assetDefaultTransform = (
       asset?.settings?.defaultTransform
       && typeof asset.settings.defaultTransform === 'object'
@@ -1295,11 +1300,17 @@ export const useTimelineStore = create(
       sourceDuration: sourceDuration, // Original media duration (Infinity for images)
       trimStart: finalTrimStart, // In-point (seconds from source start)
       trimEnd: syncLock ? finalTrimStart + anchoredDuration : finalTrimEnd, // Out-point (for images, this can grow)
-      sourceFps: Number.isFinite(sourceFps) && sourceFps > 0 ? sourceFps : null,
-      timelineFps: Number.isFinite(normalizedTimelineFps) && normalizedTimelineFps > 0 ? normalizedTimelineFps : null,
-      sourceTimeScale: 1,
-      speed: 1,
-      reverse: false,
+      sourceFps: Number.isFinite(optionSourceFps) && optionSourceFps > 0
+        ? optionSourceFps
+        : (Number.isFinite(sourceFps) && sourceFps > 0 ? sourceFps : null),
+      timelineFps: Number.isFinite(optionTimelineFps) && optionTimelineFps > 0
+        ? optionTimelineFps
+        : (Number.isFinite(normalizedTimelineFps) && normalizedTimelineFps > 0 ? normalizedTimelineFps : null),
+      sourceTimeScale: Number.isFinite(optionSourceTimeScale) && optionSourceTimeScale > 0
+        ? optionSourceTimeScale
+        : 1,
+      speed: Number.isFinite(optionSpeed) && optionSpeed > 0 ? optionSpeed : 1,
+      reverse: options?.reverse === true,
       gainDb: asset.type === 'audio' ? normalizeAudioClipGainDb(options?.gainDb) : undefined,
       fadeIn: asset.type === 'audio' ? clampAudioFadeDuration(options?.fadeIn, finalDuration) : undefined,
       fadeOut: asset.type === 'audio' ? clampAudioFadeDuration(options?.fadeOut, finalDuration) : undefined,
@@ -5430,7 +5441,14 @@ export const useTimelineStore = create(
     if (!timelineData) return
     const fps = Number(timelineFps) || 24
     const assetsById = buildAssetByIdMap(assets)
-    const normalizedClips = normalizeClipTimebases(timelineData.clips || [], assets, fps)
+    const projectTracks = timelineData.tracks || [
+      { id: 'video-1', name: 'Video 1', type: 'video', muted: false, locked: false, visible: true },
+      { id: 'audio-1', name: 'Audio 1', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
+    ]
+    const normalizedClips = normalizeVideoBackedAudioClips(
+      normalizeClipTimebases(timelineData.clips || [], assets, fps),
+      projectTracks
+    )
     // Align all clip start times and durations to frame boundaries (no sub-frame)
     const frameAlignedClips = normalizedClips.map((clip) => {
       const startTime = roundToFrame(Math.max(0, clip.startTime || 0), fps)
@@ -5456,6 +5474,13 @@ export const useTimelineStore = create(
         trimEnd,
         sourceDuration,
         adjustments: normalizedAdjustments,
+        ...(clip.type === 'audio'
+          ? {
+              gainDb: normalizeAudioClipGainDb(clip.gainDb),
+              fadeIn: clampAudioFadeDuration(clip.fadeIn, duration),
+              fadeOut: clampAudioFadeDuration(clip.fadeOut, duration),
+            }
+          : {}),
         ...(supportsLowerLayerCompositeMode(clip)
           ? { compositeLowerLayers: normalizeClipCompositeMode(clip.compositeLowerLayers) }
           : {}),
@@ -5471,10 +5496,7 @@ export const useTimelineStore = create(
       zoom: timelineData.zoom || 100,
       masterAudioVolume: clampTrackVolume(timelineData.masterAudioVolume),
       masterAudioInserts: normalizeAudioInserts(timelineData.masterAudioInserts),
-      tracks: timelineData.tracks || [
-        { id: 'video-1', name: 'Video 1', type: 'video', muted: false, locked: false, visible: true },
-        { id: 'audio-1', name: 'Audio 1', type: 'audio', channels: 'stereo', muted: false, locked: false, visible: true },
-      ],
+      tracks: projectTracks,
       clips: frameAlignedClips,
       transitions: timelineData.transitions || [],
       markers: timelineData.markers || [],

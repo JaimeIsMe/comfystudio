@@ -21,6 +21,7 @@ import useViewportClampedPosition from '../hooks/useViewportClampedPosition'
 import { getAllKeyframeTimes } from '../utils/keyframes'
 import { TRANSITION_TYPES, TRANSITION_DURATIONS, FRAME_RATE } from '../constants/transitions'
 import { getAudioClipFadeValues } from '../utils/audioClipFades'
+import { buildAudioClipSplitState } from '../utils/audioClipSplit'
 import { getSpriteFramePosition } from '../services/thumbnailSprites'
 import { getEffectTypeDefinition } from '../utils/effects'
 import { isTextEditingElement } from '../utils/keyboardFocus'
@@ -2771,10 +2772,12 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   }, [])
 
   const splitClipAtTime = useCallback((clip, splitPosition, { saveHistory = false } = {}) => {
-    if (!clip || isSyncLockedClip(clip) || splitPosition <= clip.startTime || splitPosition >= clip.startTime + clip.duration) return null
+    const snappedSplitPosition = quantizeTimeToFrame(splitPosition, getSafeTimelineFps(timelineFps))
+    if (!clip || isSyncLockedClip(clip) || snappedSplitPosition <= clip.startTime || snappedSplitPosition >= clip.startTime + clip.duration) return null
 
-    const splitTime = splitPosition - clip.startTime
+    const splitTime = snappedSplitPosition - clip.startTime
     const remainder = clip.duration - splitTime
+    const track = tracks.find((candidate) => candidate.id === clip.trackId)
 
     let asset = null
     if (clip.type !== 'text' && clip.type !== 'shape' && clip.type !== 'adjustment') {
@@ -2787,6 +2790,19 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     }
 
     resizeClip(clip.id, splitTime)
+    const audioSplitState = buildAudioClipSplitState(clip, track, asset, {
+      left: splitTime,
+      right: remainder,
+    })
+    if (audioSplitState) {
+      useTimelineStore.setState((state) => ({
+        clips: state.clips.map((candidate) => (
+          candidate.id === clip.id
+            ? { ...candidate, ...audioSplitState.leftClipUpdates }
+            : candidate
+        )),
+      }))
+    }
 
     if (clip.type === 'text') {
       const textOptions = {
@@ -2796,7 +2812,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         effects: clip.effects,
         saveHistory: false,
       }
-      return addTextClip(clip.trackId, textOptions, splitPosition)
+      return addTextClip(clip.trackId, textOptions, snappedSplitPosition)
     }
 
     if (clip.type === 'shape') {
@@ -2808,11 +2824,11 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         enabled: isClipEnabled(clip),
         effects: clip.effects,
         saveHistory: false,
-      }, splitPosition)
+      }, snappedSplitPosition)
     }
 
     if (clip.type === 'adjustment') {
-      return addAdjustmentClip(clip.trackId, splitPosition, {
+      return addAdjustmentClip(clip.trackId, snappedSplitPosition, {
         duration: remainder,
         name: clip.name,
         adjustments: clip.adjustments || {},
@@ -2827,21 +2843,17 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     const sourceTimeAtCut = (clip.trimStart || 0) + splitTime * timeScale
     const sourceTrimEnd = sourceTimeAtCut + remainder * timeScale
 
-    return addClip(clip.trackId, asset, splitPosition, timelineFps, {
+    return addClip(clip.trackId, audioSplitState?.asset || asset, snappedSplitPosition, timelineFps, {
       duration: remainder,
       trimStart: sourceTimeAtCut,
       trimEnd: sourceTrimEnd,
       enabled: isClipEnabled(clip),
       transform: clip.transform,
       effects: clip.effects,
-      ...(clip.type === 'audio'
-        ? {
-            gainDb: clip.gainDb,
-          }
-        : {}),
+      ...(audioSplitState?.rightClipOptions || {}),
       saveHistory: false,
     })
-  }, [assets, saveToHistory, resizeClip, addTextClip, addShapeClip, addAdjustmentClip, addClip, timelineFps, isClipEnabled])
+  }, [assets, tracks, saveToHistory, resizeClip, addTextClip, addShapeClip, addAdjustmentClip, addClip, timelineFps, isClipEnabled])
 
   const splitAllTracksAtPlayhead = useCallback(() => {
     const playheadPosition = getLivePlayhead()

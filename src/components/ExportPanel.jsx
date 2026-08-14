@@ -428,6 +428,7 @@ function ExportPanel() {
     || XML_EXPORT_FORMATS[0]
   const exportStartRef = useRef(null)
   const renderStartRef = useRef(null)
+  const nvencCheckRequestRef = useRef(0)
   const [nvencStatus, setNvencStatus] = useState({
     checked: false,
     available: false,
@@ -435,6 +436,10 @@ function ExportPanel() {
     h265: false,
     gpuName: null,
     kind: 'nvenc', // 'nvenc' | 'videotoolbox' — set by the platform-aware check
+    ffmpegSource: 'bundled',
+    ffmpegPath: null,
+    ffmpegVersion: null,
+    ffmpegWarning: null,
     error: null,
   })
   const [queueRunning, setQueueRunning] = useState(false)
@@ -462,14 +467,16 @@ function ExportPanel() {
   useEffect(() => {
     let cancelled = false
     
-    const checkNvenc = async () => {
+    const checkNvenc = async (options = undefined) => {
+      const requestId = ++nvencCheckRequestRef.current
       if (!window.electronAPI?.checkNvenc) {
-        setNvencStatus({ checked: true, available: false, h264: false, h265: false, gpuName: null, kind: 'nvenc', error: 'Hardware encoder check unavailable' })
+        if (cancelled || requestId !== nvencCheckRequestRef.current) return
+        setNvencStatus({ checked: true, available: false, h264: false, h265: false, gpuName: null, kind: 'nvenc', ffmpegSource: 'bundled', ffmpegPath: null, ffmpegVersion: null, ffmpegWarning: null, error: 'Hardware encoder check unavailable' })
         return
       }
       try {
-        const result = await window.electronAPI.checkNvenc()
-        if (cancelled) return
+        const result = await window.electronAPI.checkNvenc(options)
+        if (cancelled || requestId !== nvencCheckRequestRef.current) return
         setNvencStatus({
           checked: true,
           available: !!result.available,
@@ -477,10 +484,14 @@ function ExportPanel() {
           h265: !!result.h265,
           gpuName: result.gpuName || null,
           kind: result.kind || 'nvenc',
+          ffmpegSource: result.ffmpegSource || 'bundled',
+          ffmpegPath: result.ffmpegPath || null,
+          ffmpegVersion: result.ffmpegVersion || null,
+          ffmpegWarning: result.ffmpegWarning || null,
           error: result.error || null,
         })
       } catch (err) {
-        if (cancelled) return
+        if (cancelled || requestId !== nvencCheckRequestRef.current) return
         setNvencStatus({
           checked: true,
           available: false,
@@ -488,14 +499,25 @@ function ExportPanel() {
           h265: false,
           gpuName: null,
           kind: 'nvenc',
+          ffmpegSource: 'bundled',
+          ffmpegPath: null,
+          ffmpegVersion: null,
+          ffmpegWarning: null,
           error: err.message,
         })
       }
     }
     
     checkNvenc()
+    const unsubscribe = window.electronAPI?.onHardwareExportFfmpegChanged?.(() => {
+      if (cancelled) return
+      setNvencStatus((current) => ({ ...current, checked: false, error: null }))
+      void checkNvenc({ forceRefresh: true })
+    })
     return () => {
       cancelled = true
+      nvencCheckRequestRef.current += 1
+      unsubscribe?.()
     }
   }, [])
 
@@ -723,13 +745,13 @@ function ExportPanel() {
       return `${hardwareLabel} is not used for ProRes exports.`
     }
     if (nvencStatus.checked && !nvencStatus.available) {
-      return `${hardwareLabel} not available in your FFmpeg build.`
+      return `${hardwareLabel} is not available in the active FFmpeg.`
     }
     if (settings.videoCodec === 'h265' && nvencStatus.checked && !nvencStatus.h265) {
-      return `HEVC ${hardwareLabel} is not available in your FFmpeg build.`
+      return `HEVC ${hardwareLabel} is not available in the active FFmpeg.`
     }
     if (settings.videoCodec === 'h264' && nvencStatus.checked && !nvencStatus.h264) {
-      return `H.264 ${hardwareLabel} is not available in your FFmpeg build.`
+      return `H.264 ${hardwareLabel} is not available in the active FFmpeg.`
     }
     return null
   }, [settings.format, settings.videoCodec, nvencStatus, hardwareLabel])
@@ -741,24 +763,30 @@ function ExportPanel() {
     const gpuPrefix = nvencStatus.gpuName
       ? `Detected GPU: ${nvencStatus.gpuName}. `
       : ''
+    const ffmpegSourcePrefix = nvencStatus.ffmpegSource === 'environment'
+      ? 'Environment FFmpeg. '
+      : nvencStatus.ffmpegSource === 'setting'
+        ? 'Custom FFmpeg. '
+        : 'Bundled FFmpeg. '
+    const warningSuffix = nvencStatus.ffmpegWarning ? ` ${nvencStatus.ffmpegWarning}` : ''
 
     if (!nvencStatus.available) {
-      return gpuPrefix + (nvencStatus.error || `${hardwareLabel} not detected in FFmpeg. Hardware encoding will be unavailable.`)
+      return ffmpegSourcePrefix + gpuPrefix + (nvencStatus.error || `${hardwareLabel} not detected in FFmpeg. Hardware encoding will be unavailable.`)
     }
 
     if (settings.format === 'webm' || settings.videoCodec === 'vp9') {
-      return `${gpuPrefix}${hardwareLabel} is ready for MP4 H.264/H.265 exports. Switch from WebM/VP9 to use it.`
+      return `${ffmpegSourcePrefix}${gpuPrefix}${hardwareLabel} is ready for MP4 H.264/H.265 exports. Switch from WebM/VP9 to use it.${warningSuffix}`
     }
 
     if (settings.format === 'prores') {
-      return `${gpuPrefix}${hardwareLabel} is ready for MP4 H.264/H.265 exports. ProRes always uses software encoding.`
+      return `${ffmpegSourcePrefix}${gpuPrefix}${hardwareLabel} is ready for MP4 H.264/H.265 exports. ProRes always uses software encoding.${warningSuffix}`
     }
 
     if (selectedNvencCodecSupported) {
-      return `${gpuPrefix}${hardwareLabel} is ready for faster ${settings.videoCodec === 'h265' ? 'H.265' : 'H.264'} exports.`
+      return `${ffmpegSourcePrefix}${gpuPrefix}${hardwareLabel} is ready for faster ${settings.videoCodec === 'h265' ? 'H.265' : 'H.264'} exports.${warningSuffix}`
     }
 
-    return `${gpuPrefix}${hardwareLabel} is detected, but the current codec is not available in this FFmpeg build.`
+    return `${ffmpegSourcePrefix}${gpuPrefix}${hardwareLabel} is detected, but the current codec is not available in this FFmpeg build.${warningSuffix}`
   }, [nvencStatus, selectedNvencCodecSupported, settings.format, settings.videoCodec, hardwareLabel])
   const nvencExpectedEncoder = settings.useHardwareEncoder && selectedNvencCodecSupported
     ? (settings.videoCodec === 'h265'

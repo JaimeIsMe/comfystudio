@@ -145,7 +145,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * Check if FFmpeg supports NVIDIA NVENC encoders
    * @returns {Promise<{available: boolean, h264: boolean, h265: boolean, gpuName?: string | null, error?: string}>}
    */
-  checkNvenc: () => ipcRenderer.invoke('export:checkNvenc'),
+  checkNvenc: (options) => ipcRenderer.invoke('export:checkNvenc', options),
+  getHardwareExportFfmpegStatus: () => ipcRenderer.invoke('export:getHardwareFfmpegStatus'),
+  setHardwareExportFfmpegPath: (filePath) => ipcRenderer.invoke('export:setHardwareFfmpegPath', filePath),
+  resetHardwareExportFfmpegPath: () => ipcRenderer.invoke('export:resetHardwareFfmpegPath'),
+  onHardwareExportFfmpegChanged: (callback) => {
+    const handler = () => callback()
+    ipcRenderer.on('export:hardwareFfmpegChanged', handler)
+    return () => ipcRenderer.removeListener('export:hardwareFfmpegChanged', handler)
+  },
 
   // Direct NVIDIA RTX Video Super Resolution. The optional runtime is
   // managed by Velorn and does not require a running ComfyUI server.
