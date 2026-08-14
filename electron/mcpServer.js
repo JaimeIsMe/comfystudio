@@ -3588,7 +3588,7 @@ function checkExportReadiness(snapshot, args = {}) {
   if (plan.settings.includeAudio && audioTracks.some((track) => track?.muted)) notes.push('One or more audio tracks are muted and will not contribute to export audio.')
   if (plan.settings.includeAudio && audioClips.length === 0) notes.push('Audio export is enabled, but no active audio/video clips with audio were detected.')
   if (visualTracks.some((track) => track?.visible === false)) notes.push('One or more visual tracks are hidden and will not appear in the export.')
-  if (plan.settings.useHardwareEncoder) notes.push('Export requests hardware encoding; the renderer will fail if NVENC is unavailable.')
+  if (plan.settings.useHardwareEncoder) notes.push('Export requests hardware encoding; Velorn probes the active export FFmpeg at runtime and falls back to software encoding if the requested encoder is unavailable.')
   if (plan.settings.deliveryFraming === 'fill') notes.push('Delivery framing is fill/center-crop, so the export will fill the target aspect ratio instead of letterboxing.')
 
   return {
@@ -10392,7 +10392,7 @@ function createToolDefinitions() {
           },
           useHardwareEncoder: {
             type: 'boolean',
-            description: 'Request NVENC hardware encoding. Defaults to false.',
+            description: 'Request platform hardware encoding using the active export FFmpeg. Velorn falls back safely to software encoding if the encoder cannot initialize. Defaults to false.',
           },
           useProxyMedia: {
             type: 'boolean',
@@ -10462,7 +10462,7 @@ function createToolDefinitions() {
           includeAudio: { type: 'boolean', description: 'Shared include-audio setting. Defaults to true.' },
           videoCodec: { type: 'string', enum: ['h264', 'h265'], description: 'Shared video codec. Defaults to h264.' },
           crf: { type: 'number', description: 'Shared CRF quality. Defaults to export_timeline behavior.' },
-          useHardwareEncoder: { type: 'boolean', description: 'Shared hardware encoder setting.' },
+          useHardwareEncoder: { type: 'boolean', description: 'Shared hardware encoder request. Velorn probes the active export FFmpeg and falls back to software if unavailable.' },
           deliveryFraming: { type: 'string', enum: ['fit', 'fill', 'center_crop'], description: 'Shared framing override. Square/vertical targets default to fill.' },
           filenamePrefix: { type: 'string', description: 'Optional filename prefix for every export. Target suffixes are appended automatically.' },
           previewOnly: { type: 'boolean', description: 'When true, returns all export plans without rendering. Defaults to true.' },

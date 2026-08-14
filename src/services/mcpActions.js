@@ -11,6 +11,7 @@ import { normalizeTrackMatte } from '../utils/trackMatte'
 import { DEFAULT_SHAPE_MASK, DEFAULT_SPLINE_POINTS, SHAPE_MASK_TYPES, normalizeShapeMask, normalizeSplinePoints } from '../utils/shapeMask'
 import { clampTrackPan, clampTrackVolume } from '../utils/audioTrackAudibility'
 import { normalizeAudioInserts } from '../utils/audioInserts'
+import { buildAudioClipSplitState } from '../utils/audioClipSplit'
 import {
   MUSIC_KEY_SCALES,
   MUSIC_TIME_SIGNATURES,
@@ -3147,6 +3148,7 @@ function splitTimelineClipAtTime(clip, splitPosition) {
   const splitTime = splitPosition - clip.startTime
   const remainder = clip.duration - splitTime
   const enabled = clip.enabled !== false
+  const track = (useTimelineStore.getState().tracks || []).find((candidate) => candidate.id === clip.trackId)
 
   let asset = null
   if (clip.type !== 'text' && clip.type !== 'shape' && clip.type !== 'adjustment') {
@@ -3155,6 +3157,19 @@ function splitTimelineClipAtTime(clip, splitPosition) {
   }
 
   useTimelineStore.getState().resizeClip?.(clip.id, splitTime)
+  const audioSplitState = buildAudioClipSplitState(clip, track, asset, {
+    left: splitTime,
+    right: remainder,
+  })
+  if (audioSplitState) {
+    useTimelineStore.setState((state) => ({
+      clips: state.clips.map((candidate) => (
+        candidate.id === clip.id
+          ? { ...candidate, ...audioSplitState.leftClipUpdates }
+          : candidate
+      )),
+    }))
+  }
 
   if (clip.type === 'text') {
     return useTimelineStore.getState().addTextClip?.(clip.trackId, {
@@ -3192,7 +3207,7 @@ function splitTimelineClipAtTime(clip, splitPosition) {
   const sourceTrimEnd = sourceTimeAtCut + remainder * timeScale
   const rightClip = useTimelineStore.getState().addClip?.(
     clip.trackId,
-    asset,
+    audioSplitState?.asset || asset,
     splitPosition,
     Number(useTimelineStore.getState().timelineFps) || 24,
     {
@@ -3204,22 +3219,10 @@ function splitTimelineClipAtTime(clip, splitPosition) {
       // media clips keep their layout and label.
       ...(clip.transform ? { transform: safeClone(clip.transform) } : {}),
       ...(clip.labelColor ? { labelColor: clip.labelColor } : {}),
-      ...(clip.type === 'audio' ? { gainDb: clip.gainDb, fadeIn: clip.fadeIn, fadeOut: clip.fadeOut } : {}),
+      ...(audioSplitState?.rightClipOptions || {}),
       saveHistory: false,
     }
   )
-  // addClip always derives type from the asset (e.g. a video file's audio
-  // track clip has type 'audio' but an asset.type of 'video'); patch it back
-  // so the split piece matches the original instead of silently becoming a
-  // visual clip that tools filtering on clip.type === 'audio' won't find.
-  if (rightClip && clip.type && rightClip.type !== clip.type) {
-    useTimelineStore.setState((state) => ({
-      clips: state.clips.map((candidate) => (
-        candidate.id === rightClip.id ? { ...candidate, type: clip.type } : candidate
-      )),
-    }))
-    rightClip.type = clip.type
-  }
   return rightClip
 }
 

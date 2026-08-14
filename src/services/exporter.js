@@ -18,6 +18,7 @@ import { drawLiveCaptionsFrame } from '../utils/captionRenderer'
 import { getAudioClipFadeGain, getAudioClipFadeValues } from '../utils/audioClipFades'
 import { getAudioClipLinearGain, normalizeAudioClipGainDb } from '../utils/audioClipGain'
 import { clampTrackVolume, hasAudioSolo, isAudioTrackAudible, trackPanToStereoPosition, trackVolumeToLinearGain } from '../utils/audioTrackAudibility'
+import { collectAudioMixClips, countExpectedAudioMixClips } from '../../electron/audioMixEligibility.mjs'
 import { getEnabledAudioInserts, hasEnabledAudioInserts } from '../utils/audioInserts'
 import { buildInsertChain } from './audioInsertChain'
 import {
@@ -1030,7 +1031,9 @@ const serializeAudioClipForMix = (clip) => ({
   id: clip.id,
   assetId: clip.assetId,
   trackId: clip.trackId,
-  type: clip.type,
+  // Audio-track placement is authoritative for legacy split fragments whose
+  // persisted clip type was accidentally changed to "video".
+  type: 'audio',
   startTime: clip.startTime,
   duration: clip.duration,
   trimStart: clip.trimStart || 0,
@@ -1065,15 +1068,8 @@ const serializeAudioTracksForMix = (tracks) => (tracks || [])
     pan: track.pan ?? 0,
   }))
 
-const countExpectedAudioMixClips = (clips, rangeStart, rangeEnd) => clips.filter((clip) => {
-  if (clip.reverse) return false // Reverse audio is intentionally silent.
-  const clipStart = Number(clip.startTime) || 0
-  const clipDuration = Math.max(0, Number(clip.duration) || 0)
-  return clipDuration > 0 && clipStart < rangeEnd && clipStart + clipDuration > rangeStart
-}).length
-
 const collectEligibleAudioMix = (timelineState) => {
-  const audioClips = timelineState.clips.filter(clip => clip.type === 'audio' && clip.enabled !== false)
+  const audioClips = collectAudioMixClips(timelineState.clips, timelineState.tracks)
   const anyAudioSolo = hasAudioSolo(timelineState.tracks)
   const activeTracks = timelineState.tracks.filter(t => t.type === 'audio' && isAudioTrackAudible(t, anyAudioSolo))
   const activeTrackIds = new Set(activeTracks.map(track => track.id))
@@ -1367,6 +1363,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
   let framePipeSessionId = null
   let framePipeEncoderUsed = null
   let framePipeHardwareFallback = null
+  let framePipeHardwareFfmpeg = null
   
   onProgress({ status: EXPORT_STATUS.preparing, progress: 2 })
   
@@ -1820,6 +1817,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         console.warn(`[Export] Hardware encoder unavailable (${framePipeHardwareFallback.requestedEncoder}): ${framePipeHardwareFallback.reason} — exporting with ${framePipeHardwareFallback.fallbackEncoder}.`)
         onProgress({ status: `Hardware encoder unavailable — exporting with ${framePipeHardwareFallback.fallbackEncoder}`, progress: 4 })
       }
+      framePipeHardwareFfmpeg = pipeStart.hardwareFfmpeg || null
     } else if (pipeStart?.code === 'ffmpeg-missing' || pipeStart?.code === 'spawn-failed') {
       // The PNG fallback needs the same FFmpeg binary for its encode step,
       // so an unstartable FFmpeg would only fail again after rendering
@@ -3258,9 +3256,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
       onProgress({ status: `Mixing audio (${elapsed}s) • ${message}`, progress })
     }
     updateAudioStatus('Preparing audio clips', 80)
-    const audioClips = timelineState.clips.filter(clip => clip.type === 'audio' && clip.enabled !== false)
-    const anyAudioSolo = hasAudioSolo(timelineState.tracks)
-    const activeTracks = timelineState.tracks.filter(t => t.type === 'audio' && isAudioTrackAudible(t, anyAudioSolo))
+    const { audioClips, activeTracks, eligibleAudioClips } = collectEligibleAudioMix(timelineState)
     // Program master gain from the mixer; part of the program, so it must be
     // baked into the export mix (unlike the preview-only monitor volume).
     const masterAudioGain = clampTrackVolume(timelineState.masterAudioVolume) / 100
@@ -3268,8 +3264,6 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     if (audioClips.length > 0 && activeTracks.length > 0) {
       const sampleRate = audioSampleRate || DEFAULT_SAMPLE_RATE
       const channelCount = audioChannels || 2
-      const activeTrackIds = new Set(activeTracks.map(track => track.id))
-      const eligibleAudioClips = audioClips.filter(clip => activeTrackIds.has(clip.trackId))
 
       // Shared module-level builders (see above exportTimeline) so the
       // pre-render validation, the audio-only export, and this mix can
@@ -3596,7 +3590,9 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
         for (let index = 0; index < eligibleAudioClips.length; index++) {
           const clip = eligibleAudioClips[index]
           const track = timelineState.tracks.find(t => t.id === clip.trackId)
-          if (!track || !isAudioTrackAudible(track, anyAudioSolo)) continue
+          // eligibleAudioClips already applies the shared mute/solo/visibility
+          // predicate; only guard against a concurrently removed track here.
+          if (!track) continue
           const asset = assetsState.getAssetById(clip.assetId)
           if (!asset?.url) continue
           let audioUrl = resolvedAudioUrlCache.get(asset.id)
@@ -3816,6 +3812,7 @@ export const exportTimeline = async (options = {}, onProgress = () => {}) => {
     // export fell back to software ({requestedEncoder, fallbackEncoder,
     // reason}); surfaced in the worker-complete log and MCP export results.
     hardwareFallback: framePipeHardwareFallback || encodeResult.hardwareFallback || null,
+    hardwareFfmpeg: framePipeHardwareFfmpeg || encodeResult.hardwareFfmpeg || null,
     // Surfaced in the main window's '[ExportPanel] Worker export complete'
     // log — the export runs in a hidden worker window whose own console
     // isn't visible in normal devtools captures.

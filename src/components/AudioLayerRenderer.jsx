@@ -18,6 +18,125 @@ import {
   removeTrackAnalyser,
   setInsertMeters,
 } from '../services/audioMixerGraph'
+import {
+  AUDIO_PREVIEW_DRIFT_CHECK_INTERVAL_MS,
+  AUDIO_PREVIEW_SEEK_TOLERANCE_SECONDS,
+  getAudioClipTimeScale,
+  getAudioSourceTimeAtTimeline,
+  isAudioTimelineDiscontinuity,
+  resolveAudioPreviewUrl,
+  selectAudioPreviewCandidates,
+  shouldAlignAudioBeforeStart,
+  shouldCorrectAudioDrift,
+} from '../utils/audioPreviewScheduling'
+
+const getNowMs = () => (
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+)
+
+function clearAudioEntryListeners(entry) {
+  entry?.removeSourceListeners?.()
+  if (entry) entry.removeSourceListeners = null
+}
+
+function pauseAudioEntry(entry) {
+  if (!entry) return
+  if (!entry.element.paused) entry.element.pause()
+}
+
+function disposeAudioEntry(entry) {
+  if (!entry || entry.disposed) return
+  entry.disposed = true
+  entry.desiredPlaying = false
+  entry.generation += 1
+  clearAudioEntryListeners(entry)
+  pauseAudioEntry(entry)
+  entry.element.removeAttribute('src')
+  entry.element.load?.()
+  try {
+    entry.sourceNode?.disconnect()
+    entry.gainNode?.disconnect()
+  } catch (_) {}
+}
+
+function refreshAudioEntrySeekState(entry, nowMs) {
+  if (!entry?.seekInFlight) return
+  const elapsed = Math.max(0, nowMs - (entry.seekStartedAtMs || 0))
+  // Some Chromium/container combinations omit `seeked` for tiny seeks. Do
+  // not leave the clip permanently blocked if the element is already stable.
+  if ((!entry.element.seeking && elapsed > 100) || elapsed > 1500) {
+    entry.seekInFlight = false
+    entry.seekTarget = null
+  }
+}
+
+function requestAudioEntrySeek(entry, targetTime, nowMs = getNowMs()) {
+  if (!entry || entry.disposed || !Number.isFinite(targetTime)) return false
+  entry.pendingSeekTarget = targetTime
+  if (entry.element.readyState < 1) return false
+  refreshAudioEntrySeekState(entry, nowMs)
+  if (entry.seekInFlight || entry.element.seeking) return false
+
+  if (Math.abs((entry.element.currentTime || 0) - targetTime) <= AUDIO_PREVIEW_SEEK_TOLERANCE_SECONDS) {
+    entry.pendingSeekTarget = null
+    entry.positionPrepared = true
+    return false
+  }
+
+  try {
+    entry.pendingSeekTarget = null
+    entry.seekInFlight = true
+    entry.seekTarget = targetTime
+    entry.seekStartedAtMs = nowMs
+    entry.lastSeekAtMs = nowMs
+    entry.positionPrepared = false
+    entry.element.currentTime = targetTime
+    return true
+  } catch (err) {
+    entry.seekInFlight = false
+    entry.seekTarget = null
+    console.warn('Failed to seek preview audio clip:', err)
+    return false
+  }
+}
+
+function requestAudioEntryPlay(entry) {
+  if (
+    !entry
+    || entry.disposed
+    || !entry.desiredPlaying
+    || entry.seekInFlight
+    || entry.element.seeking
+    || entry.element.readyState < 2
+    || !entry.element.paused
+    || entry.playPromise
+  ) return
+
+  const generation = entry.generation
+  const playPromise = entry.element.play()
+  if (!playPromise || typeof playPromise.then !== 'function') return
+
+  entry.playPromise = playPromise
+  playPromise.then(() => {
+    if (entry.generation !== generation) return
+    if (entry.disposed || !entry.desiredPlaying) {
+      pauseAudioEntry(entry)
+    }
+  }).catch((err) => {
+    if (
+      entry.disposed
+      || entry.generation !== generation
+      || err?.name === 'AbortError'
+    ) return
+    console.warn('Failed to play audio clip:', err)
+  }).finally(() => {
+    if (entry.generation === generation && entry.playPromise === playPromise) {
+      entry.playPromise = null
+    }
+  })
+}
 
 /**
  * AudioLayerRenderer - Manages audio playback for audio clips on the timeline
@@ -46,7 +165,9 @@ import {
 function AudioLayerRenderer() {
   const audioElementsRef = useRef(new Map()) // clipId -> { element, currentSrc, sourceNode, gainNode, trackId }
   const trackBusesRef = useRef(new Map()) // trackId -> { input, chain, chainSignature, fader, analyser }
-  const isPlayingRef = useRef(false)
+  const latestPlaybackRef = useRef(null)
+  const previousTimelineSampleRef = useRef(null)
+  const entryEventHandlerRef = useRef(null)
   const audioContextRef = useRef(null)
   const masterBusInputRef = useRef(null)
   const masterChainRef = useRef(null)
@@ -62,16 +183,11 @@ function AudioLayerRenderer() {
     playbackRate,
     masterAudioVolume,
     masterAudioInserts,
-    getActiveClipsAtTime,
   } = useTimelineStore()
 
-  const getAssetById = useAssetsStore(state => state.getAssetById)
+  const assets = useAssetsStore(state => state.assets)
+  const getAssetUrl = useAssetsStore(state => state.getAssetUrl)
   const volume = useAssetsStore(state => state.volume) // Monitor volume from assets store
-
-  // Keep isPlayingRef in sync so event handlers always have current value
-  useEffect(() => {
-    isPlayingRef.current = isPlaying
-  }, [isPlaying])
 
   useEffect(() => {
     let audioContext = null
@@ -118,6 +234,97 @@ function AudioLayerRenderer() {
       masterBusInputRef.current = null
       programGainRef.current = null
       monitorGainRef.current = null
+    }
+  }, [])
+
+  // Media readiness events must consult the latest timeline/entry state. A
+  // single ref-backed handler prevents old loaded/seeked callbacks from
+  // reviving an evicted clip or playing it after the playhead moved away.
+  useEffect(() => {
+    entryEventHandlerRef.current = (entry, eventType = '') => {
+      if (!entry || entry.disposed || audioElementsRef.current.get(entry.clipId) !== entry) return
+
+      const nowMs = getNowMs()
+      const latest = latestPlaybackRef.current
+      const clip = entry.clip
+      if (!latest || !clip) return
+      const clipStart = Number(clip.startTime) || 0
+      const clipEnd = clipStart + Math.max(0, Number(clip.duration) || 0)
+      const active = latest.playheadPosition >= clipStart && latest.playheadPosition < clipEnd
+      entry.active = active
+      entry.desiredPlaying = Boolean(latest.isPlaying && active && !clip.reverse)
+
+      if (eventType === 'error') {
+        const failedUrl = entry.currentSrc
+        entry.failedUrl = failedUrl
+        entry.failedUrls.add(failedUrl)
+        if (failedUrl && failedUrl === entry.cacheUrl) {
+          useAssetsStore.getState().markPlaybackCacheBroken?.(clip.assetId, 'audio-preview-error')
+        }
+        const fallbackUrl = [entry.preferredUrl, entry.sourceUrl]
+          .find((url) => url && !entry.failedUrls.has(url)) || null
+        if (fallbackUrl) {
+          pauseAudioEntry(entry)
+          entry.seekInFlight = false
+          entry.seekTarget = null
+          entry.pendingSeekTarget = null
+          entry.positionPrepared = false
+          entry.startAlignmentAttempts = 0
+          entry.currentSrc = fallbackUrl
+          entry.element.src = fallbackUrl
+          entry.element.load?.()
+        } else if (!entry.errorReported) {
+          entry.errorReported = true
+          console.warn('Failed to load preview audio clip:', clip?.name || clip?.id || entry.clipId)
+        }
+        return
+      }
+
+      if (entry.element.seeking) return
+      if (entry.seekInFlight) {
+        entry.seekInFlight = false
+        entry.seekTarget = null
+      }
+      if (eventType === 'seeked') entry.positionPrepared = true
+
+      const latestTarget = active
+        ? getAudioSourceTimeAtTimeline(clip, latest.playheadPosition)
+        : null
+      if (shouldAlignAudioBeforeStart({
+        active,
+        isPlaying: entry.desiredPlaying,
+        positionPrepared: entry.positionPrepared,
+        attempts: entry.startAlignmentAttempts,
+        currentTime: entry.element.currentTime,
+        expectedTime: latestTarget,
+      })) {
+        entry.startAlignmentAttempts += 1
+        entry.positionPrepared = false
+        entry.pendingSeekTarget = latestTarget
+      }
+
+      // A cold load may finish hundreds of milliseconds after playback began.
+      // Replace its original target with the current playhead so it never
+      // starts behind and enters the audible catch-up/drift-correction cycle.
+      // Once a seek completes, start from that prepared position instead of
+      // chasing the moving playhead with a second in-flight seek.
+      if (active && !entry.positionPrepared) {
+        entry.pendingSeekTarget = Number.isFinite(entry.pendingSeekTarget)
+          ? entry.pendingSeekTarget
+          : latestTarget
+      }
+      const pendingTarget = entry.pendingSeekTarget
+      if (Number.isFinite(pendingTarget)) {
+        requestAudioEntrySeek(entry, pendingTarget, nowMs)
+        if (entry.seekInFlight) return
+      }
+
+      if (entry.desiredPlaying) requestAudioEntryPlay(entry)
+      else pauseAudioEntry(entry)
+    }
+
+    return () => {
+      entryEventHandlerRef.current = null
     }
   }, [])
 
@@ -250,27 +457,45 @@ function AudioLayerRenderer() {
     }
   }, [tracks])
 
-  // Get active audio clips at current playhead position (solo-aware)
-  const activeAudioClips = useMemo(() => {
+  // Keep active clips plus a bounded forward/backward warm window. Upcoming
+  // short clips get a loaded, pre-seeked element before their first sample;
+  // recently-ended entries survive briefly so ordinary cut crossings do not
+  // churn decoder instances.
+  const audioPreviewCandidates = useMemo(() => {
     const anySolo = hasAudioSolo(tracks)
-    const allActive = getActiveClipsAtTime(playheadPosition)
-    return allActive
-      .filter(({ track }) => track.type === 'audio' && isAudioTrackAudible(track, anySolo))
-      .map(({ clip, track }) => ({ clip, track }))
-  }, [playheadPosition, getActiveClipsAtTime, tracks])
+    return selectAudioPreviewCandidates({
+      clips,
+      tracks,
+      playheadPosition,
+      playbackRate,
+      isTrackAudible: (track) => isAudioTrackAudible(track, anySolo),
+    })
+  }, [clips, tracks, playheadPosition, playbackRate])
 
-  // Create/update audio elements for active clips
+  // Create/update audio elements for active and soon-to-be-active clips.
   useEffect(() => {
     const audioEntries = audioElementsRef.current
+    const nowMs = getNowMs()
+    const nextTimelineSample = {
+      playheadPosition,
+      playbackRate,
+      isPlaying,
+      sampledAtMs: nowMs,
+    }
+    const timelineDiscontinuity = isAudioTimelineDiscontinuity(
+      previousTimelineSampleRef.current,
+      nextTimelineSample,
+      nowMs
+    )
+    previousTimelineSampleRef.current = nextTimelineSample
+    latestPlaybackRef.current = nextTimelineSample
 
-    // Remove audio elements for clips that are no longer active
-    const activeClipIds = new Set(activeAudioClips.map(({ clip }) => clip.id))
+    // Evict only clips outside the warm/retention window. This set is stable
+    // during ordinary playback and avoids cold-starting a decoder at each cut.
+    const retainedClipIds = new Set(audioPreviewCandidates.map(({ clip }) => clip.id))
     for (const [clipId, entry] of audioEntries.entries()) {
-      if (!activeClipIds.has(clipId)) {
-        entry.element.pause()
-        entry.element.src = ''
-        entry.sourceNode?.disconnect()
-        entry.gainNode?.disconnect()
+      if (!retainedClipIds.has(clipId)) {
+        disposeAudioEntry(entry)
         audioEntries.delete(clipId)
       }
     }
@@ -298,12 +523,20 @@ function AudioLayerRenderer() {
       monitorGainRef.current.gain.value = Math.max(0, volume)
     }
 
-    // Create/update audio elements for active clips
-    activeAudioClips.forEach(({ clip, track }) => {
-      const asset = getAssetById(clip.assetId)
-      if (!asset?.url) return
-
+    audioPreviewCandidates.forEach(({ clip, track, active, upcoming, prepareTimelineTime }) => {
+      const asset = assets.find(item => item.id === clip.assetId)
       let entry = audioEntries.get(clip.id)
+      const sourceUrl = asset?.url || clip.url || null
+      const preferredUrl = getAssetUrl(clip.assetId) || sourceUrl
+      const resolvedUrl = resolveAudioPreviewUrl({
+        preferredUrl,
+        sourceUrl,
+        currentUrl: entry?.currentSrc,
+        playing: Boolean(isPlaying && active && !clip.reverse),
+        failedUrl: entry?.failedUrl,
+        failedUrls: entry?.failedUrls,
+      })
+      if (!resolvedUrl) return
 
       if (!entry) {
         const audioEl = new Audio()
@@ -312,9 +545,32 @@ function AudioLayerRenderer() {
         entry = {
           element: audioEl,
           currentSrc: null,
+          sourceUrl: null,
+          preferredUrl: null,
+          cacheUrl: null,
+          failedUrl: null,
+          failedUrls: new Set(),
+          errorReported: false,
           sourceNode: null,
           gainNode: null,
           trackId: null,
+          clipId: clip.id,
+          clip: null,
+          track: null,
+          active: false,
+          desiredPlaying: false,
+          disposed: false,
+          generation: 0,
+          seekInFlight: false,
+          seekTarget: null,
+          pendingSeekTarget: null,
+          seekStartedAtMs: 0,
+          lastSeekAtMs: 0,
+          lastDriftCheckAtMs: 0,
+          startAlignmentAttempts: 0,
+          positionPrepared: false,
+          playPromise: null,
+          removeSourceListeners: null,
         }
 
         const audioContext = audioContextRef.current
@@ -351,84 +607,55 @@ function AudioLayerRenderer() {
       }
 
       const audioEl = entry.element
+      entry.clip = clip
+      entry.track = track
+      entry.sourceUrl = sourceUrl
+      entry.preferredUrl = preferredUrl
+      entry.cacheUrl = asset?.playbackCacheUrl || null
+      entry.active = active
+      entry.desiredPlaying = Boolean(isPlaying && active && !clip.reverse)
+      if (!active) entry.startAlignmentAttempts = 0
+      entry.disposed = false
 
       // Check if src actually changed (compare against our tracked src, not browser-resolved URL)
-      const srcChanged = entry.currentSrc !== asset.url
+      const srcChanged = entry.currentSrc !== resolvedUrl
       if (srcChanged) {
-        audioEl.src = asset.url
-        entry.currentSrc = asset.url
+        clearAudioEntryListeners(entry)
+        pauseAudioEntry(entry)
+        entry.generation += 1
+        entry.playPromise = null
+        entry.seekInFlight = false
+        entry.seekTarget = null
+        entry.pendingSeekTarget = null
+        entry.positionPrepared = false
+        entry.startAlignmentAttempts = 0
+        entry.errorReported = false
+        const sourceGeneration = entry.generation
+        const handleMediaState = (event) => {
+          if (entry.generation !== sourceGeneration) return
+          entryEventHandlerRef.current?.(entry, event?.type)
+        }
+        audioEl.addEventListener('loadedmetadata', handleMediaState)
+        audioEl.addEventListener('canplay', handleMediaState)
+        audioEl.addEventListener('seeked', handleMediaState)
+        audioEl.addEventListener('error', handleMediaState)
+        entry.removeSourceListeners = () => {
+          audioEl.removeEventListener('loadedmetadata', handleMediaState)
+          audioEl.removeEventListener('canplay', handleMediaState)
+          audioEl.removeEventListener('seeked', handleMediaState)
+          audioEl.removeEventListener('error', handleMediaState)
+        }
+        audioEl.src = resolvedUrl
+        entry.currentSrc = resolvedUrl
+        audioEl.load?.()
       }
 
-      // Calculate source time within the audio file (with speed/reverse)
       const clipTime = playheadPosition - clip.startTime
-      const speed = Number(clip.speed)
-      const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
       const reverse = !!clip.reverse
-      const trimStart = clip.trimStart || 0
-      const rawTrimEnd = clip.trimEnd ?? clip.sourceDuration ?? trimStart
-      const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
-      const minTime = Math.min(trimStart, trimEnd)
-      const maxTime = Math.max(trimStart, trimEnd)
-      const sourceTime = reverse
-        ? trimEnd - clipTime * speedScale
-        : trimStart + clipTime * speedScale
-      const clampedTime = Math.max(minTime, Math.min(sourceTime, maxTime - 0.01))
+      const clampedTime = getAudioSourceTimeAtTimeline(clip, playheadPosition)
 
-      // Check if we're within the clip's active range
-      const clipEnd = clip.startTime + clip.duration
-      const isWithinClip = playheadPosition >= clip.startTime && playheadPosition < clipEnd
-
-      // Reverse audio not supported with HTMLAudioElement; keep silent
-      if (reverse) {
-        audioEl.pause()
-        return
-      }
-
-      const effectiveRate = Math.abs(playbackRate) * speedScale
-
-      if (srcChanged) {
-        // Remove any prior loadeddata handlers to avoid stale closures
-        const onLoadedData = () => {
-          // Read from ref to get current isPlaying state (not stale closure)
-          const currentlyPlaying = isPlayingRef.current
-          if (isWithinClip && currentlyPlaying) {
-            audioEl.currentTime = clampedTime
-            audioEl.playbackRate = effectiveRate
-            audioEl.play().catch(err => {
-              console.warn('Failed to play audio clip:', err)
-            })
-          }
-        }
-        // Use { once: true } to auto-remove the listener
-        audioEl.addEventListener('loadeddata', onLoadedData, { once: true })
-      } else if (audioEl.readyState >= 2) {
-        // Audio is loaded - sync position
-        const timeDiff = Math.abs(audioEl.currentTime - clampedTime)
-        if (timeDiff > 0.1) {
-          audioEl.currentTime = clampedTime
-        }
-
-        // Set playback rate
-        if (Math.abs(audioEl.playbackRate - effectiveRate) > 0.01) {
-          audioEl.playbackRate = effectiveRate
-        }
-
-        // Play/pause based on timeline state and clip boundaries
-        if (isPlaying && isWithinClip) {
-          if (audioEl.paused) {
-            audioEl.play().catch(err => {
-              console.warn('Failed to play audio clip:', err)
-            })
-          }
-        } else {
-          if (!audioEl.paused) {
-            audioEl.pause()
-          }
-        }
-      }
-
-      const fadeGain = getAudioClipFadeGain(clip, clipTime)
-      const clipGain = getAudioClipLinearGain(clip) * fadeGain
+      const fadeGain = active ? getAudioClipFadeGain(clip, clipTime) : 0
+      const clipGain = active ? getAudioClipLinearGain(clip) * fadeGain : 0
 
       if (entry.gainNode) {
         entry.gainNode.gain.value = Math.max(0, clipGain)
@@ -441,18 +668,62 @@ function AudioLayerRenderer() {
         const fallbackVolume = Math.max(0, Math.min(1, volume * clipGain * trackGain * masterGain))
         audioEl.volume = fallbackVolume
       }
+
+      // Reverse audio not supported with HTMLAudioElement; keep silent
+      if (reverse) {
+        pauseAudioEntry(entry)
+        return
+      }
+
+      const effectiveRate = Math.max(0.01, Math.abs(playbackRate) * getAudioClipTimeScale(clip))
+      if (Math.abs(audioEl.playbackRate - effectiveRate) > 0.01) {
+        audioEl.playbackRate = effectiveRate
+      }
+
+      refreshAudioEntrySeekState(entry, nowMs)
+
+      // Warm upcoming clips at their source in-point. Active clips only seek
+      // on initial preparation, explicit timeline jumps, or bounded drift
+      // checks — never on every RAF update.
+      if (upcoming && Number.isFinite(prepareTimelineTime)) {
+        requestAudioEntrySeek(entry, getAudioSourceTimeAtTimeline(clip, prepareTimelineTime), nowMs)
+      } else if (active && (srcChanged || timelineDiscontinuity)) {
+        entry.startAlignmentAttempts = 0
+        requestAudioEntrySeek(entry, clampedTime, nowMs)
+      } else if (shouldCorrectAudioDrift({
+        active,
+        isPlaying,
+        isSeeking: entry.seekInFlight || audioEl.seeking,
+        currentTime: audioEl.currentTime,
+        expectedTime: clampedTime,
+        nowMs,
+        lastCheckAtMs: entry.lastDriftCheckAtMs,
+        lastSeekAtMs: entry.lastSeekAtMs,
+      })) {
+        entry.lastDriftCheckAtMs = nowMs
+        requestAudioEntrySeek(entry, clampedTime, nowMs)
+      } else if (
+        active
+        && isPlaying
+        && nowMs - entry.lastDriftCheckAtMs >= AUDIO_PREVIEW_DRIFT_CHECK_INTERVAL_MS
+      ) {
+        entry.lastDriftCheckAtMs = nowMs
+      }
+
+      if (entry.desiredPlaying) {
+        requestAudioEntryPlay(entry)
+      } else {
+        pauseAudioEntry(entry)
+      }
     })
-  }, [activeAudioClips, playheadPosition, isPlaying, playbackRate, getAssetById, clips, tracks, volume, masterAudioVolume, masterAudioInserts])
+  }, [audioPreviewCandidates, playheadPosition, isPlaying, playbackRate, getAssetUrl, assets, tracks, volume, masterAudioVolume, masterAudioInserts])
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       const audioEntries = audioElementsRef.current
       for (const entry of audioEntries.values()) {
-        entry.element.pause()
-        entry.element.src = ''
-        entry.sourceNode?.disconnect()
-        entry.gainNode?.disconnect()
+        disposeAudioEntry(entry)
       }
       audioEntries.clear()
     }
