@@ -135,7 +135,7 @@ Captions can be generated from edited timeline audio and styled in-app.
 
 ### Export
 
-The Export tab includes practical render presets, hardware-accelerated options where available, queue controls, and project-aware output settings.
+The Export tab includes practical render presets, hardware-accelerated options where available, numbered PNG image sequence export, queue controls, and project-aware output settings.
 
 <p align="center">
   <img src="docs/readme/export-settings.png" alt="Velorn export settings with presets, codec controls, and export queue" />
