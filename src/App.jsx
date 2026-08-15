@@ -31,6 +31,7 @@ import { startComfyAutoImport } from './services/comfyAutoImport'
 import { startMcpSnapshotPublisher } from './services/mcpSnapshot'
 import { MCP_ACTION_BRIDGE_VERSION, startMcpActionBridge } from './services/mcpActions'
 import { attachProjectDirtyWatchers, isProjectDirty } from './services/projectDirtyTracker'
+import CanvasGenerationNotifications from './components/CanvasGenerationNotifications'
 
 // Tab workspaces load on first visit instead of shipping in the startup
 // bundle. This keeps launch parse time down; GenerateWorkspace alone carries
@@ -39,6 +40,7 @@ import { attachProjectDirtyWatchers, isProjectDirty } from './services/projectDi
 // and ExportPanel hosts the renderer-side export engine that MCP-driven
 // exports rely on.
 const GenerateWorkspace = lazy(() => import('./components/GenerateWorkspace'))
+const CanvasWorkspace = lazy(() => import('./components/CanvasWorkspace'))
 const FlowAIWorkspace = lazy(() => import('./components/FlowAIWorkspace'))
 const AgentWorkspace = lazy(() => import('./components/AgentWorkspace'))
 const MOGWorkspace = lazy(() => import('./components/MOGWorkspace'))
@@ -72,6 +74,7 @@ function App() {
   const [mainTab, setMainTab] = useState('editor')
   const [hasMountedFlowAi, setHasMountedFlowAi] = useState(false)
   const [hasMountedGenerate, setHasMountedGenerate] = useState(false)
+  const [hasMountedCanvas, setHasMountedCanvas] = useState(false)
   const [bottomEditorView, setBottomEditorView] = useState('timeline')
   const [activeTimelineToolLabel, setActiveTimelineToolLabel] = useState('Move tool')
   const [timelineStatusText, setTimelineStatusText] = useState('')
@@ -327,6 +330,9 @@ function App() {
     }
     if (mainTab === 'generate') {
       setHasMountedGenerate(true)
+    }
+    if (mainTab === 'canvas') {
+      setHasMountedCanvas(true)
     }
   }, [mainTab])
 
@@ -584,6 +590,8 @@ function App() {
   }
 
   return (
+    <>
+      <CanvasGenerationNotifications />
     <div className="relative h-screen flex flex-col bg-sf-dark-950 no-select">
       {/* Title Bar */}
       <TitleBar
@@ -773,6 +781,18 @@ function App() {
                   key={`generate-workspace-${projectSessionKey}`}
                   onOpenWorkflowSetup={() => openSettingsModal(WORKFLOW_SETUP_SECTION_ID)}
                 />
+              </Suspense>
+            </WorkspaceErrorBoundary>
+          </div>
+        )}
+        {hasMountedCanvas && (
+          <div
+            className="flex-1 flex flex-col min-h-0 overflow-hidden bg-sf-dark-950"
+            style={{ display: mainTab === 'canvas' ? 'flex' : 'none' }}
+          >
+            <WorkspaceErrorBoundary>
+              <Suspense fallback={WORKSPACE_LOADING_FALLBACK}>
+                <CanvasWorkspace />
               </Suspense>
             </WorkspaceErrorBoundary>
           </div>
@@ -1114,6 +1134,7 @@ function App() {
         onNavigate={handleNavigateFromGettingStarted}
       />
     </div>
+    </>
   )
 }
 

@@ -3,7 +3,11 @@ import {
   CUSTOM_GENERATE_IMAGE_WORKFLOW_ID,
   CUSTOM_GENERATE_VIDEO_WORKFLOW_ID,
 } from './generateWorkspaceConfig'
-import { getImportedManifestById, getImportedManifestByWorkflowId } from './importedWorkflowRegistry'
+import {
+  getImportedManifestById,
+  getImportedManifestByWorkflowId,
+  getImportedManifests,
+} from './importedWorkflowRegistry'
 
 const WORKFLOW_ASSET_BASE = (() => {
   const rawBase = typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL
@@ -1026,4 +1030,44 @@ export function getWorkflowManifestByWorkflowId(workflowId) {
 export function getWorkflowManifestById(id) {
   return GENERATE_WORKFLOW_CATALOG.find((workflow) => workflow.id === id)
     || getImportedManifestById(id)
+}
+
+export function getTextToImageWorkflowOptions() {
+  const workflows = [
+    ...GENERATE_WORKFLOW_CATALOG,
+    ...getImportedManifests(),
+  ]
+  const seen = new Set()
+  return workflows
+    .filter((workflow) => {
+      const id = String(workflow?.workflowId || workflow?.id || '').trim()
+      const isTextToImage = workflow?.category === 'text-to-image'
+      if (!id || !isTextToImage || seen.has(id)) return false
+      seen.add(id)
+      return true
+    })
+    .map((workflow) => ({
+      value: String(workflow.workflowId || workflow.id),
+      label: workflow.title || workflow.label || workflow.workflowId || workflow.id,
+    }))
+}
+
+export function getImageWorkflowOptions() {
+  const workflows = [
+    ...GENERATE_WORKFLOW_CATALOG,
+    ...getImportedManifests(),
+  ]
+  const seen = new Set()
+  return workflows
+    .filter((workflow) => {
+      const id = String(workflow?.workflowId || workflow?.id || '').trim()
+      const isImageWorkflow = ['image', 'text-to-image', 'image-edit'].includes(workflow?.category)
+      if (!id || !isImageWorkflow || seen.has(id)) return false
+      seen.add(id)
+      return true
+    })
+    .map((workflow) => ({
+      value: String(workflow.workflowId || workflow.id),
+      label: workflow.title || workflow.label || workflow.workflowId || workflow.id,
+    }))
 }

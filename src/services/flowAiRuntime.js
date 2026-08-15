@@ -7,6 +7,7 @@ import comfyui, {
   modifyMusicWorkflow,
   modifyMultipleAnglesWorkflow,
   modifyNanoBanana2Workflow,
+  modifyOpenAIGPTImage2Workflow,
   modifyTopazVideoUpscaleWorkflow,
   modifyQwenImageEdit2509Workflow,
   modifySeedream5LiteImageEditWorkflow,
@@ -77,6 +78,7 @@ const WORKFLOW_MODIFIERS = Object.freeze({
   'nano-banana-2': modifyNanoBanana2Workflow,
   'nano-banana-pro': modifyNanoBanana2Workflow,
   'grok-text-to-image': modifyGrokTextToImageWorkflow,
+  'gpt-image-2-t2i': modifyOpenAIGPTImage2Workflow,
   'seedream-5-lite-image-edit': modifySeedream5LiteImageEditWorkflow,
   'music-gen': modifyMusicWorkflow,
   'google-gemini-flash-lite': modifyGeminiPromptWorkflow,
@@ -482,8 +484,7 @@ function resolveConnectedAsset(document, node, targetHandle, desiredType = 'imag
     if (!sourceNode) continue
     if (sourceNode.type === FLOW_AI_NODE_TYPES.imageInput || sourceNode.type === FLOW_AI_NODE_TYPES.styleReference) {
       const assetId = String(sourceNode?.data?.assetId || '').trim()
-      if (!assetId) continue
-      const asset = assetMapFor().get(assetId)
+      const asset = (assetId && assetMapFor().get(assetId)) || sourceNode?.data?.asset || null
       if (!asset) continue
       if (!desiredType || asset.type === desiredType || (desiredType === 'image' && asset.type === 'video')) {
         return asset
@@ -505,7 +506,7 @@ function resolveConnectedAssets(document, node, targetHandle, desiredType = 'ima
     const sourceNode = nodesById.get(edge.source)
     if (!sourceNode) continue
     if (sourceNode.type === FLOW_AI_NODE_TYPES.imageInput || sourceNode.type === FLOW_AI_NODE_TYPES.styleReference) {
-      const asset = assetsById.get(String(sourceNode?.data?.assetId || '').trim())
+      const asset = assetsById.get(String(sourceNode?.data?.assetId || '').trim()) || sourceNode?.data?.asset || null
       if (asset && (!desiredType || asset.type === desiredType || (desiredType === 'image' && asset.type === 'video'))) {
         resolved.push(asset)
       }
@@ -1139,6 +1140,15 @@ async function configureWorkflow(workflowId, workflowJson, context) {
         variantCount: context.variantCount,
         filenamePrefix: context.outputPrefix || 'image/flow_ai_grok_image',
       })
+    case 'gpt-image-2-t2i':
+      return modifier(workflowJson, {
+        prompt: context.promptText,
+        seed: context.seed,
+        width: context.width,
+        height: context.height,
+        useCustomSize: true,
+        filenamePrefix: context.outputPrefix || 'image/flow_ai_gpt_image_2',
+      })
     case 'seedream-5-lite-image-edit':
       return modifier(workflowJson, {
         prompt: context.promptText,
@@ -1567,3 +1577,53 @@ export async function runFlowGraph(document, options = {}) {
   }
 }
 
+export async function runCanvasImageGeneration({
+  workflowId,
+  prompt = '',
+  width = 1024,
+  height = 1024,
+  seed = 1,
+  referenceAssetIds = [],
+  referenceAssets = [],
+  documentId = 'canvas',
+  onStatus,
+} = {}) {
+  const nodeId = `canvas-image-generation-${Date.now()}`
+  const references = Array.isArray(referenceAssets) && referenceAssets.length > 0
+    ? referenceAssets.filter(Boolean)
+    : (Array.isArray(referenceAssetIds) ? referenceAssetIds.filter(Boolean).map((assetId) => ({ id: assetId })) : [])
+  const inputNodes = references.map((asset, index) => ({
+    id: `${nodeId}-reference-${index}`,
+    type: index === 0 ? FLOW_AI_NODE_TYPES.imageInput : FLOW_AI_NODE_TYPES.styleReference,
+    data: { assetId: asset.id || '', asset },
+  }))
+  const inputEdges = references.map((_, index) => ({
+    id: `${nodeId}-reference-edge-${index}`,
+    source: `${nodeId}-reference-${index}`,
+    target: nodeId,
+    sourceHandle: index === 0 ? 'out:image' : 'out:style',
+    targetHandle: index === 0 ? 'in:image' : 'in:style',
+  }))
+  const result = await runFlowGraph({
+    nodes: [...inputNodes, {
+      id: nodeId,
+      type: FLOW_AI_NODE_TYPES.imageGen,
+      data: {
+        label: 'Canvas image',
+        workflowId,
+        inlinePrompt: String(prompt || ''),
+        width: Number(width) || 1024,
+        height: Number(height) || 1024,
+        seed: Number(seed) || 1,
+        variantCount: 1,
+      },
+    }],
+    edges: inputEdges,
+  }, {
+    targetNodeId: nodeId,
+    forceRunAll: true,
+    documentId,
+    onNodePatch: (_nodeId, patch) => onStatus?.(patch),
+  })
+  return result
+}

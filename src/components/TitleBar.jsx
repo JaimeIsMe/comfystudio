@@ -12,6 +12,7 @@ const EDITOR_LAYOUTS = [
 const TOP_TABS = [
   { id: 'editor', label: 'Editor' },
   { id: 'generate', label: 'Generate' },
+  { id: 'canvas', label: 'Canvas' },
   { id: 'agent', label: 'Agent' },
   { id: 'flow-ai', label: 'Flow AI' },
   { id: 'mog', label: 'MoGraph' },

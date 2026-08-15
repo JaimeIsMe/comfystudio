@@ -10,3 +10,8 @@
 - Treat generation and editing as separate layers: editing, captions, and export must not require ComfyUI unless the specific feature is explicitly a ComfyUI workflow.
 - Agent write actions should inspect first, preview when supported, and use Velorn's existing undo/checkpoint paths.
 - Keep changes narrowly scoped and test risky behavior at the renderer, Electron IPC, and packaged-platform boundaries it touches.
+
+## Canvas
+
+Canvas-specific rules and the spec-driven implementation workflow live in
+[`docs/canvas/canvas.md`](docs/canvas/canvas.md).
