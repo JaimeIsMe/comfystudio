@@ -5672,10 +5672,15 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
   if (exportWorkerWindow && !exportWorkerWindow.isDestroyed()) {
     return { success: false, error: 'Export already in progress' }
   }
+  const requestedJobId = typeof payload?.jobId === 'string' ? payload.jobId.trim() : ''
+  const jobId = /^[a-zA-Z0-9._:-]{1,160}$/.test(requestedJobId)
+    ? requestedJobId
+    : `export-${crypto.randomUUID()}`
+  const jobPayload = { ...payload, jobId }
   const workerUrl = isDev
     ? `http://127.0.0.1:5173?export=worker`
     : `file://${path.join(__dirname, '../dist/index.html')}?export=worker`
-  exportWorkerWindow = new BrowserWindow({
+  const workerWindow = new BrowserWindow({
     width: 400,
     height: 200,
     show: false,
@@ -5690,7 +5695,8 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
       webSecurity: false,
     },
   })
-  const workerContents = exportWorkerWindow.webContents
+  exportWorkerWindow = workerWindow
+  const workerContents = workerWindow.webContents
   // The export worker is a hidden window, so its console is invisible in
   // normal use. Mirror it to userData/export-worker.log so export failures
   // are diagnosable from disk — including renderer crashes, which otherwise
@@ -5723,6 +5729,27 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
       }
     }
   }
+  let terminalSent = false
+  const clearActiveWorker = () => {
+    if (exportWorkerWindow === workerWindow) {
+      exportWorkerWindow = null
+    }
+  }
+  const forwardToMain = (channel, data) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(channel, data, { jobId })
+    }
+  }
+  const finishWorker = (channel, data) => {
+    if (terminalSent) return false
+    terminalSent = true
+    forwardToMain(channel, data)
+    clearActiveWorker()
+    if (!workerWindow.isDestroyed()) {
+      workerWindow.close()
+    }
+    return true
+  }
   workerContents.on('console-message', (_event, level, message, lineNo, sourceId) => {
     workerLog(`[${new Date().toISOString().slice(11, 19)}] [${level}] ${message} (${String(sourceId).split('/').pop()}:${lineNo})`)
   })
@@ -5731,68 +5758,65 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
   // line forever AND blocks every future export with "already in progress".
   workerContents.on('render-process-gone', (_event, details) => {
     workerLog(`!!! RENDER PROCESS GONE: ${JSON.stringify(details)}`)
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(
-        'export:error',
-        `Export process crashed (${details?.reason || 'unknown'}, code ${details?.exitCode ?? '?'}). Details in ${workerLogActivePath}.`
-      )
-    }
-    if (exportWorkerWindow && !exportWorkerWindow.isDestroyed()) {
-      exportWorkerWindow.close()
-    }
-    exportWorkerWindow = null
+    const pngSequenceRecoveryNote = jobPayload?.options?.format === 'png-seq' && jobPayload?.outputPath
+      ? ` An incomplete PNG sequence may remain at ${jobPayload.outputPath}; Velorn did not delete it because the worker could not confirm folder ownership after the crash.`
+      : ''
+    finishWorker(
+      'export:error',
+      `Export process crashed (${details?.reason || 'unknown'}, code ${details?.exitCode ?? '?'}). Details in ${workerLogActivePath}.${pngSequenceRecoveryNote}`
+    )
   })
-  exportWorkerWindow.on('unresponsive', () => {
+  workerWindow.on('unresponsive', () => {
     workerLog('!!! WORKER WINDOW UNRESPONSIVE')
   })
-  const forwardToMain = (channel, data) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(channel, data)
-    }
-  }
   const onProgress = (event, data) => {
-    if (event.sender === workerContents) forwardToMain('export:progress', data)
+    if (event.sender === workerContents && !terminalSent) forwardToMain('export:progress', data)
   }
   const onComplete = (event, data) => {
     if (event.sender === workerContents) {
-      forwardToMain('export:complete', data)
-      if (exportWorkerWindow && !exportWorkerWindow.isDestroyed()) {
-        exportWorkerWindow.close()
-        exportWorkerWindow = null
-      }
+      finishWorker('export:complete', data)
     }
   }
   const onError = (event, err) => {
     if (event.sender === workerContents) {
       console.error('[Export] Worker reported error:', err, typeof err)
-      forwardToMain('export:error', err)
-      if (exportWorkerWindow && !exportWorkerWindow.isDestroyed()) {
-        exportWorkerWindow.close()
-        exportWorkerWindow = null
-      }
+      finishWorker('export:error', err)
     }
   }
   ipcMain.on('export:progress', onProgress)
   ipcMain.on('export:complete', onComplete)
   ipcMain.on('export:error', onError)
   const sendJob = () => {
-    if (exportWorkerWindow && !exportWorkerWindow.isDestroyed()) {
-      exportWorkerWindow.webContents.send('export:job', payload)
+    if (!workerWindow.isDestroyed()) {
+      workerWindow.webContents.send('export:job', jobPayload)
     }
   }
-  ipcMain.once('export:workerReady', (event) => {
-    if (event.sender === workerContents) sendJob()
-  })
-  exportWorkerWindow.on('closed', () => {
+  const onWorkerReady = (event) => {
+    if (event.sender !== workerContents) return
+    ipcMain.removeListener('export:workerReady', onWorkerReady)
+    sendJob()
+  }
+  ipcMain.on('export:workerReady', onWorkerReady)
+  workerWindow.on('closed', () => {
     ipcMain.removeListener('export:progress', onProgress)
     ipcMain.removeListener('export:complete', onComplete)
     ipcMain.removeListener('export:error', onError)
+    ipcMain.removeListener('export:workerReady', onWorkerReady)
+    if (!terminalSent) {
+      terminalSent = true
+      forwardToMain('export:error', 'Export worker closed before reporting completion.')
+    }
+    clearActiveWorker()
   })
-  exportWorkerWindow.on('closed', () => {
-    exportWorkerWindow = null
-  })
-  await exportWorkerWindow.loadURL(workerUrl)
-  return { started: true }
+  try {
+    await workerWindow.loadURL(workerUrl)
+  } catch (err) {
+    terminalSent = true
+    clearActiveWorker()
+    if (!workerWindow.isDestroyed()) workerWindow.close()
+    throw err
+  }
+  return { started: true, jobId }
 })
 
 const formatFilterNumber = (value, fallback = '0.000000') => {
