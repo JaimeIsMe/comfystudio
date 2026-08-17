@@ -17,7 +17,7 @@ import {
 } from '../src/services/canvasSchema.js'
 
 test('Canvas block definitions provide typed handles and defaults', () => {
-  assert.equal(CANVAS_BLOCK_LIBRARY.length, 9)
+  assert.equal(CANVAS_BLOCK_LIBRARY.length, 10)
   for (const definition of CANVAS_BLOCK_LIBRARY) {
     assert.ok(definition.type)
     assert.ok(definition.defaults.title)
@@ -32,13 +32,16 @@ test('Canvas block definitions provide typed handles and defaults', () => {
     type: 'workflow-select',
     optionsSource: 'text-to-image',
     defaultValue: 'z-image-turbo',
+    inToolbar: false,
   })
   const configNode = createCanvasNode(CANVAS_BLOCK_TYPES.configuration, { id: 'canvas-config' })
+  const timelineNode = createCanvasNode(CANVAS_BLOCK_TYPES.timeline, { id: 'timeline-1' })
   assert.equal(configNode.data.properties.characterImageWorkflow, 'z-image-turbo')
   assert.equal(createCanvasNode(CANVAS_BLOCK_TYPES.configuration, { id: 'canvas-config' }).data.properties.characterSheetWorkflow, 'image-edit')
   assert.equal(configNode.data.properties.locationImageWorkflow, 'z-image-turbo')
   assert.equal(configNode.data.properties.locationSheetWorkflow, 'image-edit')
   assert.deepEqual(createCanvasNode(CANVAS_BLOCK_TYPES.configuration, { id: 'canvas-config' }).deletable, false)
+  assert.equal(timelineNode.deletable, false)
   for (const definition of CANVAS_BLOCK_LIBRARY) {
     assert.ok(definition.minSize.width > 0)
     assert.ok(definition.minSize.height > 0)
@@ -47,12 +50,13 @@ test('Canvas block definitions provide typed handles and defaults', () => {
   }
 })
 
-test('Canvas rules allow production context to connect to a scene', () => {
+test('Canvas rules allow production context to connect to a shot', () => {
   const nodes = [
     createCanvasNode(CANVAS_BLOCK_TYPES.character, { id: 'character-1' }),
     createCanvasNode(CANVAS_BLOCK_TYPES.scene, { id: 'scene-1' }),
+    createCanvasNode(CANVAS_BLOCK_TYPES.shot, { id: 'shot-1', parentId: 'scene-1' }),
   ]
-  assert.equal(isValidCanvasConnection({ source: 'character-1', target: 'scene-1', sourceHandle: 'right', targetHandle: 'character' }, nodes), true)
+  assert.equal(isValidCanvasConnection({ source: 'character-1', target: 'shot-1', sourceHandle: 'right', targetHandle: 'character' }, nodes), true)
   assert.equal(isValidCanvasConnection({ source: 'scene-1', target: 'character-1', sourceHandle: 'right', targetHandle: 'left' }, nodes), false)
 })
 
@@ -108,8 +112,10 @@ test('Canvas document owns global rules', () => {
 test('Container nodes define a default child layout', () => {
   const character = createCanvasNode(CANVAS_BLOCK_TYPES.character)
   const location = createCanvasNode(CANVAS_BLOCK_TYPES.location)
-  assert.equal(character.data.layout, CANVAS_CHILD_LAYOUTS.landscape)
-  assert.equal(location.data.layout, CANVAS_CHILD_LAYOUTS.landscape)
+  const timeline = createCanvasNode(CANVAS_BLOCK_TYPES.timeline)
+  assert.equal(character.data.layout, CANVAS_CHILD_LAYOUTS.portrait)
+  assert.equal(location.data.layout, CANVAS_CHILD_LAYOUTS.portrait)
+  assert.equal(timeline.data.layout, CANVAS_CHILD_LAYOUTS.portrait)
   assert.equal(CANVAS_CHILD_LAYOUTS.freeform, 'freeform')
 })
 
@@ -119,7 +125,7 @@ test('Initial and new Character and Location nodes receive a default Image', () 
   assert.equal(initial.nodes.filter((node) => node.parentId === 'location-1').length, 1)
   const character = createCanvasNode(CANVAS_BLOCK_TYPES.character, { id: 'character-new' })
   const image = createCanvasNode(CANVAS_BLOCK_TYPES.image, { parentId: character.id })
-  assert.equal(canDeleteCanvasNodes([character, image], new Set([image.id])), false)
+  assert.equal(canDeleteCanvasNodes([character, image], new Set([image.id])), true)
   const sheet = createCanvasNode(CANVAS_BLOCK_TYPES.characterSheet, { parentId: character.id })
   assert.equal(canDeleteCanvasNodes([character, image, sheet], new Set([image.id])), true)
 })
@@ -143,7 +149,18 @@ test('Canvas containment rules keep character and timeline children explicit', (
   assert.equal(canContainCanvasNode(CANVAS_BLOCK_TYPES.location, CANVAS_BLOCK_TYPES.image), true)
   assert.equal(canContainCanvasNode(CANVAS_BLOCK_TYPES.location, CANVAS_BLOCK_TYPES.locationSheet), true)
   assert.equal(canContainCanvasNode(CANVAS_BLOCK_TYPES.timeline, CANVAS_BLOCK_TYPES.scene), true)
+  assert.equal(canContainCanvasNode(CANVAS_BLOCK_TYPES.scene, CANVAS_BLOCK_TYPES.shot), true)
   assert.equal(canContainCanvasNode(CANVAS_BLOCK_TYPES.scene, CANVAS_BLOCK_TYPES.character), false)
+})
+
+test('Scenes normalize ordered Shot labels and Shot owns production properties', () => {
+  const scene = createCanvasNode(CANVAS_BLOCK_TYPES.scene, { id: 'scene-1' })
+  const first = createCanvasNode(CANVAS_BLOCK_TYPES.shot, { id: 'shot-1', parentId: scene.id })
+  const second = createCanvasNode(CANVAS_BLOCK_TYPES.shot, { id: 'shot-2', parentId: scene.id })
+  const normalized = normalizeCanvasDocument({ nodes: [scene, first, second], edges: [] })
+  assert.deepEqual(normalized.nodes.filter((node) => node.type === CANVAS_BLOCK_TYPES.shot).map((node) => node.data.title), ['Shot 1', 'Shot 2'])
+  const shot = CANVAS_BLOCK_LIBRARY.find((definition) => definition.type === CANVAS_BLOCK_TYPES.shot)
+  assert.deepEqual(shot.properties.map((property) => property.id), ['prompt', 'description', 'duration', 'framing', 'cameraMovement', 'lens', 'lighting', 'action', 'dialogue'])
 })
 
 test('Child nodes default to expanded mode and can be normalized compact', () => {
@@ -163,9 +180,11 @@ test('Image keeps prompt as an editable property instead of a Canvas block', () 
   const node = createCanvasNode(CANVAS_BLOCK_TYPES.image)
   assert.equal(node.data.properties.seed, 1)
   assert.equal(node.data.properties.aspectRatio, '1:1')
-  assert.equal(node.data.properties.resolution, 'fhd')
-  assert.deepEqual(CANVAS_IMAGE_ASPECT_RATIOS.map((option) => option.value), ['1:1', '16:9', '9:16', '4:3', '3:4', '21:9'])
-  assert.deepEqual(CANVAS_IMAGE_RESOLUTIONS.map((option) => option.value), ['hd', 'fhd', '2k', '4k'])
+  assert.equal(node.data.properties.size, '1080p')
+  assert.deepEqual(CANVAS_IMAGE_ASPECT_RATIOS.map((option) => option.value), ['1:1', '2:3', '3:2', '16:9', '9:16'])
+  assert.deepEqual(CANVAS_IMAGE_RESOLUTIONS.map((option) => option.value), ['512p', '720p', '1080p', '2k', '4k'])
+  assert.equal(image.properties.find((property) => property.id === 'aspectRatio').inToolbar, true)
+  assert.equal(image.properties.find((property) => property.id === 'size').inToolbar, true)
   assert.equal(image.properties.some((property) => property.id === 'assetId'), false)
   assert.equal(CANVAS_BLOCK_TYPES.prompt, undefined)
 })

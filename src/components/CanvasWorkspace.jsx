@@ -76,12 +76,16 @@ const BLOCK_ICONS = {
   audio: AudioLines,
   timeline: Clapperboard,
   scene: Clapperboard,
+  shot: Clapperboard,
   configuration: Settings2,
 }
 
 const GALLERY_CARD_WIDTH = 112
 const GALLERY_CARD_HEIGHT = 72
 const GALLERY_GAP = 6
+const GALLERY_COLUMN_GAP = 18
+const GALLERY_LABEL_HEIGHT = 18
+const PROMPT_COLUMN_WIDTH = 180
 const TITLE_BAR_HEIGHT = 28
 const CHILD_BORDER_GAP = 12
 
@@ -124,8 +128,8 @@ function clampSize(size, minimum, fallback) {
   }
 }
 
-function imageDimensions(aspectRatio = '1:1', resolution = 'fhd') {
-  const longEdge = { hd: 1280, fhd: 1920, '2k': 2048, '4k': 3840 }[resolution] || 1920
+function imageDimensions(aspectRatio = '1:1', size = '1080p') {
+  const longEdge = { '512p': 512, '720p': 720, '1080p': 1080, '2k': 2048, '4k': 3840 }[size] || 1080
   const [ratioWidth, ratioHeight] = String(aspectRatio || '1:1').split(':').map(Number)
   const safeWidth = Number(ratioWidth) > 0 ? Number(ratioWidth) : 1
   const safeHeight = Number(ratioHeight) > 0 ? Number(ratioHeight) : 1
@@ -211,8 +215,9 @@ function getGalleryLayout(parentDefinition, children, orientation = CANVAS_CHILD
         : Math.max(...sizes.map((size) => size.height), GALLERY_CARD_HEIGHT),
     }
   })
+  const hasPromptColumn = [CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location].includes(parentDefinition?.type)
   const contentWidth = orientation === CANVAS_CHILD_LAYOUTS.portrait
-    ? groupSizes.reduce((total, size) => total + size.width, 0) + Math.max(0, groupSizes.length - 1) * GALLERY_GAP
+    ? groupSizes.reduce((total, size) => total + size.width, 0) + Math.max(0, groupSizes.length - 1) * GALLERY_COLUMN_GAP + (hasPromptColumn ? GALLERY_COLUMN_GAP + PROMPT_COLUMN_WIDTH : 0)
     : Math.max(...groupSizes.map((size) => size.width), GALLERY_CARD_WIDTH)
   const contentHeight = orientation === CANVAS_CHILD_LAYOUTS.portrait
     ? Math.max(...groupSizes.map((size) => size.height), GALLERY_CARD_HEIGHT)
@@ -220,7 +225,7 @@ function getGalleryLayout(parentDefinition, children, orientation = CANVAS_CHILD
   const minimum = parentDefinition?.minSize || { width: 220, height: 120 }
   const required = {
     width: Math.max(minimum.width, CHILD_BORDER_GAP * 2 + contentWidth),
-    height: Math.max(minimum.height, TITLE_BAR_HEIGHT + CHILD_BORDER_GAP * 2 + contentHeight),
+    height: Math.max(minimum.height, TITLE_BAR_HEIGHT + CHILD_BORDER_GAP * 2 + contentHeight + (orientation === CANVAS_CHILD_LAYOUTS.portrait ? GALLERY_LABEL_HEIGHT : 0)),
   }
   return {
     minWidth: required.width,
@@ -251,12 +256,49 @@ function getGalleryPosition(index, orientation = CANVAS_CHILD_LAYOUTS.landscape,
   const childIndex = group.children.findIndex((child) => child.id === current?.id)
   const precedingGroups = groups.slice(0, groupIndex)
   const x = orientation === CANVAS_CHILD_LAYOUTS.portrait
-    ? precedingGroups.reduce((total, candidate) => total + Math.max(...candidate.children.map((child) => getChildDimensions(child).width), GALLERY_CARD_WIDTH), 0) + groupIndex * GALLERY_GAP
+    ? precedingGroups.reduce((total, candidate) => total + Math.max(...candidate.children.map((child) => getChildDimensions(child).width), GALLERY_CARD_WIDTH), 0) + groupIndex * GALLERY_COLUMN_GAP
     : group.children.slice(0, childIndex).reduce((total, child) => total + getChildDimensions(child).width, 0) + childIndex * GALLERY_GAP
   const y = orientation === CANVAS_CHILD_LAYOUTS.portrait
-    ? group.children.slice(0, childIndex).reduce((total, child) => total + getChildDimensions(child).height, 0) + childIndex * GALLERY_GAP
+    ? group.children.slice(0, childIndex).reduce((total, child) => total + getChildDimensions(child).height, 0) + childIndex * GALLERY_GAP + GALLERY_LABEL_HEIGHT
     : precedingGroups.reduce((total, candidate) => total + Math.max(...candidate.children.map((child) => getChildDimensions(child).height), GALLERY_CARD_HEIGHT), 0) + groupIndex * GALLERY_GAP
   return { x: CHILD_BORDER_GAP + x, y: TITLE_BAR_HEIGHT + CHILD_BORDER_GAP + y }
+}
+
+function getGalleryColumnLabels(parentDefinition, children, orientation, availableWidth) {
+  if (orientation !== CANVAS_CHILD_LAYOUTS.portrait || !parentDefinition?.contains) return []
+  const labels = []
+  let x = CHILD_BORDER_GAP
+  for (const group of getGalleryGroups(children)) {
+    const width = Math.max(...group.children.map((child) => getChildDimensions(child).width), GALLERY_CARD_WIDTH)
+    const definition = getCanvasBlockDefinition(group.type)
+    labels.push({ label: `${definition?.label || group.type}${group.children.length === 1 ? '' : 's'}`, x, width })
+    x += width + GALLERY_COLUMN_GAP
+  }
+  if ([CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location].includes(parentDefinition.type)) {
+    labels.push({ label: 'Prompt', x, width: Math.max(PROMPT_COLUMN_WIDTH, (Number(availableWidth) || 0) - x - CHILD_BORDER_GAP), prompt: true })
+  }
+  return labels
+}
+
+function reorderSceneShots(nodes, sceneId, shotId, shotPosition) {
+  const shots = nodes.filter((node) => node.parentId === sceneId && node.type === CANVAS_BLOCK_TYPES.shot)
+  const dragged = shots.find((node) => node.id === shotId)
+  if (!dragged) return nodes
+  const remaining = shots.filter((node) => node.id !== shotId)
+  const draggedY = Number(shotPosition?.y) || 0
+  const insertAt = remaining.findIndex((node) => draggedY < (Number(node.position?.y) || 0) + getChildDimensions(node).height / 2)
+  const ordered = [...remaining]
+  ordered.splice(insertAt < 0 ? ordered.length : insertAt, 0, dragged)
+  const replacements = new Map(ordered.map((node, index) => [node.id, {
+    ...node,
+    data: { ...node.data, title: `Shot ${index + 1}` },
+  }]))
+  const updated = nodes.map((node) => replacements.get(node.id) || node)
+  const order = new Map(ordered.map((node, index) => [node.id, index]))
+  return updated.slice().sort((a, b) => {
+    if (!order.has(a.id) || !order.has(b.id)) return 0
+    return order.get(a.id) - order.get(b.id)
+  })
 }
 
 function normalizeFreeformParent(nodes, parentId) {
@@ -301,6 +343,9 @@ function CanvasNode({ data }) {
   const isImage = data.kind === CANVAS_BLOCK_TYPES.image
   const isConfiguration = data.kind === CANVAS_BLOCK_TYPES.configuration
   const isSheet = [CANVAS_BLOCK_TYPES.characterSheet, CANVAS_BLOCK_TYPES.locationSheet].includes(data.kind)
+  const isShot = data.kind === CANVAS_BLOCK_TYPES.shot
+  const isScene = data.kind === CANVAS_BLOCK_TYPES.scene
+  const fixedVerticalLayout = [CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location, CANVAS_BLOCK_TYPES.timeline].includes(data.kind) || isSheet
   const isCompact = false
   const showToolbar = true
   const nodeTitle = `${definition?.label || data.detail} - ${data.title || 'Untitled'}`
@@ -326,6 +371,8 @@ function CanvasNode({ data }) {
   const addGenerationJob = useCanvasGenerationStore((state) => state.addJob)
   const updateGenerationJob = useCanvasGenerationStore((state) => state.updateJob)
   const selectedAsset = [...assets, ...comfyAssets].find((asset) => asset.id === (draft.assetId || data.assetId)) || (data.assetUrl ? { id: data.assetId, name: data.assetName, url: data.assetUrl } : null)
+  const quickEditProperties = (definition?.properties || []).filter((property) => property.inToolbar)
+  const updateQuickProperty = (property, value) => data.onUpdate?.(data.nodeId, { properties: { ...(data.properties || {}), [property.id]: value } })
 
   useEffect(() => {
     setMode(data.mode || null)
@@ -412,7 +459,7 @@ function CanvasNode({ data }) {
 
   const generateImage = async () => {
     if (generating || !generationWorkflowId) return
-    const dimensions = imageDimensions(draft.aspectRatio, draft.resolution)
+    const dimensions = imageDimensions(draft.aspectRatio, draft.size)
     persistDraft()
     const jobId = addGenerationJob({
       title: draft.title || 'Canvas image',
@@ -555,7 +602,7 @@ function CanvasNode({ data }) {
               )}
             </div>
           )}
-          {definition?.contains && (
+          {definition?.contains && !fixedVerticalLayout && (
             <button type="button" onClick={() => data.onToggleLayout?.(data.nodeId)} className="rounded p-0.5 text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary" title={`Use ${data.layout === CANVAS_CHILD_LAYOUTS.landscape ? 'vertical' : data.layout === CANVAS_CHILD_LAYOUTS.portrait ? 'freeform' : 'horizontal'} child layout`}>
               {data.layout === CANVAS_CHILD_LAYOUTS.portrait ? <LayoutPanelTop className="h-3 w-3" /> : data.layout === CANVAS_CHILD_LAYOUTS.freeform ? <Move className="h-3 w-3" /> : <LayoutPanelLeft className="h-3 w-3" />}
             </button>
@@ -563,6 +610,19 @@ function CanvasNode({ data }) {
           <button type="button" onClick={() => setNodeMode('edit')} className="rounded p-0.5 text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary" title="Edit node">
             <Edit3 className="h-3 w-3" />
           </button>
+        </div>
+      )}
+
+      {quickEditProperties.length > 0 && (
+        <div className="nodrag nopan absolute -top-[3.35rem] left-1 z-20 flex items-end gap-2 rounded-md border border-sf-dark-500/70 bg-sf-dark-900/65 px-2 py-1.5 opacity-0 shadow-lg backdrop-blur-sm transition-opacity group-hover:opacity-100">
+          {quickEditProperties.map((property) => (
+            <label key={property.id} className="flex flex-col gap-0.5 text-[8px] font-semibold uppercase tracking-wide text-sf-text-muted">
+              <span>{property.label}</span>
+              <select value={data.properties?.[property.id] ?? property.defaultValue ?? ''} onChange={(event) => updateQuickProperty(property, event.target.value)} className="rounded border border-sf-dark-500 bg-sf-dark-800/80 px-1.5 py-1 text-[10px] font-normal normal-case tracking-normal text-sf-text-primary outline-none focus:border-sf-accent">
+                {(property.options || []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+          ))}
         </div>
       )}
 
@@ -578,10 +638,16 @@ function CanvasNode({ data }) {
       </div>
 
       {isImage ? (
-        <div className="flex h-[calc(100%-34px)] min-h-[60px] items-center justify-center rounded-b-lg" title="Image">
-          {selectedAsset?.url
-            ? <img src={selectedAsset.url} alt={selectedAsset.name || 'Canvas image'} className="h-full w-full rounded-b-lg object-contain" />
-            : <ImageIcon className="h-8 w-8" style={{ color: accent }} />}
+        <div className="grid h-[calc(100%-28px)] min-h-[100px] grid-cols-2 divide-x divide-sf-dark-700 rounded-b-lg">
+          <div className="flex min-w-0 items-center justify-center overflow-hidden bg-sf-dark-950 p-1.5" title="Source image">
+            {selectedAsset?.url
+              ? <img src={selectedAsset.url} alt={selectedAsset.name || 'Canvas image'} className="h-full w-full rounded object-contain" />
+              : <ImageIcon className="h-8 w-8" style={{ color: accent }} />}
+          </div>
+          <div className="min-w-0 overflow-hidden bg-white p-2" title="Image prompt">
+            <div className="mb-1 text-[8px] font-semibold uppercase tracking-wide text-slate-500">Prompt</div>
+            <div className="whitespace-pre-wrap break-words text-[10px] leading-4 text-slate-900">{data.properties?.prompt || ''}</div>
+          </div>
         </div>
       ) : isConfiguration ? (
         <div className="min-h-[60px] space-y-2 rounded-b-lg px-2.5 py-2" title={selectedWorkflow?.label || selectedWorkflowId || 'No image generation workflow selected'}>
@@ -597,6 +663,45 @@ function CanvasNode({ data }) {
       ) : isSheet ? (
         <div className="min-h-[60px] rounded-b-lg px-2.5 py-2 text-[10px] text-sf-text-muted">
           {data.sheetImages?.filter((image) => image.connected).length || 0} connected reference image{data.sheetImages?.filter((image) => image.connected).length === 1 ? '' : 's'}
+        </div>
+      ) : isShot ? (
+        <div className="grid min-h-[calc(100%-28px)] grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] divide-x divide-sf-dark-700 rounded-b-lg">
+          <div className="min-w-0 space-y-1.5 overflow-hidden p-2">
+            <div className="text-[8px] font-semibold uppercase tracking-wide text-sf-text-muted">Used elements</div>
+            <div className="text-[8px] font-semibold uppercase tracking-wide text-sf-text-muted">Location</div>
+            <div className="flex min-w-0 items-center gap-1.5 rounded border border-sf-dark-700 bg-sf-dark-900/70 p-1">
+              <div className="flex h-9 w-11 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-sf-dark-800">
+                {data.shotReferences?.location?.url
+                  ? <img src={data.shotReferences.location.url} alt={data.shotReferences.location.name || 'Location'} className="h-full w-full object-cover" />
+                  : <MapPin className="h-4 w-4 text-sf-text-muted/60" />}
+              </div>
+              <span className="min-w-0 truncate text-[9px] text-sf-text-secondary">{data.shotReferences?.location?.name || ''}</span>
+            </div>
+            <div className="pt-2 text-[8px] font-semibold uppercase tracking-wide text-sf-text-muted">Characters</div>
+            <div className="grid grid-cols-3 gap-1">
+              {(data.shotReferences?.characters || []).map((character) => (
+                <div key={character.id} className="min-w-0" title={character.name}>
+                  <div className="flex h-10 items-center justify-center overflow-hidden rounded border border-sf-dark-700 bg-sf-dark-800">
+                    {character.url ? <img src={character.url} alt={character.name || 'Character'} className="h-full w-full object-cover" /> : <CircleUserRound className="h-4 w-4 text-sf-text-muted/60" />}
+                  </div>
+                  <div className="truncate pt-0.5 text-[8px] text-sf-text-muted">{character.name}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="min-w-0 overflow-hidden bg-white p-2">
+            <div className="mb-1 text-[8px] font-semibold uppercase tracking-wide text-sf-text-muted">Prompt</div>
+            <div className="h-[calc(100%-14px)] overflow-hidden whitespace-pre-wrap break-words text-[10px] leading-4 text-slate-900">{data.properties?.prompt || ''}</div>
+          </div>
+        </div>
+      ) : definition?.contains ? (
+        <div className="relative h-[calc(100%-28px)] min-h-[60px] overflow-hidden rounded-b-lg">
+          {(data.galleryColumnLabels || []).map((column) => (
+            <div key={column.label} className="absolute top-2 overflow-hidden rounded px-1 text-[8px] font-semibold uppercase tracking-wide text-sf-text-muted" style={{ left: column.x, width: column.width }}>
+              {column.label}
+            </div>
+          ))}
+          {data.promptColumn && <div className="absolute bottom-2 overflow-hidden rounded bg-white p-2 text-[10px] leading-4 text-slate-900" style={{ left: data.promptColumn.x, width: data.promptColumn.width, top: GALLERY_LABEL_HEIGHT + 4 }}>{data.properties?.prompt || ''}</div>}
         </div>
       ) : definition?.contains && data.childCount === 0 ? (
         <div className="flex h-[calc(100%-34px)] min-h-[60px] items-center justify-center rounded-b-lg" title="Empty">
@@ -614,7 +719,7 @@ function CanvasNode({ data }) {
               <button type="button" onClick={closeDraft} className="rounded p-1 hover:bg-sf-dark-800 hover:text-sf-text-primary" title="Close without saving"><X className="h-5 w-5" /></button>
             </div>
             <div className="flex min-h-0 flex-1 flex-col p-5">
-              {!isSheet && <input value={draft.title || ''} onChange={(event) => updateDraft('title', event.target.value)} className="mb-4 w-full rounded border border-sf-dark-600 bg-sf-dark-800 px-3 py-2 text-sm text-sf-text-primary outline-none focus:border-sf-accent" placeholder="Title" />}
+              {!isSheet && !isShot && <input value={draft.title || ''} onChange={(event) => updateDraft('title', event.target.value)} className="mb-4 w-full rounded border border-sf-dark-600 bg-sf-dark-800 px-3 py-2 text-sm text-sf-text-primary outline-none focus:border-sf-accent" placeholder="Title" />}
               {isImage ? (
                 <div className="grid min-h-0 flex-1 grid-cols-2 gap-5">
                   <div className="flex min-h-0 flex-col">
@@ -623,7 +728,7 @@ function CanvasNode({ data }) {
                     <div className="mt-3 grid grid-cols-3 gap-2">
                       <label className="text-[10px] text-sf-text-secondary"><span className="mb-1 block">Seed</span><input type="number" value={draft.seed ?? 1} onChange={(event) => handlePropertyChange({ id: 'seed', type: 'number' }, event)} className="w-full rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-1.5 text-[11px] text-sf-text-primary outline-none focus:border-sf-accent" /></label>
                       <label className="text-[10px] text-sf-text-secondary"><span className="mb-1 block">Aspect ratio</span><select value={draft.aspectRatio || '1:1'} onChange={(event) => updateDraft('aspectRatio', event.target.value)} className="w-full rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-1.5 text-[11px] text-sf-text-primary outline-none focus:border-sf-accent">{CANVAS_IMAGE_ASPECT_RATIOS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-                      <label className="text-[10px] text-sf-text-secondary"><span className="mb-1 block">Resolution</span><select value={draft.resolution || 'fhd'} onChange={(event) => updateDraft('resolution', event.target.value)} className="w-full rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-1.5 text-[11px] text-sf-text-primary outline-none focus:border-sf-accent">{CANVAS_IMAGE_RESOLUTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+                      <label className="text-[10px] text-sf-text-secondary"><span className="mb-1 block">Size</span><select value={draft.size || '1080p'} onChange={(event) => updateDraft('size', event.target.value)} className="w-full rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-1.5 text-[11px] text-sf-text-primary outline-none focus:border-sf-accent">{CANVAS_IMAGE_RESOLUTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button type="button" onClick={() => setAssetPickerOpen(true)} className="rounded border border-sf-dark-600 px-2 py-1.5 text-[10px] text-sf-text-secondary hover:bg-sf-dark-800"><ImageIcon className="mr-1 inline h-3 w-3" /> Select from Comfy assets</button>
@@ -666,7 +771,21 @@ function CanvasNode({ data }) {
                   </div>
               ) : (
                 <div className="min-h-0 flex-1 overflow-y-auto">
-                  {(definition?.properties || []).map((property) => property.type === 'checkbox' ? (
+                  {isShot && <div className="mb-4 rounded-lg border border-sf-dark-700 bg-sf-dark-900 p-3">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-sf-text-muted">Used elements</div>
+                    <div className="space-y-2">
+                      {(data.shotAssignments || []).map((assignment) => (
+                        <div key={assignment.id} className="flex items-center gap-2 rounded border border-sf-dark-700 bg-sf-dark-800 p-1.5">
+                          <div className="flex h-10 w-12 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-sf-dark-950">
+                            {assignment.url ? <img src={assignment.url} alt={assignment.name} className="h-full w-full object-cover" /> : (assignment.kind === CANVAS_BLOCK_TYPES.location ? <MapPin className="h-4 w-4 text-sf-text-muted/60" /> : <CircleUserRound className="h-4 w-4 text-sf-text-muted/60" />)}
+                          </div>
+                          <span className="min-w-0 flex-1 truncate text-xs text-sf-text-primary">{assignment.name}</span>
+                          <button type="button" onClick={() => data.onToggleShotConnection?.(data.nodeId, assignment.id)} className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded border ${assignment.connected ? 'border-emerald-500/50 text-emerald-400 hover:bg-emerald-950/40' : 'border-red-500/50 text-red-400 hover:bg-red-950/40'}`} title={assignment.connected ? 'Remove from shot' : 'Assign to shot'}>{assignment.connected ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>}
+                  {(definition?.properties || []).filter((property) => !isScene).map((property) => property.type === 'checkbox' ? (
                     <label key={property.id} className="mb-2 flex items-center gap-2 rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-2 text-[10px] text-sf-text-secondary"><input type="checkbox" checked={Boolean(draft[property.id])} onChange={(event) => handlePropertyChange(property, event)} className="accent-sf-accent" />{property.label}</label>
                   ) : property.type === 'workflow-select' ? (
                     <label key={property.id} className="mb-3 block text-[10px] text-sf-text-secondary">
@@ -838,7 +957,9 @@ function CanvasWorkspaceContent() {
   }, [applyNodesChange, nodes, setEdges])
 
   const handleNodeUpdate = useCallback((nodeId, patch) => {
-    setNodes((currentNodes) => currentNodes.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node))
+    setNodes((currentNodes) => currentNodes.map((node) => node.id === nodeId
+      ? { ...node, data: { ...node.data, ...(node.type === CANVAS_BLOCK_TYPES.shot ? { ...patch, title: node.data.title } : patch) } }
+      : node))
   }, [setNodes])
 
   const handleNodeMode = useCallback((nodeId, mode) => {
@@ -883,6 +1004,23 @@ function CanvasWorkspaceContent() {
       const connection = { source: imageId, target: sheetId, sourceHandle: 'sheet', targetHandle: 'images' }
       if (!isValidCanvasConnection(connection, nodes, canvasDocument.rules, currentEdges)) return currentEdges
       return addEdge({ ...connection, type: 'canvas-connection' }, currentEdges)
+    })
+  }, [canvasDocument.rules, nodes, setEdges])
+
+  const handleToggleShotConnection = useCallback((shotId, sourceId) => {
+    setEdges((currentEdges) => {
+      const existing = currentEdges.find((edge) => edge.source === sourceId && edge.target === shotId)
+      if (existing) return currentEdges.filter((edge) => edge.id !== existing.id)
+      const source = nodes.find((node) => node.id === sourceId)
+      const shot = nodes.find((node) => node.id === shotId)
+      if (!source || !shot) return currentEdges
+      const targetHandle = source.type === CANVAS_BLOCK_TYPES.location ? 'location' : 'character'
+      const connection = { source: sourceId, target: shotId, sourceHandle: 'right', targetHandle }
+      const withoutExistingLocation = source.type === CANVAS_BLOCK_TYPES.location
+        ? currentEdges.filter((edge) => !(edge.target === shotId && edge.targetHandle === 'location'))
+        : currentEdges
+      if (!isValidCanvasConnection(connection, nodes, canvasDocument.rules, withoutExistingLocation)) return currentEdges
+      return addEdge({ ...connection, type: 'canvas-connection' }, withoutExistingLocation)
     })
   }, [canvasDocument.rules, nodes, setEdges])
 
@@ -976,6 +1114,9 @@ function CanvasWorkspaceContent() {
         }
       })
       if (parent?.data?.layout === CANVAS_CHILD_LAYOUTS.freeform) nextNodes = normalizeFreeformParent(nextNodes, parent.id)
+      if (draggedNode.type === CANVAS_BLOCK_TYPES.shot && parent?.type === CANVAS_BLOCK_TYPES.scene) {
+        nextNodes = reorderSceneShots(nextNodes, parent.id, draggedNode.id, nextNodes.find((node) => node.id === draggedNode.id)?.position)
+      }
       return nextNodes
     })
     dragOriginRef.current = null
@@ -989,7 +1130,7 @@ function CanvasWorkspaceContent() {
       const fallbackParent = parent || (requestedParentId ? null : currentNodes.find((node) => canContainCanvasNode(node.type, type)))
       const siblings = fallbackParent ? currentNodes.filter((node) => node.parentId === fallbackParent.id) : []
       const parentLayout = fallbackParent?.data?.layout || CANVAS_CHILD_LAYOUTS.landscape
-      const createdNode = createCanvasNode(type, { index: currentNodes.length, parentId: fallbackParent?.id, position: fallbackParent ? getGalleryPosition(siblings.length, parentLayout, siblings) : undefined, mode: 'add' })
+      const createdNode = createCanvasNode(type, { index: currentNodes.length, parentId: fallbackParent?.id, position: fallbackParent ? getGalleryPosition(siblings.length, parentLayout, siblings) : undefined, title: type === CANVAS_BLOCK_TYPES.shot ? `Shot ${siblings.length + 1}` : undefined, mode: type === CANVAS_BLOCK_TYPES.scene ? undefined : 'add' })
       const nextNodes = [...currentNodes, createdNode]
       if (![CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location].includes(type) || requestedParentId) return nextNodes
       if (!canAddCanvasNode({ ...canvasDocument, nodes: nextNodes }, CANVAS_BLOCK_TYPES.image)) return currentNodes
@@ -1019,9 +1160,46 @@ function CanvasWorkspaceContent() {
         return { id: image.id, assetId: image.data?.assetId || asset?.id || '', name: image.data?.assetName || asset?.name || image.data?.title || 'Untitled image', url: image.data?.assetUrl || asset?.url || '', connected }
       })
       : []
+    const shotReferences = node.type === CANVAS_BLOCK_TYPES.shot
+      ? (() => {
+        const connectedSources = edges
+          .filter((edge) => edge.target === node.id)
+          .map((edge) => nodes.find((candidate) => candidate.id === edge.source))
+          .filter((candidate) => candidate && [CANVAS_BLOCK_TYPES.location, CANVAS_BLOCK_TYPES.character].includes(candidate.type))
+        const toReference = (source) => {
+          if (!source) return null
+          const image = nodes.find((candidate) => candidate.parentId === source.id && candidate.type === CANVAS_BLOCK_TYPES.image)
+          const asset = image ? useAssetsStore.getState().assets.find((candidate) => candidate.id === image.data?.assetId) : null
+          return {
+            id: source.id,
+            name: source.data?.title || (source.type === CANVAS_BLOCK_TYPES.location ? 'Location' : 'Character'),
+            url: image?.data?.assetUrl || asset?.url || '',
+          }
+        }
+        return {
+          location: toReference(connectedSources.find((source) => source.type === CANVAS_BLOCK_TYPES.location)),
+          characters: connectedSources.filter((source) => source.type === CANVAS_BLOCK_TYPES.character).map(toReference),
+        }
+      })()
+      : null
+    const shotAssignments = node.type === CANVAS_BLOCK_TYPES.shot
+      ? nodes.filter((candidate) => [CANVAS_BLOCK_TYPES.location, CANVAS_BLOCK_TYPES.character].includes(candidate.type)).map((source) => {
+        const image = nodes.find((candidate) => candidate.parentId === source.id && candidate.type === CANVAS_BLOCK_TYPES.image)
+        const asset = image ? useAssetsStore.getState().assets.find((candidate) => candidate.id === image.data?.assetId) : null
+        return {
+          id: source.id,
+          kind: source.type,
+          name: source.data?.title || (source.type === CANVAS_BLOCK_TYPES.location ? 'Location' : 'Character'),
+          url: image?.data?.assetUrl || asset?.url || '',
+          connected: edges.some((edge) => edge.source === source.id && edge.target === node.id),
+        }
+      })
+      : []
     const parentLayout = parent?.data?.layout || CANVAS_CHILD_LAYOUTS.landscape
     const isCoveredByEditor = Boolean(editingNodeId && node.parentId === editingNodeId)
     const layout = definition?.contains ? getGalleryLayout(definition, children, node.data?.layout, node.data?.size) : null
+    const galleryColumnLabels = definition?.contains ? getGalleryColumnLabels(definition, children, node.data?.layout, layout?.width) : []
+    const promptColumn = galleryColumnLabels.find((column) => column.prompt) || null
     const normalDimensions = node.parentId ? getChildDimensions(node) : layout || getNodeDimensions(node)
     const dimensions = node.data?.mode
       ? { width: Math.max(normalDimensions.width, 360), height: Math.max(normalDimensions.height, 300) }
@@ -1038,6 +1216,7 @@ function CanvasWorkspaceContent() {
           : node.position,
       data: {
         ...node.data,
+        ...(node.type === CANVAS_BLOCK_TYPES.shot ? { title: `Shot ${childIndex + 1}` } : {}),
         nodeId: node.id,
         selected: Boolean(node.selected),
         minWidth: layout?.minWidth || minimum.width,
@@ -1049,7 +1228,12 @@ function CanvasWorkspaceContent() {
         onToggleLayout: handleToggleLayout,
         onAddChild: (parentId, childType) => addElement(childType, parentId),
         onToggleImageConnection: handleToggleImageConnection,
+        onToggleShotConnection: handleToggleShotConnection,
         sheetImages,
+        shotReferences,
+        shotAssignments,
+        galleryColumnLabels,
+        promptColumn,
         generationWorkflowId: parent?.type === CANVAS_BLOCK_TYPES.location
           ? (canvasConfiguration?.data?.properties?.locationImageWorkflow || 'z-image-turbo')
           : (canvasConfiguration?.data?.properties?.characterImageWorkflow || canvasConfiguration?.data?.properties?.imageGenerationWorkflow || 'z-image-turbo'),
@@ -1058,7 +1242,7 @@ function CanvasWorkspaceContent() {
           : (canvasConfiguration?.data?.properties?.characterSheetWorkflow || 'image-edit'),
       },
     }
-  }), [addElement, canvasDocument.rules, edges, editingNodeId, handleImageAction, handleNodeMode, handleNodeResize, handleNodeUpdate, handleToggleImageConnection, handleToggleLayout, nodes])
+  }), [addElement, canvasDocument.rules, edges, editingNodeId, handleImageAction, handleNodeMode, handleNodeResize, handleNodeUpdate, handleToggleImageConnection, handleToggleLayout, handleToggleShotConnection, nodes])
 
   const resetCanvas = useCallback(() => {
     setNodes(initialDocument.nodes)

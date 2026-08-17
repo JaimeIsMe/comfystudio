@@ -35,6 +35,8 @@ Character Sheet is expanded by default. When its parent is collapsed, it has
 no floating toolbar. Its minimum size is 150x100 and its default normal size is
 190x132. Resizing it resizes all sibling Character Sheets of the same Character
 to the same normal size. Images in that Character keep their own size.
+Character Sheet does not expose a layout toggle and uses vertical layout when
+a layout is applicable.
 
 Character Sheet accepts multiple Image links from Images inside the same
 Character. Clicking the Sheet reveals all those links; clicking an Image

@@ -1,4 +1,4 @@
-const CANVAS_SCHEMA_VERSION = 6
+const CANVAS_SCHEMA_VERSION = 7
 
 export const CANVAS_BLOCK_TYPES = Object.freeze({
   configuration: 'canvas-config',
@@ -10,6 +10,7 @@ export const CANVAS_BLOCK_TYPES = Object.freeze({
   audio: 'audio',
   timeline: 'timeline',
   scene: 'scene',
+  shot: 'shot',
 })
 
 export const CANVAS_RULES = Object.freeze({
@@ -28,22 +29,22 @@ export const CANVAS_CHILD_LAYOUTS = Object.freeze({
 })
 
 export const CANVAS_IMAGE_ASPECT_RATIOS = Object.freeze([
-  { value: '1:1', label: '1:1 Square' },
-  { value: '16:9', label: '16:9 Widescreen' },
-  { value: '9:16', label: '9:16 Portrait' },
-  { value: '4:3', label: '4:3 Landscape' },
-  { value: '3:4', label: '3:4 Portrait' },
-  { value: '21:9', label: '21:9 Ultrawide' },
+  { value: '1:1', label: '1:1' },
+  { value: '2:3', label: '2:3' },
+  { value: '3:2', label: '3:2' },
+  { value: '16:9', label: '16:9' },
+  { value: '9:16', label: '9:16' },
 ])
 
 export const CANVAS_IMAGE_RESOLUTIONS = Object.freeze([
-  { value: 'hd', label: 'HD' },
-  { value: 'fhd', label: 'FHD' },
+  { value: '512p', label: '512p' },
+  { value: '720p', label: '720p' },
+  { value: '1080p', label: '1080p' },
   { value: '2k', label: '2K' },
   { value: '4k', label: '4K' },
 ])
 
-export const CANVAS_BLOCK_LIBRARY = Object.freeze([
+const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
   {
     type: CANVAS_BLOCK_TYPES.configuration,
     label: 'Canvas Configuration',
@@ -75,7 +76,7 @@ export const CANVAS_BLOCK_LIBRARY = Object.freeze([
     inputs: [],
     outputs: [{ id: 'right', type: 'character', label: 'Character' }],
     contains: [CANVAS_BLOCK_TYPES.image, CANVAS_BLOCK_TYPES.characterSheet],
-    defaultChildLayout: CANVAS_CHILD_LAYOUTS.landscape,
+    defaultChildLayout: CANVAS_CHILD_LAYOUTS.portrait,
     minSize: { width: 220, height: 120 },
     defaultSize: { width: 280, height: 180 },
     properties: [
@@ -95,15 +96,15 @@ export const CANVAS_BLOCK_LIBRARY = Object.freeze([
     inputs: [],
     outputs: [{ id: 'sheet', type: 'image-sheet-link', label: 'Sheet' }],
     allowedParents: [CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location],
-    minSize: { width: 150, height: 100 },
-    defaultSize: { width: 190, height: 132 },
+    minSize: { width: 280, height: 150 },
+    defaultSize: { width: 380, height: 190 },
     properties: [
       { id: 'prompt', label: 'Prompt', type: 'textarea', defaultValue: '' },
       { id: 'seed', label: 'Seed', type: 'number', defaultValue: 1 },
-      { id: 'aspectRatio', label: 'Aspect ratio', type: 'select', defaultValue: '1:1', options: CANVAS_IMAGE_ASPECT_RATIOS },
-      { id: 'resolution', label: 'Resolution', type: 'select', defaultValue: 'fhd', options: CANVAS_IMAGE_RESOLUTIONS },
+      { id: 'aspectRatio', label: 'Aspect ratio', type: 'select', defaultValue: '1:1', options: CANVAS_IMAGE_ASPECT_RATIOS, inToolbar: true },
+      { id: 'size', label: 'Size', type: 'select', defaultValue: '1080p', options: CANVAS_IMAGE_RESOLUTIONS, inToolbar: true },
     ],
-    defaults: { title: 'Character image', properties: { prompt: '', seed: 1, aspectRatio: '1:1', resolution: 'fhd' } },
+    defaults: { title: 'Character image', properties: { prompt: '', seed: 1, aspectRatio: '1:1', size: '1080p' } },
   },
   {
     type: CANVAS_BLOCK_TYPES.characterSheet,
@@ -133,7 +134,7 @@ export const CANVAS_BLOCK_LIBRARY = Object.freeze([
     inputs: [],
     outputs: [{ id: 'right', type: 'location', label: 'Location' }],
     contains: [CANVAS_BLOCK_TYPES.image, CANVAS_BLOCK_TYPES.locationSheet],
-    defaultChildLayout: CANVAS_CHILD_LAYOUTS.landscape,
+    defaultChildLayout: CANVAS_CHILD_LAYOUTS.portrait,
     minSize: { width: 220, height: 120 },
     defaultSize: { width: 280, height: 180 },
     properties: [
@@ -181,10 +182,11 @@ export const CANVAS_BLOCK_LIBRARY = Object.freeze([
     category: 'Production',
     icon: 'timeline',
     accent: '#fb7185',
+    fixed: true,
     inputs: [],
     outputs: [{ id: 'right', type: 'timeline', label: 'Timeline' }],
     contains: [CANVAS_BLOCK_TYPES.scene],
-    defaultChildLayout: CANVAS_CHILD_LAYOUTS.landscape,
+    defaultChildLayout: CANVAS_CHILD_LAYOUTS.portrait,
     minSize: { width: 220, height: 120 },
     defaultSize: { width: 280, height: 180 },
     properties: [
@@ -196,26 +198,56 @@ export const CANVAS_BLOCK_LIBRARY = Object.freeze([
   {
     type: CANVAS_BLOCK_TYPES.scene,
     label: 'Scene',
-    description: 'A shot or sequence to develop',
+    description: 'An organizing container for shots',
     category: 'Production',
     icon: 'scene',
     accent: '#38bdf8',
+    outputs: [{ id: 'right', type: 'scene', label: 'Scene' }],
+    contains: [CANVAS_BLOCK_TYPES.shot],
+    defaultChildLayout: CANVAS_CHILD_LAYOUTS.portrait,
+    allowedParents: [CANVAS_BLOCK_TYPES.timeline],
+    minSize: { width: 220, height: 140 },
+    defaultSize: { width: 300, height: 260 },
+    properties: [{ id: 'prompt', label: 'Prompt', type: 'textarea', defaultValue: '' }],
+    defaults: { title: 'New scene', properties: { prompt: '' } },
+  },
+  {
+    type: CANVAS_BLOCK_TYPES.shot,
+    label: 'Shot',
+    description: 'A specific shot with its location, characters, and direction',
+    category: 'Production',
+    icon: 'shot',
+    accent: '#60a5fa',
     inputs: [
       { id: 'location', type: 'location', label: 'Location' },
       { id: 'character', type: 'character', label: 'Characters', multiple: true },
     ],
-    outputs: [{ id: 'right', type: 'scene', label: 'Scene' }],
-    allowedParents: [CANVAS_BLOCK_TYPES.timeline],
-    minSize: { width: 150, height: 100 },
-    defaultSize: { width: 190, height: 132 },
+    outputs: [{ id: 'right', type: 'shot', label: 'Shot' }],
+    allowedParents: [CANVAS_BLOCK_TYPES.scene],
+    minSize: { width: 300, height: 170 },
+    defaultSize: { width: 420, height: 220 },
     properties: [
       { id: 'prompt', label: 'Prompt', type: 'textarea', defaultValue: '' },
       { id: 'description', label: 'Description', type: 'textarea', defaultValue: '' },
       { id: 'duration', label: 'Duration (seconds)', type: 'number', defaultValue: 5 },
+      { id: 'framing', label: 'Framing', type: 'text', defaultValue: '' },
+      { id: 'cameraMovement', label: 'Camera movement', type: 'text', defaultValue: '' },
+      { id: 'lens', label: 'Lens', type: 'text', defaultValue: '' },
+      { id: 'lighting', label: 'Lighting', type: 'textarea', defaultValue: '' },
+      { id: 'action', label: 'Action', type: 'textarea', defaultValue: '' },
+      { id: 'dialogue', label: 'Dialogue', type: 'textarea', defaultValue: '' },
     ],
-    defaults: { title: 'New scene', properties: { prompt: '', description: '', duration: 5 } },
+    defaults: { title: 'Shot 1', properties: { prompt: '', description: '', duration: 5, framing: '', cameraMovement: '', lens: '', lighting: '', action: '', dialogue: '' } },
   },
-])
+]
+
+export const CANVAS_BLOCK_LIBRARY = Object.freeze(CANVAS_BLOCK_LIBRARY_DEFINITIONS.map((definition) => ({
+  ...definition,
+  properties: Object.freeze((definition.properties || []).map((property) => ({
+    ...property,
+    inToolbar: property.inToolbar === true,
+  }))),
+})))
 
 const DEFAULT_VIEWPORT = Object.freeze({ x: 0, y: 0, zoom: 1 })
 
@@ -239,9 +271,14 @@ export function createCanvasNode(type, options = {}) {
   const properties = Object.fromEntries((definition.properties || []).map((property) => {
     const hasOption = Boolean(options.properties && Object.prototype.hasOwnProperty.call(options.properties, property.id))
     const hasDefault = Boolean(definition.defaults.properties && Object.prototype.hasOwnProperty.call(definition.defaults.properties, property.id))
+    const legacySize = property.id === 'size' && options.properties && options.properties.resolution
+      ? ({ hd: '512p', fhd: '1080p' }[options.properties.resolution] || options.properties.resolution)
+      : undefined
     const value = hasOption
       ? options.properties[property.id]
-      : hasDefault
+      : legacySize !== undefined
+        ? legacySize
+        : hasDefault
         ? definition.defaults.properties[property.id]
         : property.defaultValue
     return [property.id, value === undefined ? '' : value]
@@ -348,11 +385,7 @@ export function canContainCanvasNode(parentType, childType) {
 
 export function canDeleteCanvasNodes(nodes, nodeIds) {
   const deleteIds = nodeIds instanceof Set ? nodeIds : new Set(nodeIds)
-  return nodes.every((node) => {
-    if (![CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location].includes(node.type) || deleteIds.has(node.id)) return true
-    const children = nodes.filter((child) => child.parentId === node.id)
-    return children.some((child) => !deleteIds.has(child.id))
-  })
+  return nodes.every((node) => !deleteIds.has(node.id) || !getCanvasBlockDefinition(node.type)?.fixed)
 }
 
 export function normalizeCanvasDocument(value) {
@@ -376,7 +409,9 @@ export function normalizeCanvasDocument(value) {
         imageMode: node.data?.imageMode,
         parentId: node.parentId,
         collapsed: node.data?.collapsed,
-        layout: node.data?.layout,
+        layout: [CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location, CANVAS_BLOCK_TYPES.timeline, CANVAS_BLOCK_TYPES.scene].includes(definition.type)
+          ? CANVAS_CHILD_LAYOUTS.portrait
+          : node.data?.layout,
       })
       return { ...normalized, selected: Boolean(node.selected), dragging: Boolean(node.dragging) }
     })
@@ -390,9 +425,16 @@ export function normalizeCanvasDocument(value) {
     if (withConfiguration.some((candidate) => candidate.parentId === node.id)) return [node]
     return [node, createCanvasNode(CANVAS_BLOCK_TYPES.image, { parentId: node.id, position: { x: 12, y: 46 } })]
   })
-  const nodeIds = new Set(ensuredNodes.map((node) => node.id))
+  const shotCounters = new Map()
+  const titledNodes = ensuredNodes.map((node) => {
+    if (node.type !== CANVAS_BLOCK_TYPES.shot) return node
+    const shotNumber = (shotCounters.get(node.parentId) || 0) + 1
+    shotCounters.set(node.parentId, shotNumber)
+    return { ...node, data: { ...node.data, title: `Shot ${shotNumber}` } }
+  })
+  const nodeIds = new Set(titledNodes.map((node) => node.id))
   const edges = base.edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))
-  return { ...base, nodes: ensuredNodes, edges }
+  return { ...base, schemaVersion: CANVAS_SCHEMA_VERSION, nodes: titledNodes, edges }
 }
 
 export { CANVAS_SCHEMA_VERSION }

@@ -72,8 +72,19 @@ Canvas area. Every item below must remain true when the Canvas is changed.
 - Character contains Image and Character Sheet.
 - Location contains Image and Location Sheet.
 - Timeline contains Scene.
-- Image, Character Sheet, Location Sheet, and Scene cannot exist at the top
+- Scene contains Shot.
+- Image, Character Sheet, Location Sheet, Scene, and Shot cannot exist at the top
   level.
+- A Shot card shows its connected Location and Characters on the Used elements
+  side, using each source's first Image child as its preview. Its other side
+  shows the Shot prompt.
+- Adding a Scene is immediate and opens no Add form. Scene title editing is
+  available through double-click.
+- Timeline, Character Sheet, and Location Sheet do not expose a layout icon;
+  Timeline uses vertical Scene layout for now.
+- Character and Location use portrait galleries with a minimum gap between
+  columns. Their columns are Images, Sheets, and Prompt. Shot Used elements
+  are labeled Location and Characters, beside its Prompt column.
 - A child can only be dragged into a compatible parent.
 - An invalid drag leaves the child in its previous valid parent and position.
 

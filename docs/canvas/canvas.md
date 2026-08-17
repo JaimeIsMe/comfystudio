@@ -135,11 +135,14 @@ initial state above.
 | Image | none; prompt is an Image property |
 | Location | Image, Location Sheet |
 | Timeline | Scene |
+| Scene | Shot |
 
 ## Current connections
 
-- Scene accepts one Location connection.
-- Scene accepts multiple Character connections.
+- Shot accepts one Location connection.
+- Shot accepts multiple Character connections.
+- Shot previews use the first Image child of each connected Location or
+  Character, and its card displays those Used elements beside the Shot prompt.
 - Images connect to Sheets only when both belong to the same Character or
   Location parent. A Sheet accepts many Images; an Image accepts one Sheet.
 - Edges are hidden until a node is clicked. Clicking a Sheet reveals all of

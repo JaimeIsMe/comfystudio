@@ -16,8 +16,9 @@ Location may contain any number of:
 - Image
 - Location Sheet
 
-Children are arranged in the Location gallery grouped by type. In landscape
-mode Images occupy one row and Location Sheets occupy another row. In
+Children are arranged in portrait Location columns grouped by type. Images
+occupy one column and Location Sheets occupy another column, with a separate
+Prompt column on the right. A minimum gap separates columns. In
 portrait mode each type occupies its own column. In freeform mode each child
 can be positioned independently. The container expands to fit them with a
 small border gap and shrinks when they move inward. The Location toolbar
