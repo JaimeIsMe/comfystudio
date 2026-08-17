@@ -769,6 +769,44 @@ function CanvasNode({ data }) {
                       </div>
                     </div>
                   </div>
+              ) : isShot ? (
+                <div className="grid min-h-0 flex-1 grid-cols-2 gap-5">
+                  <div className="min-h-0 overflow-y-auto pr-1">
+                    <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-sf-text-muted">Shot properties</div>
+                    {(definition?.properties || []).map((property) => property.type === 'textarea' ? (
+                      <label key={property.id} className="mb-3 block text-[10px] text-sf-text-secondary"><span className="mb-1 block">{property.label}</span><textarea value={draft[property.id] ?? ''} onChange={(event) => handlePropertyChange(property, event)} className="h-20 w-full resize-y rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-2 text-[11px] text-sf-text-primary outline-none focus:border-sf-accent" /></label>
+                    ) : (
+                      <label key={property.id} className="mb-3 block text-[10px] text-sf-text-secondary"><span className="mb-1 block">{property.label}</span><input type={property.type === 'number' ? 'number' : 'text'} min={property.min} step={property.step} value={draft[property.id] ?? ''} onChange={(event) => handlePropertyChange(property, event)} className="w-full rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-2 text-[11px] text-sf-text-primary outline-none focus:border-sf-accent" /></label>
+                    ))}
+                  </div>
+                  <div className="min-h-0 overflow-y-auto pl-1">
+                    <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-sf-text-muted">Used elements</div>
+                    <div className="mb-4">
+                      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-sf-text-muted">Location</div>
+                      <div className="space-y-2">
+                        {(data.shotAssignments || []).filter((assignment) => assignment.kind === CANVAS_BLOCK_TYPES.location).map((assignment) => (
+                          <div key={assignment.id} className="flex items-center gap-2 rounded border border-sf-dark-700 bg-sf-dark-800 p-1.5">
+                            <div className="flex h-12 w-16 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-sf-dark-950">{assignment.url ? <img src={assignment.url} alt={assignment.name} className="h-full w-full object-cover" /> : <MapPin className="h-4 w-4 text-sf-text-muted/60" />}</div>
+                            <span className="min-w-0 flex-1 truncate text-xs text-sf-text-primary">{assignment.name}</span>
+                            <button type="button" onClick={() => data.onToggleShotConnection?.(data.nodeId, assignment.id)} className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded border ${assignment.connected ? 'border-emerald-500/50 text-emerald-400 hover:bg-emerald-950/40' : 'border-red-500/50 text-red-400 hover:bg-red-950/40'}`} title={assignment.connected ? 'Remove from shot' : 'Assign to shot'}>{assignment.connected ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-sf-text-muted">Characters</div>
+                      <div className="space-y-2">
+                        {(data.shotAssignments || []).filter((assignment) => assignment.kind === CANVAS_BLOCK_TYPES.character).map((assignment) => (
+                          <div key={assignment.id} className="flex items-center gap-2 rounded border border-sf-dark-700 bg-sf-dark-800 p-1.5">
+                            <div className="flex h-12 w-16 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-sf-dark-950">{assignment.url ? <img src={assignment.url} alt={assignment.name} className="h-full w-full object-cover" /> : <CircleUserRound className="h-4 w-4 text-sf-text-muted/60" />}</div>
+                            <span className="min-w-0 flex-1 truncate text-xs text-sf-text-primary">{assignment.name}</span>
+                            <button type="button" onClick={() => data.onToggleShotConnection?.(data.nodeId, assignment.id)} className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded border ${assignment.connected ? 'border-emerald-500/50 text-emerald-400 hover:bg-emerald-950/40' : 'border-red-500/50 text-red-400 hover:bg-red-950/40'}`} title={assignment.connected ? 'Remove from shot' : 'Assign to shot'}>{assignment.connected ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <div className="min-h-0 flex-1 overflow-y-auto">
                   {isShot && <div className="mb-4 rounded-lg border border-sf-dark-700 bg-sf-dark-900 p-3">
@@ -1130,7 +1168,7 @@ function CanvasWorkspaceContent() {
       const fallbackParent = parent || (requestedParentId ? null : currentNodes.find((node) => canContainCanvasNode(node.type, type)))
       const siblings = fallbackParent ? currentNodes.filter((node) => node.parentId === fallbackParent.id) : []
       const parentLayout = fallbackParent?.data?.layout || CANVAS_CHILD_LAYOUTS.landscape
-      const createdNode = createCanvasNode(type, { index: currentNodes.length, parentId: fallbackParent?.id, position: fallbackParent ? getGalleryPosition(siblings.length, parentLayout, siblings) : undefined, title: type === CANVAS_BLOCK_TYPES.shot ? `Shot ${siblings.length + 1}` : undefined, mode: type === CANVAS_BLOCK_TYPES.scene ? undefined : 'add' })
+      const createdNode = createCanvasNode(type, { index: currentNodes.length, parentId: fallbackParent?.id, position: fallbackParent ? getGalleryPosition(siblings.length, parentLayout, siblings) : undefined, title: type === CANVAS_BLOCK_TYPES.shot ? `Shot ${siblings.length + 1}` : type === CANVAS_BLOCK_TYPES.scene ? `Scene ${siblings.length + 1}` : undefined, mode: type === CANVAS_BLOCK_TYPES.scene ? undefined : 'add' })
       const nextNodes = [...currentNodes, createdNode]
       if (![CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location].includes(type) || requestedParentId) return nextNodes
       if (!canAddCanvasNode({ ...canvasDocument, nodes: nextNodes }, CANVAS_BLOCK_TYPES.image)) return currentNodes
@@ -1217,6 +1255,7 @@ function CanvasWorkspaceContent() {
       data: {
         ...node.data,
         ...(node.type === CANVAS_BLOCK_TYPES.shot ? { title: `Shot ${childIndex + 1}` } : {}),
+        ...(node.type === CANVAS_BLOCK_TYPES.scene && (/^Scene \d+$/.test(String(node.data?.title || '')) || node.data?.title === 'New scene') ? { title: `Scene ${childIndex + 1}` } : {}),
         nodeId: node.id,
         selected: Boolean(node.selected),
         minWidth: layout?.minWidth || minimum.width,

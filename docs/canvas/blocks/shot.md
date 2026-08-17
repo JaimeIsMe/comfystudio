@@ -27,8 +27,11 @@ Shot may only be placed inside Scene.
 ## Properties
 
 - Prompt
+- Seed
 - Description
 - Duration in seconds
+- Duration start in milliseconds
+- Duration end in milliseconds
 - Framing
 - Camera movement
 - Lens

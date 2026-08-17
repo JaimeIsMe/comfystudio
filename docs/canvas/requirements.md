@@ -85,6 +85,10 @@ Canvas area. Every item below must remain true when the Canvas is changed.
 - Character and Location use portrait galleries with a minimum gap between
   columns. Their columns are Images, Sheets, and Prompt. Shot Used elements
   are labeled Location and Characters, beside its Prompt column.
+- Every block with a Prompt also persists a Seed. Shot editing uses two
+  columns: Shot properties on the left and Used elements on the right, with
+  separate Location and Characters sections. Shot duration_start and
+  duration_end are editable in milliseconds.
 - A child can only be dragged into a compatible parent.
 - An invalid drag leaves the child in its previous valid parent and position.
 

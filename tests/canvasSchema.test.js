@@ -160,7 +160,16 @@ test('Scenes normalize ordered Shot labels and Shot owns production properties',
   const normalized = normalizeCanvasDocument({ nodes: [scene, first, second], edges: [] })
   assert.deepEqual(normalized.nodes.filter((node) => node.type === CANVAS_BLOCK_TYPES.shot).map((node) => node.data.title), ['Shot 1', 'Shot 2'])
   const shot = CANVAS_BLOCK_LIBRARY.find((definition) => definition.type === CANVAS_BLOCK_TYPES.shot)
-  assert.deepEqual(shot.properties.map((property) => property.id), ['prompt', 'description', 'duration', 'framing', 'cameraMovement', 'lens', 'lighting', 'action', 'dialogue'])
+  assert.deepEqual(shot.properties.map((property) => property.id), ['prompt', 'seed', 'description', 'duration', 'duration_start', 'duration_end', 'framing', 'cameraMovement', 'lens', 'lighting', 'action', 'dialogue'])
+})
+
+test('Scenes receive automatic sequential labels while custom titles remain editable', () => {
+  const timeline = createCanvasNode(CANVAS_BLOCK_TYPES.timeline, { id: 'timeline-1' })
+  const first = createCanvasNode(CANVAS_BLOCK_TYPES.scene, { id: 'scene-1', parentId: timeline.id })
+  const second = createCanvasNode(CANVAS_BLOCK_TYPES.scene, { id: 'scene-2', parentId: timeline.id })
+  const custom = createCanvasNode(CANVAS_BLOCK_TYPES.scene, { id: 'scene-3', parentId: timeline.id, title: 'Chorus' })
+  const normalized = normalizeCanvasDocument({ nodes: [timeline, first, second, custom], edges: [] })
+  assert.deepEqual(normalized.nodes.filter((node) => node.type === CANVAS_BLOCK_TYPES.scene).map((node) => node.data.title), ['Scene 1', 'Scene 2', 'Chorus'])
 })
 
 test('Child nodes default to expanded mode and can be normalized compact', () => {
@@ -204,8 +213,10 @@ test('Location Sheets use prompt and seed without style or notes', () => {
 test('Every Canvas node definition owns a persisted Prompt property', () => {
   for (const definition of CANVAS_BLOCK_LIBRARY) {
     assert.ok(definition.properties.some((property) => property.id === 'prompt'))
+    assert.ok(definition.properties.some((property) => property.id === 'seed'))
     const node = createCanvasNode(definition.type)
     assert.equal(node.data.properties.prompt, '')
+    assert.equal(node.data.properties.seed, 1)
   }
 })
 
@@ -227,5 +238,5 @@ test('Image asset IDs are generated internally and uniquely', () => {
 test('Audio asset IDs are internal metadata', () => {
   const audio = createCanvasNode(CANVAS_BLOCK_TYPES.audio)
   assert.ok(audio.data.assetId)
-  assert.deepEqual(audio.data.properties, { prompt: '' })
+  assert.deepEqual(audio.data.properties, { prompt: '', seed: 1 })
 })

@@ -59,12 +59,13 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     defaultSize: { width: 230, height: 132 },
     properties: [
       { id: 'prompt', label: 'Prompt', type: 'textarea', defaultValue: '' },
+      { id: 'seed', label: 'Seed', type: 'number', defaultValue: 1 },
       { id: 'characterImageWorkflow', label: 'Character image workflow', type: 'workflow-select', optionsSource: 'text-to-image', defaultValue: 'z-image-turbo' },
       { id: 'characterSheetWorkflow', label: 'Character sheet workflow', type: 'workflow-select', optionsSource: 'image', defaultValue: 'image-edit' },
       { id: 'locationImageWorkflow', label: 'Location image workflow', type: 'workflow-select', optionsSource: 'text-to-image', defaultValue: 'z-image-turbo' },
       { id: 'locationSheetWorkflow', label: 'Location sheet workflow', type: 'workflow-select', optionsSource: 'image', defaultValue: 'image-edit' },
     ],
-    defaults: { title: 'Canvas configuration', properties: { prompt: '', characterImageWorkflow: 'z-image-turbo', characterSheetWorkflow: 'image-edit', locationImageWorkflow: 'z-image-turbo', locationSheetWorkflow: 'image-edit' } },
+    defaults: { title: 'Canvas configuration', properties: { prompt: '', seed: 1, characterImageWorkflow: 'z-image-turbo', characterSheetWorkflow: 'image-edit', locationImageWorkflow: 'z-image-turbo', locationSheetWorkflow: 'image-edit' } },
   },
   {
     type: CANVAS_BLOCK_TYPES.character,
@@ -81,10 +82,11 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     defaultSize: { width: 280, height: 180 },
     properties: [
       { id: 'prompt', label: 'Prompt', type: 'textarea', defaultValue: '' },
+      { id: 'seed', label: 'Seed', type: 'number', defaultValue: 1 },
       { id: 'name', label: 'Name', type: 'text', defaultValue: '' },
       { id: 'description', label: 'Description', type: 'textarea', defaultValue: '' },
     ],
-    defaults: { title: 'New character', properties: { prompt: '', name: '', description: '' } },
+    defaults: { title: 'New character', properties: { prompt: '', seed: 1, name: '', description: '' } },
   },
   {
     type: CANVAS_BLOCK_TYPES.image,
@@ -139,9 +141,10 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     defaultSize: { width: 280, height: 180 },
     properties: [
       { id: 'prompt', label: 'Prompt', type: 'textarea', defaultValue: '' },
+      { id: 'seed', label: 'Seed', type: 'number', defaultValue: 1 },
       { id: 'description', label: 'Description', type: 'textarea', defaultValue: '' },
     ],
-    defaults: { title: 'New location', properties: { prompt: '', description: '' } },
+    defaults: { title: 'New location', properties: { prompt: '', seed: 1, description: '' } },
   },
   {
     type: CANVAS_BLOCK_TYPES.locationSheet,
@@ -170,10 +173,10 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     accent: '#f59e0b',
     inputs: [],
     outputs: [{ id: 'right', type: 'audio', label: 'Audio' }],
-    properties: [{ id: 'prompt', label: 'Prompt', type: 'textarea', defaultValue: '' }],
+    properties: [{ id: 'prompt', label: 'Prompt', type: 'textarea', defaultValue: '' }, { id: 'seed', label: 'Seed', type: 'number', defaultValue: 1 }],
     minSize: { width: 150, height: 100 },
     defaultSize: { width: 190, height: 132 },
-    defaults: { title: 'New audio', properties: { prompt: '' } },
+    defaults: { title: 'New audio', properties: { prompt: '', seed: 1 } },
   },
   {
     type: CANVAS_BLOCK_TYPES.timeline,
@@ -191,9 +194,10 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     defaultSize: { width: 280, height: 180 },
     properties: [
       { id: 'prompt', label: 'Prompt', type: 'textarea', defaultValue: '' },
+      { id: 'seed', label: 'Seed', type: 'number', defaultValue: 1 },
       { id: 'description', label: 'Description', type: 'textarea', defaultValue: '' },
     ],
-    defaults: { title: 'New timeline', properties: { prompt: '', description: '' } },
+    defaults: { title: 'New timeline', properties: { prompt: '', seed: 1, description: '' } },
   },
   {
     type: CANVAS_BLOCK_TYPES.scene,
@@ -208,8 +212,8 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     allowedParents: [CANVAS_BLOCK_TYPES.timeline],
     minSize: { width: 220, height: 140 },
     defaultSize: { width: 300, height: 260 },
-    properties: [{ id: 'prompt', label: 'Prompt', type: 'textarea', defaultValue: '' }],
-    defaults: { title: 'New scene', properties: { prompt: '' } },
+    properties: [{ id: 'prompt', label: 'Prompt', type: 'textarea', defaultValue: '' }, { id: 'seed', label: 'Seed', type: 'number', defaultValue: 1 }],
+    defaults: { title: 'Scene 1', properties: { prompt: '', seed: 1 } },
   },
   {
     type: CANVAS_BLOCK_TYPES.shot,
@@ -228,8 +232,11 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     defaultSize: { width: 420, height: 220 },
     properties: [
       { id: 'prompt', label: 'Prompt', type: 'textarea', defaultValue: '' },
+      { id: 'seed', label: 'Seed', type: 'number', defaultValue: 1 },
       { id: 'description', label: 'Description', type: 'textarea', defaultValue: '' },
       { id: 'duration', label: 'Duration (seconds)', type: 'number', defaultValue: 5 },
+      { id: 'duration_start', label: 'Duration start (ms)', type: 'number', defaultValue: 0, min: 0, step: 1 },
+      { id: 'duration_end', label: 'Duration end (ms)', type: 'number', defaultValue: 5000, min: 0, step: 1 },
       { id: 'framing', label: 'Framing', type: 'text', defaultValue: '' },
       { id: 'cameraMovement', label: 'Camera movement', type: 'text', defaultValue: '' },
       { id: 'lens', label: 'Lens', type: 'text', defaultValue: '' },
@@ -237,7 +244,7 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
       { id: 'action', label: 'Action', type: 'textarea', defaultValue: '' },
       { id: 'dialogue', label: 'Dialogue', type: 'textarea', defaultValue: '' },
     ],
-    defaults: { title: 'Shot 1', properties: { prompt: '', description: '', duration: 5, framing: '', cameraMovement: '', lens: '', lighting: '', action: '', dialogue: '' } },
+    defaults: { title: 'Shot 1', properties: { prompt: '', seed: 1, description: '', duration: 5, duration_start: 0, duration_end: 5000, framing: '', cameraMovement: '', lens: '', lighting: '', action: '', dialogue: '' } },
   },
 ]
 
@@ -426,7 +433,16 @@ export function normalizeCanvasDocument(value) {
     return [node, createCanvasNode(CANVAS_BLOCK_TYPES.image, { parentId: node.id, position: { x: 12, y: 46 } })]
   })
   const shotCounters = new Map()
+  const sceneCounters = new Map()
   const titledNodes = ensuredNodes.map((node) => {
+    if (node.type === CANVAS_BLOCK_TYPES.scene) {
+      const sceneNumber = (sceneCounters.get(node.parentId) || 0) + 1
+      sceneCounters.set(node.parentId, sceneNumber)
+      const title = /^Scene \d+$/.test(String(node.data?.title || '')) || node.data?.title === 'New scene'
+        ? `Scene ${sceneNumber}`
+        : node.data?.title
+      return { ...node, data: { ...node.data, title } }
+    }
     if (node.type !== CANVAS_BLOCK_TYPES.shot) return node
     const shotNumber = (shotCounters.get(node.parentId) || 0) + 1
     shotCounters.set(node.parentId, shotNumber)
