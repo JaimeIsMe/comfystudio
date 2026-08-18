@@ -41,3 +41,13 @@ a layout is applicable.
 Character Sheet accepts multiple Image links from Images inside the same
 Character. Clicking the Sheet reveals all those links; clicking an Image
 reveals only that Image's one Sheet link.
+## Visual identity
+
+Character Sheet belongs to the Asset visual family and uses a stacked-page
+placeholder until generated, then shows only its associated sheet image. Its
+connected reference count remains visible as metadata; Prompt and Seed remain
+available in Edit mode.
+
+A Character Sheet may only be added when the same Character already contains
+at least one Image with associated media. The Add option remains visible but
+disabled until that prerequisite is satisfied.

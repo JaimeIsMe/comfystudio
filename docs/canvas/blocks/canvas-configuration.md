@@ -26,3 +26,7 @@ is immediately recognizable as the Canvas-level rule node.
 
 These workflow selections are persisted as Canvas Configuration state and are
 used by child Image and Sheet generation.
+## Visual identity
+
+Canvas Configuration belongs to the System visual family. It uses a utility
+panel silhouette, dashed structure, and subtle technical pattern.

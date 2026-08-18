@@ -6,21 +6,35 @@ import {
   CANVAS_CHILD_LAYOUTS,
   CANVAS_IMAGE_ASPECT_RATIOS,
   CANVAS_IMAGE_RESOLUTIONS,
+  CANVAS_SHOT_CUE_TYPES,
+  CANVAS_SHOT_PERFORMANCE_MODES,
+  CANVAS_VISUAL_FAMILIES,
+  canAddCanvasChild,
   canAddCanvasNode,
   canContainCanvasNode,
   canDeleteCanvasNodes,
   createCanvasDocument,
   createCanvasNode,
+  createCanvasShotTranslationContext,
   createInitialCanvasDocument,
+  formatCanvasTime,
   isValidCanvasConnection,
   normalizeCanvasDocument,
+  parseCanvasTime,
 } from '../src/services/canvasSchema.js'
+
+test('Canvas time values display seconds and milliseconds', () => {
+  assert.equal(formatCanvasTime(5554), '5,554')
+  assert.equal(parseCanvasTime('5,554'), 5554)
+  assert.equal(parseCanvasTime('3sec250millisec'), 3250)
+})
 
 test('Canvas block definitions provide typed handles and defaults', () => {
   assert.equal(CANVAS_BLOCK_LIBRARY.length, 10)
   for (const definition of CANVAS_BLOCK_LIBRARY) {
     assert.ok(definition.type)
     assert.ok(definition.defaults.title)
+    assert.ok(Object.values(CANVAS_VISUAL_FAMILIES).includes(definition.visualFamily))
     if (!definition.fixed) assert.ok(definition.outputs.length > 0)
   }
   const configuration = CANVAS_BLOCK_LIBRARY.find((definition) => definition.type === CANVAS_BLOCK_TYPES.configuration)
@@ -113,9 +127,13 @@ test('Container nodes define a default child layout', () => {
   const character = createCanvasNode(CANVAS_BLOCK_TYPES.character)
   const location = createCanvasNode(CANVAS_BLOCK_TYPES.location)
   const timeline = createCanvasNode(CANVAS_BLOCK_TYPES.timeline)
+  const scene = createCanvasNode(CANVAS_BLOCK_TYPES.scene)
   assert.equal(character.data.layout, CANVAS_CHILD_LAYOUTS.portrait)
   assert.equal(location.data.layout, CANVAS_CHILD_LAYOUTS.portrait)
   assert.equal(timeline.data.layout, CANVAS_CHILD_LAYOUTS.portrait)
+  assert.equal(scene.data.layout, CANVAS_CHILD_LAYOUTS.portrait)
+  const normalizedScene = normalizeCanvasDocument({ nodes: [{ ...scene, data: { ...scene.data, layout: CANVAS_CHILD_LAYOUTS.freeform } }], edges: [] }).nodes.find((node) => node.type === CANVAS_BLOCK_TYPES.scene)
+  assert.equal(normalizedScene.data.layout, CANVAS_CHILD_LAYOUTS.portrait)
   assert.equal(CANVAS_CHILD_LAYOUTS.freeform, 'freeform')
 })
 
@@ -123,11 +141,26 @@ test('Initial and new Character and Location nodes receive a default Image', () 
   const initial = createInitialCanvasDocument()
   assert.equal(initial.nodes.filter((node) => node.parentId === 'character-1').length, 1)
   assert.equal(initial.nodes.filter((node) => node.parentId === 'location-1').length, 1)
+  assert.equal(initial.nodes.find((node) => node.parentId === 'location-1').data.title, 'Location image')
   const character = createCanvasNode(CANVAS_BLOCK_TYPES.character, { id: 'character-new' })
   const image = createCanvasNode(CANVAS_BLOCK_TYPES.image, { parentId: character.id })
   assert.equal(canDeleteCanvasNodes([character, image], new Set([image.id])), true)
   const sheet = createCanvasNode(CANVAS_BLOCK_TYPES.characterSheet, { parentId: character.id })
   assert.equal(canDeleteCanvasNodes([character, image, sheet], new Set([image.id])), true)
+})
+
+test('Sheets require at least one sibling Image with associated media', () => {
+  const character = createCanvasNode(CANVAS_BLOCK_TYPES.character, { id: 'character-1' })
+  const emptyImage = createCanvasNode(CANVAS_BLOCK_TYPES.image, { id: 'image-1', parentId: character.id })
+  assert.equal(canAddCanvasChild(character.id, CANVAS_BLOCK_TYPES.characterSheet, [character, emptyImage]), false)
+  const readyImage = { ...emptyImage, data: { ...emptyImage.data, assetUrl: 'project://images/character.png' } }
+  assert.equal(canAddCanvasChild(character.id, CANVAS_BLOCK_TYPES.characterSheet, [character, readyImage]), true)
+  assert.equal(canAddCanvasChild(character.id, CANVAS_BLOCK_TYPES.image, [character, emptyImage]), true)
+
+  const location = createCanvasNode(CANVAS_BLOCK_TYPES.location, { id: 'location-1' })
+  const legacyImage = createCanvasNode(CANVAS_BLOCK_TYPES.image, { id: 'location-image-1', parentId: location.id })
+  const normalized = normalizeCanvasDocument({ nodes: [location, legacyImage], edges: [] })
+  assert.equal(normalized.nodes.find((node) => node.id === legacyImage.id).data.title, 'Location image')
 })
 
 test('Canvas document starts without inter-node connections', () => {
@@ -160,7 +193,15 @@ test('Scenes normalize ordered Shot labels and Shot owns production properties',
   const normalized = normalizeCanvasDocument({ nodes: [scene, first, second], edges: [] })
   assert.deepEqual(normalized.nodes.filter((node) => node.type === CANVAS_BLOCK_TYPES.shot).map((node) => node.data.title), ['Shot 1', 'Shot 2'])
   const shot = CANVAS_BLOCK_LIBRARY.find((definition) => definition.type === CANVAS_BLOCK_TYPES.shot)
-  assert.deepEqual(shot.properties.map((property) => property.id), ['prompt', 'seed', 'description', 'duration', 'duration_start', 'duration_end', 'framing', 'cameraMovement', 'lens', 'lighting', 'action', 'dialogue'])
+  assert.deepEqual(shot.properties.map((property) => property.id), ['prompt', 'seed', 'description', 'duration', 'duration_start', 'duration_end', 'framing', 'cameraMovement', 'lens', 'lighting', 'action', 'cameraFlow', 'videoStyle', 'temporalWorldEffect', 'performanceMode', 'characterAssignments'])
+  assert.deepEqual(CANVAS_SHOT_PERFORMANCE_MODES.map((option) => option.value), ['performance', 'instrumental', 'visual_only', 'b_roll'])
+  assert.deepEqual(CANVAS_SHOT_CUE_TYPES.map((option) => option.value), ['singing', 'dialogue', 'reaction', 'silent', 'instrumental_action'])
+  assert.equal(shot.properties.find((property) => property.id === 'performanceMode').inToolbar, true)
+  assert.equal(shot.properties.find((property) => property.id === 'cameraFlow').inToolbar, true)
+  assert.equal(shot.properties.find((property) => property.id === 'framing').inToolbar, true)
+  assert.equal(shot.properties.find((property) => property.id === 'duration').type, 'readonly')
+  const timedShot = createCanvasNode(CANVAS_BLOCK_TYPES.shot, { properties: { duration_start: 125, duration_end: 2375, duration: 999 } })
+  assert.equal(timedShot.data.properties.duration, 2.25)
 })
 
 test('Scenes receive automatic sequential labels while custom titles remain editable', () => {
@@ -170,6 +211,27 @@ test('Scenes receive automatic sequential labels while custom titles remain edit
   const custom = createCanvasNode(CANVAS_BLOCK_TYPES.scene, { id: 'scene-3', parentId: timeline.id, title: 'Chorus' })
   const normalized = normalizeCanvasDocument({ nodes: [timeline, first, second, custom], edges: [] })
   assert.deepEqual(normalized.nodes.filter((node) => node.type === CANVAS_BLOCK_TYPES.scene).map((node) => node.data.title), ['Scene 1', 'Scene 2', 'Chorus'])
+})
+
+test('Shot translation context keeps target-neutral timing and cue ownership', () => {
+  const shot = createCanvasNode(CANVAS_BLOCK_TYPES.shot, {
+    id: 'shot-1',
+    properties: {
+      duration_start: 120,
+      duration_end: 2345,
+      performanceMode: 'performance',
+      characterAssignments: [{ characterId: 'character-1', cues: [{ start: 25, end: 900, type: 'singing', text: 'hello' }] }],
+    },
+  })
+  assert.deepEqual(createCanvasShotTranslationContext(shot).characterAssignments, [{ characterId: 'character-1', cues: [{ startMs: 120, endMs: 900, type: 'singing', text: 'hello' }] }])
+  assert.equal(createCanvasShotTranslationContext(shot).durationEndMs, 2345)
+})
+
+test('Legacy Shot dialogue migrates into an explicit timed cue', () => {
+  const scene = createCanvasNode(CANVAS_BLOCK_TYPES.scene, { id: 'scene-1' })
+  const legacyShot = { ...createCanvasNode(CANVAS_BLOCK_TYPES.shot, { id: 'shot-1', parentId: scene.id }), data: { ...createCanvasNode(CANVAS_BLOCK_TYPES.shot, { id: 'shot-1', parentId: scene.id }).data, properties: { prompt: '', seed: 1, duration: 3, dialogue: 'Hello there' } } }
+  const normalized = normalizeCanvasDocument({ nodes: [scene, legacyShot], edges: [] })
+  assert.deepEqual(normalized.nodes.find((node) => node.id === 'shot-1').data.properties.characterAssignments, [{ characterId: '', cues: [{ start: 0, end: 3000, type: 'dialogue', text: 'Hello there' }] }])
 })
 
 test('Child nodes default to expanded mode and can be normalized compact', () => {

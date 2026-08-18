@@ -44,3 +44,12 @@ mode and does not create a Prompt node.
 Image has one Sheet link. The link is valid only to a Sheet inside the same
 Character or Location parent. It is hidden until the Image or its Sheet is
 clicked, and disappears when the Canvas background is clicked.
+## Visual identity
+
+Image belongs to the Asset visual family. Its normal child card is an
+edge-to-edge source-media tile with aspect ratio, resolution, and seed shown as
+read-only metadata chips. Prompt remains available in Edit mode and is not
+repeated in the Character or Location gallery.
+
+The automatic title follows its parent: `Character image` inside Character and
+`Location image` inside Location. User-edited titles are not replaced.

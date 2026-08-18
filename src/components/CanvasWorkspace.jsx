@@ -25,6 +25,8 @@ import {
   CircleUserRound,
   Clapperboard,
   Edit3,
+  Film,
+  FolderOpen,
   Image as ImageIcon,
   ImagePlus,
   Inbox,
@@ -38,6 +40,7 @@ import {
   Scissors,
   Settings2,
   Sparkles,
+  Trash2,
   Wand2,
   X,
 } from 'lucide-react'
@@ -47,16 +50,22 @@ import {
   CANVAS_CHILD_LAYOUTS,
   CANVAS_IMAGE_ASPECT_RATIOS,
   CANVAS_IMAGE_RESOLUTIONS,
+  CANVAS_SHOT_CUE_TYPES,
+  CANVAS_VISUAL_FAMILIES,
   CANVAS_RULES,
   canAddCanvasNode,
+  canAddCanvasChild,
   canContainCanvasNode,
   canDeleteCanvasNodes,
   createCanvasDocument,
   createCanvasNode,
   createInitialCanvasDocument,
   getCanvasBlockDefinition,
+  formatCanvasTime,
   isValidCanvasConnection,
   normalizeCanvasDocument,
+  normalizeCanvasShotAssignments,
+  parseCanvasTime,
 } from '../services/canvasSchema'
 import useProjectStore from '../stores/projectStore'
 import useAssetsStore from '../stores/assetsStore'
@@ -75,19 +84,24 @@ const BLOCK_ICONS = {
   locationSheet: ScrollText,
   audio: AudioLines,
   timeline: Clapperboard,
-  scene: Clapperboard,
-  shot: Clapperboard,
+  scene: FolderOpen,
+  shot: Film,
   configuration: Settings2,
 }
 
 const GALLERY_CARD_WIDTH = 112
 const GALLERY_CARD_HEIGHT = 72
-const GALLERY_GAP = 6
-const GALLERY_COLUMN_GAP = 18
-const GALLERY_LABEL_HEIGHT = 18
-const PROMPT_COLUMN_WIDTH = 180
-const TITLE_BAR_HEIGHT = 28
-const CHILD_BORDER_GAP = 12
+const GALLERY_GAP = 24
+const GALLERY_COLUMN_GAP = 40
+const GALLERY_LABEL_HEIGHT = 30
+const PROMPT_COLUMN_WIDTH = 280
+const TITLE_BAR_HEIGHT = 54
+const CHILD_BORDER_GAP = 20
+
+function effectiveChildLayout(node) {
+  if ([CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location, CANVAS_BLOCK_TYPES.timeline, CANVAS_BLOCK_TYPES.scene].includes(node?.type)) return CANVAS_CHILD_LAYOUTS.portrait
+  return node?.data?.layout || CANVAS_CHILD_LAYOUTS.landscape
+}
 
 function CanvasConnectionEdge({ id, sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition, data }) {
   const [edgePath, labelX, labelY] = getSmoothStepPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition, borderRadius: 8 })
@@ -141,6 +155,92 @@ function imageDimensions(aspectRatio = '1:1', size = '1080p') {
   }
 }
 
+function propertyOptionLabel(definition, propertyId, value) {
+  const property = definition?.properties?.find((candidate) => candidate.id === propertyId)
+  return property?.options?.find((option) => option.value === value)?.label || String(value || '')
+}
+
+function getNodeMetadata(definition, data) {
+  const properties = data.properties || {}
+  const childCounts = data.childCounts || {}
+  const totalChildren = Object.values(childCounts).reduce((total, count) => total + Number(count || 0), 0)
+  if (data.kind === CANVAS_BLOCK_TYPES.configuration) return [{ label: '4 workflows' }, { label: `Seed ${properties.seed ?? 1}` }]
+  if (data.kind === CANVAS_BLOCK_TYPES.character) return [
+    { label: `${childCounts[CANVAS_BLOCK_TYPES.image] || 0} images` },
+    { label: `${childCounts[CANVAS_BLOCK_TYPES.characterSheet] || 0} sheets` },
+  ]
+  if (data.kind === CANVAS_BLOCK_TYPES.location) return [
+    { label: `${childCounts[CANVAS_BLOCK_TYPES.image] || 0} images` },
+    { label: `${childCounts[CANVAS_BLOCK_TYPES.locationSheet] || 0} sheets` },
+  ]
+  if (data.kind === CANVAS_BLOCK_TYPES.timeline) {
+    const metadata = [{ label: `${childCounts[CANVAS_BLOCK_TYPES.scene] || 0} scenes` }]
+    if (properties.videoStyle) metadata.push({ label: propertyOptionLabel(definition, 'videoStyle', properties.videoStyle) })
+    if (properties.cameraFlow) metadata.push({ label: propertyOptionLabel(definition, 'cameraFlow', properties.cameraFlow) })
+    return metadata
+  }
+  if (data.kind === CANVAS_BLOCK_TYPES.scene) return [{ label: `${childCounts[CANVAS_BLOCK_TYPES.shot] || 0} shots` }]
+  if (data.kind === CANVAS_BLOCK_TYPES.shot) {
+    const duration = Math.max(0, (Number(properties.duration_end) || 0) - (Number(properties.duration_start) || 0))
+    const metadata = [{ label: formatCanvasTime(duration), emphasis: true }]
+    if (properties.performanceMode) metadata.push({ label: propertyOptionLabel(definition, 'performanceMode', properties.performanceMode) })
+    if (properties.framing) metadata.push({ label: propertyOptionLabel(definition, 'framing', properties.framing) })
+    if (properties.cameraFlow && properties.cameraFlow !== 'off') metadata.push({ label: propertyOptionLabel(definition, 'cameraFlow', properties.cameraFlow) })
+    return metadata
+  }
+  if (data.kind === CANVAS_BLOCK_TYPES.image) return [
+    { label: properties.aspectRatio || '1:1' },
+    { label: String(properties.size || '1080p').toUpperCase() },
+    { label: `Seed ${properties.seed ?? 1}` },
+  ]
+  if ([CANVAS_BLOCK_TYPES.characterSheet, CANVAS_BLOCK_TYPES.locationSheet].includes(data.kind)) {
+    const referenceCount = data.sheetImages?.filter((image) => image.connected).length || 0
+    return [{ label: `${referenceCount} references` }, { label: `Seed ${properties.seed ?? 1}` }]
+  }
+  if (data.kind === CANVAS_BLOCK_TYPES.audio) return [{ label: `Seed ${properties.seed ?? 1}` }]
+  return totalChildren ? [{ label: `${totalChildren} elements` }] : []
+}
+
+function MetadataChips({ items, accent }) {
+  if (!items.length) return null
+  return (
+    <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
+      {items.slice(0, 4).map((item, index) => (
+        <span
+          key={`${item.label}-${index}`}
+          className={`max-w-32 truncate rounded-full border px-1.5 py-0.5 text-[8px] leading-none ${item.emphasis ? 'font-semibold text-white' : 'text-sf-text-secondary'}`}
+          style={{ borderColor: `${accent}55`, background: item.emphasis ? `${accent}55` : `${accent}12` }}
+          title={item.label}
+        >
+          {item.label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function PromptSurface({ prompt, label = 'Prompt', accent = '#64748b', className = '', style }) {
+  return (
+    <div className={`relative min-w-0 overflow-hidden border border-slate-300/90 bg-slate-50 text-slate-900 shadow-inner ${className}`} style={style}>
+      <div className="flex min-h-[34px] items-center justify-between gap-2 border-b border-slate-200 bg-white/90 px-2.5 py-1.5">
+        <div className="min-w-0"><div className="text-[6px] font-bold uppercase tracking-[0.18em]" style={{ color: accent }}>Creative direction</div><div className="truncate text-[9px] font-semibold uppercase tracking-[0.1em] text-slate-700">{label}</div></div>
+        <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: accent }} />
+      </div>
+      <div className="h-[calc(100%-34px)] overflow-hidden whitespace-pre-wrap break-words px-2.5 py-2 text-[10px] leading-4">{prompt || ''}</div>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-7 bg-gradient-to-t from-slate-50 to-transparent" />
+    </div>
+  )
+}
+
+function AudioWaveform() {
+  const bars = [18, 34, 24, 46, 30, 56, 38, 62, 30, 48, 22, 40, 26, 54, 36, 20]
+  return (
+    <div className="flex h-full items-center justify-center gap-1 px-3" aria-hidden="true">
+      {bars.map((height, index) => <span key={index} className="w-1 rounded-full bg-amber-400/80" style={{ height: `${height}%` }} />)}
+    </div>
+  )
+}
+
 function getChildDimensions(child) {
   const definition = getCanvasBlockDefinition(child?.type)
   return clampSize(
@@ -181,9 +281,9 @@ function getFirstGalleryChild(parentDefinition, children) {
   })[0] || null
 }
 
-function getGalleryLayout(parentDefinition, children, orientation = CANVAS_CHILD_LAYOUTS.landscape, requestedSize) {
+function getGalleryLayout(parentDefinition, children, orientation = CANVAS_CHILD_LAYOUTS.landscape, requestedSize, resolveDimensions = getChildDimensions) {
   if (orientation === CANVAS_CHILD_LAYOUTS.freeform) {
-    const sizes = children.map(getChildDimensions)
+    const sizes = children.map(resolveDimensions)
     const maxRight = children.length
       ? Math.max(...children.map((child, index) => (Number(child.position?.x) || 0) + sizes[index].width))
       : CHILD_BORDER_GAP
@@ -205,7 +305,7 @@ function getGalleryLayout(parentDefinition, children, orientation = CANVAS_CHILD
 
   const groups = getGalleryGroups(children)
   const groupSizes = groups.map((group) => {
-    const sizes = group.children.map(getChildDimensions)
+    const sizes = group.children.map(resolveDimensions)
     return {
       width: orientation === CANVAS_CHILD_LAYOUTS.portrait
         ? Math.max(...sizes.map((size) => size.width), GALLERY_CARD_WIDTH)
@@ -235,6 +335,27 @@ function getGalleryLayout(parentDefinition, children, orientation = CANVAS_CHILD
   }
 }
 
+function getResolvedNodeDimensions(node, allNodes, cache = new Map()) {
+  if (!node) return { width: GALLERY_CARD_WIDTH, height: GALLERY_CARD_HEIGHT }
+  if (cache.has(node.id)) return cache.get(node.id)
+  const definition = getCanvasBlockDefinition(node.type)
+  const base = getNodeDimensions(node)
+  if (!definition?.contains) {
+    cache.set(node.id, base)
+    return base
+  }
+  const children = allNodes.filter((candidate) => candidate.parentId === node.id)
+  const resolved = getGalleryLayout(
+    definition,
+    children,
+    effectiveChildLayout(node),
+    node.data?.size,
+    (child) => getResolvedNodeDimensions(child, allNodes, cache),
+  )
+  cache.set(node.id, resolved)
+  return resolved
+}
+
 function getFreeformPosition(index, siblings = []) {
   const column = index % 3
   const row = Math.floor(index / 3)
@@ -246,7 +367,21 @@ function getFreeformPosition(index, siblings = []) {
   }
 }
 
-function getGalleryPosition(index, orientation = CANVAS_CHILD_LAYOUTS.landscape, siblings = []) {
+function getLeadingPromptWidth(parentDefinition) {
+  if (![CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location].includes(parentDefinition?.type)) return 0
+  return PROMPT_COLUMN_WIDTH
+}
+
+function getPortraitGroupWidths(parentDefinition, children, availableWidth, resolveDimensions = getChildDimensions) {
+  const groups = getGalleryGroups(children)
+  const baseWidths = groups.map((group) => Math.max(...group.children.map((child) => resolveDimensions(child).width), GALLERY_CARD_WIDTH))
+  if (![CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location].includes(parentDefinition?.type) || !groups.length) return baseWidths
+  const fixedWidth = CHILD_BORDER_GAP * 2 + PROMPT_COLUMN_WIDTH + groups.length * GALLERY_COLUMN_GAP + baseWidths.reduce((total, width) => total + width, 0)
+  const extraPerGroup = Math.max(0, (Number(availableWidth) || 0) - fixedWidth) / groups.length
+  return baseWidths.map((width) => width + extraPerGroup)
+}
+
+function getGalleryPosition(index, orientation = CANVAS_CHILD_LAYOUTS.landscape, siblings = [], parentDefinition = null, availableWidth = 0, resolveDimensions = getChildDimensions) {
   if (orientation === CANVAS_CHILD_LAYOUTS.freeform) return getFreeformPosition(index, siblings)
 
   const groups = getGalleryGroups(siblings)
@@ -255,27 +390,35 @@ function getGalleryPosition(index, orientation = CANVAS_CHILD_LAYOUTS.landscape,
   const group = groups[groupIndex] || { children: [] }
   const childIndex = group.children.findIndex((child) => child.id === current?.id)
   const precedingGroups = groups.slice(0, groupIndex)
+  const portraitWidths = getPortraitGroupWidths(parentDefinition, siblings, availableWidth, resolveDimensions)
   const x = orientation === CANVAS_CHILD_LAYOUTS.portrait
-    ? precedingGroups.reduce((total, candidate) => total + Math.max(...candidate.children.map((child) => getChildDimensions(child).width), GALLERY_CARD_WIDTH), 0) + groupIndex * GALLERY_COLUMN_GAP
-    : group.children.slice(0, childIndex).reduce((total, child) => total + getChildDimensions(child).width, 0) + childIndex * GALLERY_GAP
+    ? portraitWidths.slice(0, groupIndex).reduce((total, width) => total + width, 0) + groupIndex * GALLERY_COLUMN_GAP
+    : group.children.slice(0, childIndex).reduce((total, child) => total + resolveDimensions(child).width, 0) + childIndex * GALLERY_GAP
   const y = orientation === CANVAS_CHILD_LAYOUTS.portrait
-    ? group.children.slice(0, childIndex).reduce((total, child) => total + getChildDimensions(child).height, 0) + childIndex * GALLERY_GAP + GALLERY_LABEL_HEIGHT
-    : precedingGroups.reduce((total, candidate) => total + Math.max(...candidate.children.map((child) => getChildDimensions(child).height), GALLERY_CARD_HEIGHT), 0) + groupIndex * GALLERY_GAP
-  return { x: CHILD_BORDER_GAP + x, y: TITLE_BAR_HEIGHT + CHILD_BORDER_GAP + y }
+    ? group.children.slice(0, childIndex).reduce((total, child) => total + resolveDimensions(child).height, 0) + childIndex * GALLERY_GAP + GALLERY_LABEL_HEIGHT
+    : precedingGroups.reduce((total, candidate) => total + Math.max(...candidate.children.map((child) => resolveDimensions(child).height), GALLERY_CARD_HEIGHT), 0) + groupIndex * GALLERY_GAP
+  const promptOffset = orientation === CANVAS_CHILD_LAYOUTS.portrait
+    ? getLeadingPromptWidth(parentDefinition) + (getLeadingPromptWidth(parentDefinition) ? GALLERY_COLUMN_GAP : 0)
+    : 0
+  return { x: CHILD_BORDER_GAP + promptOffset + x, y: TITLE_BAR_HEIGHT + CHILD_BORDER_GAP + y }
 }
 
-function getGalleryColumnLabels(parentDefinition, children, orientation, availableWidth) {
+function getGalleryColumnLabels(parentDefinition, children, orientation, availableWidth, resolveDimensions = getChildDimensions) {
   if (orientation !== CANVAS_CHILD_LAYOUTS.portrait || !parentDefinition?.contains) return []
   const labels = []
   let x = CHILD_BORDER_GAP
-  for (const group of getGalleryGroups(children)) {
-    const width = Math.max(...group.children.map((child) => getChildDimensions(child).width), GALLERY_CARD_WIDTH)
+  if ([CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location].includes(parentDefinition.type)) {
+    const promptWidth = getLeadingPromptWidth(parentDefinition)
+    labels.push({ label: `${parentDefinition.label} prompt`, x, width: promptWidth, prompt: true })
+    x += promptWidth + GALLERY_COLUMN_GAP
+  }
+  const groups = getGalleryGroups(children)
+  const portraitWidths = getPortraitGroupWidths(parentDefinition, children, availableWidth, resolveDimensions)
+  for (const [index, group] of groups.entries()) {
+    const width = portraitWidths[index]
     const definition = getCanvasBlockDefinition(group.type)
     labels.push({ label: `${definition?.label || group.type}${group.children.length === 1 ? '' : 's'}`, x, width })
     x += width + GALLERY_COLUMN_GAP
-  }
-  if ([CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location].includes(parentDefinition.type)) {
-    labels.push({ label: 'Prompt', x, width: Math.max(PROMPT_COLUMN_WIDTH, (Number(availableWidth) || 0) - x - CHILD_BORDER_GAP), prompt: true })
   }
   return labels
 }
@@ -334,21 +477,23 @@ function normalizeFreeformParent(nodes, parentId) {
   })
 }
 
-function CanvasNode({ data }) {
+function CanvasNode({ data, selected, dragging }) {
   const definition = getCanvasBlockDefinition(data.kind)
   const Icon = BLOCK_ICONS[definition?.icon] || Sparkles
   const accent = data.accent || '#94a3b8'
   const inputs = definition?.inputs || []
   const outputs = definition?.outputs || []
   const isImage = data.kind === CANVAS_BLOCK_TYPES.image
+  const isAudio = data.kind === CANVAS_BLOCK_TYPES.audio
   const isConfiguration = data.kind === CANVAS_BLOCK_TYPES.configuration
   const isSheet = [CANVAS_BLOCK_TYPES.characterSheet, CANVAS_BLOCK_TYPES.locationSheet].includes(data.kind)
   const isShot = data.kind === CANVAS_BLOCK_TYPES.shot
   const isScene = data.kind === CANVAS_BLOCK_TYPES.scene
-  const fixedVerticalLayout = [CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location, CANVAS_BLOCK_TYPES.timeline].includes(data.kind) || isSheet
+  const visualFamily = definition?.visualFamily || CANVAS_VISUAL_FAMILIES.asset
+  const fixedVerticalLayout = [CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location, CANVAS_BLOCK_TYPES.timeline, CANVAS_BLOCK_TYPES.scene].includes(data.kind) || isSheet
   const isCompact = false
   const showToolbar = true
-  const nodeTitle = `${definition?.label || data.detail} - ${data.title || 'Untitled'}`
+  const nodeTitle = data.title || 'Untitled'
   const [mode, setMode] = useState(data.mode || null)
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false)
   const [draft, setDraft] = useState({ title: data.title, imageMode: data.imageMode, ...(data.properties || {}) })
@@ -371,7 +516,19 @@ function CanvasNode({ data }) {
   const addGenerationJob = useCanvasGenerationStore((state) => state.addJob)
   const updateGenerationJob = useCanvasGenerationStore((state) => state.updateJob)
   const selectedAsset = [...assets, ...comfyAssets].find((asset) => asset.id === (draft.assetId || data.assetId)) || (data.assetUrl ? { id: data.assetId, name: data.assetName, url: data.assetUrl } : null)
+  const computedShotDuration = isShot
+    ? Math.max(0, (Math.max(0, Number(draft.duration_end) || 0) - Math.max(0, Number(draft.duration_start) || 0)) / 1000)
+    : null
   const quickEditProperties = (definition?.properties || []).filter((property) => property.inToolbar)
+  const metadata = getNodeMetadata(definition, data)
+  const isSelected = Boolean(selected || data.selected)
+  const familyShellClass = {
+    [CANVAS_VISUAL_FAMILIES.organization]: 'rounded-2xl border-dashed bg-sf-dark-950/90 shadow-lg shadow-black/20',
+    [CANVAS_VISUAL_FAMILIES.production]: 'rounded-xl border-solid bg-sf-dark-900 shadow-2xl shadow-black/45',
+    [CANVAS_VISUAL_FAMILIES.subject]: 'rounded-2xl border-solid bg-sf-dark-900 shadow-xl shadow-black/35',
+    [CANVAS_VISUAL_FAMILIES.asset]: 'rounded-lg border-solid bg-sf-dark-900 shadow-lg shadow-black/30',
+    [CANVAS_VISUAL_FAMILIES.system]: 'rounded-xl border-dashed bg-sf-dark-950 shadow-xl shadow-black/30',
+  }[visualFamily]
   const updateQuickProperty = (property, value) => data.onUpdate?.(data.nodeId, { properties: { ...(data.properties || {}), [property.id]: value } })
 
   useEffect(() => {
@@ -427,9 +584,11 @@ function CanvasNode({ data }) {
     data.onModeChange?.(data.nodeId, next)
   }
   const persistDraft = () => {
+    const persistedProperties = Object.fromEntries((definition?.properties || []).map((property) => [property.id, draft[property.id] ?? '']))
+    if (isShot) persistedProperties.duration = computedShotDuration
     data.onUpdate?.(data.nodeId, {
       title: draft.title,
-      properties: Object.fromEntries((definition?.properties || []).map((property) => [property.id, draft[property.id] ?? ''])),
+      properties: persistedProperties,
       ...(isImage ? { imageMode: draft.imageMode || 'create-from-prompt' } : {}),
       ...(isImage ? { assetId: draft.assetId || null } : {}),
       ...(isImage ? { assetUrl: selectedAsset?.url || null, assetName: selectedAsset?.name || null, assetSource: selectedAsset?.source || 'project' } : {}),
@@ -446,9 +605,42 @@ function CanvasNode({ data }) {
   }
 
   const handlePropertyChange = (property, event) => {
+    if (property.type === 'readonly') return
     if (property.type === 'checkbox') updateDraft(property.id, event.target.checked)
-    else if (property.type === 'number') updateDraft(property.id, event.target.value === '' ? null : Number(event.target.value))
-    else updateDraft(property.id, event.target.value)
+    else if (property.type === 'timecode') {
+      const value = parseCanvasTime(event.target.value)
+      if (value == null) return
+      setDraft((current) => {
+        const next = { ...current, [property.id]: value }
+        if (isShot) {
+          const start = Math.max(0, Number(next.duration_start) || 0)
+          const end = Math.max(start, Number(next.duration_end) || start)
+          next.duration = (end - start) / 1000
+        }
+        return next
+      })
+    } else if (property.type === 'number') {
+      const value = event.target.value === '' ? null : Number(event.target.value)
+      setDraft((current) => {
+        const next = { ...current, [property.id]: value }
+        if (isShot && (property.id === 'duration_start' || property.id === 'duration_end')) {
+          const start = Math.max(0, Number(next.duration_start) || 0)
+          const end = Math.max(start, Number(next.duration_end) || start)
+          next.duration = (end - start) / 1000
+        }
+        return next
+      })
+    } else updateDraft(property.id, event.target.value)
+  }
+
+  const shotStartMs = Math.max(0, Number(draft.duration_start) || 0)
+  const shotEndMs = Math.max(shotStartMs, Number(draft.duration_end) || shotStartMs)
+  const shotAssignments = normalizeCanvasShotAssignments(draft.characterAssignments, shotStartMs, shotEndMs)
+  const updateShotAssignments = (nextAssignments) => updateDraft('characterAssignments', normalizeCanvasShotAssignments(nextAssignments, shotStartMs, shotEndMs))
+  const assignmentForCharacter = (characterId) => shotAssignments.find((assignment) => assignment.characterId === characterId) || { characterId, cues: [] }
+  const updateCharacterCues = (characterId, cues) => {
+    const existing = shotAssignments.filter((assignment) => assignment.characterId !== characterId)
+    updateShotAssignments([...existing, { characterId, cues }])
   }
 
   const selectAsset = (asset) => {
@@ -560,8 +752,12 @@ function CanvasNode({ data }) {
 
   return (
     <div
-      className={`group relative ${isCompact ? 'min-w-0' : 'min-w-[150px]'} h-full w-full overflow-visible rounded-lg border border-sf-dark-600 bg-sf-dark-900 shadow-2xl shadow-black/30`}
+      className={`group relative ${isCompact ? 'min-w-0' : 'min-w-[150px]'} ${familyShellClass} h-full w-full overflow-visible border transition-[box-shadow,border-color,transform,opacity] duration-150 ${isSelected ? 'ring-2 ring-offset-2 ring-offset-sf-dark-950' : ''} ${dragging ? 'scale-[1.015] opacity-90' : ''} ${data.dropState === 'valid' ? '!border-emerald-400 ring-2 ring-emerald-400/80' : ''} ${data.dropState === 'invalid' ? '!border-red-400 ring-2 ring-red-400/80' : ''}`}
+      style={{ borderColor: isSelected ? accent : `${accent}66`, '--tw-ring-color': data.dropState === 'valid' ? '#34d399' : data.dropState === 'invalid' ? '#f87171' : accent }}
     >
+      <div className="pointer-events-none absolute bottom-2 left-0 top-2 z-10 w-1 rounded-r-full" style={{ background: accent, boxShadow: `0 0 14px ${accent}55` }} />
+      {isConfiguration && <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-[inherit] opacity-[0.07]" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,.3) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.3) 1px, transparent 1px)', backgroundSize: '14px 14px' }} />}
+      {isShot && <div className="pointer-events-none absolute inset-x-4 top-0 h-1 opacity-70" style={{ backgroundImage: `repeating-linear-gradient(90deg, ${accent} 0 7px, transparent 7px 13px)` }} />}
       <NodeResizer
         nodeId={data.nodeId}
         minWidth={data.minWidth}
@@ -573,26 +769,41 @@ function CanvasNode({ data }) {
       />
 
       {showToolbar && (
-        <div className="nodrag nopan absolute -top-7 right-1 z-20 flex items-center gap-0.5 rounded-md border border-sf-dark-600 bg-sf-dark-900 p-0.5 opacity-0 shadow-xl transition-opacity group-hover:opacity-100">
+        <div className={`nodrag nopan absolute -top-[3.25rem] left-3 right-3 z-30 flex min-h-11 items-end justify-between gap-3 rounded-lg border border-sf-dark-500/70 bg-sf-dark-950/80 px-2 py-1.5 opacity-0 shadow-2xl shadow-black/40 backdrop-blur-xl transition-all duration-150 group-hover:opacity-100 ${isSelected ? 'opacity-100' : ''}`} style={{ borderBottomColor: accent }}>
+          <div className="flex min-w-0 items-end gap-2 overflow-x-auto">
+            {quickEditProperties.map((property) => (
+              <label key={property.id} className="flex min-w-24 flex-col gap-0.5 text-[7px] font-semibold uppercase tracking-[0.12em] text-sf-text-muted">
+                <span className="truncate">{property.label}</span>
+                <select value={data.properties?.[property.id] ?? property.defaultValue ?? ''} onChange={(event) => updateQuickProperty(property, event.target.value)} className="max-w-36 rounded border border-sf-dark-500 bg-sf-dark-800/90 px-1.5 py-1 text-[9px] font-normal normal-case tracking-normal text-sf-text-primary outline-none focus:border-sf-accent">
+                  {(property.options || []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+            ))}
+          </div>
+          <div className="flex flex-shrink-0 items-center gap-1 border-l border-sf-dark-600 pl-2">
           {definition?.contains && (
             <div className="relative">
-              <button type="button" onClick={() => setIsAddMenuOpen((current) => !current)} className="rounded p-0.5 text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary" title="Add child element">
-                <Plus className="h-3 w-3" />
+              <button type="button" onClick={() => setIsAddMenuOpen((current) => !current)} className="rounded-md p-1.5 text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary" title="Add child element">
+                <Plus className="h-3.5 w-3.5" />
               </button>
               {isAddMenuOpen && (
-                <div className="absolute right-0 top-6 z-30 min-w-32 rounded-lg border border-sf-dark-600 bg-sf-dark-900 p-1 shadow-2xl">
+                <div className="absolute right-0 top-8 z-30 min-w-36 rounded-lg border border-sf-dark-600 bg-sf-dark-900 p-1 shadow-2xl">
                   {definition.contains.map((childType) => {
                     const childDefinition = getCanvasBlockDefinition(childType)
                     const ChildIcon = BLOCK_ICONS[childDefinition?.icon] || Sparkles
+                    const canAddChild = data.childAvailability?.[childType] !== false
                     return (
                       <button
                         key={childType}
                         type="button"
+                        disabled={!canAddChild}
+                        title={canAddChild ? `Add ${childDefinition?.label}` : 'Add or generate an image first'}
                         onClick={() => {
+                          if (!canAddChild) return
                           data.onAddChild?.(data.nodeId, childType)
                           setIsAddMenuOpen(false)
                         }}
-                        className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[10px] text-sf-text-secondary hover:bg-sf-dark-700 hover:text-sf-text-primary"
+                        className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[10px] text-sf-text-secondary hover:bg-sf-dark-700 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
                       >
                         <ChildIcon className="h-3 w-3" /> {childDefinition?.label}
                       </button>
@@ -603,73 +814,78 @@ function CanvasNode({ data }) {
             </div>
           )}
           {definition?.contains && !fixedVerticalLayout && (
-            <button type="button" onClick={() => data.onToggleLayout?.(data.nodeId)} className="rounded p-0.5 text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary" title={`Use ${data.layout === CANVAS_CHILD_LAYOUTS.landscape ? 'vertical' : data.layout === CANVAS_CHILD_LAYOUTS.portrait ? 'freeform' : 'horizontal'} child layout`}>
-              {data.layout === CANVAS_CHILD_LAYOUTS.portrait ? <LayoutPanelTop className="h-3 w-3" /> : data.layout === CANVAS_CHILD_LAYOUTS.freeform ? <Move className="h-3 w-3" /> : <LayoutPanelLeft className="h-3 w-3" />}
+            <button type="button" onClick={() => data.onToggleLayout?.(data.nodeId)} className="rounded-md p-1.5 text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary" title={`Use ${data.layout === CANVAS_CHILD_LAYOUTS.landscape ? 'vertical' : data.layout === CANVAS_CHILD_LAYOUTS.portrait ? 'freeform' : 'horizontal'} child layout`}>
+              {data.layout === CANVAS_CHILD_LAYOUTS.portrait ? <LayoutPanelTop className="h-3.5 w-3.5" /> : data.layout === CANVAS_CHILD_LAYOUTS.freeform ? <Move className="h-3.5 w-3.5" /> : <LayoutPanelLeft className="h-3.5 w-3.5" />}
             </button>
           )}
-          <button type="button" onClick={() => setNodeMode('edit')} className="rounded p-0.5 text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary" title="Edit node">
-            <Edit3 className="h-3 w-3" />
+          <button type="button" onClick={() => setNodeMode('edit')} className="rounded-md p-1.5 text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary" title="Edit node">
+            <Edit3 className="h-3.5 w-3.5" />
           </button>
-        </div>
-      )}
-
-      {quickEditProperties.length > 0 && (
-        <div className="nodrag nopan absolute -top-[3.35rem] left-1 z-20 flex items-end gap-2 rounded-md border border-sf-dark-500/70 bg-sf-dark-900/65 px-2 py-1.5 opacity-0 shadow-lg backdrop-blur-sm transition-opacity group-hover:opacity-100">
-          {quickEditProperties.map((property) => (
-            <label key={property.id} className="flex flex-col gap-0.5 text-[8px] font-semibold uppercase tracking-wide text-sf-text-muted">
-              <span>{property.label}</span>
-              <select value={data.properties?.[property.id] ?? property.defaultValue ?? ''} onChange={(event) => updateQuickProperty(property, event.target.value)} className="rounded border border-sf-dark-500 bg-sf-dark-800/80 px-1.5 py-1 text-[10px] font-normal normal-case tracking-normal text-sf-text-primary outline-none focus:border-sf-accent">
-                {(property.options || []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </label>
-          ))}
+          {!definition?.fixed && <button type="button" onClick={() => data.onDeleteNode?.(data.nodeId)} className="rounded-md p-1.5 text-sf-text-muted hover:bg-red-950/60 hover:text-red-300" title="Delete node"><Trash2 className="h-3.5 w-3.5" /></button>}
+          </div>
         </div>
       )}
 
       {inputs.map((handle, index) => (
-        <Handle key={`input-${handle.id}`} id={handle.id} type="target" position={Position.Left} className="!h-2.5 !w-2.5 !border-2 !border-sf-dark-950" style={{ top: `${((index + 1) / (inputs.length + 1)) * 100}%`, background: accent }} />
+        <Handle key={`input-${handle.id}`} id={handle.id} type="target" position={Position.Left} className="!h-3 !w-3 !border-2 !border-sf-dark-950" style={{ top: `${((index + 1) / (inputs.length + 1)) * 100}%`, background: accent }}>
+          <span className={`pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 whitespace-nowrap rounded-full border border-sf-dark-500 bg-sf-dark-950/95 px-2 py-1 text-[8px] font-semibold uppercase tracking-wide text-sf-text-secondary shadow-lg transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>{handle.label}</span>
+        </Handle>
       ))}
 
-      <div className="flex min-h-[28px] items-center justify-between gap-1.5 border-b border-sf-dark-700 px-2 py-1" style={{ background: `${accent}18` }}>
-        <div className="flex min-w-0 items-center gap-1.5">
-          <Icon className="h-3.5 w-3.5 flex-shrink-0" style={{ color: accent }} />
-          <span className="truncate text-[10px] font-medium text-sf-text-primary" title={nodeTitle}>{nodeTitle}</span>
+      <div className={`relative flex min-h-[54px] items-center justify-between gap-3 overflow-hidden border-b px-3 py-2 pl-4 ${visualFamily === CANVAS_VISUAL_FAMILIES.organization ? 'border-dashed' : ''}`} style={{ borderColor: `${accent}44`, background: `linear-gradient(110deg, ${accent}20, rgba(15,23,42,.72) 55%, rgba(15,23,42,.94))` }}>
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className={`flex flex-shrink-0 items-center justify-center border ${isScene ? 'h-8 w-9 rounded-md border-dashed' : data.kind === CANVAS_BLOCK_TYPES.character ? 'h-8 w-8 rounded-full' : data.kind === CANVAS_BLOCK_TYPES.location ? 'h-7 w-10 rounded-md' : 'h-8 w-8 rounded-lg'}`} style={{ borderColor: `${accent}66`, background: `${accent}18`, color: accent }}>
+            <Icon className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-[7px] font-bold uppercase tracking-[0.18em]" style={{ color: accent }}>{definition?.label || data.detail}</div>
+            <div className="truncate text-[11px] font-semibold leading-4 text-sf-text-primary" title={nodeTitle}>{nodeTitle}</div>
+          </div>
         </div>
+        <MetadataChips items={metadata} accent={accent} />
       </div>
 
       {isImage ? (
-        <div className="grid h-[calc(100%-28px)] min-h-[100px] grid-cols-2 divide-x divide-sf-dark-700 rounded-b-lg">
-          <div className="flex min-w-0 items-center justify-center overflow-hidden bg-sf-dark-950 p-1.5" title="Source image">
-            {selectedAsset?.url
-              ? <img src={selectedAsset.url} alt={selectedAsset.name || 'Canvas image'} className="h-full w-full rounded object-contain" />
-              : <ImageIcon className="h-8 w-8" style={{ color: accent }} />}
-          </div>
-          <div className="min-w-0 overflow-hidden bg-white p-2" title="Image prompt">
-            <div className="mb-1 text-[8px] font-semibold uppercase tracking-wide text-slate-500">Prompt</div>
-            <div className="whitespace-pre-wrap break-words text-[10px] leading-4 text-slate-900">{data.properties?.prompt || ''}</div>
-          </div>
+        <div className="flex h-[calc(100%-54px)] min-h-[100px] items-center justify-center overflow-hidden rounded-b-lg bg-black/70 p-2" title="Source image">
+          {selectedAsset?.url
+            ? <img src={selectedAsset.url} alt={selectedAsset.name || 'Canvas image'} className="h-full w-full rounded-md object-contain" />
+            : <div className="flex h-full w-full items-center justify-center rounded-md border border-dashed border-sf-dark-600 bg-sf-dark-950/70"><ImageIcon className="h-8 w-8" style={{ color: accent }} /></div>}
         </div>
       ) : isConfiguration ? (
-        <div className="min-h-[60px] space-y-2 rounded-b-lg px-2.5 py-2" title={selectedWorkflow?.label || selectedWorkflowId || 'No image generation workflow selected'}>
-          <div className="text-[9px] uppercase tracking-wide text-sf-text-muted">Image generation</div>
-          <div className="truncate text-[11px] text-sf-text-primary">{selectedWorkflow?.label || selectedWorkflowId || 'Not selected'}</div>
-          <div className="pt-1 text-[9px] uppercase tracking-wide text-sf-text-muted">Character sheet workflow</div>
-          <div className="truncate text-[11px] text-sf-text-primary">{selectedCharacterSheetWorkflow?.label || selectedCharacterSheetWorkflowId || 'Not selected'}</div>
-          <div className="pt-1 text-[9px] uppercase tracking-wide text-sf-text-muted">Location image workflow</div>
-          <div className="truncate text-[11px] text-sf-text-primary">{textToImageWorkflowOptions.find((option) => option.value === (data.properties?.locationImageWorkflow || 'z-image-turbo'))?.label || data.properties?.locationImageWorkflow || 'z-image-turbo'}</div>
-          <div className="pt-1 text-[9px] uppercase tracking-wide text-sf-text-muted">Location sheet workflow</div>
-          <div className="truncate text-[11px] text-sf-text-primary">{imageWorkflowOptions.find((option) => option.value === (data.properties?.locationSheetWorkflow || 'image-edit'))?.label || data.properties?.locationSheetWorkflow || 'image-edit'}</div>
+        <div className="grid min-h-[calc(100%-54px)] grid-cols-2 gap-2 rounded-b-xl p-2" title={selectedWorkflow?.label || selectedWorkflowId || 'Image generation workflow'}>
+          {[
+            ['Character image', selectedWorkflow?.label || selectedWorkflowId || 'Not selected'],
+            ['Character sheet', selectedCharacterSheetWorkflow?.label || selectedCharacterSheetWorkflowId || 'Not selected'],
+            ['Location image', textToImageWorkflowOptions.find((option) => option.value === (data.properties?.locationImageWorkflow || 'z-image-turbo'))?.label || data.properties?.locationImageWorkflow || 'z-image-turbo'],
+            ['Location sheet', imageWorkflowOptions.find((option) => option.value === (data.properties?.locationSheetWorkflow || 'image-edit'))?.label || data.properties?.locationSheetWorkflow || 'image-edit'],
+          ].map(([label, value]) => <div key={label} className="min-w-0 rounded-md border border-orange-400/20 bg-orange-400/[0.06] px-2 py-1.5"><div className="text-[7px] font-semibold uppercase tracking-[0.14em] text-orange-300/70">{label}</div><div className="truncate pt-0.5 text-[9px] text-sf-text-primary">{value}</div></div>)}
         </div>
       ) : isSheet ? (
-        <div className="min-h-[60px] rounded-b-lg px-2.5 py-2 text-[10px] text-sf-text-muted">
-          {data.sheetImages?.filter((image) => image.connected).length || 0} connected reference image{data.sheetImages?.filter((image) => image.connected).length === 1 ? '' : 's'}
+        <div className="flex h-[calc(100%-54px)] min-h-[70px] items-center justify-center overflow-hidden rounded-b-lg bg-black/60 p-2">
+          {selectedAsset?.url
+            ? <img src={selectedAsset.url} alt={selectedAsset.name || definition?.label || 'Sheet image'} className="h-full w-full rounded-md object-contain" />
+            : <div className="relative flex h-full w-full items-center justify-center rounded-md border border-dashed border-sf-dark-600 bg-sf-dark-950/60">
+              <div className="absolute h-[62%] w-[42%] translate-x-3 -rotate-3 rounded border border-sf-dark-500 bg-sf-dark-700" />
+              <div className="absolute h-[68%] w-[46%] translate-x-1 rotate-2 rounded border border-sf-dark-500 bg-sf-dark-800" />
+              <div className="relative flex h-[74%] w-[50%] flex-col items-center justify-center rounded border bg-sf-dark-900 shadow-xl" style={{ borderColor: `${accent}77` }}>
+                <ScrollText className="h-5 w-5" style={{ color: accent }} />
+                <span className="mt-1 text-[8px] font-semibold text-sf-text-secondary">{data.sheetImages?.filter((image) => image.connected).length || 0}</span>
+              </div>
+            </div>
+          }
+        </div>
+      ) : isAudio ? (
+        <div className="grid h-[calc(100%-54px)] min-h-[70px] grid-cols-[minmax(90px,.9fr)_minmax(0,1.1fr)] gap-2 rounded-b-lg bg-sf-dark-950/50 p-2">
+          <div className="overflow-hidden rounded-md border border-amber-400/25 bg-gradient-to-br from-amber-400/10 to-sf-dark-950"><AudioWaveform /></div>
+          <PromptSurface prompt={data.properties?.prompt} label="Audio prompt" accent={accent} className="h-full rounded-md" />
         </div>
       ) : isShot ? (
-        <div className="grid min-h-[calc(100%-28px)] grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] divide-x divide-sf-dark-700 rounded-b-lg">
-          <div className="min-w-0 space-y-1.5 overflow-hidden p-2">
-            <div className="text-[8px] font-semibold uppercase tracking-wide text-sf-text-muted">Used elements</div>
+        <div className="grid min-h-[calc(100%-54px)] grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] gap-2 rounded-b-xl bg-sf-dark-950/55 p-2">
+          <PromptSurface prompt={data.properties?.prompt} label="Shot prompt" accent={accent} className="h-full rounded-lg" />
+          <div className="min-w-0 space-y-1.5 overflow-hidden rounded-lg border border-sf-dark-600/80 bg-sf-dark-900/80 p-2 shadow-inner">
+            <div className="border-b border-sf-dark-700 pb-1.5 text-[8px] font-semibold uppercase tracking-[0.16em] text-sf-text-muted">Used elements</div>
             <div className="text-[8px] font-semibold uppercase tracking-wide text-sf-text-muted">Location</div>
-            <div className="flex min-w-0 items-center gap-1.5 rounded border border-sf-dark-700 bg-sf-dark-900/70 p-1">
+            <div className="flex min-w-0 items-center gap-1.5 rounded-md border border-sf-dark-600 bg-sf-dark-950/70 p-1 shadow-sm">
               <div className="flex h-9 w-11 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-sf-dark-800">
                 {data.shotReferences?.location?.url
                   ? <img src={data.shotReferences.location.url} alt={data.shotReferences.location.name || 'Location'} className="h-full w-full object-cover" />
@@ -681,7 +897,7 @@ function CanvasNode({ data }) {
             <div className="grid grid-cols-3 gap-1">
               {(data.shotReferences?.characters || []).map((character) => (
                 <div key={character.id} className="min-w-0" title={character.name}>
-                  <div className="flex h-10 items-center justify-center overflow-hidden rounded border border-sf-dark-700 bg-sf-dark-800">
+                  <div className="flex h-10 items-center justify-center overflow-hidden rounded-md border border-sf-dark-600 bg-sf-dark-950 shadow-sm">
                     {character.url ? <img src={character.url} alt={character.name || 'Character'} className="h-full w-full object-cover" /> : <CircleUserRound className="h-4 w-4 text-sf-text-muted/60" />}
                   </div>
                   <div className="truncate pt-0.5 text-[8px] text-sf-text-muted">{character.name}</div>
@@ -689,22 +905,19 @@ function CanvasNode({ data }) {
               ))}
             </div>
           </div>
-          <div className="min-w-0 overflow-hidden bg-white p-2">
-            <div className="mb-1 text-[8px] font-semibold uppercase tracking-wide text-sf-text-muted">Prompt</div>
-            <div className="h-[calc(100%-14px)] overflow-hidden whitespace-pre-wrap break-words text-[10px] leading-4 text-slate-900">{data.properties?.prompt || ''}</div>
-          </div>
         </div>
-      ) : definition?.contains ? (
-        <div className="relative h-[calc(100%-28px)] min-h-[60px] overflow-hidden rounded-b-lg">
-          {(data.galleryColumnLabels || []).map((column) => (
-            <div key={column.label} className="absolute top-2 overflow-hidden rounded px-1 text-[8px] font-semibold uppercase tracking-wide text-sf-text-muted" style={{ left: column.x, width: column.width }}>
-              {column.label}
+      ) : definition?.contains && data.childCount > 0 ? (
+        <div className={`relative h-[calc(100%-54px)] min-h-[60px] overflow-hidden rounded-b-[inherit] ${visualFamily === CANVAS_VISUAL_FAMILIES.organization ? 'bg-slate-900/45' : 'bg-sf-dark-950/35'}`}>
+          {visualFamily === CANVAS_VISUAL_FAMILIES.organization && <div className="pointer-events-none absolute bottom-3 left-4 top-3 w-px bg-gradient-to-b from-transparent via-sky-400/50 to-transparent" />}
+          {(data.galleryColumnLabels || []).filter((column) => !column.prompt).map((column) => (
+            <div key={column.label} className="pointer-events-none absolute bottom-2 top-2 overflow-hidden rounded-xl border border-sf-dark-500/70 bg-sf-dark-950/55 shadow-inner" style={{ left: column.x, width: column.width }}>
+              <div className="min-h-[30px] border-b border-sf-dark-600/80 bg-sf-dark-800/90 px-2.5 py-1"><div className="text-[6px] font-bold uppercase tracking-[0.18em]" style={{ color: accent }}>Child nodes</div><div className="truncate text-[8px] font-semibold uppercase tracking-[0.12em] text-sf-text-secondary">{column.label}</div></div>
             </div>
           ))}
-          {data.promptColumn && <div className="absolute bottom-2 overflow-hidden rounded bg-white p-2 text-[10px] leading-4 text-slate-900" style={{ left: data.promptColumn.x, width: data.promptColumn.width, top: GALLERY_LABEL_HEIGHT + 4 }}>{data.properties?.prompt || ''}</div>}
+          {data.promptColumn && <PromptSurface prompt={data.properties?.prompt} label={data.promptColumn.label} accent={accent} className="absolute bottom-2 top-2 rounded-xl border-2 shadow-lg shadow-black/20" style={{ left: data.promptColumn.x, width: data.promptColumn.width, borderColor: `${accent}88` }} />}
         </div>
       ) : definition?.contains && data.childCount === 0 ? (
-        <div className="flex h-[calc(100%-34px)] min-h-[60px] items-center justify-center rounded-b-lg" title="Empty">
+        <div className="flex h-[calc(100%-54px)] min-h-[60px] items-center justify-center rounded-b-lg" title="Empty">
           <Inbox className="h-7 w-7 text-sf-text-muted/60" />
         </div>
       ) : (
@@ -773,10 +986,14 @@ function CanvasNode({ data }) {
                 <div className="grid min-h-0 flex-1 grid-cols-2 gap-5">
                   <div className="min-h-0 overflow-y-auto pr-1">
                     <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-sf-text-muted">Shot properties</div>
-                    {(definition?.properties || []).map((property) => property.type === 'textarea' ? (
+                    {(definition?.properties || []).filter((property) => property.type !== 'shot-cues').map((property) => property.type === 'readonly' ? (
+                      <div key={property.id} className="mb-3 rounded border border-sf-dark-700 bg-sf-dark-900 px-2 py-2 text-[10px] text-sf-text-secondary"><span className="mb-1 block">{property.label}</span><div className="text-[11px] text-sf-text-primary">{computedShotDuration.toFixed(3)} s</div></div>
+                    ) : property.type === 'textarea' ? (
                       <label key={property.id} className="mb-3 block text-[10px] text-sf-text-secondary"><span className="mb-1 block">{property.label}</span><textarea value={draft[property.id] ?? ''} onChange={(event) => handlePropertyChange(property, event)} className="h-20 w-full resize-y rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-2 text-[11px] text-sf-text-primary outline-none focus:border-sf-accent" /></label>
+                    ) : property.type === 'select' ? (
+                      <label key={property.id} className="mb-3 block text-[10px] text-sf-text-secondary"><span className="mb-1 block">{property.label}</span><select value={draft[property.id] ?? property.defaultValue ?? ''} onChange={(event) => handlePropertyChange(property, event)} className="w-full rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-2 text-[11px] text-sf-text-primary outline-none focus:border-sf-accent">{(property.options || []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
                     ) : (
-                      <label key={property.id} className="mb-3 block text-[10px] text-sf-text-secondary"><span className="mb-1 block">{property.label}</span><input type={property.type === 'number' ? 'number' : 'text'} min={property.min} step={property.step} value={draft[property.id] ?? ''} onChange={(event) => handlePropertyChange(property, event)} className="w-full rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-2 text-[11px] text-sf-text-primary outline-none focus:border-sf-accent" /></label>
+                      <label key={property.id} className="mb-3 block text-[10px] text-sf-text-secondary"><span className="mb-1 block">{property.label}</span><input type={property.type === 'number' ? 'number' : 'text'} min={property.min} step={property.step} placeholder={property.type === 'timecode' ? '0,000' : undefined} value={property.type === 'timecode' ? formatCanvasTime(draft[property.id]) : (draft[property.id] ?? '')} onChange={(event) => handlePropertyChange(property, event)} className="w-full rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-2 text-[11px] text-sf-text-primary outline-none focus:border-sf-accent" /></label>
                     ))}
                   </div>
                   <div className="min-h-0 overflow-y-auto pl-1">
@@ -797,10 +1014,22 @@ function CanvasNode({ data }) {
                       <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-sf-text-muted">Characters</div>
                       <div className="space-y-2">
                         {(data.shotAssignments || []).filter((assignment) => assignment.kind === CANVAS_BLOCK_TYPES.character).map((assignment) => (
-                          <div key={assignment.id} className="flex items-center gap-2 rounded border border-sf-dark-700 bg-sf-dark-800 p-1.5">
-                            <div className="flex h-12 w-16 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-sf-dark-950">{assignment.url ? <img src={assignment.url} alt={assignment.name} className="h-full w-full object-cover" /> : <CircleUserRound className="h-4 w-4 text-sf-text-muted/60" />}</div>
-                            <span className="min-w-0 flex-1 truncate text-xs text-sf-text-primary">{assignment.name}</span>
-                            <button type="button" onClick={() => data.onToggleShotConnection?.(data.nodeId, assignment.id)} className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded border ${assignment.connected ? 'border-emerald-500/50 text-emerald-400 hover:bg-emerald-950/40' : 'border-red-500/50 text-red-400 hover:bg-red-950/40'}`} title={assignment.connected ? 'Remove from shot' : 'Assign to shot'}>{assignment.connected ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}</button>
+                          <div key={assignment.id} className="space-y-2 rounded border border-sf-dark-700 bg-sf-dark-800 p-1.5">
+                            <div className="flex items-center gap-2">
+                              <div className="flex h-12 w-16 flex-shrink-0 items-center justify-center overflow-hidden rounded bg-sf-dark-950">{assignment.url ? <img src={assignment.url} alt={assignment.name} className="h-full w-full object-cover" /> : <CircleUserRound className="h-4 w-4 text-sf-text-muted/60" />}</div>
+                              <span className="min-w-0 flex-1 truncate text-xs text-sf-text-primary">{assignment.name}</span>
+                              <button type="button" onClick={() => data.onToggleShotConnection?.(data.nodeId, assignment.id)} className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded border ${assignment.connected ? 'border-emerald-500/50 text-emerald-400 hover:bg-emerald-950/40' : 'border-red-500/50 text-red-400 hover:bg-red-950/40'}`} title={assignment.connected ? 'Remove from shot' : 'Assign to shot'}>{assignment.connected ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}</button>
+                            </div>
+                            {assignment.connected && <div className="space-y-1 border-t border-sf-dark-700 pt-2">
+                              <div className="flex items-center justify-between text-[9px] font-semibold uppercase tracking-wide text-sf-text-muted"><span>Timed cues ({formatCanvasTime(shotStartMs)}–{formatCanvasTime(shotEndMs)})</span><button type="button" onClick={() => { const current = assignmentForCharacter(assignment.id); updateCharacterCues(assignment.id, [...current.cues, { start: shotStartMs, end: shotEndMs, type: 'singing', text: '' }]) }} className="rounded border border-sf-dark-600 px-1.5 py-0.5 text-sf-text-secondary hover:bg-sf-dark-700">Add cue</button></div>
+                              {assignmentForCharacter(assignment.id).cues.map((cue, cueIndex) => <div key={`${assignment.id}-${cueIndex}`} className="grid grid-cols-[52px_52px_minmax(80px,0.7fr)_minmax(100px,1fr)_20px] gap-1">
+                                <input type="text" value={formatCanvasTime(cue.start)} title="Start time (absolute timeline time)" onChange={(event) => { const value = parseCanvasTime(event.target.value); if (value == null) return; const current = assignmentForCharacter(assignment.id); const cues = current.cues.map((item, index) => index === cueIndex ? { ...item, start: value } : item); updateCharacterCues(assignment.id, cues) }} className="rounded border border-sf-dark-600 bg-sf-dark-900 px-1 py-1 text-[9px] text-sf-text-primary" placeholder="0,000" />
+                                <input type="text" value={formatCanvasTime(cue.end)} title="End time (absolute timeline time)" onChange={(event) => { const value = parseCanvasTime(event.target.value); if (value == null) return; const current = assignmentForCharacter(assignment.id); const cues = current.cues.map((item, index) => index === cueIndex ? { ...item, end: value } : item); updateCharacterCues(assignment.id, cues) }} className="rounded border border-sf-dark-600 bg-sf-dark-900 px-1 py-1 text-[9px] text-sf-text-primary" placeholder="0,000" />
+                                <select value={cue.type} title="Cue type" onChange={(event) => { const current = assignmentForCharacter(assignment.id); const cues = current.cues.map((item, index) => index === cueIndex ? { ...item, type: event.target.value } : item); updateCharacterCues(assignment.id, cues) }} className="rounded border border-sf-dark-600 bg-sf-dark-900 px-1 py-1 text-[9px] text-sf-text-primary">{CANVAS_SHOT_CUE_TYPES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+                                <input value={cue.text} title="Cue text" onChange={(event) => { const current = assignmentForCharacter(assignment.id); const cues = current.cues.map((item, index) => index === cueIndex ? { ...item, text: event.target.value } : item); updateCharacterCues(assignment.id, cues) }} className="min-w-0 rounded border border-sf-dark-600 bg-sf-dark-900 px-1 py-1 text-[9px] text-sf-text-primary" placeholder="Phrase or action" />
+                                <button type="button" title="Remove cue" onClick={() => { const current = assignmentForCharacter(assignment.id); updateCharacterCues(assignment.id, current.cues.filter((_, index) => index !== cueIndex)) }} className="rounded text-red-400 hover:bg-red-950/40"><X className="mx-auto h-3 w-3" /></button>
+                              </div>)}
+                            </div>}
                           </div>
                         ))}
                       </div>
@@ -823,13 +1052,22 @@ function CanvasNode({ data }) {
                       ))}
                     </div>
                   </div>}
-                  {(definition?.properties || []).filter((property) => !isScene).map((property) => property.type === 'checkbox' ? (
+                  {(definition?.properties || []).filter((property) => !isScene).map((property) => property.type === 'readonly' ? (
+                    <div key={property.id} className="mb-2 rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-2 text-[10px] text-sf-text-secondary"><span className="mr-2">{property.label}</span><span className="text-sf-text-primary">{computedShotDuration?.toFixed(3)} s</span></div>
+                  ) : property.type === 'checkbox' ? (
                     <label key={property.id} className="mb-2 flex items-center gap-2 rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-2 text-[10px] text-sf-text-secondary"><input type="checkbox" checked={Boolean(draft[property.id])} onChange={(event) => handlePropertyChange(property, event)} className="accent-sf-accent" />{property.label}</label>
                   ) : property.type === 'workflow-select' ? (
                     <label key={property.id} className="mb-3 block text-[10px] text-sf-text-secondary">
                       <span className="mb-1 block">{property.label}</span>
                       <select value={draft[property.id] ?? property.defaultValue ?? ''} onChange={(event) => handlePropertyChange(property, event)} className="w-full rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-2 text-[11px] text-sf-text-primary outline-none focus:border-sf-accent">
                         {(property.optionsSource === 'image' ? imageWorkflowOptions : textToImageWorkflowOptions).length === 0 ? <option value="">No image workflows available</option> : (property.optionsSource === 'image' ? imageWorkflowOptions : textToImageWorkflowOptions).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </select>
+                    </label>
+                  ) : property.type === 'select' ? (
+                    <label key={property.id} className="mb-3 block text-[10px] text-sf-text-secondary">
+                      <span className="mb-1 block">{property.label}</span>
+                      <select value={draft[property.id] ?? property.defaultValue ?? ''} onChange={(event) => handlePropertyChange(property, event)} className="w-full rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-2 text-[11px] text-sf-text-primary outline-none focus:border-sf-accent">
+                        {(property.options || []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                       </select>
                     </label>
                   ) : property.type === 'textarea' ? (
@@ -857,7 +1095,9 @@ function CanvasNode({ data }) {
       }
 
       {outputs.map((handle, index) => (
-        <Handle key={`output-${handle.id}`} id={handle.id} type="source" position={Position.Right} className="!h-2.5 !w-2.5 !border-2 !border-sf-dark-950" style={{ top: `${((index + 1) / (outputs.length + 1)) * 100}%`, background: accent }} />
+        <Handle key={`output-${handle.id}`} id={handle.id} type="source" position={Position.Right} className="!h-3 !w-3 !border-2 !border-sf-dark-950" style={{ top: `${((index + 1) / (outputs.length + 1)) * 100}%`, background: accent }}>
+          <span className={`pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 whitespace-nowrap rounded-full border border-sf-dark-500 bg-sf-dark-950/95 px-2 py-1 text-[8px] font-semibold uppercase tracking-wide text-sf-text-secondary shadow-lg transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>{handle.label}</span>
+        </Handle>
       ))}
     </div>
   )
@@ -876,6 +1116,7 @@ function CanvasWorkspaceContent() {
   const canvasDocument = useMemo(() => createCanvasDocument({ nodes, edges, rules: canvasRules }), [canvasRules, edges, nodes])
   const { getIntersectingNodes } = useReactFlow()
   const dragOriginRef = useRef(null)
+  const [dragDestination, setDragDestination] = useState(null)
   const [activeNodeId, setActiveNodeId] = useState(null)
   const autoSaveTimerRef = useRef(null)
   const autoSaveInFlightRef = useRef(false)
@@ -1013,8 +1254,9 @@ function CanvasWorkspaceContent() {
       if (!target) return currentNodes
       const definition = getCanvasBlockDefinition(target.type)
       const targetChildren = currentNodes.filter((node) => node.parentId === target.id)
+      const dimensionCache = new Map()
       const requiredLayout = definition?.contains
-        ? getGalleryLayout(definition, targetChildren, target.data?.layout, params)
+        ? getGalleryLayout(definition, targetChildren, effectiveChildLayout(target), params, (child) => getResolvedNodeDimensions(child, currentNodes, dimensionCache))
         : null
       const minimum = requiredLayout
         ? { width: requiredLayout.minWidth, height: requiredLayout.minHeight }
@@ -1066,9 +1308,11 @@ function CanvasWorkspaceContent() {
     setNodes((currentNodes) => {
       const parent = currentNodes.find((node) => node.id === nodeId)
       if (!parent || !getCanvasBlockDefinition(parent.type)?.contains) return currentNodes
-      const nextLayout = parent.data?.layout === CANVAS_CHILD_LAYOUTS.landscape
+      if ([CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location, CANVAS_BLOCK_TYPES.timeline, CANVAS_BLOCK_TYPES.scene].includes(parent.type)) return currentNodes
+      const currentLayout = effectiveChildLayout(parent)
+      const nextLayout = currentLayout === CANVAS_CHILD_LAYOUTS.landscape
         ? CANVAS_CHILD_LAYOUTS.portrait
-        : parent.data?.layout === CANVAS_CHILD_LAYOUTS.portrait
+        : currentLayout === CANVAS_CHILD_LAYOUTS.portrait
           ? CANVAS_CHILD_LAYOUTS.freeform
           : CANVAS_CHILD_LAYOUTS.landscape
       const nextNodes = currentNodes.map((node) => node.id === nodeId ? { ...node, data: { ...node.data, layout: nextLayout } } : node)
@@ -1116,12 +1360,17 @@ function CanvasWorkspaceContent() {
 
   const onNodeDragStart = useCallback((_, draggedNode) => {
     dragOriginRef.current = { id: draggedNode.id, parentId: draggedNode.parentId, position: draggedNode.position }
+    setDragDestination(null)
   }, [])
 
   const onNodeDrag = useCallback((_, draggedNode) => {
+    const destination = getIntersectingNodes(draggedNode, false)
+      .filter((candidate) => candidate.id !== draggedNode.id && getCanvasBlockDefinition(candidate.type)?.contains)
+      .at(-1)
+    setDragDestination(destination ? { id: destination.id, valid: canContainCanvasNode(destination.type, draggedNode.type) } : null)
     const parentId = draggedNode.parentId || dragOriginRef.current?.parentId
     const parent = parentId ? nodes.find((node) => node.id === parentId) : null
-    if (parent?.data?.layout !== CANVAS_CHILD_LAYOUTS.freeform) return
+    if (effectiveChildLayout(parent) !== CANVAS_CHILD_LAYOUTS.freeform) return
     setNodes((currentNodes) => normalizeFreeformParent(
       currentNodes.map((node) => node.id === draggedNode.id ? { ...node, position: draggedNode.position } : node),
       parent.id,
@@ -1132,7 +1381,7 @@ function CanvasWorkspaceContent() {
     const candidates = getIntersectingNodes(draggedNode, false).filter((candidate) => canContainCanvasNode(candidate.type, draggedNode.type))
     const origin = dragOriginRef.current
     const originParent = origin?.parentId ? nodes.find((node) => node.id === origin.parentId) : null
-    const parent = candidates[candidates.length - 1] || (originParent?.data?.layout === CANVAS_CHILD_LAYOUTS.freeform ? originParent : null)
+    const parent = candidates[candidates.length - 1] || (effectiveChildLayout(originParent) === CANVAS_CHILD_LAYOUTS.freeform ? originParent : null)
     const absolutePosition = draggedNode.internals?.positionAbsolute || draggedNode.positionAbsolute || draggedNode.position
     setNodes((currentNodes) => {
       let nextNodes = currentNodes.map((currentNode) => {
@@ -1147,17 +1396,18 @@ function CanvasWorkspaceContent() {
         return {
           ...currentNode,
           parentId: parent.id,
-          ...(parent.data?.layout === CANVAS_CHILD_LAYOUTS.freeform ? { extent: undefined } : { extent: 'parent' }),
+          ...(effectiveChildLayout(parent) === CANVAS_CHILD_LAYOUTS.freeform ? { extent: undefined } : { extent: 'parent' }),
           position: sameParent ? draggedNode.position : { x: absolutePosition.x - parentAbsolutePosition.x, y: absolutePosition.y - parentAbsolutePosition.y },
         }
       })
-      if (parent?.data?.layout === CANVAS_CHILD_LAYOUTS.freeform) nextNodes = normalizeFreeformParent(nextNodes, parent.id)
+      if (effectiveChildLayout(parent) === CANVAS_CHILD_LAYOUTS.freeform) nextNodes = normalizeFreeformParent(nextNodes, parent.id)
       if (draggedNode.type === CANVAS_BLOCK_TYPES.shot && parent?.type === CANVAS_BLOCK_TYPES.scene) {
         nextNodes = reorderSceneShots(nextNodes, parent.id, draggedNode.id, nextNodes.find((node) => node.id === draggedNode.id)?.position)
       }
       return nextNodes
     })
     dragOriginRef.current = null
+    setDragDestination(null)
   }, [getIntersectingNodes, nodes, setNodes])
 
   const addElement = useCallback((type, requestedParentId = null) => {
@@ -1166,26 +1416,51 @@ function CanvasWorkspaceContent() {
       const parent = requestedParentId ? currentNodes.find((node) => node.id === requestedParentId && canContainCanvasNode(node.type, type)) : null
       if (requestedParentId && !parent) return currentNodes
       const fallbackParent = parent || (requestedParentId ? null : currentNodes.find((node) => canContainCanvasNode(node.type, type)))
+      if (fallbackParent && !canAddCanvasChild(fallbackParent.id, type, currentNodes)) return currentNodes
       const siblings = fallbackParent ? currentNodes.filter((node) => node.parentId === fallbackParent.id) : []
-      const parentLayout = fallbackParent?.data?.layout || CANVAS_CHILD_LAYOUTS.landscape
-      const createdNode = createCanvasNode(type, { index: currentNodes.length, parentId: fallbackParent?.id, position: fallbackParent ? getGalleryPosition(siblings.length, parentLayout, siblings) : undefined, title: type === CANVAS_BLOCK_TYPES.shot ? `Shot ${siblings.length + 1}` : type === CANVAS_BLOCK_TYPES.scene ? `Scene ${siblings.length + 1}` : undefined, mode: type === CANVAS_BLOCK_TYPES.scene ? undefined : 'add' })
+      const parentLayout = effectiveChildLayout(fallbackParent)
+      const timeline = fallbackParent?.type === CANVAS_BLOCK_TYPES.scene
+        ? currentNodes.find((node) => node.id === fallbackParent.parentId && node.type === CANVAS_BLOCK_TYPES.timeline)
+        : null
+      const timelineProperties = timeline?.data?.properties || {}
+      const inheritedShotProperties = type === CANVAS_BLOCK_TYPES.shot ? {
+        videoStyle: timelineProperties.videoStyle || '',
+        temporalWorldEffect: timelineProperties.temporalWorldEffect || '',
+        cameraFlow: timelineProperties.cameraFlow || '',
+      } : undefined
+      const contextualTitle = type === CANVAS_BLOCK_TYPES.image && fallbackParent?.type === CANVAS_BLOCK_TYPES.location
+        ? 'Location image'
+        : type === CANVAS_BLOCK_TYPES.image && fallbackParent?.type === CANVAS_BLOCK_TYPES.character
+          ? 'Character image'
+          : type === CANVAS_BLOCK_TYPES.shot
+            ? `Shot ${siblings.length + 1}`
+            : type === CANVAS_BLOCK_TYPES.scene
+              ? `Scene ${siblings.length + 1}`
+              : undefined
+      const createdNode = createCanvasNode(type, { index: currentNodes.length, parentId: fallbackParent?.id, position: fallbackParent ? getGalleryPosition(siblings.length, parentLayout, siblings, getCanvasBlockDefinition(fallbackParent.type), fallbackParent.data?.size?.width) : undefined, title: contextualTitle, properties: inheritedShotProperties, mode: type === CANVAS_BLOCK_TYPES.scene ? undefined : 'add' })
       const nextNodes = [...currentNodes, createdNode]
       if (![CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location].includes(type) || requestedParentId) return nextNodes
       if (!canAddCanvasNode({ ...canvasDocument, nodes: nextNodes }, CANVAS_BLOCK_TYPES.image)) return currentNodes
       return [...nextNodes, createCanvasNode(CANVAS_BLOCK_TYPES.image, {
         index: nextNodes.length,
         parentId: createdNode.id,
-        position: getGalleryPosition(0, createdNode.data.layout || CANVAS_CHILD_LAYOUTS.landscape, []),
+        title: type === CANVAS_BLOCK_TYPES.location ? 'Location image' : 'Character image',
+        position: getGalleryPosition(0, effectiveChildLayout(createdNode), [], getCanvasBlockDefinition(createdNode.type), createdNode.data?.size?.width),
         mode: null,
       })]
     })
   }, [canvasDocument, setNodes])
 
-  const displayNodes = useMemo(() => nodes.map((node) => {
+  const displayNodes = useMemo(() => {
+    const dimensionCache = new Map()
+    const resolveDimensions = (candidate) => getResolvedNodeDimensions(candidate, nodes, dimensionCache)
+    return nodes.map((node) => {
     const definition = getCanvasBlockDefinition(node.type)
     const siblings = node.parentId ? nodes.filter((child) => child.parentId === node.parentId) : []
     const childIndex = siblings.findIndex((child) => child.id === node.id)
     const children = nodes.filter((child) => child.parentId === node.id)
+    const childCounts = Object.fromEntries(getGalleryGroups(children).map((group) => [group.type, group.children.length]))
+    const childAvailability = Object.fromEntries((definition?.contains || []).map((childType) => [childType, canAddCanvasChild(node.id, childType, nodes)]))
     const parent = node.parentId ? nodes.find((candidate) => candidate.id === node.parentId) : null
     const canvasConfiguration = nodes.find((candidate) => candidate.type === CANVAS_BLOCK_TYPES.configuration)
     const siblingImages = node.parentId
@@ -1233,12 +1508,21 @@ function CanvasWorkspaceContent() {
         }
       })
       : []
-    const parentLayout = parent?.data?.layout || CANVAS_CHILD_LAYOUTS.landscape
+    const parentLayout = effectiveChildLayout(parent)
+    const parentDefinition = parent ? getCanvasBlockDefinition(parent.type) : null
+    const parentDimensions = parentDefinition?.contains ? resolveDimensions(parent) : null
     const isCoveredByEditor = Boolean(editingNodeId && node.parentId === editingNodeId)
-    const layout = definition?.contains ? getGalleryLayout(definition, children, node.data?.layout, node.data?.size) : null
-    const galleryColumnLabels = definition?.contains ? getGalleryColumnLabels(definition, children, node.data?.layout, layout?.width) : []
+    const nodeLayout = effectiveChildLayout(node)
+    const layout = definition?.contains ? resolveDimensions(node) : null
+    const galleryColumnLabels = definition?.contains ? getGalleryColumnLabels(definition, children, nodeLayout, layout?.width, resolveDimensions) : []
     const promptColumn = galleryColumnLabels.find((column) => column.prompt) || null
-    const normalDimensions = node.parentId ? getChildDimensions(node) : layout || getNodeDimensions(node)
+    let normalDimensions = resolveDimensions(node)
+    if ([CANVAS_BLOCK_TYPES.character, CANVAS_BLOCK_TYPES.location].includes(parent?.type) && parentLayout === CANVAS_CHILD_LAYOUTS.portrait) {
+      const groups = getGalleryGroups(siblings)
+      const groupIndex = groups.findIndex((group) => group.type === node.type)
+      const expandedWidth = getPortraitGroupWidths(parentDefinition, siblings, parentDimensions?.width, resolveDimensions)[groupIndex]
+      if (expandedWidth) normalDimensions = { ...normalDimensions, width: expandedWidth }
+    }
     const dimensions = node.data?.mode
       ? { width: Math.max(normalDimensions.width, 360), height: Math.max(normalDimensions.height, 300) }
       : normalDimensions
@@ -1250,12 +1534,11 @@ function CanvasWorkspaceContent() {
       ...(node.parentId && parentLayout === CANVAS_CHILD_LAYOUTS.freeform ? { extent: undefined } : {}),
       style: dimensions,
       position: node.parentId && childIndex >= 0 && parentLayout !== CANVAS_CHILD_LAYOUTS.freeform
-          ? getGalleryPosition(childIndex, parentLayout, siblings)
+          ? getGalleryPosition(childIndex, parentLayout, siblings, parentDefinition, parentDimensions?.width, resolveDimensions)
           : node.position,
       data: {
         ...node.data,
         ...(node.type === CANVAS_BLOCK_TYPES.shot ? { title: `Shot ${childIndex + 1}` } : {}),
-        ...(node.type === CANVAS_BLOCK_TYPES.scene && (/^Scene \d+$/.test(String(node.data?.title || '')) || node.data?.title === 'New scene') ? { title: `Scene ${childIndex + 1}` } : {}),
         nodeId: node.id,
         selected: Boolean(node.selected),
         minWidth: layout?.minWidth || minimum.width,
@@ -1268,9 +1551,14 @@ function CanvasWorkspaceContent() {
         onAddChild: (parentId, childType) => addElement(childType, parentId),
         onToggleImageConnection: handleToggleImageConnection,
         onToggleShotConnection: handleToggleShotConnection,
+        onDeleteNode: (nodeId) => handleNodesChange([{ id: nodeId, type: 'remove' }]),
         sheetImages,
         shotReferences,
         shotAssignments,
+        childCount: children.length,
+        childCounts,
+        childAvailability,
+        dropState: dragDestination?.id === node.id ? (dragDestination.valid ? 'valid' : 'invalid') : null,
         galleryColumnLabels,
         promptColumn,
         generationWorkflowId: parent?.type === CANVAS_BLOCK_TYPES.location
@@ -1281,7 +1569,8 @@ function CanvasWorkspaceContent() {
           : (canvasConfiguration?.data?.properties?.characterSheetWorkflow || 'image-edit'),
       },
     }
-  }), [addElement, canvasDocument.rules, edges, editingNodeId, handleImageAction, handleNodeMode, handleNodeResize, handleNodeUpdate, handleToggleImageConnection, handleToggleLayout, handleToggleShotConnection, nodes])
+  })
+  }, [addElement, canvasDocument.rules, dragDestination, edges, editingNodeId, handleImageAction, handleNodeMode, handleNodeResize, handleNodeUpdate, handleNodesChange, handleToggleImageConnection, handleToggleLayout, handleToggleShotConnection, nodes])
 
   const resetCanvas = useCallback(() => {
     setNodes(initialDocument.nodes)
@@ -1290,25 +1579,27 @@ function CanvasWorkspaceContent() {
   }, [initialDocument, setEdges, setNodes])
 
   return (
-    <div className="flex min-h-0 flex-1 overflow-hidden bg-sf-dark-950">
-      <aside className="z-10 flex w-64 flex-shrink-0 flex-col border-r border-sf-dark-700 bg-sf-dark-900">
-        <div className="border-b border-sf-dark-700 px-4 py-4">
+    <div className="flex min-h-0 flex-1 overflow-hidden bg-[#1a2740]">
+      <aside className="z-10 flex w-64 flex-shrink-0 flex-col border-r border-slate-500/30 bg-[#25334d] shadow-xl shadow-black/20">
+        <div className="border-b border-slate-400/20 bg-white/[0.025] px-4 py-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-sf-text-primary"><Sparkles className="h-4 w-4 text-sf-accent" />Canvas elements</div>
+          <div className="mt-1 text-[10px] text-slate-400">Build production context visually</div>
         </div>
         <div className="flex-1 space-y-2 overflow-y-auto p-3">
           {CANVAS_BLOCK_LIBRARY.filter((definition) => !definition.allowedParents && !definition.fixed).map((definition) => {
             const Icon = BLOCK_ICONS[definition.icon] || Sparkles
             return (
-              <button key={definition.type} type="button" onClick={() => addElement(definition.type)} className="flex w-full items-center gap-3 rounded-lg border border-sf-dark-700 bg-sf-dark-800/60 px-3 py-3 text-left transition-colors hover:border-sf-dark-500 hover:bg-sf-dark-800">
+              <button key={definition.type} type="button" onClick={() => addElement(definition.type)} className="group/library relative flex w-full items-center gap-3 overflow-hidden rounded-xl border border-slate-400/20 bg-slate-900/35 px-3 py-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-slate-300/40 hover:bg-slate-800/70 hover:shadow-lg">
+                <span className="absolute inset-y-2 left-0 w-1 rounded-r-full" style={{ background: definition.accent }} />
                 <span className="rounded-md p-2" style={{ background: `${definition.accent}18`, color: definition.accent }}><Icon className="h-4 w-4" /></span>
-                <span className="min-w-0 flex-1"><span className="block text-xs font-medium text-sf-text-primary">{definition.label}</span></span>
+                <span className="min-w-0 flex-1"><span className="block text-[8px] font-bold uppercase tracking-[0.14em]" style={{ color: definition.accent }}>{definition.visualFamily}</span><span className="block text-xs font-medium text-sf-text-primary">{definition.label}</span></span>
                 <Plus className="h-3.5 w-3.5 text-sf-text-muted" />
               </button>
             )
           })}
         </div>
-        <div className="space-y-2 border-t border-sf-dark-700 p-3">
-          <div className="flex items-center justify-center gap-2 rounded-lg border border-sf-dark-700 px-3 py-2 text-xs text-sf-text-secondary">
+        <div className="space-y-2 border-t border-slate-400/20 bg-black/10 p-3">
+          <div className="flex items-center justify-center gap-2 rounded-lg border border-slate-400/20 bg-slate-900/25 px-3 py-2 text-xs text-sf-text-secondary">
             <Check className="h-3.5 w-3.5 text-sf-accent" /> {saveState === 'saving' ? 'Auto-saving…' : saveState === 'saved' ? 'Canvas saved' : saveState === 'error' ? 'Auto-save failed' : saveState === 'dirty' ? 'Changes pending' : 'Canvas up to date'}
           </div>
           <button type="button" onClick={resetCanvas} className="flex w-full items-center justify-center gap-2 rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:bg-sf-dark-800"><RotateCcw className="h-3.5 w-3.5" /> Reset canvas</button>
@@ -1332,13 +1623,14 @@ function CanvasWorkspaceContent() {
           fitView
           fitViewOptions={{ padding: 0.2 }}
           className="canvas-workspace"
+          style={{ background: 'radial-gradient(circle at 25% 15%, rgba(71, 96, 138, .34), transparent 34%), linear-gradient(145deg, #263650 0%, #1a2740 62%, #22314b 100%)' }}
           defaultEdgeOptions={{ animated: true, style: { stroke: '#64748b', strokeWidth: 1.5 } }}
           proOptions={{ hideAttribution: true }}
         >
-          <Background gap={32} size={1} color="rgba(255,255,255,0.07)" />
+          <Background gap={32} size={1.35} color="rgba(203,213,225,0.16)" />
           <Controls showInteractive={false} />
-          <MiniMap pannable zoomable bgColor="rgba(8, 12, 26, 0.92)" maskColor="rgba(0,0,0,0.45)" nodeColor={(node) => node.data?.accent || '#64748b'} />
-          <Panel position="top-left" className="!m-4"><div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/90 px-3 py-2 text-[11px] text-sf-text-muted shadow-lg backdrop-blur">Drag to arrange · scroll to zoom · connect handles to compose a scene</div></Panel>
+          <MiniMap pannable zoomable bgColor="rgba(30, 42, 65, 0.96)" maskColor="rgba(15,23,42,0.38)" nodeColor={(node) => node.data?.accent || '#64748b'} />
+          <Panel position="top-left" className="!m-4"><div className="rounded-xl border border-slate-300/20 bg-slate-800/75 px-3 py-2 text-[11px] text-slate-300 shadow-xl backdrop-blur-xl">Drag to arrange · scroll to zoom · connect handles to compose a scene</div></Panel>
         </ReactFlow>
       </div>
     </div>

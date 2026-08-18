@@ -28,3 +28,13 @@ a layout is applicable.
 Location Sheet accepts multiple Image links from Images inside the same
 Location. Clicking the Sheet reveals all those links; clicking an Image
 reveals only that Image's one Sheet link.
+## Visual identity
+
+Location Sheet belongs to the Asset visual family and uses a stacked-page
+placeholder until generated, then shows only its associated sheet image. Its
+connected reference count remains visible as metadata; Prompt and Seed remain
+available in Edit mode.
+
+A Location Sheet may only be added when the same Location already contains at
+least one Image with associated media. The Add option remains visible but
+disabled until that prerequisite is satisfied.

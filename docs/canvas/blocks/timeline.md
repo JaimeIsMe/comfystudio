@@ -24,3 +24,11 @@ resized larger, but never below its child gallery's required size.
 
 - Prompt
 - Description
+- Video style default
+- Temporal/world effect default
+- Camera flow preset default
+## Visual identity
+
+Timeline belongs to the Organization visual family. It is the broadest,
+lowest-elevation sequence frame and exposes Scene count plus concise creative
+defaults as card metadata.

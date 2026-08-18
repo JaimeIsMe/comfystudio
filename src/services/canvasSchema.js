@@ -1,4 +1,4 @@
-const CANVAS_SCHEMA_VERSION = 7
+const CANVAS_SCHEMA_VERSION = 8
 
 export const CANVAS_BLOCK_TYPES = Object.freeze({
   configuration: 'canvas-config',
@@ -28,6 +28,14 @@ export const CANVAS_CHILD_LAYOUTS = Object.freeze({
   freeform: 'freeform',
 })
 
+export const CANVAS_VISUAL_FAMILIES = Object.freeze({
+  organization: 'organization',
+  production: 'production',
+  subject: 'subject',
+  asset: 'asset',
+  system: 'system',
+})
+
 export const CANVAS_IMAGE_ASPECT_RATIOS = Object.freeze([
   { value: '1:1', label: '1:1' },
   { value: '2:3', label: '2:3' },
@@ -44,12 +52,117 @@ export const CANVAS_IMAGE_RESOLUTIONS = Object.freeze([
   { value: '4k', label: '4K' },
 ])
 
+export const CANVAS_SHOT_PERFORMANCE_MODES = Object.freeze([
+  { value: 'performance', label: 'Performance' },
+  { value: 'instrumental', label: 'Instrumental' },
+  { value: 'visual_only', label: 'Visual only' },
+  { value: 'b_roll', label: 'B-roll' },
+])
+
+export const CANVAS_SHOT_CUE_TYPES = Object.freeze([
+  { value: 'singing', label: 'Singing' },
+  { value: 'dialogue', label: 'Dialogue' },
+  { value: 'reaction', label: 'Reaction' },
+  { value: 'silent', label: 'Silent' },
+  { value: 'instrumental_action', label: 'Instrumental action' },
+])
+
+export const CANVAS_SHOT_CAMERA_FLOW_OPTIONS = Object.freeze([
+  { value: 'off', label: 'Off', impact: 'Do not auto-fill camera or framing direction.' },
+  { value: 'balanced', label: 'Balanced cinematic flow', impact: 'Vary wide, medium, close, lateral, reveal, and reset coverage.' },
+  { value: 'intimate_closeups', label: 'Intimate close-ups', impact: 'Keep coverage tight, intimate, and frame-filling.' },
+  { value: 'music_video', label: 'Music video shots', impact: 'Use rhythmic performance, movement, reveal, and tracking coverage.' },
+  { value: 'fisheye_distorted', label: 'Fisheye / distorted', impact: 'Favor wide-angle, fisheye, and optical-distortion coverage.' },
+  { value: 'quiet', label: 'Quiet', impact: 'Favor restrained, gentle, low-energy camera movement.' },
+  { value: 'energetic', label: 'Energetic', impact: 'Favor active tracking, dynamic movement, and stronger camera energy.' },
+])
+
+export const CANVAS_SHOT_TEMPORAL_EFFECT_OPTIONS = Object.freeze([
+  { value: '', label: 'Off / natural time', impact: 'Characters and environment move in the same natural time.' },
+  { value: 'realtime_subjects_timelapse_world', label: 'Real-time characters / time-lapse world', impact: 'Keep mapped characters natural while the background world accelerates.' },
+  { value: 'frozen_world', label: 'Characters move / world frozen', impact: 'Characters move while the surrounding world remains almost still.' },
+  { value: 'reverse_world', label: 'Characters forward / world reverses', impact: 'Characters move forward while background action runs backward.' },
+  { value: 'day_night_sweep', label: 'Day/night sweep', impact: 'Accelerate daylight, shadows, and practical-light changes.' },
+  { value: 'seasonal_passage', label: 'Seasons pass', impact: 'Transition the location through coherent seasonal changes.' },
+  { value: 'crowd_flow', label: 'Crowd river', impact: 'Move anonymous extras around protected referenced characters.' },
+  { value: 'looping_background', label: 'Looping background', impact: 'Repeat background actions while the referenced cast continues.' },
+  { value: 'delayed_world', label: 'Delayed world', impact: 'Make environmental reactions visibly lag behind the characters.' },
+  { value: 'living_shadows', label: 'Living shadows', impact: 'Let shadows move independently from the protected characters.' },
+  { value: 'reflection_delay', label: 'Delayed reflections', impact: 'Make reflections respond later than the real-time cast.' },
+  { value: 'gravity_separation', label: 'Altered-gravity world', impact: 'Keep characters grounded while loose environment objects move unnaturally.' },
+])
+
+const CANVAS_SHOT_VIDEO_STYLE_LABELS = [
+  'Cinematic realism', 'Gothic romance', 'Dark fantasy', 'Ethereal dreamscape', 'Surrealism', 'Cosmic horror',
+  'Psychological horror', 'Found footage', 'Analog horror', 'Body horror', 'Occult ritual', 'Silent Hill-inspired',
+  'Cyberpunk', 'Biopunk', 'Dieselpunk', 'Steampunk', 'Post-apocalyptic', 'Dystopian sci-fi', 'Retro-futurism',
+  'Y2K futurism', 'Vaporwave', 'Synthwave', 'Dreamcore', 'Weirdcore', 'Liminal space', 'Dark academia',
+  'Cottagecore', 'Fairycore', 'Angelcore', 'Goblincore', 'Whimsigoth', 'Baroque', 'Rococo', 'Art Nouveau',
+  'Art Deco', 'Victorian gothic', 'Renaissance-inspired', 'Medieval fantasy', 'Mythological epic', 'Film noir',
+  'Neo-noir', 'Expressionism', 'Giallo horror', 'Grindhouse', '1970s psychedelic', '1980s music video',
+  '1990s grunge', 'Early-2000s pop', 'Indie sleaze', 'Lo-fi VHS', 'Super 8 film', 'Vintage Hollywood',
+  'High-fashion editorial', 'Avant-garde fashion', 'Runway glamour', 'Luxury commercial', 'Beauty campaign',
+  'Pop-star music video', 'Industrial metal', 'Gothic metal', 'Alternative rock', 'Punk rock', 'Dark pop',
+  'Hyperpop', 'K-pop-inspired', 'R&B glamour', 'Eerie claymation', 'Stop-motion', 'Paper-cut animation',
+  'Hand-painted animation', 'Anime-inspired', 'Graphic novel', 'Comic-book', 'Cel-shaded 3D', 'Photorealistic CGI',
+  'Low-poly 3D', 'Miniature diorama', 'Dollhouse surrealism', 'Liquid chrome', 'Holographic iridescence',
+  'Neon noir', 'Monochrome minimalism', 'High-key white studio', 'Low-key chiaroscuro', 'Soft pastel',
+  'Desaturated melancholy', 'Crimson-and-black', 'Teal-and-orange blockbuster', 'Golden-hour nostalgia',
+  'Moonlit blue', 'Underwater ethereal', 'Elemental fantasy', 'Nature mysticism', 'Apocalyptic biblical',
+  'Glitch art', 'Datamosh', 'CRT distortion', 'Kaleidoscopic', 'Double exposure', 'Infrared', 'Thermal vision',
+  'Fisheye distortion', 'Security-camera footage', 'Documentary realism', 'Social-media selfie', 'TikTok transformation',
+  'Dreamlike slow motion', 'Frenetic montage', 'One-take immersive', 'Music-video performance',
+  'Narrative short film', 'Movie-trailer aesthetic',
+]
+
+export const CANVAS_SHOT_VIDEO_STYLE_OPTIONS = Object.freeze([
+  { value: '', label: 'Default / let prompt decide', impact: 'No additional global video aesthetic is imposed.' },
+  ...CANVAS_SHOT_VIDEO_STYLE_LABELS.map((label) => ({
+    value: label,
+    label,
+    impact: `${label} visual direction for the target video translator.`,
+  })),
+])
+
+const DEFAULT_SHOT_ASSIGNMENTS = Object.freeze([])
+
+export function normalizeCanvasShotAssignments(assignments, durationStart = 0, durationEnd = Number.POSITIVE_INFINITY) {
+  const startLimit = Math.max(0, Number(durationStart) || 0)
+  const endLimit = Math.max(startLimit, Number.isFinite(Number(durationEnd)) ? Number(durationEnd) : startLimit)
+  return Array.isArray(assignments) ? assignments.map((assignment) => ({
+    characterId: String(assignment?.characterId || ''),
+    cues: Array.isArray(assignment?.cues) ? assignment.cues.map((cue) => {
+      const start = Math.min(endLimit, Math.max(startLimit, Number(cue?.start) || startLimit))
+      const end = Math.min(endLimit, Math.max(start, Number(cue?.end) || start))
+      return { start, end, type: String(cue?.type || 'silent'), text: String(cue?.text || '') }
+    }) : [],
+  })) : []
+}
+
+export function formatCanvasTime(milliseconds) {
+  const value = Math.max(0, Math.round(Number(milliseconds) || 0))
+  return value.toLocaleString('en-US')
+}
+
+export function parseCanvasTime(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.round(value))
+  const text = String(value ?? '').trim().toLowerCase().replace(/\s+/g, '')
+  if (!text) return null
+  if (/^\d{1,3}(?:,\d{3})+$/.test(text)) return Math.max(0, Number(text.replace(/,/g, '')))
+  const match = text.match(/^(?:(\d+(?:\.\d+)?)sec)?(?:(\d+)milli?sec)?$/)
+  if (!match || (!match[1] && !match[2])) return null
+  const seconds = match[1] ? Number(match[1]) * 1000 : 0
+  const millis = match[2] ? Number(match[2]) : 0
+  return Number.isFinite(seconds) && Number.isFinite(millis) ? Math.max(0, Math.round(seconds + millis)) : null
+}
+
 const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
   {
     type: CANVAS_BLOCK_TYPES.configuration,
     label: 'Canvas Configuration',
     description: 'Global rules for this Canvas',
     category: 'Canvas',
+    visualFamily: CANVAS_VISUAL_FAMILIES.system,
     icon: 'configuration',
     accent: '#f97316',
     inputs: [],
@@ -72,6 +185,7 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     label: 'Character',
     description: 'A person, performer, or subject',
     category: 'Production',
+    visualFamily: CANVAS_VISUAL_FAMILIES.subject,
     icon: 'character',
     accent: '#a78bfa',
     inputs: [],
@@ -93,6 +207,7 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     label: 'Image',
     description: 'A reference image for a Character or Location',
     category: 'Production',
+    visualFamily: CANVAS_VISUAL_FAMILIES.asset,
     icon: 'image',
     accent: '#c084fc',
     inputs: [],
@@ -113,6 +228,7 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     label: 'Character Sheet',
     description: 'Structured character reference and continuity notes',
     category: 'Character',
+    visualFamily: CANVAS_VISUAL_FAMILIES.asset,
     icon: 'characterSheet',
     accent: '#e879f9',
     inputs: [{ id: 'images', type: 'image-sheet-link', label: 'Images', multiple: true }],
@@ -131,6 +247,7 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     label: 'Location',
     description: 'A place, set, or visual world',
     category: 'Production',
+    visualFamily: CANVAS_VISUAL_FAMILIES.subject,
     icon: 'location',
     accent: '#34d399',
     inputs: [],
@@ -151,6 +268,7 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     label: 'Location Sheet',
     description: 'Structured location reference built from prompt, seed, and connected images',
     category: 'Location',
+    visualFamily: CANVAS_VISUAL_FAMILIES.asset,
     icon: 'locationSheet',
     accent: '#6ee7b7',
     inputs: [{ id: 'images', type: 'image-sheet-link', label: 'Images', multiple: true }],
@@ -169,6 +287,7 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     label: 'Audio',
     description: 'Music, dialogue, or sound design',
     category: 'Production',
+    visualFamily: CANVAS_VISUAL_FAMILIES.asset,
     icon: 'audio',
     accent: '#f59e0b',
     inputs: [],
@@ -183,6 +302,7 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     label: 'Timeline',
     description: 'A sequence container for scenes',
     category: 'Production',
+    visualFamily: CANVAS_VISUAL_FAMILIES.organization,
     icon: 'timeline',
     accent: '#fb7185',
     fixed: true,
@@ -196,14 +316,18 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
       { id: 'prompt', label: 'Prompt', type: 'textarea', defaultValue: '' },
       { id: 'seed', label: 'Seed', type: 'number', defaultValue: 1 },
       { id: 'description', label: 'Description', type: 'textarea', defaultValue: '' },
+      { id: 'videoStyle', label: 'Video style default', type: 'select', defaultValue: '', options: CANVAS_SHOT_VIDEO_STYLE_OPTIONS },
+      { id: 'temporalWorldEffect', label: 'Temporal/world effect default', type: 'select', defaultValue: '', options: CANVAS_SHOT_TEMPORAL_EFFECT_OPTIONS },
+      { id: 'cameraFlow', label: 'Camera flow preset default', type: 'select', defaultValue: '', options: CANVAS_SHOT_CAMERA_FLOW_OPTIONS },
     ],
-    defaults: { title: 'New timeline', properties: { prompt: '', seed: 1, description: '' } },
+    defaults: { title: 'New timeline', properties: { prompt: '', seed: 1, description: '', videoStyle: '', temporalWorldEffect: '', cameraFlow: '' } },
   },
   {
     type: CANVAS_BLOCK_TYPES.scene,
     label: 'Scene',
     description: 'An organizing container for shots',
     category: 'Production',
+    visualFamily: CANVAS_VISUAL_FAMILIES.organization,
     icon: 'scene',
     accent: '#38bdf8',
     outputs: [{ id: 'right', type: 'scene', label: 'Scene' }],
@@ -220,6 +344,7 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
     label: 'Shot',
     description: 'A specific shot with its location, characters, and direction',
     category: 'Production',
+    visualFamily: CANVAS_VISUAL_FAMILIES.production,
     icon: 'shot',
     accent: '#60a5fa',
     inputs: [
@@ -234,17 +359,28 @@ const CANVAS_BLOCK_LIBRARY_DEFINITIONS = [
       { id: 'prompt', label: 'Prompt', type: 'textarea', defaultValue: '' },
       { id: 'seed', label: 'Seed', type: 'number', defaultValue: 1 },
       { id: 'description', label: 'Description', type: 'textarea', defaultValue: '' },
-      { id: 'duration', label: 'Duration (seconds)', type: 'number', defaultValue: 5 },
-      { id: 'duration_start', label: 'Duration start (ms)', type: 'number', defaultValue: 0, min: 0, step: 1 },
-      { id: 'duration_end', label: 'Duration end (ms)', type: 'number', defaultValue: 5000, min: 0, step: 1 },
-      { id: 'framing', label: 'Framing', type: 'text', defaultValue: '' },
-      { id: 'cameraMovement', label: 'Camera movement', type: 'text', defaultValue: '' },
+      { id: 'duration', label: 'Duration (seconds)', type: 'readonly', defaultValue: 5 },
+      { id: 'duration_start', label: 'Duration start', type: 'timecode', defaultValue: 0 },
+      { id: 'duration_end', label: 'Duration end', type: 'timecode', defaultValue: 5000 },
+      { id: 'framing', label: 'Framing', type: 'select', defaultValue: '', options: [
+        { value: '', label: 'Inherited/default' },
+        { value: 'extreme_close_up', label: 'Extreme close-up' },
+        { value: 'close_up', label: 'Close-up' },
+        { value: 'medium', label: 'Medium' },
+        { value: 'wide', label: 'Wide' },
+        { value: 'extreme_wide', label: 'Extreme wide' },
+      ], inToolbar: true },
+      { id: 'cameraMovement', label: 'Exact camera movement', type: 'text', defaultValue: '' },
       { id: 'lens', label: 'Lens', type: 'text', defaultValue: '' },
       { id: 'lighting', label: 'Lighting', type: 'textarea', defaultValue: '' },
       { id: 'action', label: 'Action', type: 'textarea', defaultValue: '' },
-      { id: 'dialogue', label: 'Dialogue', type: 'textarea', defaultValue: '' },
+      { id: 'cameraFlow', label: 'Camera flow preset', type: 'select', defaultValue: '', options: CANVAS_SHOT_CAMERA_FLOW_OPTIONS, inToolbar: true },
+      { id: 'videoStyle', label: 'Video style', type: 'select', defaultValue: '', options: CANVAS_SHOT_VIDEO_STYLE_OPTIONS },
+      { id: 'temporalWorldEffect', label: 'Temporal/world effect', type: 'select', defaultValue: '', options: CANVAS_SHOT_TEMPORAL_EFFECT_OPTIONS },
+      { id: 'performanceMode', label: 'Performance mode', type: 'select', defaultValue: 'performance', options: CANVAS_SHOT_PERFORMANCE_MODES, inToolbar: true },
+      { id: 'characterAssignments', label: 'Character assignments', type: 'shot-cues', defaultValue: DEFAULT_SHOT_ASSIGNMENTS },
     ],
-    defaults: { title: 'Shot 1', properties: { prompt: '', seed: 1, description: '', duration: 5, duration_start: 0, duration_end: 5000, framing: '', cameraMovement: '', lens: '', lighting: '', action: '', dialogue: '' } },
+    defaults: { title: 'Shot 1', properties: { prompt: '', seed: 1, description: '', duration: 5, duration_start: 0, duration_end: 5000, framing: '', cameraMovement: '', lens: '', lighting: '', action: '', videoStyle: '', temporalWorldEffect: '', cameraFlow: '', performanceMode: 'performance', characterAssignments: DEFAULT_SHOT_ASSIGNMENTS } },
   },
 ]
 
@@ -260,6 +396,36 @@ const DEFAULT_VIEWPORT = Object.freeze({ x: 0, y: 0, zoom: 1 })
 
 export function getCanvasBlockDefinition(type) {
   return CANVAS_BLOCK_LIBRARY.find((definition) => definition.type === type) || null
+}
+
+export function createCanvasShotTranslationContext(shotNode) {
+  const properties = shotNode?.data?.properties || {}
+  const durationStartMs = Math.max(0, Number(properties.duration_start) || 0)
+  const durationEndMs = Math.max(durationStartMs, Number(properties.duration_end) || durationStartMs)
+  const assignments = normalizeCanvasShotAssignments(properties.characterAssignments, durationStartMs, durationEndMs)
+  return {
+    shotId: String(shotNode?.id || ''),
+    prompt: String(properties.prompt || ''),
+    performanceMode: String(properties.performanceMode || 'performance'),
+    videoStyle: String(properties.videoStyle || ''),
+    temporalWorldEffect: String(properties.temporalWorldEffect || ''),
+    cameraFlow: String(properties.cameraFlow || ''),
+    framing: String(properties.framing || ''),
+    cameraMovement: String(properties.cameraMovement || ''),
+    action: String(properties.action || ''),
+    lighting: String(properties.lighting || ''),
+    durationStartMs,
+    durationEndMs,
+    characterAssignments: assignments.map((assignment) => ({
+      characterId: String(assignment?.characterId || ''),
+      cues: Array.isArray(assignment?.cues) ? assignment.cues.map((cue) => ({
+        startMs: cue.start,
+        endMs: cue.end,
+        type: String(cue?.type || 'silent'),
+        text: String(cue?.text || ''),
+      })) : [],
+    })),
+  }
 }
 
 export function createCanvasNode(type, options = {}) {
@@ -290,6 +456,9 @@ export function createCanvasNode(type, options = {}) {
         : property.defaultValue
     return [property.id, value === undefined ? '' : value]
   }))
+  if (definition.type === CANVAS_BLOCK_TYPES.shot) {
+    properties.duration = Math.max(0, (Number(properties.duration_end) || 0) - (Number(properties.duration_start) || 0)) / 1000
+  }
   return {
     id,
     type: definition.type,
@@ -338,7 +507,7 @@ export function createInitialCanvasDocument(options = {}) {
       character,
       createCanvasNode(CANVAS_BLOCK_TYPES.image, { id: 'character-image-1', parentId: character.id, position: { x: 12, y: 46 } }),
       location,
-      createCanvasNode(CANVAS_BLOCK_TYPES.image, { id: 'location-image-1', parentId: location.id, position: { x: 12, y: 46 } }),
+      createCanvasNode(CANVAS_BLOCK_TYPES.image, { id: 'location-image-1', parentId: location.id, title: 'Location image', position: { x: 12, y: 46 } }),
       createCanvasNode(CANVAS_BLOCK_TYPES.timeline, { id: 'timeline-1', title: 'Main timeline', position: { x: 780, y: 90 } }),
     ],
     edges: [],
@@ -390,6 +559,15 @@ export function canContainCanvasNode(parentType, childType) {
   return Boolean(parent.contains?.includes(child.type) && child.allowedParents?.includes(parent.type))
 }
 
+export function canAddCanvasChild(parentId, childType, nodes) {
+  const parent = nodes.find((node) => node.id === parentId)
+  if (!parent || !canContainCanvasNode(parent.type, childType)) return false
+  if (![CANVAS_BLOCK_TYPES.characterSheet, CANVAS_BLOCK_TYPES.locationSheet].includes(childType)) return true
+  return nodes.some((node) => node.parentId === parentId
+    && node.type === CANVAS_BLOCK_TYPES.image
+    && Boolean(String(node.data?.assetUrl || '').trim()))
+}
+
 export function canDeleteCanvasNodes(nodes, nodeIds) {
   const deleteIds = nodeIds instanceof Set ? nodeIds : new Set(nodeIds)
   return nodes.every((node) => !deleteIds.has(node.id) || !getCanvasBlockDefinition(node.type)?.fixed)
@@ -402,12 +580,37 @@ export function normalizeCanvasDocument(value) {
     .map((node, index) => {
       const definition = getCanvasBlockDefinition(node?.type)
       if (!definition) return null
+      const parent = node.parentId ? base.nodes.find((candidate) => candidate.id === node.parentId) : null
+      const contextualTitle = definition.type === CANVAS_BLOCK_TYPES.image
+        && parent?.type === CANVAS_BLOCK_TYPES.location
+        && (!node.data?.title || node.data.title === 'Character image')
+        ? 'Location image'
+        : node.data?.title
+      const legacyProperties = node.data?.properties || {}
+      const migratedProperties = definition.type === CANVAS_BLOCK_TYPES.shot
+        && !Array.isArray(legacyProperties.characterAssignments)
+        && String(legacyProperties.dialogue || '').trim()
+        ? {
+          ...legacyProperties,
+          characterAssignments: [{ characterId: '', cues: [{ start: 0, end: Number(legacyProperties.duration || 5) * 1000, type: 'dialogue', text: String(legacyProperties.dialogue).trim() }] }],
+        }
+        : legacyProperties
+      if (definition.type === CANVAS_BLOCK_TYPES.shot) {
+        if (migratedProperties.duration_end == null && migratedProperties.duration != null) {
+          migratedProperties.duration_end = Math.max(0, Number(migratedProperties.duration) * 1000)
+        }
+        migratedProperties.characterAssignments = normalizeCanvasShotAssignments(
+          migratedProperties.characterAssignments,
+          migratedProperties.duration_start,
+          migratedProperties.duration_end,
+        )
+      }
       const normalized = createCanvasNode(definition.type, {
         id: node.id,
         index,
         position: node.position,
-        title: node.data?.title,
-        properties: node.data?.properties,
+        title: contextualTitle,
+        properties: migratedProperties,
         assetId: node.data?.assetId || node.data?.properties?.assetId,
         assetUrl: node.data?.assetUrl,
         assetName: node.data?.assetName,

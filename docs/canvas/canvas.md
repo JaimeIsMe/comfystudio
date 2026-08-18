@@ -80,7 +80,8 @@ initial state above.
 - Each node has a toolbar hidden by default. A collapsed child has no floating
   toolbar; its parent title bar remains available to expand the gallery.
 - The toolbar appears on node hover.
-- Every node title bar shows the block type and title as `Type - Title`.
+- Every node header separates an uppercase block type label from the larger
+  node title and a read-only metadata strip.
 - Edit opens a compact property editor that expands from the node's left edge
   toward the right, over the existing gallery content. Save or cancel closes
   the overlay and reveals the gallery again.
@@ -104,6 +105,9 @@ initial state above.
 ## Container layout
 
 - Containers always resize to contain all their children.
+- Container sizing is recursive. A Scene's resolved size includes every Shot;
+  a Timeline's resolved size includes each fully resolved Scene. Nested child
+  cards must never render outside their parent boundary.
 - Children are laid out in a gallery.
 - Children are grouped by block type. Landscape galleries use one horizontal
   row per child type; portrait galleries use one vertical column per child
@@ -113,12 +117,20 @@ initial state above.
 - The toolbar layout icon cycles through horizontal, vertical, and freeform
   modes.
 - In freeform mode, children remain draggable within their parent. All three
-  layouts use the same small border gap around children. The parent expands
+  layouts use a consistent 24px gap around repeated children and a 40px gap
+  between grouped columns. Each child column has a tinted bordered region and
+  type header; the Prompt column has a separate white panel. The parent expands
   when a child is moved beyond an edge and shrinks when children move closer
   together.
 - Navigation for galleries that become too large is explicitly deferred.
 - Every node is resizable with a block-defined minimum size.
 - Title bars are compact and do not consume unnecessary gallery space.
+- Timeline and Scene render as nested organization frames with a visible
+  hierarchy spine. Shot children render as raised production cards so Scene
+  ownership is clear even when connection edges are hidden.
+- Timeline and Scene always use portrait layout. They do not expose a layout
+  toggle: Scenes remain a vertical Timeline list and Shots remain a vertical
+  Scene list.
 - Resizing one child applies the resulting normal size only to sibling children
   of the same block type in that parent.
 - Resizing a compact child expands same-type siblings before applying the
@@ -143,6 +155,11 @@ initial state above.
 - Shot accepts multiple Character connections.
 - Shot previews use the first Image child of each connected Location or
   Character, and its card displays those Used elements beside the Shot prompt.
+- Timeline creative defaults for video style, temporal/world effect, and
+  camera flow are copied into newly created Shots and can be overridden there.
+- Shot performance uses one mode (`performance`, `instrumental`, `visual_only`,
+  or `b_roll`) plus explicit timed cues on Character-in-Shot assignments;
+  singing and dialogue are cue types.
 - Images connect to Sheets only when both belong to the same Character or
   Location parent. A Sheet accepts many Images; an Image accepts one Sheet.
 - Edges are hidden until a node is clicked. Clicking a Sheet reveals all of
@@ -151,6 +168,51 @@ initial state above.
 - Every visible connection has a scissors action at its midpoint. Activating
   it removes that connection only, regardless of the connected block types.
 - Other connections must be added to the schema before the UI exposes them.
+
+## Visual language
+
+The Canvas uses five schema-owned visual families:
+
+| Family | Blocks | Card language |
+| --- | --- | --- |
+| Organization | Timeline, Scene | Broad nested frame, low elevation, hierarchy spine |
+| Production | Shot | High-emphasis cinematic card with timing and creative-state chips |
+| Subject | Character, Location | Media-forward identity/world container |
+| Asset | Image, Audio, Character Sheet, Location Sheet | Compact type-specific media or document tile |
+| System | Canvas Configuration | Utility panel with a subtle technical pattern |
+
+All nodes have a left accent rail, separated type and title typography, and
+compact read-only metadata chips. Color reinforces identity but is never the
+only distinction. The node shell, interior layout, elevation, and content
+silhouette must also communicate its role.
+
+Prompt content uses a soft neutral paper panel rather than the same dark child
+surface. Character and Location place their parent-owned Prompt first, then
+their child groups. Shot places Shot Prompt first and Used elements second.
+Prompt headers name the owning block and include a `Creative direction` cue; child
+group headers include a `Child nodes` cue. Child groups use dark inset regions
+with explicit headers. Prompt and child panels have matching header anatomy, a
+strong divider, and clear bounds.
+Overflowing prompt text fades at the bottom; blank content remains blank.
+
+When Character or Location grows horizontally, its Prompt column keeps the
+same fixed 280px width. Extra width is distributed evenly among the visible child
+type columns, and child cards fill their assigned column width. Prompt does not
+absorb horizontal resize space.
+
+Image and Sheet children are visual references, so their normal gallery cards
+are media-only. An Image fills its card with the selected source. A Character
+Sheet or Location Sheet fills its card with the generated sheet image and uses
+a restrained stacked-document placeholder until one exists. Their Prompt and
+Seed remain editable but are not repeated in the gallery.
+
+Hover reveals a single translucent toolbar shelf attached to the top edge.
+Quick properties appear on the left side and node actions on the right.
+Deletable nodes include a Delete action that uses the existing confirmation
+and descendant cleanup path.
+Selection adds an accent ring, dragging raises the card, and compatible or
+incompatible drop containers receive green or red destination rings. Typed
+connection labels appear next to handles on hover or selection.
 
 ## Spec-driven implementation rules
 

@@ -21,3 +21,7 @@ persisted with the Audio block, and are not shown in the edit panel.
 
 Audio has a minimum size of 150x100 and a default size of 190x132. It has no
 child gallery.
+## Visual identity
+
+Audio belongs to the Asset visual family and uses a waveform silhouette beside
+its Prompt panel.

@@ -25,9 +25,20 @@ on within each Scene.
 ## Properties
 
 - Prompt
-- Prompt
 
 Scene is expanded by default. When its parent is collapsed, it has no floating
 toolbar. Its minimum size is 150x100 and its default normal size is 190x132.
 Scene uses a portrait child layout by default. Resizing it resizes all sibling
 Scenes of the same Timeline to the same normal size.
+
+Scene does not expose a child-layout toggle. A stale saved freeform or
+landscape value is ignored and normalized to portrait layout.
+
+Scene height is resolved from the complete vertical Shot list, including card
+heights, labels, gaps, and border padding. Timeline uses that resolved Scene
+height when sizing its own Scene list, so no Shot renders outside Scene bounds.
+## Visual identity
+
+Scene belongs to the Organization visual family. It is a quiet nested frame
+with a visible hierarchy spine and Shot count; raised Shot cards remain the
+dominant production elements.

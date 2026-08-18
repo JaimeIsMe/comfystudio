@@ -55,7 +55,11 @@ change a block definition in the UI without changing its MD specification.
   parents show an Empty icon; the visible preview child fills the parent's
   usable inner area without exposing its toolbar or handles; hidden children
   remain persisted.
-- Keep title bars compact so they do not dominate the node's usable area.
+- Keep headers compact while preserving the visual-family type label, title,
+  metadata chips, and left identity rail.
+- Preserve schema-owned visual families and their non-color distinctions.
+  New block types must declare a family and provide a recognizable content
+  silhouette, not only a different accent color.
 - Child galleries stay grouped by block type: rows in landscape, columns in
   portrait, and independently positioned cards in freeform mode.
 - Links stay hidden until a node is clicked and are cleared by a background
