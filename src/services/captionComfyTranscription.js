@@ -2,6 +2,10 @@ import { comfyui } from './comfyui'
 import { getBundledWorkflowPath } from '../config/workflowRegistry'
 import { isElectron } from './fileSystem'
 import { mixTimelineAudioToWav } from './timelineAudioMix'
+import {
+  QWEN3_TTS_ENGINE_CLASS_TYPE,
+  resolveQwen3TtsWorkflowInputs,
+} from '../utils/qwen3TtsWorkflowCompatibility.mjs'
 
 const CAPTION_WORKFLOW_PATH = getBundledWorkflowPath('caption_qwen_asr_transcription.json')
 const VIDEO_INPUT_NODE_ID = '18'
@@ -228,6 +232,23 @@ function buildCaptionWorkflow(baseWorkflow, uploadedFilename, options = {}) {
   }
 
   return workflow
+}
+
+async function resolveCaptionQwen3TtsCompatibility(workflow) {
+  let objectInfo = null
+  try {
+    objectInfo = await comfyui.getObjectInfo(QWEN3_TTS_ENGINE_CLASS_TYPE)
+  } catch (error) {
+    try {
+      console.warn('[Captions] Qwen3-TTS schema lookup failed; sending both supported input aliases:', error?.message)
+    } catch (_) { /* ignore */ }
+  }
+
+  const resolvedWorkflow = resolveQwen3TtsWorkflowInputs(workflow, objectInfo)
+  if (resolvedWorkflow !== workflow) {
+    console.log('[Captions] Adapted Qwen3-TTS model input for the installed TTS-Audio-Suite version.')
+  }
+  return resolvedWorkflow
 }
 
 function extractOutputTextFromNodeOutput(nodeOutput) {
@@ -491,7 +512,9 @@ export async function transcribeWithComfyUI(asset, { onProgress, language = 'Aut
   }
 
   const baseWorkflow = await loadCaptionWorkflow()
-  const workflow = buildCaptionWorkflow(baseWorkflow, uploadedFilename, { language })
+  const workflow = await resolveCaptionQwen3TtsCompatibility(
+    buildCaptionWorkflow(baseWorkflow, uploadedFilename, { language })
+  )
 
   if (typeof onProgress === 'function') {
     onProgress({ stage: 'queue', message: 'Queuing transcription on ComfyUI...' })
@@ -570,7 +593,9 @@ export async function transcribeTimeline({ onProgress } = {}) {
 
   report('workflow', 'Loading caption workflow…', 48)
   const baseWorkflow = await loadCaptionWorkflow()
-  const workflow = buildCaptionWorkflow(baseWorkflow, uploadedFilename)
+  const workflow = await resolveCaptionQwen3TtsCompatibility(
+    buildCaptionWorkflow(baseWorkflow, uploadedFilename)
+  )
 
   report('queue', 'Queuing transcription on ComfyUI…', 52)
   const promptId = await comfyui.queuePrompt(workflow)

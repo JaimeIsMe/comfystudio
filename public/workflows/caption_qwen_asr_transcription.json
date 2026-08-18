@@ -132,7 +132,7 @@
   },
   "45": {
     "inputs": {
-      "model_size": "0.6B",
+      "model_variant": "0.6B",
       "device": "auto",
       "voice_preset": "None (Zero-shot / Custom)",
       "language": "Auto",
