@@ -73,7 +73,50 @@ initial state above.
 - The Canvas Configuration node is the persisted owner of these global rules
   and cannot be removed.
 - The Canvas Configuration node currently has no editable rule options. Global
-  rules are fixed by this specification and the Canvas schema.
+  rules are fixed by this specification and the Canvas schema. It does expose
+  one project-level creative integration: Canvas reads the agent selected in
+  Velorn application settings. The agent profile and the Canvas selection are
+  application configuration; the Canvas document stores no agent ID or
+  credentials.
+
+## LLM agent selection
+
+Velorn Settings > LLM Agents manages named agent profiles using the
+OpenAI-compatible model and generation contract. Profiles contain a provider
+label, base URL, optional model override, optional API key, endpoint mode, and
+enabled state. The default model is discovered from the server's `/models`
+response rather than hard-coded. In auto endpoint mode, Velorn tries the
+Responses API first and falls back to Chat Completions only when the provider
+does not support Responses. LM Studio and Codex/OpenAI-compatible profiles are
+available out of the box, and additional profiles can point to any compatible
+server.
+
+Canvas reads the profile selected in Settings at action time; changing or
+deleting a profile never changes the project document. If the selected profile
+is unavailable, Canvas actions must report that configuration problem rather
+than silently using a different agent.
+
+## Canvas Chat
+
+The left Canvas menu has a visible Canvas agent card. Its **Bring agent to
+Canvas** action opens Canvas Chat with the agent selected in Settings; once
+active, the same action becomes **Open agent chat**. Canvas Chat is an
+ephemeral, project-local conversation: it is never saved in the Canvas
+document or project file. Its header has a Discard action that clears the
+current conversation, removes the agent from the Canvas, and closes the panel
+at any time.
+
+Every request uses the LLM selected for Canvas in Settings and receives a
+fresh, read-only Canvas context. That context includes the normalized node and
+edge structure, node properties that describe the production plan, containment
+and connection rules, and every Canvas block definition/capability. It does
+not include API keys or local asset URLs.
+
+The chat also receives live Velorn MCP context: the loopback server status,
+project/timeline summary published to MCP, and the complete MCP tool catalogue
+with descriptions and input schemas. This lets it reason about what Velorn can
+inspect or do alongside the Canvas. Chat must describe and plan write-capable
+MCP work for user approval; it does not autonomously invoke MCP actions.
 
 ## Node interaction
 

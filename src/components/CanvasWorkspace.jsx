@@ -33,6 +33,7 @@ import {
   LayoutPanelLeft,
   LayoutPanelTop,
   MapPin,
+  MessageCircle,
   Move,
   Plus,
   RotateCcw,
@@ -75,6 +76,9 @@ import { runCanvasImageGeneration } from '../services/flowAiRuntime'
 import { getImageWorkflowOptions, getTextToImageWorkflowOptions } from '../config/generateWorkflowCatalog'
 import { IMPORTED_WORKFLOWS_CHANGED_EVENT } from '../config/importedWorkflowRegistry'
 import { useCanvasGenerationStore } from '../stores/canvasGenerationStore'
+import { LLM_AGENTS_SETTING_KEY, normalizeLlmAgentConfiguration, resolveLlmAgent } from '../services/llmAgents'
+import { createCanvasChatContext } from '../services/canvasChatContext'
+import CanvasChatPanel from './CanvasChatPanel'
 
 const BLOCK_ICONS = {
   character: CircleUserRound,
@@ -164,7 +168,7 @@ function getNodeMetadata(definition, data) {
   const properties = data.properties || {}
   const childCounts = data.childCounts || {}
   const totalChildren = Object.values(childCounts).reduce((total, count) => total + Number(count || 0), 0)
-  if (data.kind === CANVAS_BLOCK_TYPES.configuration) return [{ label: '4 workflows' }, { label: `Seed ${properties.seed ?? 1}` }]
+  if (data.kind === CANVAS_BLOCK_TYPES.configuration) return [{ label: '4 workflows' }, { label: `Agent ${data.canvasAgent?.label || 'not configured'}` }]
   if (data.kind === CANVAS_BLOCK_TYPES.character) return [
     { label: `${childCounts[CANVAS_BLOCK_TYPES.image] || 0} images` },
     { label: `${childCounts[CANVAS_BLOCK_TYPES.characterSheet] || 0} sheets` },
@@ -1118,6 +1122,12 @@ function CanvasWorkspaceContent() {
   const dragOriginRef = useRef(null)
   const [dragDestination, setDragDestination] = useState(null)
   const [activeNodeId, setActiveNodeId] = useState(null)
+  const [llmAgentConfiguration, setLlmAgentConfiguration] = useState(() => normalizeLlmAgentConfiguration())
+  const [canvasChatOpen, setCanvasChatOpen] = useState(false)
+  const [canvasChatMessages, setCanvasChatMessages] = useState([])
+  const [canvasChatBusy, setCanvasChatBusy] = useState(false)
+  const [canvasChatError, setCanvasChatError] = useState('')
+  const [canvasAgentInCanvas, setCanvasAgentInCanvas] = useState(false)
   const autoSaveTimerRef = useRef(null)
   const autoSaveInFlightRef = useRef(false)
   const autoSaveQueuedRef = useRef(false)
@@ -1127,8 +1137,25 @@ function CanvasWorkspaceContent() {
   const latestEdgesRef = useRef(edges)
   const projectKey = currentProjectHandle || currentProject?.name || null
 
+  useEffect(() => {
+    let cancelled = false
+    window.electronAPI?.getSetting?.(LLM_AGENTS_SETTING_KEY)
+      .then((value) => { if (!cancelled) setLlmAgentConfiguration(normalizeLlmAgentConfiguration(value)) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
   latestNodesRef.current = nodes
   latestEdgesRef.current = edges
+
+  const canvasChatAgent = useMemo(() => {
+    const agent = resolveLlmAgent(llmAgentConfiguration.agents, llmAgentConfiguration.canvasAgentId)
+    return agent?.enabled ? agent : null
+  }, [llmAgentConfiguration])
+
+  useEffect(() => {
+    if (!canvasChatAgent) setCanvasAgentInCanvas(false)
+  }, [canvasChatAgent])
 
   const saveCanvas = useCallback(async () => {
     if (!currentProject || !currentProjectHandle) return false
@@ -1567,10 +1594,11 @@ function CanvasWorkspaceContent() {
         generationSheetWorkflowId: parent?.type === CANVAS_BLOCK_TYPES.location
           ? (canvasConfiguration?.data?.properties?.locationSheetWorkflow || 'image-edit')
           : (canvasConfiguration?.data?.properties?.characterSheetWorkflow || 'image-edit'),
+        canvasAgent: resolveLlmAgent(llmAgentConfiguration.agents, llmAgentConfiguration.canvasAgentId),
       },
     }
   })
-  }, [addElement, canvasDocument.rules, dragDestination, edges, editingNodeId, handleImageAction, handleNodeMode, handleNodeResize, handleNodeUpdate, handleNodesChange, handleToggleImageConnection, handleToggleLayout, handleToggleShotConnection, nodes])
+  }, [addElement, canvasDocument.rules, dragDestination, edges, editingNodeId, handleImageAction, handleNodeMode, handleNodeResize, handleNodeUpdate, handleNodesChange, handleToggleImageConnection, handleToggleLayout, handleToggleShotConnection, llmAgentConfiguration, nodes])
 
   const resetCanvas = useCallback(() => {
     setNodes(initialDocument.nodes)
@@ -1578,12 +1606,66 @@ function CanvasWorkspaceContent() {
     setSaveState('dirty')
   }, [initialDocument, setEdges, setNodes])
 
+  const sendCanvasChatMessage = useCallback(async (content) => {
+    if (!canvasChatAgent || canvasChatBusy) return
+    const userMessage = {
+      id: `canvas-chat-${globalThis.crypto?.randomUUID?.() || Date.now()}`,
+      role: 'user',
+      content,
+    }
+    const nextMessages = [...canvasChatMessages, userMessage]
+    setCanvasChatMessages(nextMessages)
+    setCanvasChatBusy(true)
+    setCanvasChatError('')
+    try {
+      const canvas = createCanvasChatContext({
+        nodes: latestNodesRef.current,
+        edges: latestEdgesRef.current,
+        rules: CANVAS_RULES,
+      })
+      const result = await window.electronAPI?.sendCanvasChat?.({
+        messages: nextMessages.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
+        canvas,
+      })
+      if (!result?.ok) throw new Error(result?.error || 'Canvas Chat could not reach the selected agent.')
+      setCanvasChatMessages((current) => [...current, {
+        id: `canvas-chat-${globalThis.crypto?.randomUUID?.() || Date.now()}-assistant`,
+        role: 'assistant',
+        content: result.answer,
+      }])
+    } catch (error) {
+      setCanvasChatError(error?.message || 'Canvas Chat could not reach the selected agent.')
+    } finally {
+      setCanvasChatBusy(false)
+    }
+  }, [canvasChatAgent, canvasChatBusy, canvasChatMessages])
+
+  const discardCanvasChat = useCallback(() => {
+    setCanvasChatMessages([])
+    setCanvasChatError('')
+    setCanvasAgentInCanvas(false)
+    setCanvasChatOpen(false)
+  }, [])
+
+  const bringCanvasAgentToCanvas = useCallback(() => {
+    setCanvasAgentInCanvas(Boolean(canvasChatAgent))
+    setCanvasChatOpen(true)
+  }, [canvasChatAgent])
+
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden bg-[#1a2740]">
       <aside className="z-10 flex w-64 flex-shrink-0 flex-col border-r border-slate-500/30 bg-[#25334d] shadow-xl shadow-black/20">
         <div className="border-b border-slate-400/20 bg-white/[0.025] px-4 py-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-sf-text-primary"><Sparkles className="h-4 w-4 text-sf-accent" />Canvas elements</div>
           <div className="mt-1 text-[10px] text-slate-400">Build production context visually</div>
+        </div>
+        <div className="border-b border-slate-400/20 p-3">
+          <div className="rounded-xl border border-sf-accent/35 bg-sf-accent/10 p-3">
+            <div className="flex items-center gap-2 text-xs font-semibold text-sf-text-primary"><MessageCircle className="h-4 w-4 text-sf-accent" /> Canvas agent</div>
+            <p className="mt-1 truncate text-[10px] text-slate-300">{canvasChatAgent ? canvasChatAgent.label : 'No Canvas agent configured'}</p>
+            <p className="mt-1 text-[10px] leading-relaxed text-slate-400">{canvasAgentInCanvas ? 'Agent is ready with this Canvas and Velorn MCP context.' : 'Bring the selected agent into this Canvas to start a contextual chat.'}</p>
+            <button type="button" onClick={bringCanvasAgentToCanvas} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-sf-accent px-3 py-2 text-xs font-medium text-white hover:bg-sf-accent-hover"><MessageCircle className="h-3.5 w-3.5" /> {canvasAgentInCanvas ? 'Open agent chat' : 'Bring agent to Canvas'}</button>
+          </div>
         </div>
         <div className="flex-1 space-y-2 overflow-y-auto p-3">
           {CANVAS_BLOCK_LIBRARY.filter((definition) => !definition.allowedParents && !definition.fixed).map((definition) => {
@@ -1602,6 +1684,7 @@ function CanvasWorkspaceContent() {
           <div className="flex items-center justify-center gap-2 rounded-lg border border-slate-400/20 bg-slate-900/25 px-3 py-2 text-xs text-sf-text-secondary">
             <Check className="h-3.5 w-3.5 text-sf-accent" /> {saveState === 'saving' ? 'Auto-saving…' : saveState === 'saved' ? 'Canvas saved' : saveState === 'error' ? 'Auto-save failed' : saveState === 'dirty' ? 'Changes pending' : 'Canvas up to date'}
           </div>
+          <button type="button" onClick={bringCanvasAgentToCanvas} className="flex w-full items-center justify-center gap-2 rounded-lg border border-sf-accent/40 bg-sf-accent/10 px-3 py-2 text-xs text-sf-text-primary hover:bg-sf-accent/20"><MessageCircle className="h-3.5 w-3.5 text-sf-accent" /> {canvasAgentInCanvas ? 'Open agent chat' : 'Bring agent to Canvas'}</button>
           <button type="button" onClick={resetCanvas} className="flex w-full items-center justify-center gap-2 rounded-lg border border-sf-dark-600 px-3 py-2 text-xs text-sf-text-secondary hover:bg-sf-dark-800"><RotateCcw className="h-3.5 w-3.5" /> Reset canvas</button>
         </div>
       </aside>
@@ -1632,6 +1715,16 @@ function CanvasWorkspaceContent() {
           <MiniMap pannable zoomable bgColor="rgba(30, 42, 65, 0.96)" maskColor="rgba(15,23,42,0.38)" nodeColor={(node) => node.data?.accent || '#64748b'} />
           <Panel position="top-left" className="!m-4"><div className="rounded-xl border border-slate-300/20 bg-slate-800/75 px-3 py-2 text-[11px] text-slate-300 shadow-xl backdrop-blur-xl">Drag to arrange · scroll to zoom · connect handles to compose a scene</div></Panel>
         </ReactFlow>
+        <CanvasChatPanel
+          open={canvasChatOpen}
+          messages={canvasChatMessages}
+          agentLabel={canvasChatAgent?.label || ''}
+          busy={canvasChatBusy}
+          error={canvasChatError}
+          onSend={sendCanvasChatMessage}
+          onClose={() => setCanvasChatOpen(false)}
+          onDiscard={discardCanvasChat}
+        />
       </div>
     </div>
   )

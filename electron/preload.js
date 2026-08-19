@@ -442,6 +442,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<{success: boolean, error?: string}>}
    */
   deleteSetting: (key) => ipcRenderer.invoke('settings:delete', key),
+  testLlmAgent: (agent) => ipcRenderer.invoke('llmAgents:test', agent),
+  listLlmAgentModels: (agent) => ipcRenderer.invoke('llmAgents:listModels', agent),
+  sendCanvasChat: (payload) => ipcRenderer.invoke('llmAgents:canvasChat', payload),
 
   // ============================================
   // MCP Server

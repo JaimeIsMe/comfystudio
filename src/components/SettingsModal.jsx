@@ -56,6 +56,12 @@ import {
   getShowCloudCreditBalance,
   setShowCloudCreditBalance,
 } from '../services/cloudCreditDisplaySettings'
+import {
+  DEFAULT_LLM_AGENT_SETTINGS,
+  LLM_AGENTS_SETTING_KEY,
+  LLM_AGENT_PROVIDER_PRESETS,
+  normalizeLlmAgentConfiguration,
+} from '../services/llmAgents'
 
 const AUTO_IMPORT_KEY = 'comfystudio-auto-import-comfy-outputs'
 const OUTPUT_DIRECTORY_SETTING_KEY = 'outputDirectory'
@@ -210,6 +216,9 @@ function GeneralTab({ initialSection = null }) {
   const [playbackCacheMessage, setPlaybackCacheMessage] = useState('')
   const [mcpStatus, setMcpStatus] = useState(null)
   const [mcpCopied, setMcpCopied] = useState('')
+  const [llmAgentConfiguration, setLlmAgentConfiguration] = useState(DEFAULT_LLM_AGENT_SETTINGS)
+  const [llmAgentTest, setLlmAgentTest] = useState({})
+  const [llmAgentModels, setLlmAgentModels] = useState({})
   const currentHotkeyPresetId = useMemo(
     () => getEditorHotkeyPresetMatch(editorHotkeys),
     [editorHotkeys]
@@ -299,6 +308,13 @@ function GeneralTab({ initialSection = null }) {
           status: 'error',
           message: `Could not load local ComfyUI port. Using ${DEFAULT_COMFY_PORT}.`,
         })
+      }
+
+      try {
+        const stored = await window.electronAPI?.getSetting?.(LLM_AGENTS_SETTING_KEY)
+        setLlmAgentConfiguration(normalizeLlmAgentConfiguration(stored))
+      } catch {
+        setLlmAgentConfiguration(normalizeLlmAgentConfiguration(DEFAULT_LLM_AGENT_SETTINGS))
       }
     })()
   }, [])
@@ -648,6 +664,61 @@ function GeneralTab({ initialSection = null }) {
     }
   }
 
+  const handleSaveLlmAgentConfiguration = async (nextConfiguration = llmAgentConfiguration) => {
+    const normalized = normalizeLlmAgentConfiguration(nextConfiguration)
+    setLlmAgentConfiguration(normalized)
+    const result = await window.electronAPI?.setSetting?.(LLM_AGENTS_SETTING_KEY, normalized)
+    return result?.success !== false
+  }
+
+  const updateLlmAgent = (id, updates) => {
+    setLlmAgentConfiguration((current) => normalizeLlmAgentConfiguration({
+      ...current,
+      agents: current.agents.map((agent) => agent.id === id ? { ...agent, ...updates } : agent),
+    }))
+  }
+
+  const addLlmAgent = (provider = 'lmstudio') => {
+    const preset = LLM_AGENT_PROVIDER_PRESETS[provider] || {}
+    const id = `agent-${Date.now()}`
+    setLlmAgentConfiguration((current) => normalizeLlmAgentConfiguration({
+      ...current,
+      agents: [...current.agents, { id, ...preset, label: `${preset.label || 'OpenAI-compatible'} ${current.agents.length + 1}`, enabled: true }],
+    }))
+  }
+
+  const testLlmAgent = async (agent) => {
+    setLlmAgentTest((current) => ({ ...current, [agent.id]: { status: 'testing', message: 'Testing agent...' } }))
+    try {
+      const result = await window.electronAPI?.testLlmAgent?.(agent)
+      if (result?.ok && Array.isArray(result.models)) {
+        setLlmAgentModels((current) => ({ ...current, [agent.id]: result.models }))
+        if (!agent.model && result.model) updateLlmAgent(agent.id, { model: result.model })
+      }
+      setLlmAgentTest((current) => ({ ...current, [agent.id]: result?.ok
+        ? { status: 'success', message: `Answered through /${result.endpoint} with ${result.model}: ${result.answer}` }
+        : { status: 'error', message: result?.error || 'Agent test failed.' } }))
+    } catch (error) {
+      setLlmAgentTest((current) => ({ ...current, [agent.id]: { status: 'error', message: error?.message || 'Agent test failed.' } }))
+    }
+  }
+
+  const fetchLlmAgentModels = async (agent) => {
+    setLlmAgentTest((current) => ({ ...current, [agent.id]: { status: 'testing', message: 'Fetching available models...' } }))
+    try {
+      const result = await window.electronAPI?.listLlmAgentModels?.(agent)
+      if (!result?.ok || !Array.isArray(result.models)) {
+        setLlmAgentTest((current) => ({ ...current, [agent.id]: { status: 'error', message: result?.error || 'Could not load agent models.' } }))
+        return
+      }
+      setLlmAgentModels((current) => ({ ...current, [agent.id]: result.models }))
+      updateLlmAgent(agent.id, { model: result.models[0] })
+      setLlmAgentTest((current) => ({ ...current, [agent.id]: { status: 'success', message: `Selected first available model: ${result.models[0]}` } }))
+    } catch (error) {
+      setLlmAgentTest((current) => ({ ...current, [agent.id]: { status: 'error', message: error?.message || 'Could not load agent models.' } }))
+    }
+  }
+
   const handleSaveAllSettings = async () => {
     await setPexelsApiKey(pexelsApiKey.trim())
     await setEditorHotkeys(editorHotkeys)
@@ -655,7 +726,8 @@ function GeneralTab({ initialSection = null }) {
       handleSaveComfyConnection(),
       handleSaveFilePathSettings(),
     ])
-    if (connectionSaved && filePathsSaved) {
+    const agentsSaved = await handleSaveLlmAgentConfiguration()
+    if (connectionSaved && filePathsSaved && agentsSaved) {
       setSettingsSaved(true)
       setTimeout(() => setSettingsSaved(false), 2000)
     } else {
@@ -1088,6 +1160,37 @@ function GeneralTab({ initialSection = null }) {
       const claudeCommand = `claude mcp add --transport http velorn ${mcpUrl}`
       activeSectionContent = (
         <div className="space-y-4">
+          <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
+            <div className="text-sm font-medium text-sf-text-primary">LLM agents for Canvas</div>
+            <p className="mt-1 text-[11px] text-sf-text-muted">Profiles discover models from <code>/models</code>. Auto mode tries <code>/responses</code> first, then falls back to <code>/chat/completions</code> only when needed. API keys stay in app settings and are never written into project or Canvas files.</p>
+            <label className="mt-3 block text-[11px] text-sf-text-secondary">Agent used by Canvas
+              <select value={llmAgentConfiguration.canvasAgentId} onChange={(event) => { void handleSaveLlmAgentConfiguration({ ...llmAgentConfiguration, canvasAgentId: event.target.value }) }} className="mt-1 w-full rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-2 text-xs text-sf-text-primary">
+                {llmAgentConfiguration.agents.filter((agent) => agent.enabled).map((agent) => <option key={agent.id} value={agent.id}>{agent.label}</option>)}
+              </select>
+            </label>
+            <div className="mt-3 space-y-3">
+              {llmAgentConfiguration.agents.map((agent) => {
+                const test = llmAgentTest[agent.id]
+                return <div key={agent.id} className="rounded border border-sf-dark-700 bg-black/20 p-3">
+                  <div className="flex items-center gap-2">
+                    <input value={agent.label} onChange={(event) => updateLlmAgent(agent.id, { label: event.target.value })} className="min-w-0 flex-1 rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-1.5 text-xs text-sf-text-primary" aria-label="Agent name" />
+                    <select value={agent.provider} onChange={(event) => { const preset = LLM_AGENT_PROVIDER_PRESETS[event.target.value] || {}; updateLlmAgent(agent.id, { provider: event.target.value, baseUrl: preset.baseUrl || agent.baseUrl, model: '' }) }} className="rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-1.5 text-xs text-sf-text-primary" aria-label="Agent provider"><option value="lmstudio">LM Studio</option><option value="codex">Codex / OpenAI</option><option value="openai-compatible">OpenAI-compatible</option></select>
+                    <button type="button" onClick={() => updateLlmAgent(agent.id, { enabled: !agent.enabled })} className={`rounded px-2 py-1.5 text-[10px] ${agent.enabled ? 'bg-green-900/40 text-green-300' : 'bg-sf-dark-700 text-sf-text-muted'}`}>{agent.enabled ? 'Enabled' : 'Disabled'}</button>
+                  </div>
+                  <div className="mt-2 grid gap-2 md:grid-cols-2">
+                    <input value={agent.baseUrl} onChange={(event) => updateLlmAgent(agent.id, { baseUrl: event.target.value })} placeholder="Base URL, e.g. http://127.0.0.1:1234/v1" className="rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-1.5 text-xs text-sf-text-primary" aria-label="Agent base URL" />
+                    {llmAgentModels[agent.id]?.length ? <select value={agent.model} onChange={(event) => updateLlmAgent(agent.id, { model: event.target.value })} className="rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-1.5 text-xs text-sf-text-primary" aria-label="Agent model">{llmAgentModels[agent.id].map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={agent.model} onChange={(event) => updateLlmAgent(agent.id, { model: event.target.value })} placeholder="Fetch models to select one" className="rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-1.5 text-xs text-sf-text-primary" aria-label="Agent model" />}
+                    <input type="password" value={agent.apiKey} onChange={(event) => updateLlmAgent(agent.id, { apiKey: event.target.value })} placeholder="API key (optional for LM Studio)" className="rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-1.5 text-xs text-sf-text-primary" aria-label="Agent API key" />
+                    <select value={agent.apiMode || 'auto'} onChange={(event) => updateLlmAgent(agent.id, { apiMode: event.target.value })} className="rounded border border-sf-dark-600 bg-sf-dark-800 px-2 py-1.5 text-xs text-sf-text-primary" aria-label="Agent API endpoint"><option value="auto">Auto endpoint</option><option value="responses">Responses API</option><option value="chat-completions">Chat Completions</option></select>
+                    <div className="flex gap-2"><button type="button" onClick={() => { void fetchLlmAgentModels(agent) }} className="rounded bg-sf-dark-700 px-3 py-1.5 text-xs text-sf-text-secondary hover:bg-sf-dark-600">Models</button><button type="button" onClick={() => { void testLlmAgent(agent) }} className="rounded bg-sf-dark-700 px-3 py-1.5 text-xs text-sf-text-secondary hover:bg-sf-dark-600">{test?.status === 'testing' ? 'Testing...' : 'Test agent'}</button><button type="button" onClick={() => { const next = { ...llmAgentConfiguration, agents: llmAgentConfiguration.agents.filter((candidate) => candidate.id !== agent.id) }; void handleSaveLlmAgentConfiguration(next) }} className="rounded bg-red-950/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-900/50">Remove</button></div>
+                  </div>
+                  {test && <p className={`mt-2 text-[11px] ${test.status === 'success' ? 'text-green-300' : test.status === 'error' ? 'text-red-300' : 'text-yellow-300'}`}>{test.message}</p>}
+                </div>
+              })}
+            </div>
+            <button type="button" onClick={() => addLlmAgent('lmstudio')} className="mt-3 rounded bg-sf-accent px-3 py-1.5 text-xs text-white hover:bg-sf-accent/90">Add agent</button>
+            <button type="button" onClick={() => { void handleSaveLlmAgentConfiguration() }} className="ml-2 rounded bg-sf-dark-700 px-3 py-1.5 text-xs text-sf-text-secondary hover:bg-sf-dark-600">Save agent settings</button>
+          </div>
           <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">

@@ -18,6 +18,7 @@ import {
   createCanvasShotTranslationContext,
   createInitialCanvasDocument,
   formatCanvasTime,
+  getCanvasCapabilities,
   isValidCanvasConnection,
   normalizeCanvasDocument,
   parseCanvasTime,
@@ -62,6 +63,13 @@ test('Canvas block definitions provide typed handles and defaults', () => {
     assert.ok(definition.defaultSize.width >= definition.minSize.width)
     assert.ok(definition.defaultSize.height >= definition.minSize.height)
   }
+})
+
+test('Canvas capabilities expose every schema-owned block contract for Canvas Chat', () => {
+  const capabilities = getCanvasCapabilities()
+  assert.equal(capabilities.length, CANVAS_BLOCK_LIBRARY.length)
+  assert.ok(capabilities.some((block) => block.type === CANVAS_BLOCK_TYPES.shot && block.properties.some((property) => property.id === 'characterAssignments')))
+  assert.ok(capabilities.some((block) => block.type === CANVAS_BLOCK_TYPES.scene && block.contains.includes(CANVAS_BLOCK_TYPES.shot)))
 })
 
 test('Canvas rules allow production context to connect to a shot', () => {

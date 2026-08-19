@@ -40,6 +40,7 @@ const {
   createComfyStudioMcpServer,
 } = require('./mcpServer')
 const { loadMyWorkflowCatalog } = require('./myWorkflowCatalog')
+const { createLlmAgent } = require('./llmAgents')
 
 const isDev = !app.isPackaged
 
@@ -4926,6 +4927,96 @@ ipcMain.handle('settings:delete', async (event, key) => {
     return { success: true }
   } catch (err) {
     return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('llmAgents:test', async (_event, agent = {}) => {
+  try {
+    const result = await createLlmAgent(agent).test({
+      signal: AbortSignal.timeout(30000),
+    })
+    return { ok: true, ...result }
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Could not reach the LLM agent.' }
+  }
+})
+
+ipcMain.handle('llmAgents:listModels', async (_event, agent = {}) => {
+  try {
+    const models = await createLlmAgent(agent).listModels({ signal: AbortSignal.timeout(30000) })
+    return { ok: true, models }
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Could not load LLM agent models.' }
+  }
+})
+
+function resolveCanvasChatAgent(settings = {}) {
+  const configured = settings?.llmAgents
+  const profiles = Array.isArray(configured) ? configured : configured?.agents
+  const agents = Array.isArray(profiles) && profiles.length
+    ? profiles
+    : [{ id: 'lmstudio', provider: 'lmstudio', label: 'LM Studio', baseUrl: 'http://127.0.0.1:1234/v1', model: '', apiMode: 'auto', enabled: true }]
+  const selectedId = String(configured?.canvasAgentId || '')
+  const agent = agents.find((candidate) => candidate?.id === selectedId && candidate?.enabled !== false)
+    || agents.find((candidate) => candidate?.enabled !== false)
+  if (!agent) throw new Error('No enabled LLM agent is configured for Canvas. Select one in Settings > Agents (MCP).')
+  return agent
+}
+
+function getCanvasChatMcpContext() {
+  const status = mcpServer?.getStatus?.() || { running: false, url: `http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`, toolCount: 0 }
+  const snapshot = mcpServer?.lastSnapshot || null
+  return {
+    server: status,
+    project: snapshot?.project ? {
+      name: snapshot.project.name || '',
+      settings: snapshot.project.settings || {},
+      timelineCount: snapshot.project.timelineCount || 0,
+      assetCount: snapshot.project.assetCount || 0,
+    } : null,
+    currentTimeline: snapshot?.currentTimeline ? {
+      id: snapshot.currentTimeline.id || '',
+      name: snapshot.currentTimeline.name || '',
+      duration: snapshot.currentTimeline.duration || 0,
+      fps: snapshot.currentTimeline.fps || 0,
+      trackCount: snapshot.currentTimeline.tracks?.length || 0,
+      clipCount: snapshot.currentTimeline.clips?.length || 0,
+    } : null,
+    tools: Array.isArray(mcpServer?.tools) ? mcpServer.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+    })) : [],
+  }
+}
+
+function buildCanvasChatSystemPrompt(canvas, mcp) {
+  return [
+    'You are Velorn Canvas Chat, a planning assistant for a creator-facing video editor.',
+    'Use the supplied Canvas context as the source of truth for existing nodes, connections, production prompts, and supported Canvas capabilities.',
+    'Use the supplied Velorn MCP context to explain what the app can inspect or do. You do not invoke MCP tools yourself in this chat.',
+    'For any operation that would modify a project, queue generation, spend credits, write files, or export, first describe a safe preview plan and ask the user for approval.',
+    'Do not invent Canvas node types, connections, or MCP tools that are not present in the contexts below. Be concise and specific.',
+    `CANVAS_CONTEXT:\n${JSON.stringify(canvas)}`,
+    `VELORN_MCP_CONTEXT:\n${JSON.stringify(mcp)}`,
+  ].join('\n\n')
+}
+
+ipcMain.handle('llmAgents:canvasChat', async (_event, payload = {}) => {
+  try {
+    const settings = await readSettingsRaw()
+    const agent = resolveCanvasChatAgent(settings)
+    const canvas = payload?.canvas && typeof payload.canvas === 'object' ? payload.canvas : null
+    if (!canvas) return { ok: false, error: 'Canvas context is required.' }
+    const messages = Array.isArray(payload?.messages) ? payload.messages : []
+    const result = await createLlmAgent(agent).complete({
+      systemPrompt: buildCanvasChatSystemPrompt(canvas, getCanvasChatMcpContext()),
+      messages,
+      maxOutputTokens: 1200,
+    }, { signal: AbortSignal.timeout(60000) })
+    return { ok: true, ...result }
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Canvas Chat could not reach the selected LLM agent.' }
   }
 })
 

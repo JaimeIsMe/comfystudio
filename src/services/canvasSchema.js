@@ -398,6 +398,26 @@ export function getCanvasBlockDefinition(type) {
   return CANVAS_BLOCK_LIBRARY.find((definition) => definition.type === type) || null
 }
 
+export function getCanvasCapabilities() {
+  return CANVAS_BLOCK_LIBRARY.map((definition) => ({
+    type: definition.type,
+    label: definition.label,
+    description: definition.description,
+    visualFamily: definition.visualFamily,
+    fixed: Boolean(definition.fixed),
+    allowedParents: definition.allowedParents || [],
+    contains: definition.contains || [],
+    inputs: (definition.inputs || []).map((handle) => ({ id: handle.id, label: handle.label, type: handle.type, multiple: handle.multiple === true })),
+    outputs: (definition.outputs || []).map((handle) => ({ id: handle.id, label: handle.label, type: handle.type, multiple: handle.multiple === true })),
+    properties: (definition.properties || []).map((property) => ({
+      id: property.id,
+      label: property.label,
+      type: property.type,
+      options: (property.options || []).map((option) => ({ value: option.value, label: option.label })),
+    })),
+  }))
+}
+
 export function createCanvasShotTranslationContext(shotNode) {
   const properties = shotNode?.data?.properties || {}
   const durationStartMs = Math.max(0, Number(properties.duration_start) || 0)
