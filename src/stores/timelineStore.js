@@ -13,6 +13,7 @@ import { CLIP_COMPOSITE_MODE, normalizeClipCompositeMode } from '../utils/layerC
 import { getKeyframeTimeTolerance } from '../utils/keyframes'
 import { DEFAULT_SHAPE_MASK, normalizeShapeMask } from '../utils/shapeMask'
 import { normalizeTrackMatte } from '../utils/trackMatte'
+import { translateTransitionsForClipMoves } from '../utils/transitionClipMoves.mjs'
 import { DEFAULT_LINE_THICKNESS, DEFAULT_SHAPE_PROPERTIES, getShapeDisplayName, normalizeShapeProperties } from '../utils/shapes'
 import {
   quantizeTimeToFrame as roundToFrame,
@@ -2444,8 +2445,8 @@ export const useTimelineStore = create(
       startTime: roundToFrame(Math.max(0, u.startTime), fps),
       trackId: typeof u.trackId === 'string' ? u.trackId : undefined,
     }]))
-    set((state) => ({
-      clips: state.clips.map((clip) => {
+    set((state) => {
+      const updatedClips = state.clips.map((clip) => {
         if (!targetIds.has(clip.id)) return clip
         const nextPosition = map.get(clip.id)
         if (!nextPosition) return clip
@@ -2455,7 +2456,15 @@ export const useTimelineStore = create(
           trackId: nextPosition.trackId ?? clip.trackId,
         }, fps)
       })
-    }))
+      return {
+        clips: updatedClips,
+        transitions: translateTransitionsForClipMoves({
+          transitions: state.transitions,
+          beforeClips: state.clips,
+          afterClips: updatedClips,
+        }),
+      }
+    })
   },
 
   /**
@@ -2490,10 +2499,15 @@ export const useTimelineStore = create(
         }
         return clip
       })
+      const movedTransitions = translateTransitionsForClipMoves({
+        transitions: state.transitions,
+        beforeClips: state.clips,
+        afterClips: updatedClips,
+      })
       
       // Only resolve overlaps if explicitly requested (on drag end)
       if (!resolveOverlaps) {
-        return { clips: updatedClips }
+        return { clips: updatedClips, transitions: movedTransitions }
       }
       
       // Now resolve overlaps for each moved clip (NLE overwrite behavior)
@@ -2598,8 +2612,8 @@ export const useTimelineStore = create(
       
       // Remove transitions that are now broken (clips no longer adjacent on same track)
       let finalClips = updatedClips
-      let finalTransitions = state.transitions
-      if (state.transitions.length > 0) {
+      let finalTransitions = movedTransitions
+      if (movedTransitions.length > 0) {
         const isBroken = (t, clips) => {
           if (t.kind !== 'between') return false
           const a = clips.find(c => c.id === t.clipAId)
@@ -2611,7 +2625,7 @@ export const useTimelineStore = create(
           const j = trackClips.findIndex(c => c.id === b.id)
           return Math.abs(i - j) !== 1
         }
-        const broken = state.transitions.filter(t => isBroken(t, finalClips))
+        const broken = movedTransitions.filter(t => isBroken(t, finalClips))
         if (broken.length > 0) {
           const brokenIds = new Set(broken.map(t => t.id))
           for (const t of broken) {
@@ -2626,7 +2640,7 @@ export const useTimelineStore = create(
               return c
             })
           }
-          finalTransitions = state.transitions.filter(t => !brokenIds.has(t.id))
+          finalTransitions = movedTransitions.filter(t => !brokenIds.has(t.id))
         }
       }
       

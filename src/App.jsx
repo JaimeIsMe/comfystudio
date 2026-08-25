@@ -31,6 +31,7 @@ import { startComfyAutoImport } from './services/comfyAutoImport'
 import { startMcpSnapshotPublisher } from './services/mcpSnapshot'
 import { MCP_ACTION_BRIDGE_VERSION, startMcpActionBridge } from './services/mcpActions'
 import { attachProjectDirtyWatchers, isProjectDirty } from './services/projectDirtyTracker'
+import { VELORN_OPEN_STOCK_EVENT } from './services/pexelsStock'
 
 // Tab workspaces load on first visit instead of shipping in the startup
 // bundle. This keeps launch parse time down; GenerateWorkspace alone carries
@@ -341,6 +342,12 @@ function App() {
     const handler = () => setMainTab('generate')
     window.addEventListener('comfystudio-open-generate-tab', handler)
     return () => window.removeEventListener('comfystudio-open-generate-tab', handler)
+  }, [])
+
+  useEffect(() => {
+    const handler = () => setMainTab('stock')
+    window.addEventListener(VELORN_OPEN_STOCK_EVENT, handler)
+    return () => window.removeEventListener(VELORN_OPEN_STOCK_EVENT, handler)
   }, [])
 
   // Reveal-in-assets (timeline clip menu / Shift+F): make sure the Assets

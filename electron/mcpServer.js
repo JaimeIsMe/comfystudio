@@ -31,6 +31,7 @@ const MCP_ACTION_PLAN_WRITABLE_TOOLS = new Set([
   'create_project_checkpoint',
   'restore_project_checkpoint',
   'set_in_out_range',
+  'import_stock_media',
   'import_asset_from_path',
   'relink_asset',
   'set_clip_style',
@@ -6258,6 +6259,50 @@ function createToolDefinitions() {
       },
     },
     {
+      name: 'search_stock_media',
+      description: 'Search Pexels photos or videos using the API key saved in Velorn Settings. Read-only. Returns result IDs, thumbnails, creator/source metadata, and opens the same results in the visible Stock tab by default. Use import_stock_media with previewOnly before downloading selected results.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Pexels search query, for example "ocean drone shots".' },
+          mediaType: { type: 'string', enum: ['photos', 'videos'], description: 'Search photos or videos. Defaults to photos for MCP searches.' },
+          page: { type: 'integer', description: 'Pexels results page. Defaults to 1.' },
+          perPage: { type: 'integer', description: 'Results to return per page, 1-80. Defaults to 20.' },
+          orientation: { type: 'string', enum: ['landscape', 'portrait', 'square'], description: 'Optional Pexels orientation filter.' },
+          openStockTab: { type: 'boolean', description: 'Open/populate Velorn\'s visible Stock tab with these results. Defaults to true.' },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'import_stock_media',
+      description: 'Preview or bulk-import Pexels search results into the active Velorn project. Re-runs the Pexels search, validates optional result IDs, skips media already imported from Pexels by default, saves provenance, and can organize results into a Stock/Pexels/query folder. Defaults to previewOnly; applying downloads project-owned media files and may take time.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The same Pexels query used for search_stock_media.' },
+          mediaType: { type: 'string', enum: ['photos', 'videos'], description: 'Import photos or videos. Defaults to photos.' },
+          resultIds: {
+            type: 'array',
+            items: { oneOf: [{ type: 'string' }, { type: 'integer' }] },
+            description: 'Optional exact Pexels result IDs from search_stock_media. Their order controls import order. Maximum 20.',
+          },
+          count: { type: 'integer', description: 'When resultIds is omitted, import the first N non-duplicate results. Defaults to 10, maximum 20.' },
+          page: { type: 'integer', description: 'Pexels results page matching search_stock_media. Defaults to 1.' },
+          perPage: { type: 'integer', description: 'Search page size, 1-80. Keep this consistent with search_stock_media when using resultIds.' },
+          orientation: { type: 'string', enum: ['landscape', 'portrait', 'square'], description: 'Optional orientation filter matching search_stock_media.' },
+          folderId: { type: 'string', description: 'Optional existing Velorn asset-folder ID.' },
+          folderPath: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'Optional folder path to create/reuse. Defaults to Stock/Pexels/<query>.' },
+          organizeInFolder: { type: 'boolean', description: 'Set false to import into the project asset root when folderId/folderPath are omitted. Defaults to true.' },
+          skipExisting: { type: 'boolean', description: 'Skip Pexels IDs already present in the project. Defaults to true.' },
+          stopOnError: { type: 'boolean', description: 'Stop after the first failed download/import. Defaults to false so remaining approved items can continue.' },
+          openStockTab: { type: 'boolean', description: 'Open/populate the visible Stock tab with the matching results. Defaults to true.' },
+          previewOnly: { type: 'boolean', description: 'When true, revalidates and returns the exact import/folder plan without downloading files. Defaults to true.' },
+        },
+        required: ['query'],
+      },
+    },
+    {
       name: 'get_ai_review_passes',
       description: 'Return practical AI review recipes for Velorn MCP clients: timeline health, visible-shot review, hero presence checks, marker cleanup, disabled clip labeling, clip enable/disable previews, delivery checks, and current-frame questions.',
       inputSchema: {
@@ -10771,6 +10816,10 @@ class ComfyStudioMcpServer {
           assets: assets.slice(0, limit),
         })
       }
+      case 'search_stock_media':
+        return this.runRendererActionTool('search_stock_media', args, { bridgeName: 'MCP stock search bridge', suggestedTool: 'search_stock_media' })
+      case 'import_stock_media':
+        return this.runRendererActionTool('import_stock_media', args, { bridgeName: 'MCP stock import bridge', suggestedTool: 'import_stock_media', defaultPreviewOnly: true })
       case 'get_ai_review_passes':
         return textResult(buildAiReviewPasses(snapshot))
       case 'get_mcp_recipes':

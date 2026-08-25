@@ -32,11 +32,29 @@ import {
   startWorkflowInstall,
 } from './workflowInstallJobs'
 import { saveLocalComfyConnectionPort } from './localComfyConnection'
-import { getAbsoluteFileUrl, importAsset, writeGeneratedOverlayToProject } from './fileSystem'
+import { getAbsoluteFileUrl, importAsset, isElectron, writeGeneratedOverlayToProject } from './fileSystem'
 import { canImportImageSequences, importImageSequenceAsAsset } from './imageSequenceImport'
 import { detectImageSequences, parseSequenceFileName } from '../utils/imageSequenceDetection'
 import buildFcpXml from './fcpxmlExporter'
 import buildPremiereXml from './premiereXmlExporter'
+import { enqueuePlaybackTranscode } from './playbackCache'
+import { enqueueProxyTranscode, isProxyPlaybackEnabled } from './proxyCache'
+import { getPexelsApiKey } from './pexelsSettings'
+import {
+  PEXELS_DEFAULT_PER_PAGE,
+  PEXELS_MAX_MCP_IMPORT_ITEMS,
+  VELORN_OPEN_STOCK_EVENT,
+  buildDefaultPexelsFolderPath,
+  buildPexelsAssetRecord,
+  downloadPexelsMediaItem,
+  getExistingPexelsIds,
+  normalizePexelsMediaType,
+  normalizePexelsQuery,
+  searchPexelsMedia,
+  selectPexelsImportItems,
+  summarizePexelsMediaItem,
+  writePexelsStockPanelState,
+} from './pexelsStock'
 import {
   handleTranscribeCaptions,
   handleGetCaptionStatus,
@@ -44,7 +62,7 @@ import {
   handleGenerateCaptions,
 } from './mcpCaptions'
 
-export const MCP_ACTION_BRIDGE_VERSION = 5
+export const MCP_ACTION_BRIDGE_VERSION = 6
 
 const MCP_PROJECT_CHECKPOINTS = new Map()
 const MCP_PROJECT_CHECKPOINT_LIMIT = 20
@@ -4874,6 +4892,7 @@ async function handleMoveUnusedAssetsToFolder(payload = {}) {
 }
 
 function summarizeAsset(asset) {
+  const stockSource = asset.stockSource || asset.settings?.stockSource || null
   return {
     id: asset.id,
     name: asset.name || asset.id,
@@ -4892,6 +4911,16 @@ function summarizeAsset(asset) {
     audioEnabled: typeof asset.audioEnabled === 'boolean' ? asset.audioEnabled : null,
     generationStatus: asset.generationStatus || asset.status || 'none',
     createdAt: asset.createdAt || asset.imported || null,
+    ...(stockSource ? {
+      stockSource: {
+        provider: stockSource.provider || '',
+        id: stockSource.id ?? null,
+        mediaType: stockSource.mediaType || '',
+        query: stockSource.query || '',
+        pageUrl: stockSource.pageUrl || '',
+        photographer: stockSource.photographer || '',
+      },
+    } : {}),
   }
 }
 
@@ -7753,6 +7782,237 @@ async function handleRestoreProjectCheckpoint(payload = {}) {
   }
 }
 
+function publishPexelsSearchToStockTab(searchResult, { openStockTab = true } = {}) {
+  const stockState = {
+    searchQuery: searchResult.query,
+    mediaType: searchResult.mediaType,
+    results: searchResult.items,
+    page: searchResult.page,
+    totalResults: searchResult.totalResults,
+    isDefaultContent: false,
+  }
+  writePexelsStockPanelState(stockState)
+  if (openStockTab && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(VELORN_OPEN_STOCK_EVENT, { detail: { stockState } }))
+  }
+  return stockState
+}
+
+async function getPexelsKeyForMcp() {
+  const apiKey = String(await getPexelsApiKey() || '').trim()
+  if (!apiKey) {
+    throw new Error('Add a Pexels API key in Velorn Settings > Stock (Pexels), then try again.')
+  }
+  return apiKey
+}
+
+async function runPexelsMcpSearch(payload = {}, { minimumPerPage = 1 } = {}) {
+  const query = normalizePexelsQuery(payload.query || payload.search || payload.searchQuery)
+  if (!query) throw new Error('Provide a Pexels search query.')
+  const mediaType = normalizePexelsMediaType(payload.mediaType || payload.type || payload.kind, 'photos')
+  const requestedPerPage = Number(payload.perPage ?? payload.per_page ?? payload.limit)
+  const perPage = Math.max(
+    minimumPerPage,
+    Number.isFinite(requestedPerPage) && requestedPerPage > 0 ? Math.round(requestedPerPage) : PEXELS_DEFAULT_PER_PAGE,
+  )
+  return searchPexelsMedia({
+    apiKey: await getPexelsKeyForMcp(),
+    query,
+    mediaType,
+    page: payload.page,
+    perPage,
+    orientation: payload.orientation,
+  })
+}
+
+async function handleSearchStockMedia(payload = {}) {
+  const searchResult = await runPexelsMcpSearch(payload)
+  const stockTabOpened = payload.openStockTab !== false
+  publishPexelsSearchToStockTab(searchResult, { openStockTab: stockTabOpened })
+  return {
+    success: true,
+    action: 'search_stock_media',
+    provider: 'pexels',
+    query: searchResult.query,
+    mediaType: searchResult.mediaType,
+    orientation: searchResult.orientation,
+    page: searchResult.page,
+    perPage: searchResult.perPage,
+    totalResults: searchResult.totalResults,
+    returnedCount: searchResult.results.length,
+    results: searchResult.results,
+    stockTabOpened,
+    message: `Found ${searchResult.results.length} Pexels ${searchResult.mediaType} result${searchResult.results.length === 1 ? '' : 's'} for "${searchResult.query}"${stockTabOpened ? ' and opened them in the Stock tab' : ''}.`,
+  }
+}
+
+function resolveStockImportFolder(payload, query) {
+  const explicitFolderId = String(payload.folderId || '').trim()
+  if (explicitFolderId) {
+    const folder = (useAssetsStore.getState().folders || []).find((candidate) => candidate?.id === explicitFolderId)
+    if (!folder) throw new Error(`Asset folder ${explicitFolderId} was not found.`)
+    return {
+      folderId: explicitFolderId,
+      folderPath: getAssetFolderPathSegments(useAssetsStore.getState().folders || [], explicitFolderId),
+      folderPlan: null,
+    }
+  }
+
+  if (payload.organizeInFolder === false) {
+    return { folderId: null, folderPath: [], folderPlan: null }
+  }
+
+  const requestedPath = payload.folderPath || payload.targetFolderPath || payload.folderName
+  const folderPath = requestedPath || buildDefaultPexelsFolderPath(query)
+  const folderPlan = buildCreateAssetFolderPlan({ path: folderPath, previewOnly: true })
+  return {
+    folderId: null,
+    folderPath: folderPlan.path,
+    folderPlan,
+  }
+}
+
+async function buildStockMediaImportPlan(payload = {}) {
+  if (!useProjectStore.getState().currentProjectHandle) {
+    throw new Error('Open a saved Velorn project before importing stock media.')
+  }
+
+  const resultIds = normalizeStringArray(payload.resultIds || payload.pexelsIds || payload.ids)
+  if (resultIds.length > PEXELS_MAX_MCP_IMPORT_ITEMS) {
+    throw new Error(`Import at most ${PEXELS_MAX_MCP_IMPORT_ITEMS} Pexels results per call.`)
+  }
+  const requestedCount = Number(payload.count ?? payload.limit ?? (resultIds.length || 10))
+  const count = Math.max(1, Math.min(PEXELS_MAX_MCP_IMPORT_ITEMS, Number.isFinite(requestedCount) ? Math.round(requestedCount) : 10))
+  const searchResult = await runPexelsMcpSearch(payload, {
+    minimumPerPage: Math.max(PEXELS_DEFAULT_PER_PAGE, count, resultIds.length),
+  })
+  const existingIds = getExistingPexelsIds(useAssetsStore.getState().assets || [])
+  const selection = selectPexelsImportItems({
+    items: searchResult.items,
+    resultIds,
+    count,
+    existingIds,
+    skipExisting: payload.skipExisting !== false,
+  })
+  if (selection.missingIds.length > 0) {
+    throw new Error(`Pexels result IDs were not found on page ${searchResult.page}: ${selection.missingIds.join(', ')}. Search again or pass the matching page/perPage values.`)
+  }
+  const target = resolveStockImportFolder(payload, searchResult.query)
+  return {
+    action: 'import_stock_media',
+    provider: 'pexels',
+    query: searchResult.query,
+    mediaType: searchResult.mediaType,
+    orientation: searchResult.orientation,
+    page: searchResult.page,
+    perPage: searchResult.perPage,
+    totalResults: searchResult.totalResults,
+    requestedCount: count,
+    requestedIds: selection.requestedIds,
+    skipExisting: payload.skipExisting !== false,
+    candidates: selection.candidates,
+    candidateResults: selection.candidates.map((item) => summarizePexelsMediaItem(item, searchResult.mediaType)),
+    duplicateResults: selection.duplicateItems.map((item) => summarizePexelsMediaItem(item, searchResult.mediaType)),
+    targetFolderId: target.folderId,
+    targetFolderPath: target.folderPath,
+    folderPlan: target.folderPlan,
+    openStockTab: payload.openStockTab !== false,
+    searchResult,
+  }
+}
+
+async function handleImportStockMedia(payload = {}) {
+  const plan = await buildStockMediaImportPlan(payload)
+  publishPexelsSearchToStockTab(plan.searchResult, { openStockTab: plan.openStockTab })
+
+  if (payload.previewOnly !== false) {
+    return {
+      previewOnly: true,
+      action: 'import_stock_media',
+      message: `Pexels import plan only. ${plan.candidateResults.length} item${plan.candidateResults.length === 1 ? '' : 's'} would be downloaded; ${plan.duplicateResults.length} existing item${plan.duplicateResults.length === 1 ? '' : 's'} would be skipped.`,
+      provider: plan.provider,
+      query: plan.query,
+      mediaType: plan.mediaType,
+      page: plan.page,
+      perPage: plan.perPage,
+      totalResults: plan.totalResults,
+      requestedCount: plan.requestedCount,
+      requestedIds: plan.requestedIds,
+      candidates: plan.candidateResults,
+      skippedExisting: plan.duplicateResults,
+      targetFolderId: plan.targetFolderId,
+      targetFolderPath: plan.targetFolderPath,
+      folderPlan: plan.folderPlan,
+      stockTabOpened: plan.openStockTab,
+    }
+  }
+
+  let folderId = plan.targetFolderId
+  if (!folderId && plan.targetFolderPath.length > 0) {
+    folderId = await resolveMcpFolderIdForImportedAsset({ folderPath: plan.targetFolderPath })
+  }
+
+  const projectHandle = useProjectStore.getState().currentProjectHandle
+  const importedAssets = []
+  const failures = []
+  for (const item of plan.candidates) {
+    try {
+      const downloaded = await downloadPexelsMediaItem({ item, mediaType: plan.mediaType })
+      const imported = await importAsset(projectHandle, downloaded.file, downloaded.spec.category)
+      const blobUrl = typeof globalThis.URL?.createObjectURL === 'function'
+        ? globalThis.URL.createObjectURL(downloaded.blob)
+        : imported.url
+      const asset = useAssetsStore.getState().addAsset(buildPexelsAssetRecord({
+        item,
+        mediaType: plan.mediaType,
+        query: plan.query,
+        imported,
+        blobUrl,
+        folderId,
+        sourceTool: 'import_stock_media',
+      }))
+      importedAssets.push(asset)
+
+      if (downloaded.spec.assetType === 'video' && isElectron() && projectHandle && asset?.absolutePath) {
+        enqueuePlaybackTranscode(projectHandle, asset.id, asset.absolutePath).catch(() => {})
+        if (isProxyPlaybackEnabled()) {
+          enqueueProxyTranscode(projectHandle, asset.id, asset.absolutePath).catch(() => {})
+        }
+      }
+    } catch (error) {
+      failures.push({
+        id: String(item?.id ?? ''),
+        error: error?.message || String(error),
+      })
+      if (payload.stopOnError === true) break
+    }
+  }
+
+  if (importedAssets.length === 0 && failures.length > 0) {
+    throw new Error(`No Pexels media was imported. ${failures.map((failure) => `${failure.id}: ${failure.error}`).join('; ')}`)
+  }
+  const savedProject = importedAssets.length > 0 && typeof useProjectStore.getState().saveProject === 'function'
+    ? await useProjectStore.getState().saveProject()
+    : null
+  return {
+    success: failures.length === 0,
+    partial: failures.length > 0,
+    action: 'import_stock_media',
+    message: `Imported ${importedAssets.length} Pexels ${plan.mediaType} item${importedAssets.length === 1 ? '' : 's'}${plan.duplicateResults.length > 0 ? `; skipped ${plan.duplicateResults.length} already in the project` : ''}${failures.length > 0 ? `; ${failures.length} failed` : ''}.`,
+    provider: plan.provider,
+    query: plan.query,
+    mediaType: plan.mediaType,
+    folderId,
+    folderPath: plan.targetFolderPath,
+    importedCount: importedAssets.length,
+    importedAssets: importedAssets.map(summarizeAsset),
+    skippedExisting: plan.duplicateResults,
+    failures,
+    savedProject: Boolean(savedProject),
+    stockTabOpened: plan.openStockTab,
+  }
+}
+
 async function resolveMcpFolderIdForImportedAsset(payload = {}) {
   const folderId = String(payload.folderId || '').trim()
   if (folderId) {
@@ -8441,6 +8701,10 @@ async function handleMcpAction(request = {}) {
       return handleCreateProjectCheckpoint(request.payload || {})
     case 'restore_project_checkpoint':
       return handleRestoreProjectCheckpoint(request.payload || {})
+    case 'search_stock_media':
+      return handleSearchStockMedia(request.payload || {})
+    case 'import_stock_media':
+      return handleImportStockMedia(request.payload || {})
     case 'import_asset_from_path':
       return handleImportAssetFromPath(request.payload || {})
     case 'relink_asset':
