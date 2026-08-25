@@ -386,11 +386,21 @@ These tools use the same persistent Director state as the visible Music Video UI
 
 | Tool | Purpose |
 | --- | --- |
+| `search_stock_media` | Search Pexels photos/videos and open the same results in Velorn's Stock tab. |
+| `import_stock_media` | Preview/bulk-import selected Pexels IDs or the first N non-duplicate results into a project folder. |
 | `import_asset_from_path` | Preview/import a local media file into the active project. |
 | `relink_asset` | Preview/relink an existing asset record to a local file path. |
 | `add_asset_to_timeline` | Preview/place one project asset on the active timeline. |
 | `add_assets_to_timeline` | Preview/place multiple assets as review lanes or a sequence. |
 | `replace_clip_with_asset` | Preview/replace a clip with another asset while preserving the edit slot and styling by default. |
+
+Pexels search/import requires the user's API key in `Settings > Stock (Pexels)`. A safe agent flow is:
+
+```text
+Search Pexels photos for "ocean drone shots" with search_stock_media. Show me the result IDs first. Then preview importing 10 non-duplicate results with import_stock_media into Stock/Pexels/Ocean Drone Shots. Wait for approval before applying, and do not place anything on the timeline until I approve a separate add_assets_to_timeline preview.
+```
+
+`import_stock_media` re-runs the search before applying so result IDs are validated against Pexels instead of accepting arbitrary download URLs. Imported files become project-owned media and keep Pexels source/creator provenance in their asset metadata.
 
 ### Generation
 
