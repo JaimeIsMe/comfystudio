@@ -1,16 +1,22 @@
 import { X } from 'lucide-react'
+import { useI18n } from '../i18n/I18nContext'
 
 export default function ConfirmDialog({
   isOpen,
-  title = 'Confirm action',
+  title,
   message = '',
-  confirmLabel = 'Confirm',
-  cancelLabel = 'Cancel',
+  confirmLabel,
+  cancelLabel,
   tone = 'danger',
   onConfirm,
   onCancel,
 }) {
+  const { t } = useI18n()
   if (!isOpen) return null
+
+  const resolvedTitle = title || t('confirmDialog.title')
+  const resolvedConfirmLabel = confirmLabel || t('confirmDialog.confirm')
+  const resolvedCancelLabel = cancelLabel || t('common.cancel')
 
   const confirmToneClass = tone === 'danger'
     ? 'bg-sf-error hover:bg-red-500 text-white'
@@ -23,12 +29,12 @@ export default function ConfirmDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-sf-dark-700">
-          <h3 className="text-sm font-medium text-sf-text-primary">{title}</h3>
+          <h3 className="text-sm font-medium text-sf-text-primary">{resolvedTitle}</h3>
           <button
             type="button"
             onClick={onCancel}
             className="p-1 rounded hover:bg-sf-dark-700 text-sf-text-muted"
-            title="Close"
+            title={t('common.close')}
           >
             <X className="w-4 h-4" />
           </button>
@@ -42,14 +48,14 @@ export default function ConfirmDialog({
             onClick={onCancel}
             className="px-3 py-1.5 rounded bg-sf-dark-700 hover:bg-sf-dark-600 text-sf-text-secondary text-xs"
           >
-            {cancelLabel}
+            {resolvedCancelLabel}
           </button>
           <button
             type="button"
             onClick={onConfirm}
             className={`px-3 py-1.5 rounded text-xs ${confirmToneClass}`}
           >
-            {confirmLabel}
+            {resolvedConfirmLabel}
           </button>
         </div>
       </div>

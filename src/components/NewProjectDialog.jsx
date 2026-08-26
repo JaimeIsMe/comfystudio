@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { X, Loader2 } from 'lucide-react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../stores/projectStore'
+import { useI18n } from '../i18n/I18nContext'
 
 function NewProjectDialog({ isOpen, onClose }) {
+  const { t } = useI18n()
   const { createProject, defaultResolution, defaultFps } = useProjectStore()
   const [projectName, setProjectName] = useState('')
   const [selectedResolution, setSelectedResolution] = useState(() => {
@@ -65,10 +67,10 @@ function NewProjectDialog({ isOpen, onClose }) {
         onClose()
         resetForm()
       } else {
-        setError('Failed to create project. Please try again.')
+        setError(t('projectDialog.createFailed'))
       }
     } catch (err) {
-      setError(err.message || 'An error occurred while creating the project.')
+      setError(err.message || t('projectDialog.createError'))
     }
     
     setIsCreating(false)
@@ -98,7 +100,7 @@ function NewProjectDialog({ isOpen, onClose }) {
       <div className="bg-sf-dark-900 border border-sf-dark-700 rounded-xl w-full max-w-md mx-4 overflow-hidden shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-sf-dark-700">
-          <h2 className="text-lg font-semibold text-sf-text-primary">New Project</h2>
+          <h2 className="text-lg font-semibold text-sf-text-primary">{t('projectDialog.title')}</h2>
           <button
             onClick={handleClose}
             disabled={isCreating}
@@ -120,20 +122,20 @@ function NewProjectDialog({ isOpen, onClose }) {
           {/* Project Name */}
           <div>
             <label className="block text-sm font-medium text-sf-text-primary mb-2">
-              Project Name
+              {t('projectDialog.name')}
             </label>
             <input
               type="text"
               value={projectName}
               onChange={(e) => setProjectName(e.target.value)}
-              placeholder="Enter project name..."
+              placeholder={t('projectDialog.namePlaceholder')}
               disabled={isCreating}
               className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-4 py-2.5 text-sm text-sf-text-primary placeholder-sf-text-muted focus:outline-none focus:border-sf-accent disabled:opacity-50"
               autoFocus
             />
             {projectName && !isValidName && (
               <p className="text-xs text-sf-error mt-1">
-                Invalid name. Avoid characters: {'< > : " / \\ | ? *'}
+                {t('projectDialog.invalidName')} {'< > : " / \\ | ? *'}
               </p>
             )}
           </div>
@@ -141,7 +143,7 @@ function NewProjectDialog({ isOpen, onClose }) {
           {/* Resolution */}
           <div>
             <label className="block text-sm font-medium text-sf-text-primary mb-2">
-              Resolution
+              {t('projectDialog.resolution')}
             </label>
             
             {/* Preset buttons */}
@@ -177,9 +179,9 @@ function NewProjectDialog({ isOpen, onClose }) {
                     : 'bg-sf-dark-800 border border-sf-dark-600 text-sf-text-primary hover:border-sf-dark-500'
                 } disabled:opacity-50`}
               >
-                <p className="text-xs font-medium">Custom</p>
+                <p className="text-xs font-medium">{t('common.custom')}</p>
                 <p className="text-[10px] opacity-70">
-                  {isCustomResolution ? `${customWidth}x${customHeight}` : 'Enter dimensions'}
+                  {isCustomResolution ? `${customWidth}x${customHeight}` : t('projectDialog.enterDimensions')}
                 </p>
               </button>
             </div>
@@ -195,7 +197,7 @@ function NewProjectDialog({ isOpen, onClose }) {
                   max="7680"
                   disabled={isCreating}
                   className="flex-1 bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-sm text-sf-text-primary focus:outline-none focus:border-sf-accent disabled:opacity-50"
-                  placeholder="Width"
+                  placeholder={t('projectDialog.width')}
                 />
                 <span className="text-sf-text-muted">×</span>
                 <input
@@ -206,7 +208,7 @@ function NewProjectDialog({ isOpen, onClose }) {
                   max="4320"
                   disabled={isCreating}
                   className="flex-1 bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-sm text-sf-text-primary focus:outline-none focus:border-sf-accent disabled:opacity-50"
-                  placeholder="Height"
+                  placeholder={t('projectDialog.height')}
                 />
                 <span className="text-xs text-sf-text-muted w-16 text-right">
                   {getAspectRatio(customWidth, customHeight)}
@@ -218,7 +220,7 @@ function NewProjectDialog({ isOpen, onClose }) {
           {/* Frame Rate */}
           <div>
             <label className="block text-sm font-medium text-sf-text-primary mb-2">
-              Frame Rate
+              {t('projectDialog.frameRate')}
             </label>
             <div className="grid grid-cols-3 gap-2">
               {FPS_PRESETS.map((fps) => (
@@ -240,9 +242,9 @@ function NewProjectDialog({ isOpen, onClose }) {
           
           {/* Summary */}
           <div className="bg-sf-dark-800 rounded-lg p-3">
-            <p className="text-xs text-sf-text-muted mb-1">Project Settings</p>
+            <p className="text-xs text-sf-text-muted mb-1">{t('projectDialog.settings')}</p>
             <p className="text-sm text-sf-text-primary">
-              {finalWidth} × {finalHeight} at {selectedFps.value} fps
+              {t('projectDialog.summary', { width: finalWidth, height: finalHeight, fps: selectedFps.value })}
               {isCustomResolution && (
                 <span className="text-sf-text-muted"> ({getAspectRatio(finalWidth, finalHeight)})</span>
               )}
@@ -260,7 +262,7 @@ function NewProjectDialog({ isOpen, onClose }) {
             disabled={isCreating}
             className="px-4 py-2 text-sm text-sf-text-secondary hover:text-sf-text-primary transition-colors disabled:opacity-50"
           >
-            Cancel
+            {t('common.cancel')}
           </button>
           <button
             onClick={handleCreate}
@@ -270,10 +272,10 @@ function NewProjectDialog({ isOpen, onClose }) {
             {isCreating ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Creating...
+                {t('projectDialog.creating')}
               </>
             ) : (
-              'Create Project'
+              t('projectDialog.create')
             )}
           </button>
         </div>

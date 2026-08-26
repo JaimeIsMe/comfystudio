@@ -2,8 +2,10 @@ import { useState, useRef, useEffect } from 'react'
 import { Settings, LogOut, Save, FolderOpen, Minus, Maximize2, BookOpen, ChevronDown } from 'lucide-react'
 import useTimelineStore from '../stores/timelineStore'
 import useProjectStore from '../stores/projectStore'
+import { useI18n } from '../i18n/I18nContext'
 
 function BottomBar({ onOpenSettings, onOpenGettingStarted, projectName }) {
+  const { t } = useI18n()
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
 
@@ -95,31 +97,31 @@ function BottomBar({ onOpenSettings, onOpenGettingStarted, projectName }) {
       <button
         onClick={handleSave}
         className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-bold text-white hover:bg-sf-dark-800 transition-colors"
-        title="Save Project"
+        title={t('bottomBar.saveProject')}
       >
-        Save
+        {t('common.save')}
       </button>
       <Separator />
       <button
         onClick={handleUndo}
         disabled={!combinedCanUndo}
         className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-bold text-white hover:bg-sf-dark-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        title="Undo (Ctrl+Z)"
+        title={`${t('bottomBar.undo')} (Ctrl+Z)`}
       >
-        Undo
+        {t('bottomBar.undo')}
       </button>
       <Separator />
       <button
         onClick={handleRedo}
         disabled={!combinedCanRedo}
         className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-bold text-white hover:bg-sf-dark-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        title="Redo (Ctrl+Shift+Z)"
+        title={`${t('bottomBar.redo')} (Ctrl+Shift+Z)`}
       >
-        Redo
+        {t('bottomBar.redo')}
       </button>
       <Separator />
-      <div className="px-2 py-1 text-[11px] font-bold text-white truncate max-w-[180px]" title={projectName || 'Untitled'}>
-        {projectName || 'Untitled'}
+      <div className="px-2 py-1 text-[11px] font-bold text-white truncate max-w-[180px]" title={projectName || t('bottomBar.untitled')}>
+        {projectName || t('bottomBar.untitled')}
       </div>
       <Separator />
       {/* Velorn - dropdown: Leave, Settings, Project Selection, Save Project (with dividers) */}
@@ -175,7 +177,7 @@ function BottomBar({ onOpenSettings, onOpenGettingStarted, projectName }) {
               className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 transition-colors text-red-400 hover:text-red-300"
             >
               <LogOut className="w-3.5 h-3.5" />
-              Leave
+              {t('bottomBar.leave')}
             </button>
             <div className="h-px bg-sf-dark-600 my-0.5 mx-2" />
             <button
@@ -183,7 +185,7 @@ function BottomBar({ onOpenSettings, onOpenGettingStarted, projectName }) {
               className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 transition-colors"
             >
               <BookOpen className="w-3.5 h-3.5 text-sf-text-muted" />
-              Getting Started
+              {t('bottomBar.gettingStarted')}
             </button>
             <div className="h-px bg-sf-dark-600 my-0.5 mx-2" />
             <button
@@ -191,7 +193,7 @@ function BottomBar({ onOpenSettings, onOpenGettingStarted, projectName }) {
               className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 transition-colors"
             >
               <Settings className="w-3.5 h-3.5 text-sf-text-muted" />
-              Settings
+              {t('common.settings')}
             </button>
             <div className="h-px bg-sf-dark-600 my-0.5 mx-2" />
             <button
@@ -199,7 +201,7 @@ function BottomBar({ onOpenSettings, onOpenGettingStarted, projectName }) {
               className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 transition-colors"
             >
               <Minus className="w-3.5 h-3.5 text-sf-text-muted" />
-              Minimize
+              {t('bottomBar.minimize')}
             </button>
             <div className="h-px bg-sf-dark-600 my-0.5 mx-2" />
             <button
@@ -207,7 +209,7 @@ function BottomBar({ onOpenSettings, onOpenGettingStarted, projectName }) {
               className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 transition-colors"
             >
               <Maximize2 className="w-3.5 h-3.5 text-sf-text-muted" />
-              Maximize
+              {t('bottomBar.maximize')}
             </button>
             <div className="h-px bg-sf-dark-600 my-0.5 mx-2" />
             <button
@@ -215,7 +217,7 @@ function BottomBar({ onOpenSettings, onOpenGettingStarted, projectName }) {
               className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 transition-colors"
             >
               <FolderOpen className="w-3.5 h-3.5 text-sf-text-muted" />
-              Project Selection
+              {t('bottomBar.projectSelection')}
             </button>
             <div className="h-px bg-sf-dark-600 my-0.5 mx-2" />
             <button
@@ -223,7 +225,7 @@ function BottomBar({ onOpenSettings, onOpenGettingStarted, projectName }) {
               className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-sf-text-primary hover:bg-sf-dark-700 transition-colors"
             >
               <Save className="w-3.5 h-3.5 text-sf-text-muted" />
-              Save Project
+              {t('bottomBar.saveProject')}
             </button>
           </div>
         )}

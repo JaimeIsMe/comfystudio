@@ -2,8 +2,10 @@ import { useState, useRef, useEffect } from 'react'
 import { ChevronDown, Plus, Copy, Trash2, Edit3, Check, X, Film } from 'lucide-react'
 import useProjectStore from '../stores/projectStore'
 import NewTimelineDialog from './NewTimelineDialog'
+import { useI18n } from '../i18n/I18nContext'
 
 function TimelineSwitcher() {
+  const { t } = useI18n()
   const [isOpen, setIsOpen] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [editName, setEditName] = useState('')
@@ -98,7 +100,7 @@ function TimelineSwitcher() {
   const handleDeleteTimeline = (e, timelineId) => {
     e.stopPropagation()
     if (timelines.length > 1) {
-      if (confirm('Delete this timeline? This cannot be undone.')) {
+      if (confirm(t('timelineSwitcher.deleteConfirm'))) {
         deleteTimeline(timelineId)
       }
     }
@@ -131,7 +133,7 @@ function TimelineSwitcher() {
       >
         <Film className="w-3.5 h-3.5 text-sf-accent" />
         <span className="text-xs font-medium text-sf-text-primary max-w-[150px] truncate">
-          {currentTimeline?.name || 'Timeline'}
+          {currentTimeline?.name || t('timelineSwitcher.timeline')}
         </span>
         <span className="text-[10px] text-sf-text-muted">
           ({timelines.length})
@@ -175,7 +177,7 @@ function TimelineSwitcher() {
                       type="button"
                       onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleSaveRename(e); }}
                       className="p-0.5 hover:bg-sf-dark-600 rounded flex-shrink-0"
-                      title="Save name"
+                      title={t('timelineSwitcher.saveName')}
                     >
                       <Check className="w-3 h-3 text-sf-success" />
                     </button>
@@ -183,7 +185,7 @@ function TimelineSwitcher() {
                       type="button"
                       onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleCancelRename(e); }}
                       className="p-0.5 hover:bg-sf-dark-600 rounded flex-shrink-0"
-                      title="Cancel"
+                      title={t('common.cancel')}
                     >
                       <X className="w-3 h-3 text-sf-text-muted" />
                     </button>
@@ -195,7 +197,7 @@ function TimelineSwitcher() {
                         {timeline.name}
                       </p>
                       <p className="text-[10px] text-sf-text-muted">
-                        {timeline.clips?.length || 0} clips
+                        {t('timelineSwitcher.clipCount', { count: timeline.clips?.length || 0 })}
                         {(() => {
                           const { width, height, fps, hasCustomSettings } = getTimelineResolutionLabel(timeline)
                           return hasCustomSettings ? (
@@ -211,7 +213,7 @@ function TimelineSwitcher() {
                         type="button"
                         onClick={(e) => handleStartRename(e, timeline)}
                         className="p-1 hover:bg-sf-dark-600 rounded"
-                        title="Rename"
+                        title={t('timelineSwitcher.rename')}
                       >
                         <Edit3 className="w-3 h-3 text-sf-text-muted" />
                       </button>
@@ -219,7 +221,7 @@ function TimelineSwitcher() {
                         type="button"
                         onClick={(e) => handleDuplicateTimeline(e, timeline.id)}
                         className="p-1 hover:bg-sf-dark-600 rounded"
-                        title="Duplicate"
+                        title={t('timelineSwitcher.duplicate')}
                       >
                         <Copy className="w-3 h-3 text-sf-text-muted" />
                       </button>
@@ -228,7 +230,7 @@ function TimelineSwitcher() {
                           type="button"
                           onClick={(e) => handleDeleteTimeline(e, timeline.id)}
                           className="p-1 hover:bg-sf-error/20 rounded"
-                          title="Delete"
+                          title={t('timelineSwitcher.delete')}
                         >
                           <Trash2 className="w-3 h-3 text-sf-text-muted hover:text-sf-error" />
                         </button>
@@ -247,7 +249,7 @@ function TimelineSwitcher() {
               className="w-full flex items-center gap-2 px-3 py-2 hover:bg-sf-dark-700 transition-colors text-left"
             >
               <Plus className="w-3.5 h-3.5 text-sf-accent" />
-              <span className="text-xs text-sf-text-secondary">New Timeline...</span>
+              <span className="text-xs text-sf-text-secondary">{t('timelineSwitcher.newTimeline')}</span>
             </button>
             <button
               onClick={(e) => {
@@ -257,10 +259,10 @@ function TimelineSwitcher() {
                 }
               }}
               className="w-full flex items-center gap-2 px-3 py-2 hover:bg-sf-dark-700 transition-colors text-left border-t border-sf-dark-600/50"
-              title="Duplicate current timeline to create a new version"
+              title={t('timelineSwitcher.duplicateHelp')}
             >
               <Copy className="w-3.5 h-3.5 text-sf-accent" />
-              <span className="text-xs text-sf-text-secondary">Duplicate Timeline...</span>
+              <span className="text-xs text-sf-text-secondary">{t('timelineSwitcher.duplicateTimeline')}</span>
             </button>
           </div>
         </div>

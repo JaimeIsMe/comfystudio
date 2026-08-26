@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { X, Film, Monitor, Gauge, Loader2, Copy } from 'lucide-react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../stores/projectStore'
+import { useI18n } from '../i18n/I18nContext'
 
 function NewTimelineDialog({ isOpen, onClose, onCreated }) {
+  const { t } = useI18n()
   const [timelineName, setTimelineName] = useState('')
   const [selectedResolution, setSelectedResolution] = useState(RESOLUTION_PRESETS[0])
   const [customWidth, setCustomWidth] = useState(1920)
@@ -23,14 +25,14 @@ function NewTimelineDialog({ isOpen, onClose, onCreated }) {
     if (isOpen) {
       const timelines = getTimelines()
       const timelineNumber = timelines.length + 1
-      setTimelineName(`Timeline ${timelineNumber}`)
+      setTimelineName(t('timelineDialog.defaultName', { number: timelineNumber }))
       setUseProjectSettings(true)
       setSelectedResolution(RESOLUTION_PRESETS[0])
       setIsCustomResolution(false)
       setSelectedFps(FPS_PRESETS.find(f => f.value === projectSettings.fps) || FPS_PRESETS[2])
       setError(null)
     }
-  }, [isOpen, getTimelines, projectSettings.fps])
+  }, [isOpen, getTimelines, projectSettings.fps, t])
   
   if (!isOpen) return null
   
@@ -56,7 +58,7 @@ function NewTimelineDialog({ isOpen, onClose, onCreated }) {
   // Find matching preset or return custom label
   const getResolutionLabel = (w, h) => {
     const preset = RESOLUTION_PRESETS.find(p => p.width === w && p.height === h)
-    return preset ? preset.name : 'Custom'
+    return preset ? preset.name : t('common.custom')
   }
   
   const handleCreate = async () => {
@@ -79,10 +81,10 @@ function NewTimelineDialog({ isOpen, onClose, onCreated }) {
         onCreated?.(newTimeline)
         onClose()
       } else {
-        setError('Failed to create timeline. Please try again.')
+        setError(t('timelineDialog.createFailed'))
       }
     } catch (err) {
-      setError(err.message || 'An error occurred while creating the timeline.')
+      setError(err.message || t('timelineDialog.createError'))
     }
     
     setIsCreating(false)
@@ -103,7 +105,7 @@ function NewTimelineDialog({ isOpen, onClose, onCreated }) {
             <div className="w-8 h-8 bg-sf-accent rounded-lg flex items-center justify-center">
               <Film className="w-4 h-4 text-white" />
             </div>
-            <h2 className="text-lg font-semibold text-sf-text-primary">New Timeline</h2>
+            <h2 className="text-lg font-semibold text-sf-text-primary">{t('timelineDialog.title')}</h2>
           </div>
           <button
             onClick={handleClose}
@@ -126,13 +128,13 @@ function NewTimelineDialog({ isOpen, onClose, onCreated }) {
           {/* Timeline Name */}
           <div>
             <label className="block text-sm font-medium text-sf-text-primary mb-2">
-              Timeline Name
+              {t('timelineDialog.name')}
             </label>
             <input
               type="text"
               value={timelineName}
               onChange={(e) => setTimelineName(e.target.value)}
-              placeholder="Enter timeline name..."
+              placeholder={t('timelineDialog.namePlaceholder')}
               disabled={isCreating}
               className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-4 py-2.5 text-sm text-sf-text-primary placeholder-sf-text-muted focus:outline-none focus:border-sf-accent disabled:opacity-50"
               autoFocus
@@ -152,9 +154,9 @@ function NewTimelineDialog({ isOpen, onClose, onCreated }) {
             >
               <Copy className={`w-4 h-4 ${useProjectSettings ? 'text-sf-accent' : 'text-sf-text-muted'}`} />
               <div className="flex-1 text-left">
-                <p className="text-sm font-medium">Use Project Settings</p>
+                <p className="text-sm font-medium">{t('timelineDialog.useProjectSettings')}</p>
                 <p className="text-xs opacity-70">
-                  {projectSettings.width}×{projectSettings.height} at {projectSettings.fps} fps
+                  {t('projectDialog.summary', { width: projectSettings.width, height: projectSettings.height, fps: projectSettings.fps })}
                 </p>
               </div>
               <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
@@ -172,7 +174,7 @@ function NewTimelineDialog({ isOpen, onClose, onCreated }) {
               <div>
                 <label className="block text-sm font-medium text-sf-text-primary mb-2">
                   <Monitor className="w-4 h-4 inline mr-2" />
-                  Resolution
+                  {t('projectDialog.resolution')}
                 </label>
                 
                 {/* Preset buttons */}
@@ -208,9 +210,9 @@ function NewTimelineDialog({ isOpen, onClose, onCreated }) {
                         : 'bg-sf-dark-800 border border-sf-dark-600 text-sf-text-primary hover:border-sf-dark-500'
                     } disabled:opacity-50`}
                   >
-                    <p className="text-xs font-medium">Custom</p>
+                    <p className="text-xs font-medium">{t('common.custom')}</p>
                     <p className="text-[10px] opacity-70">
-                      {isCustomResolution ? `${customWidth}x${customHeight}` : 'Enter dimensions'}
+                      {isCustomResolution ? `${customWidth}x${customHeight}` : t('projectDialog.enterDimensions')}
                     </p>
                   </button>
                 </div>
@@ -226,7 +228,7 @@ function NewTimelineDialog({ isOpen, onClose, onCreated }) {
                       max="7680"
                       disabled={isCreating}
                       className="flex-1 bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-sm text-sf-text-primary focus:outline-none focus:border-sf-accent disabled:opacity-50"
-                      placeholder="Width"
+                      placeholder={t('projectDialog.width')}
                     />
                     <span className="text-sf-text-muted">×</span>
                     <input
@@ -237,7 +239,7 @@ function NewTimelineDialog({ isOpen, onClose, onCreated }) {
                       max="4320"
                       disabled={isCreating}
                       className="flex-1 bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-3 py-2 text-sm text-sf-text-primary focus:outline-none focus:border-sf-accent disabled:opacity-50"
-                      placeholder="Height"
+                      placeholder={t('projectDialog.height')}
                     />
                     <span className="text-xs text-sf-text-muted w-16 text-right">
                       {getAspectRatio(customWidth, customHeight)}
@@ -250,7 +252,7 @@ function NewTimelineDialog({ isOpen, onClose, onCreated }) {
               <div>
                 <label className="block text-sm font-medium text-sf-text-primary mb-2">
                   <Gauge className="w-4 h-4 inline mr-2" />
-                  Frame Rate
+                  {t('projectDialog.frameRate')}
                 </label>
                 <div className="grid grid-cols-3 gap-2">
                   {FPS_PRESETS.map((fps) => (
@@ -274,12 +276,12 @@ function NewTimelineDialog({ isOpen, onClose, onCreated }) {
           
           {/* Summary */}
           <div className="bg-sf-dark-800 rounded-lg p-3">
-            <p className="text-xs text-sf-text-muted mb-1">Timeline Settings</p>
+            <p className="text-xs text-sf-text-muted mb-1">{t('timelineDialog.settings')}</p>
             <p className="text-sm text-sf-text-primary">
-              {finalWidth} × {finalHeight} at {finalFps} fps
+              {t('projectDialog.summary', { width: finalWidth, height: finalHeight, fps: finalFps })}
               <span className="text-sf-text-muted"> ({getAspectRatio(finalWidth, finalHeight)})</span>
               {useProjectSettings && (
-                <span className="text-sf-accent text-xs ml-2">(Project Default)</span>
+                <span className="text-sf-accent text-xs ml-2">({t('timelineDialog.projectDefault')})</span>
               )}
             </p>
           </div>
@@ -292,7 +294,7 @@ function NewTimelineDialog({ isOpen, onClose, onCreated }) {
             disabled={isCreating}
             className="px-4 py-2 text-sm text-sf-text-secondary hover:text-sf-text-primary transition-colors disabled:opacity-50"
           >
-            Cancel
+            {t('common.cancel')}
           </button>
           <button
             onClick={handleCreate}
@@ -302,10 +304,10 @@ function NewTimelineDialog({ isOpen, onClose, onCreated }) {
             {isCreating ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Creating...
+                {t('timelineDialog.creating')}
               </>
             ) : (
-              'Create Timeline'
+              t('timelineDialog.create')
             )}
           </button>
         </div>

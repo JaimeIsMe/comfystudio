@@ -19,6 +19,7 @@ import {
   saveComfyPartnerApiKey,
   validateComfyPartnerApiKey,
 } from '../services/comfyPartnerAuth'
+import { useI18n } from '../i18n/I18nContext'
 
 function maskKey(value) {
   const raw = String(value || '').trim()
@@ -41,6 +42,7 @@ export default function ApiKeyDialog({
   headline,
   subhead,
 }) {
+  const { t } = useI18n()
   const [existingKey, setExistingKey] = useState('')
   const [draftKey, setDraftKey] = useState('')
   const [showKey, setShowKey] = useState(false)
@@ -65,7 +67,7 @@ export default function ApiKeyDialog({
         setError('')
       } catch (err) {
         if (!cancelled) {
-          setError(err?.message || 'Could not read the saved key.')
+          setError(err?.message || t('apiKey.readFailed'))
         }
       }
     }
@@ -73,7 +75,7 @@ export default function ApiKeyDialog({
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [open, t])
 
   useEffect(() => {
     if (!open) return
@@ -99,18 +101,18 @@ export default function ApiKeyDialog({
   const handleGetKey = useCallback(async () => {
     const result = await openComfyPartnerDashboard()
     if (!result?.success) {
-      setError('Could not open your browser. Visit platform.comfy.org manually.')
+      setError(t('apiKey.openFailed'))
     }
-  }, [])
+  }, [t])
 
   const runValidation = useCallback(async (candidate) => {
     const value = String(candidate || '').trim()
     if (!value) {
-      setValidation({ state: 'invalid', message: 'Paste a key first.' })
+      setValidation({ state: 'invalid', message: t('apiKey.pasteFirst') })
       return null
     }
     setValidating(true)
-    setValidation({ state: 'checking', message: 'Checking with Comfy.org…' })
+    setValidation({ state: 'checking', message: t('apiKey.checking') })
     try {
       abortRef.current?.abort?.()
     } catch (_) { /* ignore */ }
@@ -122,16 +124,16 @@ export default function ApiKeyDialog({
         state: result.status === 'valid' ? 'valid'
           : result.status === 'invalid' ? 'invalid'
           : 'unknown',
-        message: result.status === 'valid' ? 'Key accepted by Comfy.org.' : (result.message || ''),
+        message: result.status === 'valid' ? t('apiKey.accepted') : (result.message || ''),
       })
       return result
     } catch (err) {
-      setValidation({ state: 'unknown', message: err?.message || 'Could not validate right now.' })
+      setValidation({ state: 'unknown', message: err?.message || t('apiKey.validateFailed') })
       return { status: 'unknown' }
     } finally {
       setValidating(false)
     }
-  }, [])
+  }, [t])
 
   const handleTest = useCallback(() => {
     void runValidation(draftKey)
@@ -140,7 +142,7 @@ export default function ApiKeyDialog({
   const handleSave = useCallback(async () => {
     const value = String(draftKey || '').trim()
     if (!value) {
-      setError('Paste your Comfy.org API key before saving.')
+      setError(t('apiKey.pasteBeforeSave'))
       return
     }
     setSaving(true)
@@ -165,9 +167,9 @@ export default function ApiKeyDialog({
       onClose?.()
     } catch (err) {
       setSaving(false)
-      setError(err?.message || 'Could not save the key.')
+      setError(err?.message || t('apiKey.saveFailed'))
     }
-  }, [draftKey, onClose, onSaved, runValidation, validation.state])
+  }, [draftKey, onClose, onSaved, runValidation, t, validation.state])
 
   const handleRemove = useCallback(async () => {
     setSaving(true)
@@ -181,9 +183,9 @@ export default function ApiKeyDialog({
       onSaved?.('')
     } catch (err) {
       setSaving(false)
-      setError(err?.message || 'Could not remove the key.')
+      setError(err?.message || t('apiKey.removeFailed'))
     }
-  }, [onSaved])
+  }, [onSaved, t])
 
   if (!open) return null
 
@@ -206,10 +208,10 @@ export default function ApiKeyDialog({
             </div>
             <div>
               <h2 className="text-base font-semibold text-sf-text-primary">
-                {headline || 'Cloud Workflows · Comfy.org API key'}
+                {headline || t('apiKey.title')}
               </h2>
               <p className="mt-1 text-xs text-sf-text-muted">
-                {subhead || 'Unlocks the cloud-rendered workflows that ship with Velorn.'}
+                {subhead || t('apiKey.subtitle')}
               </p>
             </div>
           </div>
@@ -217,7 +219,7 @@ export default function ApiKeyDialog({
             type="button"
             onClick={onClose}
             className="rounded-lg p-1.5 text-sf-text-muted transition-colors hover:bg-sf-dark-800 hover:text-sf-text-primary"
-            aria-label="Close"
+            aria-label={t('common.close')}
           >
             <X className="h-4 w-4" />
           </button>
@@ -226,7 +228,7 @@ export default function ApiKeyDialog({
         <div className="space-y-4 px-5 py-4">
           <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/70 px-3 py-3">
             <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-sf-text-muted">
-              Unlocks
+              {t('apiKey.unlocks')}
             </div>
             <ul className="mt-1.5 space-y-0.5 text-xs text-sf-text-secondary">
               {COMFY_PARTNER_WORKFLOWS.map((item) => (
@@ -237,7 +239,7 @@ export default function ApiKeyDialog({
               ))}
             </ul>
             <p className="mt-2 text-[11px] text-sf-text-muted">
-              One key covers all of them. You pay Comfy.org per generation (usually a few cents).
+              {t('apiKey.coverage')}
             </p>
           </div>
 
@@ -247,7 +249,7 @@ export default function ApiKeyDialog({
                 <div className="flex items-start gap-2">
                   <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-400" />
                   <div>
-                    <div className="text-sm text-sf-text-primary">A key is already saved</div>
+                    <div className="text-sm text-sf-text-primary">{t('apiKey.alreadySaved')}</div>
                     <div className="mt-0.5 font-mono text-[11px] text-sf-text-muted">
                       {maskKey(existingKey)}
                     </div>
@@ -260,7 +262,7 @@ export default function ApiKeyDialog({
                   className="inline-flex items-center gap-1 rounded-md border border-sf-dark-600 px-2 py-1 text-[11px] text-sf-text-muted transition-colors hover:border-sf-error/40 hover:text-sf-error disabled:opacity-50"
                 >
                   <Trash2 className="h-3 w-3" />
-                  Remove
+                  {t('apiKey.remove')}
                 </button>
               </div>
             </div>
@@ -269,7 +271,7 @@ export default function ApiKeyDialog({
           <div>
             <div className="flex items-center justify-between gap-2">
               <label className="text-xs font-medium text-sf-text-secondary" htmlFor="comfy-partner-key">
-                {hasExisting ? 'Replace with a new key' : 'Paste your API key'}
+                {hasExisting ? t('apiKey.replacePrompt') : t('apiKey.pastePrompt')}
               </label>
               <button
                 type="button"
@@ -277,7 +279,7 @@ export default function ApiKeyDialog({
                 className="inline-flex items-center gap-1 text-[11px] text-sf-accent hover:underline"
               >
                 <ExternalLink className="h-3 w-3" />
-                Get a key
+                {t('apiKey.getKey')}
               </button>
             </div>
             <div className="mt-1.5 flex gap-2">
@@ -308,7 +310,7 @@ export default function ApiKeyDialog({
                   type="button"
                   onClick={() => setShowKey((prev) => !prev)}
                   className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1.5 text-sf-text-muted hover:text-sf-text-primary"
-                  aria-label={showKey ? 'Hide key' : 'Show key'}
+                  aria-label={showKey ? t('apiKey.hide') : t('apiKey.show')}
                   tabIndex={-1}
                 >
                   {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
@@ -321,14 +323,14 @@ export default function ApiKeyDialog({
                 className="inline-flex items-center gap-1.5 rounded border border-sf-dark-600 bg-sf-dark-800 px-3 py-2 text-xs text-sf-text-secondary transition-colors hover:border-sf-dark-500 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {validating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                Test
+                {t('apiKey.test')}
               </button>
             </div>
 
             {validation.state === 'checking' && (
               <div className="mt-2 flex items-center gap-1.5 text-[11px] text-sf-text-muted">
                 <Loader2 className="h-3 w-3 animate-spin" />
-                {validation.message || 'Checking…'}
+                {validation.message || t('apiKey.checkingShort')}
               </div>
             )}
             {validation.state === 'valid' && (
@@ -358,8 +360,9 @@ export default function ApiKeyDialog({
           )}
 
           <div className="rounded-lg border border-sf-dark-700 bg-sf-dark-900/40 px-3 py-2.5 text-[11px] text-sf-text-muted">
-            Your key is stored locally on this machine in Velorn's settings.
-            Velorn attaches it as <code className="rounded bg-sf-dark-800 px-1">api_key_comfy_org</code> when it queues a cloud-workflow prompt — it never leaves your computer except to reach Comfy.org.
+            {t('apiKey.storagePrefix')}{' '}
+            <code className="rounded bg-sf-dark-800 px-1">api_key_comfy_org</code>{' '}
+            {t('apiKey.storageSuffix')}
           </div>
         </div>
 
@@ -381,7 +384,7 @@ export default function ApiKeyDialog({
               onClick={onClose}
               className="rounded border border-sf-dark-600 px-3 py-1.5 text-xs text-sf-text-secondary transition-colors hover:text-sf-text-primary hover:border-sf-dark-500"
             >
-              Cancel
+              {t('common.cancel')}
             </button>
             <button
               type="button"
@@ -390,7 +393,7 @@ export default function ApiKeyDialog({
               className="inline-flex items-center gap-1.5 rounded bg-sf-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-sf-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-              {hasExisting ? 'Replace key' : 'Save key'}
+              {hasExisting ? t('apiKey.replace') : t('apiKey.save')}
             </button>
           </div>
         </div>

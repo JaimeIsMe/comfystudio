@@ -13,6 +13,7 @@ import {
   COMFY_PARTNER_KEY_CHANGED_EVENT,
 } from '../services/comfyPartnerAuth'
 import { resolveThumbnailUrl } from '../utils/projectThumbnail'
+import { useI18n } from '../i18n/I18nContext'
 
 const WELCOME_ASSET_BASE_URL = (() => {
   const rawBase = typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL
@@ -151,6 +152,7 @@ function HeroVideoLoop({ src, poster, fadeSeconds = 5, className = '', style = {
 }
 
 function WelcomeScreen() {
+  const { t } = useI18n()
   const [showNewProjectDialog, setShowNewProjectDialog] = useState(false)
   const [recentProjectsList, setRecentProjectsList] = useState([])
   const [loadingProjects, setLoadingProjects] = useState(false)
@@ -485,9 +487,9 @@ function WelcomeScreen() {
               <div className="flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-sf-error flex-shrink-0 mt-0.5" />
                 <div>
-                  <p className="text-sm text-sf-text-primary font-medium">Browser Not Supported</p>
+                  <p className="text-sm text-sf-text-primary font-medium">{t('welcome.browserUnsupported')}</p>
                   <p className="text-xs text-sf-text-muted mt-1">
-                    Velorn requires the File System Access API. Please use Google Chrome or Microsoft Edge.
+                    {t('welcome.browserUnsupportedHelp')}
                   </p>
                 </div>
               </div>
@@ -496,15 +498,15 @@ function WelcomeScreen() {
           
           {/* Setup Card */}
           <div className="bg-sf-dark-900 border border-sf-dark-700 rounded-xl p-6">
-            <h2 className="text-lg font-semibold text-sf-text-primary mb-2 text-center">Set Up Your Workspace</h2>
+            <h2 className="text-lg font-semibold text-sf-text-primary mb-2 text-center">{t('welcome.setupWorkspace')}</h2>
             <p className="text-sm text-sf-text-muted mb-6">
-              Choose a folder where your Velorn projects and media will be stored. Each project will have its own subfolder with all assets and imported media organized inside.
+              {t('welcome.setupWorkspaceHelp')}
             </p>
             
             {/* Current Location Display */}
             {defaultProjectsLocation && (
               <div className="mb-4 p-3 bg-sf-dark-800 rounded-lg">
-                <p className="text-xs text-sf-text-muted mb-1">Current location:</p>
+                <p className="text-xs text-sf-text-muted mb-1">{t('welcome.currentLocation')}</p>
                 <p className="text-sm text-sf-text-primary truncate">{defaultProjectsLocation}</p>
               </div>
             )}
@@ -518,14 +520,16 @@ function WelcomeScreen() {
                     onClick={openLatestAutosaveForFailedProject}
                     className="text-xs text-sf-text-primary hover:text-white mt-2 rounded-md border border-sf-dark-500 bg-sf-dark-900 px-2.5 py-1 transition-colors"
                   >
-                    Open latest autosave{lastFailedProjectName ? ` for ${lastFailedProjectName}` : ''}
+                    {lastFailedProjectName
+                      ? t('welcome.openLatestAutosaveFor', { project: lastFailedProjectName })
+                      : t('welcome.openLatestAutosave')}
                   </button>
                 )}
                 <button 
                   onClick={clearError}
                   className="text-xs text-sf-text-muted hover:text-sf-text-primary mt-1"
                 >
-                  Dismiss
+                  {t('welcome.dismiss')}
                 </button>
               </div>
             )}
@@ -541,11 +545,11 @@ function WelcomeScreen() {
               ) : (
                 <FolderOpen className="w-5 h-5" />
               )}
-              Choose Projects Folder
+              {t('welcome.chooseProjectsFolder')}
             </button>
             
             <p className="text-xs text-sf-text-muted text-center mt-4">
-              You can change this later in Settings
+              {t('welcome.changeLater')}
             </p>
           </div>
         </div>
@@ -566,7 +570,7 @@ function WelcomeScreen() {
           <button
             type="button"
             onClick={() => setApiKeyDialogOpen(true)}
-            title={partnerKeyConfigured ? 'Cloud API key is set. Click to manage.' : 'Set up your Comfy.org API key to unlock cloud workflows.'}
+            title={partnerKeyConfigured ? t('launcherChip.apiKeySetHelp') : t('launcherChip.apiKeyNeededHelp')}
             className={`flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[11px] font-medium transition-colors border ${partnerKeyConfigured
               ? 'bg-sf-dark-800 hover:bg-sf-dark-700 border-sf-dark-700 text-sf-text-primary'
               : 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/40 text-amber-100'
@@ -575,12 +579,12 @@ function WelcomeScreen() {
             {partnerKeyConfigured ? (
               <>
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>API key set</span>
+                <span>{t('launcherChip.apiKeySet')}</span>
               </>
             ) : (
               <>
                 <KeyRound className="w-3.5 h-3.5" />
-                <span>API key needed</span>
+                <span>{t('launcherChip.apiKeyNeeded')}</span>
               </>
             )}
           </button>
@@ -603,14 +607,14 @@ function WelcomeScreen() {
           className="flex items-center gap-2 px-4 py-2 bg-sf-dark-800 hover:bg-sf-dark-700 border border-sf-dark-500 rounded-lg text-sm text-sf-text-secondary font-medium transition-colors"
         >
           <FolderOpen className="w-4 h-4" />
-          Open Project
+          {t('welcome.openProject')}
         </button>
         <button
           onClick={() => setShowNewProjectDialog(true)}
           className="flex items-center gap-2 px-4 py-2 bg-sf-accent hover:bg-sf-accent-hover border border-sf-accent rounded-lg text-sm text-white font-medium shadow-lg shadow-sf-accent/20 transition-colors"
         >
           <Plus className="w-4 h-4" />
-          New Project
+          {t('welcome.newProject')}
         </button>
       </div>
     </>
@@ -707,7 +711,7 @@ function WelcomeScreen() {
               onClick={clearError}
               className="text-xs text-sf-text-muted hover:text-sf-text-primary"
             >
-              Dismiss
+              {t('welcome.dismiss')}
             </button>
           </div>
         )}
@@ -728,17 +732,17 @@ function WelcomeScreen() {
                 over busy hero artwork without becoming a full-width bar. */}
             <div className="inline-flex items-center rounded-full border border-white/10 bg-black/55 px-3 py-1 shadow-lg shadow-black/40 backdrop-blur-md">
               <h2 className="text-[13px] font-semibold text-sf-text-primary tracking-tight leading-none">
-                Select a project
+                {t('welcome.selectProject')}
               </h2>
             </div>
             {/* Grid / list toggle */}
             {recentProjectsList.length > 0 && (
-              <div className="inline-flex items-center gap-0.5 rounded-md border border-sf-dark-700 bg-sf-dark-900 p-0.5" role="group" aria-label="View mode">
+              <div className="inline-flex items-center gap-0.5 rounded-md border border-sf-dark-700 bg-sf-dark-900 p-0.5" role="group" aria-label={t('welcome.selectProject')}>
                 <button
                   type="button"
                   onClick={() => setProjectListViewMode('grid')}
-                  title="Grid view"
-                  aria-label="Grid view"
+                  title={t('welcome.gridView')}
+                  aria-label={t('welcome.gridView')}
                   aria-pressed={projectListViewMode !== 'list'}
                   className={`p-1 rounded transition-colors ${projectListViewMode !== 'list'
                     ? 'bg-sf-dark-700 text-sf-text-primary'
@@ -749,8 +753,8 @@ function WelcomeScreen() {
                 <button
                   type="button"
                   onClick={() => setProjectListViewMode('list')}
-                  title="List view"
-                  aria-label="List view"
+                  title={t('welcome.listView')}
+                  aria-label={t('welcome.listView')}
                   aria-pressed={projectListViewMode === 'list'}
                   className={`p-1 rounded transition-colors ${projectListViewMode === 'list'
                     ? 'bg-sf-dark-700 text-sf-text-primary'
@@ -768,14 +772,14 @@ function WelcomeScreen() {
             </div>
           ) : recentProjectsList.length === 0 ? (
             <div className="bg-sf-dark-900 border border-sf-dark-700 rounded-xl p-12 text-center">
-              <p className="text-sf-text-primary font-medium mb-2">No recent projects</p>
-              <p className="text-sm text-sf-text-muted mb-6">Create your first project to get started</p>
+              <p className="text-sf-text-primary font-medium mb-2">{t('welcome.noRecentProjects')}</p>
+              <p className="text-sm text-sf-text-muted mb-6">{t('welcome.createFirstProject')}</p>
               <button
                 onClick={() => setShowNewProjectDialog(true)}
                 className="inline-flex items-center gap-2 px-4 py-2 bg-sf-dark-800 hover:bg-sf-dark-700 border border-sf-dark-500 rounded-lg text-sm text-sf-text-secondary font-medium transition-colors"
               >
                 <Plus className="w-4 h-4" />
-                New Project
+                {t('welcome.newProject')}
               </button>
             </div>
           ) : projectListViewMode === 'list' ? (
@@ -944,13 +948,13 @@ function WelcomeScreen() {
         {/* Projects Location Info */}
         <div className="text-center text-xs text-sf-text-muted">
           <p className="inline-flex items-center rounded-full border border-white/10 bg-black/60 px-3 py-1.5 shadow-lg shadow-black/50 backdrop-blur-md">
-            Projects and media are saved to: <span className="text-sf-text-secondary">{defaultProjectsLocation || 'Not set'}</span>
+            {t('welcome.projectsSavedTo')} <span className="text-sf-text-secondary">{defaultProjectsLocation || t('common.notSet')}</span>
             {' '}
             <button 
               onClick={selectDefaultProjectsLocation}
               className="text-sf-accent hover:underline"
             >
-              Change
+              {t('common.change')}
             </button>
           </p>
         </div>

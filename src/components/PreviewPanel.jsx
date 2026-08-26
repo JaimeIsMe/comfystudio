@@ -27,6 +27,7 @@ import { importAsset } from '../services/fileSystem'
 import { getGlslPreviewQualityScale } from '../utils/glslEffects'
 import { getShapeCanvasRect } from '../utils/shapes'
 import { getClipQuadCorners } from '../services/exporter'
+import { useI18n } from '../i18n/I18nContext'
 
 const SPACE_MODIFIER_USED_EVENT = 'comfystudio-space-modifier-used'
 
@@ -294,6 +295,7 @@ function formatPreviewChunkRange(range) {
 }
 
 function PreviewPanel() {
+  const { t } = useI18n()
   const videoRefA = useRef(null) // Used for asset preview mode
   const containerRef = useRef(null)
   const viewportRef = useRef(null)
@@ -1787,7 +1789,7 @@ function PreviewPanel() {
   
   // Get zoom display label
   const getZoomLabel = () => {
-    if (zoom === 'fit') return 'Fit'
+    if (zoom === 'fit') return t('preview.fit')
     return `${zoom}%`
   }
   
@@ -2283,8 +2285,8 @@ function PreviewPanel() {
       <div className="h-8 bg-sf-dark-900 border-b border-sf-dark-700 flex items-center justify-between px-3 flex-shrink-0">
         <div className="flex items-center gap-3">
           <span className="text-xs text-sf-text-secondary">
-            {currentPreview ? `Preview - ${currentPreview.name}` : 'Preview'}
-            {isFullscreen && <span className="ml-2 text-sf-text-muted">(Press ESC to exit)</span>}
+            {currentPreview ? `${t('preview.title')} - ${currentPreview.name}` : t('preview.title')}
+            {isFullscreen && <span className="ml-2 text-sf-text-muted">{t('preview.escExit')}</span>}
           </span>
 
           {previewMode === 'timeline' && getTopmostVideoOrImageClipAtTime(playheadPosition) && (
@@ -2296,22 +2298,22 @@ function PreviewPanel() {
                   ? 'text-sf-success bg-sf-success/10'
                   : 'text-sf-text-muted hover:bg-sf-dark-700'
               } disabled:opacity-50`}
-              title="Capture a still frame from the preview into project assets"
+              title={t('preview.captureHelp')}
             >
               {capturingStillFrame ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Saving Still...</span>
+                  <span>{t('preview.savingStill')}</span>
                 </>
               ) : justCapturedStill ? (
                 <>
                   <Check className="w-3.5 h-3.5" />
-                  <span>Still Saved</span>
+                  <span>{t('preview.stillSaved')}</span>
                 </>
               ) : (
                 <>
                   <Camera className="w-3.5 h-3.5" />
-                  <span>Still</span>
+                  <span>{t('preview.still')}</span>
                 </>
               )}
             </button>
@@ -2323,14 +2325,14 @@ function PreviewPanel() {
             className={`flex items-center gap-1.5 px-2 py-1 hover:bg-sf-dark-700 rounded transition-colors text-xs ${
               showInfoOverlay ? 'text-sf-text-muted' : 'text-sf-text-muted/50'
             }`}
-            title={showInfoOverlay ? 'Hide Info Overlay' : 'Show Info Overlay'}
+            title={showInfoOverlay ? t('preview.hideInfo') : t('preview.showInfo')}
           >
             {showInfoOverlay ? (
               <Eye className="w-3.5 h-3.5" />
             ) : (
               <EyeOff className="w-3.5 h-3.5" />
             )}
-            <span>Info</span>
+            <span>{t('preview.info')}</span>
           </button>
           
           {/* Safe Guides Dropdown */}
@@ -2344,10 +2346,10 @@ function PreviewPanel() {
               className={`flex items-center gap-1.5 px-2 py-1 hover:bg-sf-dark-700 rounded transition-colors text-xs ${
                 safeGuide !== 'none' || letterbox !== 'none' ? 'text-sf-accent' : 'text-sf-text-muted'
               }`}
-              title="Safe Guides & Letterbox"
+              title={t('preview.guidesHelp')}
             >
               <Grid3X3 className="w-3.5 h-3.5" />
-              <span>Guides</span>
+              <span>{t('preview.guides')}</span>
               <ChevronDown className="w-3 h-3" />
             </button>
             
@@ -2358,7 +2360,7 @@ function PreviewPanel() {
               >
                 {/* Safe Guides Section */}
                 <div className="px-3 py-1 text-[10px] text-sf-text-muted uppercase tracking-wider">
-                  Safe Guides
+                  {t('preview.safeGuides')}
                 </div>
                 {SAFE_GUIDES.map((guide) => (
                   <button
@@ -2377,8 +2379,8 @@ function PreviewPanel() {
                       {guide.id === 'none' && <X className="w-3.5 h-3.5 text-sf-text-muted" />}
                     </div>
                     <div className="flex-1">
-                      <span className="text-sf-text-primary">{guide.label}</span>
-                      <p className="text-[10px] text-sf-text-muted">{guide.description}</p>
+                      <span className="text-sf-text-primary">{t(`preview.guide.${guide.id}.label`)}</span>
+                      <p className="text-[10px] text-sf-text-muted">{t(`preview.guide.${guide.id}.description`)}</p>
                     </div>
                     {safeGuide === guide.id && (
                       <Check className="w-3 h-3 text-sf-accent" />
@@ -2391,7 +2393,7 @@ function PreviewPanel() {
                 
                 {/* Letterbox Section */}
                 <div className="px-3 py-1 text-[10px] text-sf-text-muted uppercase tracking-wider">
-                  Letterbox Preview
+                  {t('preview.letterbox')}
                 </div>
                 {LETTERBOX_PRESETS.map((preset) => (
                   <button
@@ -2408,7 +2410,7 @@ function PreviewPanel() {
                         <div className="w-4 h-2 border border-sf-text-muted rounded-sm" />
                       )}
                     </div>
-                    <span className="text-sf-text-primary">{preset.label}</span>
+                    <span className="text-sf-text-primary">{preset.id === 'none' ? t('preview.noLetterbox') : preset.label}</span>
                     {letterbox === preset.id && (
                       <Check className="w-3 h-3 text-sf-accent ml-auto" />
                     )}
@@ -2424,7 +2426,7 @@ function PreviewPanel() {
             <button 
               onClick={clearPreview}
               className="p-1 hover:bg-sf-dark-700 rounded transition-colors"
-              title="Clear preview"
+              title={t('preview.clear')}
             >
               <X className="w-4 h-4 text-sf-text-muted" />
             </button>
@@ -2440,8 +2442,8 @@ function PreviewPanel() {
               } ${showPreviewTransformControls ? 'text-sf-accent' : 'text-sf-text-muted'}`}
               title={
                 canShowPreviewTransformControls
-                  ? (showPreviewTransformControls ? 'Hide transform handles' : 'Show transform handles')
-                  : 'Select an active visual clip to toggle transform controls'
+                  ? (showPreviewTransformControls ? t('preview.hideTransform') : t('preview.showTransform'))
+                  : t('preview.selectVisual')
               }
             >
               <Crosshair className="w-4 h-4" />
@@ -2450,14 +2452,14 @@ function PreviewPanel() {
           <button
             onClick={togglePreviewPopout}
             className={`p-1 hover:bg-sf-dark-700 rounded transition-colors ${isPreviewPoppedOut ? 'text-sf-accent' : 'text-sf-text-muted'}`}
-            title={isPreviewPoppedOut ? 'Close detached preview window' : 'Pop out preview to a separate window (drag it to another monitor; double-click it for fullscreen)'}
+            title={isPreviewPoppedOut ? t('preview.closePopout') : t('preview.openPopout')}
           >
             <PictureInPicture2 className="w-4 h-4" />
           </button>
           <button
             onClick={toggleFullscreen}
             className="p-1 hover:bg-sf-dark-700 rounded transition-colors"
-            title={isFullscreen ? 'Exit Fullscreen (ESC)' : 'Fullscreen'}
+            title={isFullscreen ? t('preview.exitFullscreen') : t('preview.fullscreen')}
           >
             {isFullscreen ? (
               <Minimize2 className="w-4 h-4 text-sf-text-muted" />
@@ -2928,9 +2930,9 @@ function PreviewPanel() {
               /* Empty State */
               <div className="w-full h-full flex flex-col items-center justify-center text-sf-text-muted">
                 <div className="text-6xl mb-4">🎬</div>
-                <p className="text-sm">No Preview Selected</p>
+                <p className="text-sm">{t('preview.emptyTitle')}</p>
                 <p className="text-xs mt-1 text-sf-text-muted">
-                  Generate a video or select from Assets
+                  {t('preview.emptyHelp')}
                 </p>
                 {clips.length > 0 && (
                   <button 
@@ -2941,7 +2943,7 @@ function PreviewPanel() {
                     className="mt-3 px-3 py-1.5 bg-sf-blue hover:bg-sf-blue-hover rounded text-xs text-white flex items-center gap-1 transition-colors"
                   >
                     <Film className="w-3 h-3" />
-                    Preview Timeline
+                    {t('preview.previewTimeline')}
                   </button>
                 )}
               </div>
@@ -3270,7 +3272,7 @@ function PreviewPanel() {
         <button
           onClick={resetView}
           className="p-1.5 hover:bg-sf-dark-700 rounded transition-colors"
-          title="Reset View (Home)"
+          title={t('preview.resetView')}
         >
           <Home className="w-3.5 h-3.5 text-sf-text-secondary" />
         </button>
@@ -3281,7 +3283,7 @@ function PreviewPanel() {
         <button
           onClick={zoomOut}
           className="p-1.5 hover:bg-sf-dark-700 rounded transition-colors"
-          title="Zoom Out"
+          title={t('preview.zoomOut')}
         >
           <ZoomOut className="w-3.5 h-3.5 text-sf-text-secondary" />
         </button>
@@ -3309,7 +3311,7 @@ function PreviewPanel() {
                     zoom === preset.value ? 'text-sf-accent' : 'text-sf-text-secondary'
                   }`}
                 >
-                  {preset.label}
+                  {preset.value === 'fit' ? t('preview.fit') : preset.label}
                 </button>
               ))}
             </div>
@@ -3320,7 +3322,7 @@ function PreviewPanel() {
         <button
           onClick={zoomIn}
           className="p-1.5 hover:bg-sf-dark-700 rounded transition-colors"
-          title="Zoom In"
+          title={t('preview.zoomIn')}
         >
           <ZoomIn className="w-3.5 h-3.5 text-sf-text-secondary" />
         </button>

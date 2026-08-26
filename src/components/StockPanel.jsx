@@ -17,10 +17,12 @@ import {
   searchPexelsMedia,
   writePexelsStockPanelState,
 } from '../services/pexelsStock'
+import { useI18n } from '../i18n/I18nContext'
 
 const PER_PAGE = PEXELS_DEFAULT_PER_PAGE
 
 function StockPanel() {
+  const { t } = useI18n()
   const persistedState = readPexelsStockPanelState()
   const [apiKey, setApiKey] = useState(null)
   const [searchQuery, setSearchQuery] = useState(persistedState?.searchQuery || '')
@@ -88,12 +90,12 @@ function StockPanel() {
       setPage(response.page)
       setIsDefaultContent(true)
     } catch (err) {
-      setError(err.message || 'Failed to load content')
+      setError(err.message || t('stock.loadFailed'))
       setResults([])
     } finally {
       setLoading(false)
     }
-  }, [apiKey, mediaType])
+  }, [apiKey, mediaType, t])
 
   // When API key is ready and there's no search query, show trending/popular
   useEffect(() => {
@@ -104,12 +106,12 @@ function StockPanel() {
 
   const search = useCallback(async (pageNum = 1) => {
     if (!apiKey) {
-      setError('Add your Pexels API key in Settings (left panel → Settings).')
+      setError(t('stock.apiKeyMissing'))
       return
     }
     const query = searchQuery.trim()
     if (!query) {
-      setError('Enter a search term.')
+      setError(t('stock.searchTermRequired'))
       return
     }
     setError(null)
@@ -121,16 +123,16 @@ function StockPanel() {
       setTotalResults(response.totalResults)
       setPage(response.page)
     } catch (err) {
-      setError(err.message || 'Search failed')
+      setError(err.message || t('stock.searchFailed'))
       setResults([])
     } finally {
       setLoading(false)
     }
-  }, [apiKey, searchQuery, mediaType])
+  }, [apiKey, searchQuery, mediaType, t])
 
   const handleAddToProject = async (item) => {
     if (!currentProjectHandle) {
-      setError('Open or create a project first.')
+      setError(t('stock.projectRequired'))
       return
     }
     setAddingId(item.id)
@@ -154,7 +156,7 @@ function StockPanel() {
         }
       }
     } catch (err) {
-      setError(err.message || 'Failed to add to project')
+      setError(err.message || t('stock.addFailed'))
     } finally {
       setAddingId(null)
     }
@@ -178,7 +180,7 @@ function StockPanel() {
       {/* Header */}
       <div className="flex-shrink-0 p-4 border-b border-sf-dark-700">
         <div className="flex items-center gap-3 mb-3">
-          <h1 className="text-lg font-semibold text-sf-text-primary">Stock</h1>
+          <h1 className="text-lg font-semibold text-sf-text-primary">{t('stock.title')}</h1>
           <a
             href="https://www.pexels.com"
             target="_blank"
@@ -186,7 +188,7 @@ function StockPanel() {
             className="text-[10px] text-sf-text-muted hover:text-sf-accent flex items-center gap-1"
           >
             <ExternalLink className="w-3 h-3" />
-            Photos & videos from Pexels (free to use)
+            {t('stock.source')}
           </a>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -197,7 +199,7 @@ function StockPanel() {
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && search(1)}
-              placeholder="Search stock footage..."
+              placeholder={t('stock.searchPlaceholder')}
               className="w-full pl-8 pr-3 py-2 bg-sf-dark-800 border border-sf-dark-600 rounded-lg text-sm text-sf-text-primary placeholder-sf-text-muted focus:outline-none focus:border-sf-accent"
             />
           </div>
@@ -207,14 +209,14 @@ function StockPanel() {
               className={`px-3 py-2 text-xs flex items-center gap-1.5 transition-colors ${mediaType === 'videos' ? 'bg-sf-accent text-white' : 'bg-sf-dark-800 text-sf-text-muted hover:bg-sf-dark-700'}`}
             >
               <Video className="w-3.5 h-3.5" />
-              Videos
+              {t('stock.videos')}
             </button>
             <button
               onClick={() => setMediaType('photos')}
               className={`px-3 py-2 text-xs flex items-center gap-1.5 transition-colors ${mediaType === 'photos' ? 'bg-sf-accent text-white' : 'bg-sf-dark-800 text-sf-text-muted hover:bg-sf-dark-700'}`}
             >
               <ImageIcon className="w-3.5 h-3.5" />
-              Photos
+              {t('stock.photos')}
             </button>
           </div>
           <button
@@ -223,16 +225,16 @@ function StockPanel() {
             className="px-4 py-2 bg-sf-accent hover:bg-sf-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg flex items-center gap-2 transition-colors"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-            Search
+            {t('stock.search')}
           </button>
           <button
             onClick={handleGoHome}
             disabled={loading || !canGoHome}
             className="px-3 py-2 bg-sf-dark-800 border border-sf-dark-600 hover:bg-sf-dark-700 disabled:opacity-50 disabled:cursor-not-allowed text-sf-text-secondary text-sm font-medium rounded-lg flex items-center gap-2 transition-colors"
-            title="Back to popular/trending"
+            title={t('stock.homeHelp')}
           >
             <Home className="w-4 h-4" />
-            Home
+            {t('stock.home')}
           </button>
         </div>
       </div>
@@ -242,19 +244,19 @@ function StockPanel() {
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="max-w-md text-center">
             <AlertCircle className="w-12 h-12 text-sf-accent mx-auto mb-3" />
-            <p className="text-sm text-sf-text-primary mb-2">Pexels API key required</p>
+            <p className="text-sm text-sf-text-primary mb-2">{t('stock.apiRequired')}</p>
             <p className="text-xs text-sf-text-muted mb-4">
-              Get a free API key at{' '}
+              {t('stock.apiGetKeyAt')}{' '}
               <a href="https://www.pexels.com/api/" target="_blank" rel="noopener noreferrer" className="text-sf-accent hover:underline">
                 pexels.com/api
               </a>
-              , then add it in <strong>Settings</strong> (left panel → Settings).
+              {t('stock.apiInstructions')}
             </p>
             <button
               onClick={() => getPexelsApiKey().then(key => setApiKey(key?.trim() || null))}
               className="px-3 py-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 rounded text-xs text-sf-text-primary"
             >
-              I've added my key — refresh
+              {t('stock.refreshKey')}
             </button>
           </div>
         </div>
@@ -277,13 +279,13 @@ function StockPanel() {
             </div>
           ) : results.length === 0 && !error ? (
             <div className="text-center py-20 text-sf-text-muted text-sm">
-              {searchQuery.trim() ? 'No results. Try a different search.' : 'Enter a search term and click Search.'}
+              {searchQuery.trim() ? t('stock.noResults') : t('stock.enterSearch')}
             </div>
           ) : (
             <>
               {isDefaultContent && (
                 <p className="text-xs text-sf-text-muted mb-3">
-                  {mediaType === 'videos' ? 'Popular videos' : 'Trending photos'} on Pexels — or search above for something specific.
+                  {mediaType === 'videos' ? t('stock.popularVideos') : t('stock.trendingPhotos')} {t('stock.defaultHelp')}
                 </p>
               )}
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
@@ -300,7 +302,7 @@ function StockPanel() {
                         className={`aspect-video bg-sf-dark-700 relative ${isVideo ? 'cursor-pointer' : ''}`}
                         onClick={isVideo ? () => setPreviewVideo(item) : undefined}
                         role={isVideo ? 'button' : undefined}
-                        aria-label={isVideo ? 'Preview video' : undefined}
+                        aria-label={isVideo ? t('stock.previewVideo') : undefined}
                       >
                         {thumb && (
                           <img
@@ -319,8 +321,8 @@ function StockPanel() {
                             <button
                               onClick={(e) => { e.stopPropagation(); setPreviewVideo(item) }}
                               className="p-2 bg-white/90 hover:bg-white rounded-full text-sf-dark-900 shadow-lg"
-                              title="Preview"
-                              aria-label="Preview video"
+                              title={t('stock.preview')}
+                              aria-label={t('stock.previewVideo')}
                             >
                               <Play className="w-5 h-5 fill-current" />
                             </button>
@@ -330,7 +332,7 @@ function StockPanel() {
                               className="px-3 py-1.5 bg-sf-accent hover:bg-sf-accent-hover disabled:opacity-50 text-white text-xs font-medium rounded flex items-center gap-1.5"
                             >
                               {isAdding ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
-                              Add to project
+                              {t('stock.addToProject')}
                             </button>
                           </div>
                         )}
@@ -342,7 +344,7 @@ function StockPanel() {
                               className="px-3 py-1.5 bg-sf-accent hover:bg-sf-accent-hover disabled:opacity-50 text-white text-xs font-medium rounded flex items-center gap-1.5"
                             >
                               {isAdding ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
-                              Add to project
+                              {t('stock.addToProject')}
                             </button>
                           </div>
                         )}
@@ -365,17 +367,17 @@ function StockPanel() {
                     disabled={page <= 1 || loading}
                     className="px-3 py-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 disabled:opacity-50 rounded text-xs text-sf-text-primary"
                   >
-                    Previous
+                    {t('stock.previous')}
                   </button>
                   <span className="text-xs text-sf-text-muted">
-                    Page {page} of {totalPages} ({totalResults} results)
+                    {t('stock.page', { page, pages: totalPages, results: totalResults })}
                   </span>
                   <button
                     onClick={() => loadPage(page + 1)}
                     disabled={page >= totalPages || loading}
                     className="px-3 py-1.5 bg-sf-dark-700 hover:bg-sf-dark-600 disabled:opacity-50 rounded text-xs text-sf-text-primary"
                   >
-                    Next
+                    {t('stock.next')}
                   </button>
                 </div>
               )}
@@ -391,7 +393,7 @@ function StockPanel() {
           onClick={() => setPreviewVideo(null)}
           role="dialog"
           aria-modal="true"
-          aria-label="Video preview"
+          aria-label={t('stock.videoPreview')}
         >
           <div
             className="relative bg-sf-dark-800 rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col"
@@ -400,7 +402,7 @@ function StockPanel() {
             <button
               onClick={() => setPreviewVideo(null)}
               className="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-black/60 hover:bg-black/80 text-white transition-colors"
-              aria-label="Close preview"
+              aria-label={t('stock.closePreview')}
             >
               <X className="w-5 h-5" />
             </button>
@@ -423,7 +425,7 @@ function StockPanel() {
                   onClick={() => setPreviewVideo(null)}
                   className="px-3 py-1.5 bg-sf-dark-600 hover:bg-sf-dark-500 rounded text-sm text-sf-text-primary"
                 >
-                  Close
+                  {t('common.close')}
                 </button>
                 <button
                   onClick={() => {
@@ -434,7 +436,7 @@ function StockPanel() {
                   className="px-4 py-1.5 bg-sf-accent hover:bg-sf-accent-hover disabled:opacity-50 text-white text-sm font-medium rounded flex items-center gap-1.5"
                 >
                   {addingId === previewVideo.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                  Add to project
+                  {t('stock.addToProject')}
                 </button>
               </div>
             </div>
@@ -445,9 +447,9 @@ function StockPanel() {
       {/* Footer attribution */}
       <div className="flex-shrink-0 px-4 py-2 border-t border-sf-dark-700 text-[10px] text-sf-text-muted">
         <a href="https://www.pexels.com" target="_blank" rel="noopener noreferrer" className="text-sf-accent hover:underline">
-          Photos and videos provided by Pexels
+          {t('stock.providedBy')}
         </a>
-        {' · Free to use, no attribution required.'}
+        {t('stock.attribution')}
       </div>
     </div>
   )

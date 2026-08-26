@@ -3,6 +3,7 @@ import { Search, Info, ChevronDown, ChevronRight, Waves, Radio, Sparkles, Circle
 import { useTimelineStore } from '../../stores/timelineStore'
 import { TRANSITION_TYPES, TRANSITION_DURATIONS, FRAME_RATE, TRANSITION_DEFAULT_SETTINGS, TRANSITION_CATEGORIES } from '../../constants/transitions'
 import { EFFECT_PICKER_GROUPS, getEffectTypeDefinition } from '../../utils/effects'
+import { useI18n } from '../../i18n/I18nContext'
 
 const EFFECT_PANEL_ICONS = {
   cameraShake: Waves,
@@ -29,6 +30,7 @@ const EFFECT_PANEL_ICONS = {
 const TRANSITION_DEFAULT_DURATION_KEY = 'comfystudio-transition-default-duration-frames'
 
 function EffectsPanel() {
+  const { t } = useI18n()
   const {
     clips,
     transitions,
@@ -60,12 +62,31 @@ function EffectsPanel() {
   const minTransitionSeconds = 1 / FRAME_RATE
   
   const getTransitionDefaults = (type) => TRANSITION_DEFAULT_SETTINGS[type] || {}
+
+  const getTransitionLabel = (transition) => (
+    t(`effectsPanel.transitions.items.${transition.id}`, undefined, transition.name)
+  )
+  const getEffectGroupLabel = (group) => (
+    t(`effectsPanel.effectGroups.${group.id}`, undefined, group.label)
+  )
+  const getEffectLabel = (definition) => (
+    t(`effectsPanel.catalog.${definition.id}.label`, undefined, definition.label)
+  )
+  const getEffectDescription = (definition) => (
+    t(`effectsPanel.catalog.${definition.id}.description`, undefined, definition.description)
+  )
+  const getPresetLabel = (definition, preset) => (
+    t(`effectsPanel.catalog.${definition.id}.presets.${preset.id}`, undefined, preset.label)
+  )
   
   const filteredTransitions = useMemo(() => {
     if (!search.trim()) return TRANSITION_TYPES
     const q = search.trim().toLowerCase()
-    return TRANSITION_TYPES.filter(t => t.name.toLowerCase().includes(q))
-  }, [search])
+    return TRANSITION_TYPES.filter((transition) => (
+      transition.name.toLowerCase().includes(q)
+      || getTransitionLabel(transition).toLowerCase().includes(q)
+    ))
+  }, [search, t])
   const transitionsById = useMemo(() => {
     const map = new Map()
     TRANSITION_TYPES.forEach(t => map.set(t.id, t))
@@ -172,13 +193,13 @@ function EffectsPanel() {
     if (edgeMode !== 'between' && singleClip) {
       const maxDuration = getMaxEdgeTransitionDuration(singleClip.id)
       if (maxDuration < minTransitionSeconds) {
-        setMessage('Clip is too short for an edge transition.')
+        setMessage(t('effectsPanel.messages.edgeTooShort'))
         return
       }
       const actualDuration = Math.min(durationSeconds, maxDuration)
       const result = addEdgeTransition(singleClip.id, edgeMode, type, actualDuration)
       if (!result) {
-        setMessage('Could not add edge transition.')
+        setMessage(t('effectsPanel.messages.edgeAddFailed'))
         return
       }
       setMessage('')
@@ -187,20 +208,20 @@ function EffectsPanel() {
     
     const pair = getSelectedPair()
     if (!pair) {
-      setMessage('Select two adjacent clips on the same track to apply a transition.')
+      setMessage(t('effectsPanel.messages.selectAdjacent'))
       return
     }
     
     const maxDuration = getMaxTransitionDuration(pair.clipA.id, pair.clipB.id)
     if (maxDuration < minTransitionSeconds) {
-      setMessage('Insufficient handles. Extend clip trims to add a transition.')
+      setMessage(t('effectsPanel.messages.insufficientHandles'))
       return
     }
     
     const actualDuration = Math.min(durationSeconds, maxDuration)
     const result = addTransition(pair.clipA.id, pair.clipB.id, type, actualDuration)
     if (!result) {
-      setMessage('Could not add transition. Check clip handles or overlap.')
+      setMessage(t('effectsPanel.messages.transitionAddFailed'))
       return
     }
     
@@ -223,7 +244,7 @@ function EffectsPanel() {
     const def = getEffectTypeDefinition(effectTypeId)
     if (!def) return
     if (selectedClips.length === 0) {
-      setMessage('Select one or more clips, then click an effect to apply.')
+      setMessage(t('effectsPanel.messages.selectClipsForEffect'))
       return
     }
     const preset = presetId ? def.presets?.find((p) => p.id === presetId) : null
@@ -233,11 +254,14 @@ function EffectsPanel() {
     selectedClips.forEach((clip) => {
       addEffect(clip.id, { type: effectTypeId, settings })
     })
-    setMessage(
-      `Added ${def.label}${preset ? ` (${preset.label})` : ''} to ${selectedClips.length} clip${
-        selectedClips.length === 1 ? '' : 's'
-      }.`
-    )
+    const effectLabel = getEffectLabel(def)
+    const presetSuffix = preset
+      ? t('effectsPanel.messages.presetSuffix', { preset: getPresetLabel(def, preset) })
+      : ''
+    setMessage(t(
+      selectedClips.length === 1 ? 'effectsPanel.messages.effectAddedOne' : 'effectsPanel.messages.effectAddedMany',
+      { effect: effectLabel, preset: presetSuffix, count: selectedClips.length }
+    ))
   }
   
   const TransitionThumbnail = ({ type, icon }) => {
@@ -297,11 +321,13 @@ function EffectsPanel() {
       <div className="bg-sf-dark-800 border border-sf-dark-600 rounded-lg p-2 space-y-2">
         <div className="flex items-center justify-between">
           <div className="text-xs text-sf-text-primary">{label}</div>
-          <div className="text-[10px] text-sf-text-muted">{transition.type}</div>
+          <div className="text-[10px] text-sf-text-muted">
+            {getTransitionLabel(transitionsById.get(transition.type) || { id: transition.type, name: transition.type })}
+          </div>
         </div>
         
         <div className="flex items-center gap-2">
-          <label className="text-[10px] text-sf-text-muted w-16">Duration</label>
+          <label className="text-[10px] text-sf-text-muted w-16">{t('effectsPanel.duration')}</label>
           <input
             type="number"
             min={1}
@@ -310,12 +336,12 @@ function EffectsPanel() {
             onChange={(e) => updateTransitionDuration(transition.id, e.target.value)}
             className="w-20 bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-[11px] text-sf-text-primary focus:outline-none focus:border-sf-accent"
           />
-          <span className="text-[10px] text-sf-text-muted">frames</span>
+          <span className="text-[10px] text-sf-text-muted">{t('effectsPanel.frames')}</span>
         </div>
         
         {supportsZoom && (
           <div className="flex items-center gap-2">
-            <label className="text-[10px] text-sf-text-muted w-16">Zoom</label>
+            <label className="text-[10px] text-sf-text-muted w-16">{t('effectsPanel.zoom')}</label>
             <input
               type="range"
               min={0.02}
@@ -333,7 +359,7 @@ function EffectsPanel() {
         
         {supportsBlur && (
           <div className="flex items-center gap-2">
-            <label className="text-[10px] text-sf-text-muted w-16">Blur</label>
+            <label className="text-[10px] text-sf-text-muted w-16">{t('effectsPanel.blur')}</label>
             <input
               type="range"
               min={0}
@@ -364,7 +390,7 @@ function EffectsPanel() {
               : 'text-sf-text-muted hover:text-sf-text-primary'
           }`}
         >
-          Transitions
+          {t('effectsPanel.transitionsTab')}
         </button>
         <button
           type="button"
@@ -375,7 +401,7 @@ function EffectsPanel() {
               : 'text-sf-text-muted hover:text-sf-text-primary'
           }`}
         >
-          Effects
+          {t('effectsPanel.effectsTab')}
         </button>
       </div>
 
@@ -383,10 +409,7 @@ function EffectsPanel() {
         <div className="p-3 space-y-3">
           <div className="text-[11px] text-sf-text-muted flex items-start gap-2 bg-sf-dark-800/60 border border-sf-dark-700 rounded-lg p-2">
             <Info className="w-4 h-4 text-sf-text-muted mt-0.5" />
-            <div>
-              Select one or more clips on the timeline, then click an effect or preset
-              to apply. Configure parameters in the Inspector.
-            </div>
+            <div>{t('effectsPanel.effectHelp')}</div>
           </div>
 
           {message && (
@@ -414,7 +437,7 @@ function EffectsPanel() {
                       <ChevronRight className="w-3.5 h-3.5 text-sf-text-muted" />
                     )}
                     <span className="flex-1 text-left text-[11px] uppercase tracking-wider text-sf-text-secondary">
-                      {group.label}
+                      {getEffectGroupLabel(group)}
                     </span>
                     <span className="text-[10px] text-sf-text-muted">{group.effects.length}</span>
                   </button>
@@ -433,13 +456,13 @@ function EffectsPanel() {
                               onDragStart={(e) => handleEffectDragStart(e, def.id)}
                               onClick={() => applyEffect(def.id)}
                               className="flex items-center gap-2 px-3 py-2 bg-sf-dark-800/70 hover:bg-sf-dark-700 transition-colors cursor-pointer"
-                              title="Click to apply to selected clips"
+                              title={t('effectsPanel.clickEffectHelp')}
                             >
                               <Icon className="w-4 h-4 text-sf-accent" />
                               <div className="flex-1 min-w-0">
-                                <div className="text-[12px] text-sf-text-primary">{def.label}</div>
+                                <div className="text-[12px] text-sf-text-primary">{getEffectLabel(def)}</div>
                                 {def.description && (
-                                  <div className="text-[10px] text-sf-text-muted truncate">{def.description}</div>
+                                  <div className="text-[10px] text-sf-text-muted truncate">{getEffectDescription(def)}</div>
                                 )}
                               </div>
                               <Plus className="w-3.5 h-3.5 text-sf-text-muted" />
@@ -455,9 +478,12 @@ function EffectsPanel() {
                                     onDragStart={(e) => handleEffectDragStart(e, def.id, preset.id)}
                                     onClick={() => applyEffect(def.id, preset.id)}
                                     className="px-2 py-0.5 rounded text-[10px] border border-sf-dark-600 bg-sf-dark-900 text-sf-text-secondary hover:border-sf-accent hover:text-sf-text-primary transition-colors"
-                                    title={`Apply ${def.label} preset "${preset.label}"`}
+                                    title={t('effectsPanel.applyPresetHelp', {
+                                      effect: getEffectLabel(def),
+                                      preset: getPresetLabel(def, preset),
+                                    })}
                                   >
-                                    {preset.label}
+                                    {getPresetLabel(def, preset)}
                                   </button>
                                 ))}
                               </div>
@@ -481,7 +507,7 @@ function EffectsPanel() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search transitions..."
+            placeholder={t('effectsPanel.searchTransitions')}
             className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded-lg px-2 py-1.5 text-xs text-sf-text-primary placeholder-sf-text-muted focus:outline-none focus:border-sf-accent transition-colors"
           />
         </div>
@@ -490,7 +516,7 @@ function EffectsPanel() {
             and "Set as Default Duration" live in the transition Inspector
             once a transition is applied — the bin stays a browsing surface. */}
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-[11px] text-sf-text-muted">Apply at</span>
+          <span className="text-[11px] text-sf-text-muted">{t('effectsPanel.applyAt')}</span>
           {TRANSITION_DURATIONS.map((d) => (
             <button
               key={d.frames}
@@ -501,13 +527,15 @@ function EffectsPanel() {
                   : 'bg-sf-dark-800 border-sf-dark-600 text-sf-text-muted hover:text-sf-text-primary hover:border-sf-dark-500'
               }`}
             >
-              {d.frames}f
+              {t('effectsPanel.frameShort', { count: d.frames })}
             </button>
           ))}
-          <span className="text-[11px] text-sf-text-muted">({durationSeconds.toFixed(2)}s)</span>
+          <span className="text-[11px] text-sf-text-muted">
+            {t('effectsPanel.secondsShort', { seconds: durationSeconds.toFixed(2) })}
+          </span>
           <span
             className="ml-auto cursor-help"
-            title={'Drag a transition onto a cut, or select two adjacent clips and click a transition to apply. Select one clip to apply to its start or end. Fine-tune duration in the Inspector after applying.'}
+            title={t('effectsPanel.transitionHelp')}
           >
             <Info className="w-3.5 h-3.5 text-sf-text-muted/70" />
           </span>
@@ -516,7 +544,7 @@ function EffectsPanel() {
         {/* Edge mode for single clip */}
         {selectedClips.length === 1 && (
           <div className="space-y-2">
-            <div className="text-[11px] text-sf-text-muted">Apply to</div>
+            <div className="text-[11px] text-sf-text-muted">{t('effectsPanel.applyTo')}</div>
             <div className="flex items-center gap-1">
               <button
                 onClick={() => setEdgeMode('in')}
@@ -526,7 +554,7 @@ function EffectsPanel() {
                     : 'bg-sf-dark-800 border-sf-dark-600 text-sf-text-muted hover:text-sf-text-primary hover:border-sf-dark-500'
                 }`}
               >
-                Start (In)
+                {t('effectsPanel.startIn')}
               </button>
               <button
                 onClick={() => setEdgeMode('out')}
@@ -536,7 +564,7 @@ function EffectsPanel() {
                     : 'bg-sf-dark-800 border-sf-dark-600 text-sf-text-muted hover:text-sf-text-primary hover:border-sf-dark-500'
                 }`}
               >
-                End (Out)
+                {t('effectsPanel.endOut')}
               </button>
             </div>
           </div>
@@ -550,25 +578,25 @@ function EffectsPanel() {
 
         {(selectedBetweenTransition || selectedEdgeTransitions.length > 0) && (
           <div className="space-y-2">
-            <div className="text-xs font-medium text-sf-text-primary">Transition Settings</div>
+            <div className="text-xs font-medium text-sf-text-primary">{t('effectsPanel.transitionSettings')}</div>
             {selectedBetweenTransition && (
               <TransitionSettingsCard
                 transition={selectedBetweenTransition}
-                label="Between Clips"
+                label={t('effectsPanel.betweenClips')}
               />
             )}
-            {selectedEdgeTransitions.map((t) => (
+            {selectedEdgeTransitions.map((transition) => (
               <TransitionSettingsCard
-                key={t.id}
-                transition={t}
-                label={t.edge === 'in' ? 'Start (In)' : 'End (Out)'}
+                key={transition.id}
+                transition={transition}
+                label={transition.edge === 'in' ? t('effectsPanel.startIn') : t('effectsPanel.endOut')}
               />
             ))}
           </div>
         )}
         
         <div className="space-y-3">
-          <div className="text-xs font-medium text-sf-text-primary">Transitions</div>
+          <div className="text-xs font-medium text-sf-text-primary">{t('effectsPanel.transitionsTitle')}</div>
           {search.trim() ? (
             <div className="grid grid-cols-1 gap-2">
               {filteredTransitions.map((transition) => (
@@ -578,12 +606,14 @@ function EffectsPanel() {
                   onDragStart={(e) => handleDragStart(e, transition.id)}
                   onClick={() => applyTransition(transition.id)}
                   className="flex items-center gap-2 px-3 py-2 bg-sf-dark-800 border border-sf-dark-600 rounded-lg text-xs text-sf-text-primary hover:border-sf-accent hover:bg-sf-dark-700 transition-colors cursor-pointer"
-                  title="Drag to a cut or click to apply to selected clips"
+                  title={t('effectsPanel.dragOrClickSelected')}
                 >
                   <TransitionThumbnail type={transition.id} icon={transition.icon} />
                   <div className="flex-1">
-                    <div className="text-xs text-sf-text-primary">{transition.name}</div>
-                    <div className="text-[10px] text-sf-text-muted">{durationFrames}f</div>
+                    <div className="text-xs text-sf-text-primary">{getTransitionLabel(transition)}</div>
+                    <div className="text-[10px] text-sf-text-muted">
+                      {t('effectsPanel.frameShort', { count: durationFrames })}
+                    </div>
                   </div>
                   <span className="text-[10px] text-sf-text-muted">{transition.icon}</span>
                 </div>
@@ -603,7 +633,9 @@ function EffectsPanel() {
                       onClick={() => toggleCategory(category.id)}
                       className="w-full flex items-center justify-between px-2.5 py-2 bg-sf-dark-800 hover:bg-sf-dark-700 transition-colors"
                     >
-                      <span className="text-[11px] font-medium text-sf-text-primary">{category.label}</span>
+                      <span className="text-[11px] font-medium text-sf-text-primary">
+                        {t(`effectsPanel.transitionCategories.${category.id}`, undefined, category.label)}
+                      </span>
                       {isExpanded ? (
                         <ChevronDown className="w-3.5 h-3.5 text-sf-text-muted" />
                       ) : (
@@ -619,10 +651,10 @@ function EffectsPanel() {
                             onDragStart={(e) => handleDragStart(e, transition.id)}
                             onClick={() => applyTransition(transition.id)}
                             className="flex items-center gap-2 px-2 py-2 bg-sf-dark-800 border border-sf-dark-600 rounded text-[11px] text-sf-text-primary hover:border-sf-accent hover:bg-sf-dark-700 transition-colors text-left"
-                            title="Drag to a cut or click to apply"
+                            title={t('effectsPanel.dragOrClick')}
                           >
                             <span className="text-[12px] text-sf-text-muted w-4 text-center">{transition.icon}</span>
-                            <span className="truncate">{transition.name}</span>
+                            <span className="truncate">{getTransitionLabel(transition)}</span>
                           </button>
                         ))}
                       </div>

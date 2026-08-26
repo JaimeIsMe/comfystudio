@@ -6,13 +6,15 @@ import {
 import AssetsPanel from './panels/AssetsPanel'
 import TextPanel from './panels/TextPanel'
 import EffectsPanel from './panels/EffectsPanel'
+import { useI18n } from '../i18n/I18nContext'
 
 function LeftPanel({ isActive = true, isExpanded, onToggleExpanded, activeTab, onTabChange, isFullHeight = false, onToggleFullHeight, onSettingsClick }) {
+  const { t } = useI18n()
   const tabs = [
-    { id: 'assets', label: 'Assets', icon: FolderOpen },
-    { id: 'text', label: 'Text', icon: Type },
-    { id: 'effects', label: 'Effects', icon: SlidersHorizontal },
-    { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'assets', label: t('tabs.assets'), icon: FolderOpen },
+    { id: 'text', label: t('tabs.text'), icon: Type },
+    { id: 'effects', label: t('tabs.effects'), icon: SlidersHorizontal },
+    { id: 'settings', label: t('tabs.settings'), icon: Settings },
   ]
 
   const handleTabClick = (tabId) => {
@@ -92,7 +94,7 @@ function LeftPanel({ isActive = true, isExpanded, onToggleExpanded, activeTab, o
                 ? 'text-sf-accent bg-sf-dark-800' 
                 : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-800/50'
             }`}
-            title={isFullHeight ? 'Contract panel (exit full height)' : 'Expand panel (full height)'}
+            title={isFullHeight ? t('leftPanel.exitFullHeight') : t('leftPanel.fullHeight')}
           >
             {isFullHeight ? (
               <PanelLeftClose className="w-4 h-4" />
@@ -105,7 +107,7 @@ function LeftPanel({ isActive = true, isExpanded, onToggleExpanded, activeTab, o
           <button
             onClick={onToggleExpanded}
             className="w-full h-10 flex items-center justify-center text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-800/50 transition-colors"
-            title={isExpanded ? 'Collapse panel' : 'Expand panel'}
+            title={isExpanded ? t('leftPanel.collapse') : t('leftPanel.expand')}
           >
             {isExpanded ? (
               <ChevronLeft className="w-4 h-4" />
