@@ -1022,10 +1022,16 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   const toggleClipEnabledHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.TOGGLE_CLIP_ENABLED])
   const addTextClipHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.ADD_TEXT_CLIP])
   const addTransitionHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.ADD_TRANSITION])
+  const frameAllHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.FRAME_ALL])
+  const zoomOutHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.ZOOM_OUT])
+  const zoomInHotkeyLabel = formatEditorHotkey(editorHotkeys[EDITOR_HOTKEY_IDS.ZOOM_IN])
   const isMacPlatform = typeof navigator !== 'undefined' && /mac|iphone|ipad/i.test(navigator.platform || '')
   const copyHotkeyLabel = `${isMacPlatform ? 'Cmd' : 'Ctrl'}+C`
   const pasteHotkeyLabel = `${isMacPlatform ? 'Cmd' : 'Ctrl'}+V`
   const durationByHotkeyHint = durationByHotkeyLabel === 'Not set' ? '' : durationByHotkeyLabel
+  const frameAllHotkeyHint = frameAllHotkeyLabel === 'Not set' ? '' : ` (${frameAllHotkeyLabel})`
+  const zoomOutHotkeyHint = zoomOutHotkeyLabel === 'Not set' ? '' : ` (${zoomOutHotkeyLabel})`
+  const zoomInHotkeyHint = zoomInHotkeyLabel === 'Not set' ? '' : ` (${zoomInHotkeyLabel})`
   const isClipEnabled = useCallback((clip) => clip?.enabled !== false, [])
   const getTrackGapAtTime = useCallback((trackId, time) => {
     if (!trackId || !Number.isFinite(time)) return null
@@ -2063,7 +2069,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
   }, [getMinZoom, pixelsPerSecond, setZoom, zoom])
 
   // Frame all: fit full timeline or all clips in view
-  const handleFrameAll = () => {
+  const handleFrameAll = useCallback(() => {
     if (!timelineRef.current) return
     const visibleWidth = timelineRef.current.clientWidth
     if (visibleWidth <= 0) return
@@ -2083,7 +2089,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
         timelineRef.current.scrollLeft = Math.max(0, startTime * newPixelsPerSecond)
       }
     })
-  }
+  }, [clips, duration, setZoom])
 
   // Filtered tracks by type (moved up for use in effects)
   const videoTracks = tracks.filter(t => t.type === 'video')
@@ -2987,6 +2993,24 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
       const active = document.activeElement
       if (isTextEditingElement(active)) return
 
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.FRAME_ALL])) {
+        e.preventDefault()
+        handleFrameAll()
+        return
+      }
+
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.ZOOM_OUT])) {
+        e.preventDefault()
+        applyZoomWithPlayheadPivot(zoom - 20)
+        return
+      }
+
+      if (matchEditorHotkey(e, editorHotkeys[EDITOR_HOTKEY_IDS.ZOOM_IN])) {
+        e.preventDefault()
+        applyZoomWithPlayheadPivot(zoom + 20)
+        return
+      }
+
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         if (key === 'a') {
           e.preventDefault()
@@ -3218,7 +3242,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedGap, selectedTransitionId, selectedMarkerId, removeSelectedClips, rippleDeleteSelectedClips, rippleDeleteSelectedGap, removeTransition, removeMarker, clearSelection, selectMarker, clips, handleUndoAction, handleRedoAction, activeTrackId, saveToHistory, resizeClip, addClip, addTextClip, addShapeClip, addTextClipAtPlayhead, addShapeClipAtPlayhead, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips, selectClipsFromPlayheadToEnd, selectClipsFromTimelineStartToPlayhead, splitClipAtTime, splitAllTracksAtPlayhead, openMoveOffsetDialog, openDurationDeltaDialog, moveOffsetDialogOpen, durationDeltaDialogOpen, editorHotkeys, linkSelectedClips, unlinkSelectedClips, lockSyncClips, unlockSyncLockedClips, toggleClipSelectionEnabled, applyZoomWithPlayheadPivot, zoom, rippleEditMode, activeTrackClipAtPlayhead, canDeleteCurrentSelection, handleCopySelection, handleDeleteCurrentSelection, handlePasteAtPlayhead, handleSplitActiveTrackAtPlayhead, jumpPlayheadToClipBoundary, jumpPlayheadToMarker, clipContextSyncEligibleClips, clipContextSyncLockByClipId, clipContextAllSyncLocked])
+  }, [toggleSnapping, toggleRippleEdit, addMarker, selectedClipIds, selectedGap, selectedTransitionId, selectedMarkerId, removeSelectedClips, rippleDeleteSelectedClips, rippleDeleteSelectedGap, removeTransition, removeMarker, clearSelection, selectMarker, clips, handleUndoAction, handleRedoAction, activeTrackId, saveToHistory, resizeClip, addClip, addTextClip, addShapeClip, addTextClipAtPlayhead, addShapeClipAtPlayhead, addAdjustmentClip, updateClipTrim, assets, timelineFps, copySelectedClips, pasteClipsAtPlayhead, copiedClips, selectClipsFromPlayheadToEnd, selectClipsFromTimelineStartToPlayhead, splitClipAtTime, splitAllTracksAtPlayhead, openMoveOffsetDialog, openDurationDeltaDialog, moveOffsetDialogOpen, durationDeltaDialogOpen, editorHotkeys, linkSelectedClips, unlinkSelectedClips, lockSyncClips, unlockSyncLockedClips, toggleClipSelectionEnabled, applyZoomWithPlayheadPivot, handleFrameAll, zoom, rippleEditMode, activeTrackClipAtPlayhead, canDeleteCurrentSelection, handleCopySelection, handleDeleteCurrentSelection, handlePasteAtPlayhead, handleSplitActiveTrackAtPlayhead, jumpPlayheadToClipBoundary, jumpPlayheadToMarker, clipContextSyncEligibleClips, clipContextSyncLockByClipId, clipContextAllSyncLocked])
 
   // Spacebar panning key state (dedicated listeners so keyup cannot get "stuck")
   useEffect(() => {
@@ -5566,7 +5590,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
           <button
             onClick={handleFrameAll}
             className="p-1.5 hover:bg-sf-dark-600 rounded text-sf-text-muted"
-            title={t('timelineEditor.tooltips.frameAll')}
+            title={`${t('timelineEditor.tooltips.frameAll')}${frameAllHotkeyHint}`}
           >
             <Maximize2 className="w-3.5 h-3.5" />
           </button>
@@ -5595,7 +5619,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
             <button
               onClick={() => applyZoomWithPlayheadPivot(zoom - 50)}
               className="p-0.5 hover:bg-sf-dark-600 rounded text-sf-text-muted"
-              title={t('timelineEditor.tooltips.zoomOut')}
+              title={`${t('timelineEditor.tooltips.zoomOut')}${zoomOutHotkeyHint}`}
             >
               <span className="text-xs">−</span>
             </button>
@@ -5610,7 +5634,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
             <button
               onClick={() => applyZoomWithPlayheadPivot(zoom + 50)}
               className="p-0.5 hover:bg-sf-dark-600 rounded text-sf-text-muted"
-              title={t('timelineEditor.tooltips.zoomIn')}
+              title={`${t('timelineEditor.tooltips.zoomIn')}${zoomInHotkeyHint}`}
             >
               <span className="text-xs">+</span>
             </button>
