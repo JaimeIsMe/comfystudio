@@ -25,6 +25,7 @@ import {
   DEFAULT_EDITOR_HOTKEYS,
   EDITOR_HOTKEY_DEFINITIONS,
   EDITOR_HOTKEY_PRESETS,
+  assignEditorHotkeyBinding,
   formatEditorHotkey,
   getEditorHotkeys,
   getEditorHotkeyPresetMatch,
@@ -352,16 +353,7 @@ function GeneralTab({ initialSection = null }) {
         return
       }
 
-      setEditorHotkeysState((prev) => {
-        const next = { ...prev }
-        for (const definition of EDITOR_HOTKEY_DEFINITIONS) {
-          if (definition.id !== recordingHotkeyId && next[definition.id] === binding) {
-            next[definition.id] = ''
-          }
-        }
-        next[recordingHotkeyId] = binding
-        return next
-      })
+      setEditorHotkeysState((prev) => assignEditorHotkeyBinding(prev, recordingHotkeyId, binding))
       setRecordingHotkeyId(null)
       setHotkeysError('')
     }
@@ -1660,7 +1652,7 @@ function GeneralTab({ initialSection = null }) {
                   <button
                     type="button"
                     onClick={() => {
-                      setEditorHotkeysState((prev) => ({ ...prev, [definition.id]: definition.defaultBinding || '' }))
+                      setEditorHotkeysState((prev) => assignEditorHotkeyBinding(prev, definition.id, definition.defaultBinding || ''))
                       setHotkeysError('')
                     }}
                     className="rounded bg-sf-dark-700 px-2.5 py-1.5 text-[10px] text-sf-text-muted transition-colors hover:bg-sf-dark-600"

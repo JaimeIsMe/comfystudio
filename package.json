@@ -25,6 +25,7 @@
     "test:i18n": "node --test ./src/i18n/core.test.js",
     "test:dirty-tracker": "node --experimental-default-type=module --test ./src/services/projectDirtyTracker.test.js",
     "test:premiere-xml": "node --experimental-default-type=module --test ./src/services/premiereXmlExporter.test.js",
+    "test:editor-hotkeys": "node --test ./src/services/editorHotkeys.test.mjs",
     "test:pexels-stock": "node --test ./src/services/pexelsStock.test.mjs",
     "test:png-sequence-export": "node --test ./src/services/pngSequenceExport.test.mjs",
     "test:qwen3-tts-workflow": "node --test --test-isolation=none ./tests/qwen3TtsWorkflowCompatibility.test.mjs",

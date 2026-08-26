@@ -10,6 +10,9 @@ export const EDITOR_HOTKEY_IDS = {
   NEXT_CLIP_BOUNDARY: 'timeline.nextClipBoundary',
   PREVIOUS_MARKER: 'timeline.previousMarker',
   NEXT_MARKER: 'timeline.nextMarker',
+  FRAME_ALL: 'timeline.frameAll',
+  ZOOM_OUT: 'timeline.zoomOut',
+  ZOOM_IN: 'timeline.zoomIn',
   MATCH_FRAME: 'timeline.matchFrame',
   REVEAL_IN_ASSETS: 'timeline.revealInAssets',
   SELECT_TO_END: 'timeline.selectToEnd',
@@ -108,6 +111,24 @@ export const EDITOR_HOTKEY_DEFINITIONS = [
     label: 'Jump to next marker',
     description: 'Timeline navigation',
     defaultBinding: 'Shift+ArrowDown',
+  },
+  {
+    id: EDITOR_HOTKEY_IDS.FRAME_ALL,
+    label: 'Frame all timeline content',
+    description: 'Timeline navigation',
+    defaultBinding: '1',
+  },
+  {
+    id: EDITOR_HOTKEY_IDS.ZOOM_OUT,
+    label: 'Zoom out timeline',
+    description: 'Timeline navigation',
+    defaultBinding: '2',
+  },
+  {
+    id: EDITOR_HOTKEY_IDS.ZOOM_IN,
+    label: 'Zoom in timeline',
+    description: 'Timeline navigation',
+    defaultBinding: '3',
   },
   {
     id: EDITOR_HOTKEY_IDS.OPEN_MOVE_BY,
@@ -244,6 +265,12 @@ function normalizeKeyLabel(key) {
   return raw[0].toUpperCase() + raw.slice(1)
 }
 
+function normalizeHotkeyEventKey(event) {
+  const digitMatch = /^Digit([0-9])$/.exec(String(event?.code || ''))
+  if (digitMatch) return digitMatch[1]
+  return normalizeKeyLabel(event?.key)
+}
+
 export function normalizeEditorHotkeyBinding(binding) {
   const raw = String(binding || '').trim()
   if (!raw) return ''
@@ -305,10 +332,13 @@ export function matchEditorHotkey(event, binding) {
   const pressedPrimary = !!(event.ctrlKey || event.metaKey)
   const pressedAlt = !!event.altKey
   const pressedShift = !!event.shiftKey
-  const pressedKey = normalizeKeyLabel(event.key)
+  const pressedKeys = new Set([
+    normalizeKeyLabel(event.key),
+    normalizeHotkeyEventKey(event),
+  ])
 
   return (
-    pressedKey === key &&
+    pressedKeys.has(key) &&
     pressedPrimary === requiresPrimary &&
     pressedAlt === requiresAlt &&
     pressedShift === requiresShift
@@ -316,7 +346,7 @@ export function matchEditorHotkey(event, binding) {
 }
 
 export function hotkeyEventToBinding(event) {
-  const key = normalizeKeyLabel(event.key)
+  const key = normalizeHotkeyEventKey(event)
   if (!key || ['Control', 'Shift', 'Alt', 'Meta'].includes(key)) return ''
 
   const parts = []
@@ -327,16 +357,55 @@ export function hotkeyEventToBinding(event) {
   return normalizeEditorHotkeyBinding(parts.join('+'))
 }
 
+export function assignEditorHotkeyBinding(bindings, actionId, binding) {
+  const next = { ...(bindings || {}) }
+  const normalized = normalizeEditorHotkeyBinding(binding)
+
+  if (normalized) {
+    for (const definition of EDITOR_HOTKEY_DEFINITIONS) {
+      if (
+        definition.id !== actionId &&
+        normalizeEditorHotkeyBinding(next[definition.id]) === normalized
+      ) {
+        next[definition.id] = ''
+      }
+    }
+  }
+
+  next[actionId] = normalized
+  return next
+}
+
 export function mergeEditorHotkeys(stored) {
   const merged = { ...DEFAULT_EDITOR_HOTKEYS }
   if (!stored || typeof stored !== 'object') return merged
 
+  const explicitlyStoredIds = new Set()
   for (const definition of EDITOR_HOTKEY_DEFINITIONS) {
     const raw = stored[definition.id]
     if (typeof raw === 'string') {
       merged[definition.id] = normalizeEditorHotkeyBinding(raw)
+      explicitlyStoredIds.add(definition.id)
     }
   }
+
+  // A newly introduced default must not steal a binding that the user had
+  // explicitly assigned before that action existed. Keep the older custom
+  // assignment and leave the new action unbound until the user chooses one.
+  for (const definition of EDITOR_HOTKEY_DEFINITIONS) {
+    if (explicitlyStoredIds.has(definition.id)) continue
+    const binding = merged[definition.id]
+    if (!binding) continue
+    const conflictsWithStoredBinding = EDITOR_HOTKEY_DEFINITIONS.some((candidate) => (
+      candidate.id !== definition.id &&
+      explicitlyStoredIds.has(candidate.id) &&
+      merged[candidate.id] === binding
+    ))
+    if (conflictsWithStoredBinding) {
+      merged[definition.id] = ''
+    }
+  }
+
   return merged
 }
 
