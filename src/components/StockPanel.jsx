@@ -90,12 +90,12 @@ function StockPanel() {
       setPage(response.page)
       setIsDefaultContent(true)
     } catch (err) {
-      setError(err.message || 'Failed to load content')
+      setError(err.message || t('stock.loadFailed'))
       setResults([])
     } finally {
       setLoading(false)
     }
-  }, [apiKey, mediaType])
+  }, [apiKey, mediaType, t])
 
   // When API key is ready and there's no search query, show trending/popular
   useEffect(() => {
@@ -106,12 +106,12 @@ function StockPanel() {
 
   const search = useCallback(async (pageNum = 1) => {
     if (!apiKey) {
-      setError('Add your Pexels API key in Settings (left panel → Settings).')
+      setError(t('stock.apiKeyMissing'))
       return
     }
     const query = searchQuery.trim()
     if (!query) {
-      setError('Enter a search term.')
+      setError(t('stock.searchTermRequired'))
       return
     }
     setError(null)
@@ -123,16 +123,16 @@ function StockPanel() {
       setTotalResults(response.totalResults)
       setPage(response.page)
     } catch (err) {
-      setError(err.message || 'Search failed')
+      setError(err.message || t('stock.searchFailed'))
       setResults([])
     } finally {
       setLoading(false)
     }
-  }, [apiKey, searchQuery, mediaType])
+  }, [apiKey, searchQuery, mediaType, t])
 
   const handleAddToProject = async (item) => {
     if (!currentProjectHandle) {
-      setError('Open or create a project first.')
+      setError(t('stock.projectRequired'))
       return
     }
     setAddingId(item.id)
@@ -156,7 +156,7 @@ function StockPanel() {
         }
       }
     } catch (err) {
-      setError(err.message || 'Failed to add to project')
+      setError(err.message || t('stock.addFailed'))
     } finally {
       setAddingId(null)
     }
@@ -246,7 +246,7 @@ function StockPanel() {
             <AlertCircle className="w-12 h-12 text-sf-accent mx-auto mb-3" />
             <p className="text-sm text-sf-text-primary mb-2">{t('stock.apiRequired')}</p>
             <p className="text-xs text-sf-text-muted mb-4">
-              Get a free API key at{' '}
+              {t('stock.apiGetKeyAt')}{' '}
               <a href="https://www.pexels.com/api/" target="_blank" rel="noopener noreferrer" className="text-sf-accent hover:underline">
                 pexels.com/api
               </a>

@@ -39,6 +39,8 @@ export function I18nProvider({ children }) {
   const [languages, setLanguages] = useState(DEFAULT_LANGUAGES)
   const [language, setLanguageState] = useState(getInitialLocale)
   const [dictionaries, setDictionaries] = useState({})
+  const [englishLoadError, setEnglishLoadError] = useState(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -58,22 +60,33 @@ export function I18nProvider({ children }) {
     const englishFile = languages.find((item) => normalizeLocale(item.code) === DEFAULT_LANGUAGE)?.file || 'lang_en.json'
     const selectedFile = languages.find((item) => normalizeLocale(item.code) === selectedLanguage)?.file || englishFile
 
-    Promise.all([
-      dictionaries.en ? Promise.resolve(dictionaries.en) : fetchJson(englishFile),
-      selectedLanguage === DEFAULT_LANGUAGE
-        ? Promise.resolve(null)
-        : (dictionaries[selectedLanguage] ? Promise.resolve(dictionaries[selectedLanguage]) : fetchJson(selectedFile)),
-    ]).then(([english, selected]) => {
-      if (cancelled) return
-      setDictionaries((current) => ({
-        ...current,
-        en: english,
-        ...(selected ? { [selectedLanguage]: selected } : {}),
-      }))
-    }).catch((error) => console.warn(error.message))
+    const englishPromise = dictionaries.en
+      ? Promise.resolve(dictionaries.en)
+      : fetchJson(englishFile)
+
+    setEnglishLoadError(null)
+    englishPromise
+      .then((english) => {
+        if (cancelled) return
+        setDictionaries((current) => ({ ...current, en: english }))
+      })
+      .catch((error) => {
+        if (cancelled) return
+        console.warn(error.message)
+        setEnglishLoadError(error)
+      })
+
+    if (selectedLanguage !== DEFAULT_LANGUAGE && !dictionaries[selectedLanguage]) {
+      fetchJson(selectedFile)
+        .then((selected) => {
+          if (cancelled) return
+          setDictionaries((current) => ({ ...current, [selectedLanguage]: selected }))
+        })
+        .catch((error) => console.warn(error.message))
+    }
 
     return () => { cancelled = true }
-  }, [language, languages])
+  }, [language, languages, loadAttempt])
 
   const setLanguage = useCallback((nextLanguage) => {
     const resolved = resolveLanguage(nextLanguage, languages)
@@ -96,6 +109,33 @@ export function I18nProvider({ children }) {
   }, [language, languages])
 
   const value = useMemo(() => ({ language, languages, setLanguage, t }), [language, languages, setLanguage, t])
+
+  if (!dictionaries.en) {
+    return (
+      <div className="min-h-screen bg-sf-dark-950 text-sf-text-primary flex items-center justify-center p-6">
+        <div className="max-w-md text-center" role={englishLoadError ? 'alert' : 'status'}>
+          <p className="text-sm font-medium">
+            {englishLoadError ? 'Velorn could not load its English language dictionary.' : 'Loading Velorn…'}
+          </p>
+          {englishLoadError && (
+            <>
+              <p className="mt-2 text-xs text-sf-text-muted">
+                Check that the application files are complete, then try again.
+              </p>
+              <button
+                type="button"
+                className="mt-4 px-3 py-1.5 rounded bg-sf-accent hover:bg-sf-accent-hover text-white text-sm"
+                onClick={() => setLoadAttempt((current) => current + 1)}
+              >
+                Retry
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
 }
 

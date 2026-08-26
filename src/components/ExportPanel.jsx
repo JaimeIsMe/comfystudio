@@ -34,9 +34,9 @@ const EXPORT_FORMATS = [
   { id: 'mp4', label: 'MP4 (H.264/H.265)' },
   { id: 'webm', label: 'WebM (VP9)' },
   { id: 'prores', label: 'MOV (ProRes)' },
-  { id: 'audio', label: 'Audio Only (WAV/MP3/M4A)' },
-  { id: 'png-seq', label: 'PNG Image Sequence' },
-  { id: 'gif', label: 'GIF (Preview - Soon)', disabled: true },
+  { id: 'audio', label: 'Audio Only (WAV/MP3/M4A)', translationKey: 'export.formatAudio' },
+  { id: 'png-seq', label: 'PNG Image Sequence', translationKey: 'export.formatPngSequence' },
+  { id: 'gif', label: 'GIF (Preview - Soon)', translationKey: 'export.formatGifSoon', disabled: true },
 ]
 
 const XML_EXPORT_FORMATS = [
@@ -63,8 +63,8 @@ const XML_EXPORT_FORMATS = [
 ]
 
 const RANGE_PRESETS = [
-  { id: 'full', label: 'Full Timeline' },
-  { id: 'inout', label: 'In/Out Range' },
+  { id: 'full', label: 'Full Timeline', translationKey: 'export.rangeFull' },
+  { id: 'inout', label: 'In/Out Range', translationKey: 'export.rangeInOut' },
 ]
 
 const VIDEO_CODECS = {
@@ -145,9 +145,9 @@ const AUDIO_CHANNELS = [
 ]
 
 const EXPORT_RESOLUTION_SCALE_OPTIONS = [
-  { id: 'timeline-half', label: 'Half Timeline Resolution', scale: 0.5 },
-  { id: 'timeline-third', label: 'Third Timeline Resolution', scale: 1 / 3 },
-  { id: 'timeline-quarter', label: 'Quarter Timeline Resolution', scale: 0.25 },
+  { id: 'timeline-half', label: 'Half Timeline Resolution', translationKey: 'export.resolutionHalf', scale: 0.5 },
+  { id: 'timeline-third', label: 'Third Timeline Resolution', translationKey: 'export.resolutionThird', scale: 1 / 3 },
+  { id: 'timeline-quarter', label: 'Quarter Timeline Resolution', translationKey: 'export.resolutionQuarter', scale: 0.25 },
 ]
 
 const DEFAULT_CRF = {
@@ -1554,7 +1554,9 @@ function ExportPanel() {
                 className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
               >
                 {EXPORT_FORMATS.map((format) => (
-                  <option key={format.id} value={format.id} disabled={format.disabled}>{format.label}</option>
+                  <option key={format.id} value={format.id} disabled={format.disabled}>
+                    {format.translationKey ? t(format.translationKey) : format.label}
+                  </option>
                 ))}
               </select>
             </div>
@@ -1567,7 +1569,9 @@ function ExportPanel() {
                 className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
               >
                 {RANGE_PRESETS.map((preset) => (
-                  <option key={preset.id} value={preset.id}>{preset.label}</option>
+                    <option key={preset.id} value={preset.id}>
+                      {preset.translationKey ? t(preset.translationKey) : preset.label}
+                    </option>
                 ))}
               </select>
             </div>
@@ -1901,11 +1905,11 @@ function ExportPanel() {
                     onChange={(e) => handleSettingChange('resolution', e.target.value)}
                     className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
                   >
-                    <option value="project">Project Settings</option>
+                    <option value="project">{t('export.projectSettings')}</option>
                     {EXPORT_RESOLUTION_SCALE_OPTIONS.map((option) => (
-                      <option key={option.id} value={option.id}>{option.label}</option>
+                      <option key={option.id} value={option.id}>{t(option.translationKey)}</option>
                     ))}
-                    <option value="custom">Custom...</option>
+                    <option value="custom">{t('export.custom')}</option>
                     {RESOLUTION_PRESETS.map((preset) => (
                       <option key={preset.name} value={preset.name}>{preset.name}</option>
                     ))}
@@ -1954,7 +1958,7 @@ function ExportPanel() {
                     onChange={(e) => handleSettingChange('fps', e.target.value)}
                     className="mt-1 w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
                   >
-                    <option value="project">Project Settings</option>
+                    <option value="project">{t('export.projectSettings')}</option>
                     {FPS_PRESETS.map((preset) => (
                       <option key={preset.value} value={preset.value}>{preset.label}</option>
                     ))}
