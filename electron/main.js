@@ -40,6 +40,10 @@ const {
   createComfyStudioMcpServer,
 } = require('./mcpServer')
 const { loadMyWorkflowCatalog } = require('./myWorkflowCatalog')
+const {
+  REQUEST_HEADER_REWRITE_URLS,
+  rewriteAppRequestHeaders,
+} = require('./requestHeaderRewrite')
 
 const isDev = !app.isPackaged
 
@@ -5668,6 +5672,22 @@ ipcMain.handle('workflowSetup:install', async (event, payload = {}) => {
 // Export Operations
 // ============================================
 
+// GIF delivery is a two-pass native encode after the worker has rendered its
+// lossless PNG frames. Track each native job by an unguessable renderer-side
+// session id so Stop, worker crashes, and window teardown can kill whichever
+// palette/encode pass is active without affecting another renderer.
+const activeGifExportJobs = new Map()
+
+const abortGifExportsForOwner = (ownerId) => {
+  let aborted = 0
+  for (const job of activeGifExportJobs.values()) {
+    if (job.ownerId !== ownerId || job.controller.signal.aborted) continue
+    job.controller.abort()
+    aborted += 1
+  }
+  return aborted
+}
+
 ipcMain.handle('export:runInWorker', async (event, payload) => {
   if (exportWorkerWindow && !exportWorkerWindow.isDestroyed()) {
     return { success: false, error: 'Export already in progress' }
@@ -5697,6 +5717,7 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
   })
   exportWorkerWindow = workerWindow
   const workerContents = workerWindow.webContents
+  const workerContentsId = workerContents.id
   // The export worker is a hidden window, so its console is invisible in
   // normal use. Mirror it to userData/export-worker.log so export failures
   // are diagnosable from disk — including renderer crashes, which otherwise
@@ -5758,6 +5779,7 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
   // line forever AND blocks every future export with "already in progress".
   workerContents.on('render-process-gone', (_event, details) => {
     workerLog(`!!! RENDER PROCESS GONE: ${JSON.stringify(details)}`)
+    abortGifExportsForOwner(workerContentsId)
     const pngSequenceRecoveryNote = jobPayload?.options?.format === 'png-seq' && jobPayload?.outputPath
       ? ` An incomplete PNG sequence may remain at ${jobPayload.outputPath}; Velorn did not delete it because the worker could not confirm folder ownership after the crash.`
       : ''
@@ -5798,6 +5820,7 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
   }
   ipcMain.on('export:workerReady', onWorkerReady)
   workerWindow.on('closed', () => {
+    abortGifExportsForOwner(workerContentsId)
     ipcMain.removeListener('export:progress', onProgress)
     ipcMain.removeListener('export:complete', onComplete)
     ipcMain.removeListener('export:error', onError)
@@ -5911,6 +5934,7 @@ ipcMain.handle('export:cancel', async () => {
     return { success: true, cancelled: false }
   }
   try {
+    abortGifExportsForOwner(exportWorkerWindow.webContents.id)
     exportWorkerWindow.webContents.send('export:cancel-job')
     return { success: true, cancelled: true }
   } catch (err) {
@@ -6796,6 +6820,59 @@ async function resolveHardwareEncoderDowngrade(options = {}, selection = null) {
   }
 }
 
+ipcMain.handle('export:gifEncode', async (event, options = {}) => {
+  const gifFfmpegUnavailable = getFfmpegUnavailableError()
+  if (gifFfmpegUnavailable) {
+    return { success: false, error: gifFfmpegUnavailable }
+  }
+
+  const sessionId = typeof options.sessionId === 'string' ? options.sessionId.trim() : ''
+  if (!/^[a-zA-Z0-9._-]{1,120}$/.test(sessionId)) {
+    return { success: false, error: 'Invalid GIF export session.' }
+  }
+  if (activeGifExportJobs.has(sessionId)) {
+    return { success: false, error: 'This GIF export session is already active.' }
+  }
+
+  const controller = new AbortController()
+  const ownerId = event.sender.id
+  activeGifExportJobs.set(sessionId, { controller, ownerId })
+
+  try {
+    const { encodeGifFromPngSequence } = require('./gifExportFfmpeg')
+    const result = await encodeGifFromPngSequence({
+      ffmpegPath,
+      framePattern: options.framePattern,
+      fps: options.fps,
+      outputPath: options.outputPath,
+      sessionId,
+      signal: controller.signal,
+      onPhase: phase => console.log(`[GIF Export] ${sessionId}: ${phase}`),
+    })
+    return { success: true, ...result }
+  } catch (error) {
+    const cancelled = controller.signal.aborted || error?.code === 'EXPORT_CANCELLED'
+    return {
+      success: false,
+      cancelled,
+      error: cancelled ? 'Export cancelled' : (error?.message || String(error)),
+    }
+  } finally {
+    activeGifExportJobs.delete(sessionId)
+  }
+})
+
+ipcMain.handle('export:abortGifEncode', async (event, sessionIdValue) => {
+  const sessionId = typeof sessionIdValue === 'string' ? sessionIdValue.trim() : ''
+  const job = activeGifExportJobs.get(sessionId)
+  if (!job) return { success: true, cancelled: false }
+  if (job.ownerId !== event.sender.id) {
+    return { success: false, cancelled: false, error: 'GIF export session belongs to another renderer.' }
+  }
+  job.controller.abort()
+  return { success: true, cancelled: true }
+})
+
 ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
   const {
     framePattern,
@@ -7295,6 +7372,34 @@ ipcMain.handle('playback:transcode', async (event, { inputPath, outputPath }) =>
 })
 
 // ============================================
+// GIF import (static probe + animated editing intermediate)
+// ============================================
+ipcMain.handle('gif:probe', async (event, options = {}) => {
+  const inputPath = typeof options.inputPath === 'string' ? options.inputPath.trim() : ''
+  if (!inputPath) return { success: false, error: 'Missing GIF input path.' }
+  const { probeGifFile } = require('./animatedGifTranscode')
+  const result = await probeGifFile(inputPath)
+  if (!result?.success) return result
+  // Per-frame delay arrays are useful to the pure helper tests, but sending
+  // tens of thousands of entries across IPC would add no value to import.
+  const { rawDelaysCentiseconds, delaysCentiseconds, ...summary } = result
+  return summary
+})
+
+ipcMain.handle('gif:transcodeAnimated', async (event, options = {}) => {
+  const ffmpegUnavailable = getFfmpegUnavailableError()
+  if (ffmpegUnavailable) return { success: false, error: ffmpegUnavailable }
+  const { transcodeAnimatedGif } = require('./animatedGifTranscode')
+  return await transcodeAnimatedGif({
+    ffmpegPath,
+    ffprobePath,
+    inputPath: options.inputPath,
+    outputDir: options.outputDir,
+    baseName: options.baseName,
+  })
+})
+
+// ============================================
 // Image sequence import (VFX-style numbered frames)
 //
 // Transcode an ordered frame list into an editing intermediate the rest of
@@ -7527,6 +7632,10 @@ ipcMain.handle('export:checkNvenc', async (event, options = {}) => {
 // App Lifecycle
 // ============================================
 
+// Chromium adds or withholds a few forbidden request headers that renderer
+// JavaScript cannot safely correct. Keep these narrowly scoped rewrites in a
+// single webRequest listener (Electron supports only one listener per event).
+//
 // ComfyUI's origin-only middleware (installed whenever --enable-cors-header
 // is absent) rejects our renderer's API calls with a silent 403 — blank
 // embedded tab, dead queue/history polling. It trips on two headers that
@@ -7541,38 +7650,20 @@ ipcMain.handle('export:checkNvenc', async (event, options = {}) => {
 // traffic those checks exist to allow, so for loopback requests we rewrite
 // both headers to look same-origin: no launch flag needed, any ComfyUI
 // version. Scoped to 127.0.0.1/localhost only (http and ws) — remote hosts
-// are untouched.
-function installLoopbackHeaderRewrite() {
-  const filter = {
-    urls: [
-      'http://127.0.0.1/*',
-      'http://localhost/*',
-      'ws://127.0.0.1/*',
-      'ws://localhost/*',
-    ],
-  }
+// are untouched. Packaged file:// pages also have no HTTP Referer, while the
+// YouTube embedded-player contract requires desktop clients to identify
+// themselves with one. requestHeaderRewrite adds Velorn's installed app ID
+// only to youtube.com/youtube-nocookie.com /embed/ document requests.
+function installRequestHeaderRewrite() {
+  const filter = { urls: REQUEST_HEADER_REWRITE_URLS }
   session.defaultSession.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
-    const headers = details.requestHeaders || {}
-    try {
-      const target = new URL(details.url)
-      // WebSocket handshakes carry an http(s) Origin, not ws(s).
-      const scheme = target.protocol === 'ws:' ? 'http:' : target.protocol === 'wss:' ? 'https:' : target.protocol
-      const originValue = `${scheme}//${target.host}`
-      for (const key of Object.keys(headers)) {
-        const lower = key.toLowerCase()
-        if (lower === 'origin') headers[key] = originValue
-        else if (lower === 'sec-fetch-site') headers[key] = 'same-origin'
-      }
-    } catch {
-      // Malformed URL — leave the request untouched.
-    }
-    callback({ requestHeaders: headers })
+    callback({ requestHeaders: rewriteAppRequestHeaders(details) })
   })
 }
 
 app.whenReady().then(async () => {
   registerFileProtocol()
-  installLoopbackHeaderRewrite()
+  installRequestHeaderRewrite()
   mcpServer = createComfyStudioMcpServer({
     port: DEFAULT_MCP_PORT,
     version: app.getVersion(),

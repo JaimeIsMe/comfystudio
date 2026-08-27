@@ -36,7 +36,7 @@ const EXPORT_FORMATS = [
   { id: 'prores', label: 'MOV (ProRes)' },
   { id: 'audio', label: 'Audio Only (WAV/MP3/M4A)', translationKey: 'export.formatAudio' },
   { id: 'png-seq', label: 'PNG Image Sequence', translationKey: 'export.formatPngSequence' },
-  { id: 'gif', label: 'GIF (Preview - Soon)', translationKey: 'export.formatGifSoon', disabled: true },
+  { id: 'gif', label: 'Animated GIF', translationKey: 'export.formatGif' },
 ]
 
 const XML_EXPORT_FORMATS = [
@@ -82,6 +82,7 @@ const VIDEO_CODECS = {
   // switcher's codec reset from inventing one.
   audio: [],
   'png-seq': [],
+  gif: [],
 }
 
 const AUDIO_CODECS = {
@@ -100,6 +101,7 @@ const AUDIO_CODECS = {
     { id: 'aac', label: 'M4A (AAC)' },
   ],
   'png-seq': [],
+  gif: [],
 }
 
 const ENCODER_PRESETS = [
@@ -693,15 +695,20 @@ function ExportPanel() {
       const next = { ...prev, [key]: value }
       
       if (key === 'format') {
+        // GIF has no codec controls of its own. Keep every hidden delivery
+        // choice untouched so returning to MP4 restores the user's exact
+        // codec, CRF, audio, hardware, pipe, RTX, resolution, and FPS setup.
+        if (value === 'gif') return next
         const supportedVideo = VIDEO_CODECS[value] || []
         const supportedAudio = AUDIO_CODECS[value] || []
         next.videoCodec = supportedVideo.some((codec) => codec.id === prev.videoCodec)
           ? prev.videoCodec
           : supportedVideo[0]?.id || prev.videoCodec
+        const videoCodecChanged = next.videoCodec !== prev.videoCodec
         next.audioCodec = supportedAudio.some((codec) => codec.id === prev.audioCodec)
           ? prev.audioCodec
           : supportedAudio[0]?.id || prev.audioCodec
-        if (next.videoCodec && DEFAULT_CRF[next.videoCodec]) {
+        if (videoCodecChanged && next.videoCodec && DEFAULT_CRF[next.videoCodec]) {
           next.crf = DEFAULT_CRF[next.videoCodec]
         }
         if (value === 'webm' || value === 'prores' || value === 'audio') {
@@ -738,7 +745,7 @@ function ExportPanel() {
       }
 
       if (key === 'customWidth' || key === 'customHeight') {
-        const minimum = next.format === 'png-seq' ? 1 : 2
+        const minimum = next.format === 'png-seq' || next.format === 'gif' ? 1 : 2
         const numeric = Math.max(minimum, Math.round(Number(value) || minimum))
         next[key] = numeric
       }
@@ -803,6 +810,9 @@ function ExportPanel() {
   const hardwareLabel = hardwareKind === 'videotoolbox' ? 'VideoToolbox' : 'NVENC'
   const hardwareVendorLabel = hardwareKind === 'videotoolbox' ? 'Apple VideoToolbox' : 'NVIDIA NVENC'
   const nvencToggleDisabledReason = useMemo(() => {
+    if (settings.format === 'gif' || settings.format === 'png-seq') {
+      return 'Image-based exports do not use hardware video encoding.'
+    }
     if (settings.format === 'webm' || settings.videoCodec === 'vp9') {
       return `${hardwareLabel} is only used for MP4 H.264/H.265 exports.`
     }
@@ -940,7 +950,7 @@ function ExportPanel() {
     const timelineSettings = getCurrentTimelineSettings() || { width: 1920, height: 1080, fps: 24 }
     const makeEvenDimension = (value) => Math.max(2, Math.round((Number(value) || 2) / 2) * 2)
     const makePngDimension = (value) => Math.max(1, Math.round(Number(value) || 1))
-    const normalizeDimension = exportSettings.format === 'png-seq'
+    const normalizeDimension = exportSettings.format === 'png-seq' || exportSettings.format === 'gif'
       ? makePngDimension
       : makeEvenDimension
     if (exportSettings.resolution === 'project') {
@@ -972,7 +982,7 @@ function ExportPanel() {
     const timelineSettings = getCurrentTimelineSettings() || { width: 1920, height: 1080, fps: 24 }
     const makeEvenDimension = (value) => Math.max(2, Math.round((Number(value) || 2) / 2) * 2)
     const makePngDimension = (value) => Math.max(1, Math.round(Number(value) || 1))
-    const normalizeDimension = exportSettings.format === 'png-seq'
+    const normalizeDimension = exportSettings.format === 'png-seq' || exportSettings.format === 'gif'
       ? makePngDimension
       : makeEvenDimension
     if (exportSettings.resolution === 'project') {
@@ -1051,6 +1061,8 @@ function ExportPanel() {
   const performanceHints = useMemo(() => {
     const hints = []
     const isPngSequence = settings.format === 'png-seq'
+    const isGif = settings.format === 'gif'
+    const isVisualOnlyFormat = isPngSequence || isGif
     const timelineSettings = getCurrentTimelineSettings() || { width: 1920, height: 1080, fps: 24 }
     const resolution = resolveResolution()
     const effectiveFps = settings.fps === 'project' ? timelineSettings.fps : Number(settings.fps || timelineSettings.fps)
@@ -1060,7 +1072,7 @@ function ExportPanel() {
       hints.push(t('export.hints.4k'))
     }
     if (settings.postProcessUpscale === 'rtx-4k') {
-      if (!isPngSequence) {
+      if (!isVisualOnlyFormat) {
         hints.push(t('export.hints.rtx'))
       }
     }
@@ -1075,6 +1087,12 @@ function ExportPanel() {
     if (isPngSequence) {
       hints.push(t('export.hints.pngDiskSpace'))
       hints.push(t('export.hints.pngNoAudio'))
+    } else if (isGif) {
+      hints.push(t('export.hints.gifPalette'))
+      hints.push(t('export.hints.gifNoAudio'))
+      if (effectiveFps > 15 || pixelCount > 1280 * 720) {
+        hints.push(t('export.hints.gifSize'))
+      }
     } else {
       if (!settings.useHardwareEncoder && settings.format === 'mp4' && settings.videoCodec !== 'vp9') {
         hints.push(t('export.hints.nvenc'))
@@ -1102,7 +1120,7 @@ function ExportPanel() {
     
     const audioClips = clips.filter(clip => clip.type === 'audio')
     const activeAudioTracks = tracks.filter(track => track.type === 'audio' && track.visible && !track.muted)
-    if (!isPngSequence && settings.includeAudio && audioClips.length > 0 && activeAudioTracks.length > 0) {
+    if (!isVisualOnlyFormat && settings.includeAudio && audioClips.length > 0 && activeAudioTracks.length > 0) {
       hints.push(t('export.hints.audio'))
     }
     
@@ -1111,17 +1129,16 @@ function ExportPanel() {
 
   const runExportJob = async (jobSettings, labelOverride = null) => {
     const isPngSequence = jobSettings.format === 'png-seq'
-    const shouldRunRtxUpscale = !isPngSequence && jobSettings.postProcessUpscale === 'rtx-4k'
-    if (jobSettings.format === 'gif') {
-      throw new Error('GIF export is not wired yet.')
-    }
+    const isGif = jobSettings.format === 'gif'
+    const isVisualOnlyFormat = isPngSequence || isGif
+    const shouldRunRtxUpscale = !isVisualOnlyFormat && jobSettings.postProcessUpscale === 'rtx-4k'
     if (shouldRunRtxUpscale && jobSettings.format !== 'mp4') {
       throw new Error('NVIDIA RTX Video Super Resolution currently requires an MP4 export.')
     }
     if (shouldRunRtxUpscale && window.electronAPI?.platform !== 'win32') {
       throw new Error('NVIDIA RTX Video Super Resolution is currently available on Windows only.')
     }
-    if (!isPngSequence && jobSettings.useHardwareEncoder && nvencStatus.checked) {
+    if (!isVisualOnlyFormat && jobSettings.useHardwareEncoder && nvencStatus.checked) {
       const codecSupported = jobSettings.videoCodec === 'h265'
         ? nvencStatus.h265
         : nvencStatus.h264
@@ -1155,10 +1172,10 @@ function ExportPanel() {
     const options = {
       filename: jobSettings.filename?.trim() || defaultFilename,
       format: jobSettings.format,
-      videoCodec: isPngSequence ? null : jobSettings.videoCodec,
-      audioCodec: isPngSequence ? null : jobSettings.audioCodec,
+      videoCodec: isVisualOnlyFormat ? null : jobSettings.videoCodec,
+      audioCodec: isVisualOnlyFormat ? null : jobSettings.audioCodec,
       proresProfile: jobSettings.proresProfile,
-      useHardwareEncoder: isPngSequence ? false : jobSettings.useHardwareEncoder,
+      useHardwareEncoder: isVisualOnlyFormat ? false : jobSettings.useHardwareEncoder,
       nvencPreset: jobSettings.nvencPreset,
       preset: jobSettings.preset,
       qualityMode: jobSettings.qualityMode,
@@ -1172,19 +1189,19 @@ function ExportPanel() {
       fps,
       rangeStart: range.start,
       rangeEnd: range.end,
-      includeAudio: isPngSequence ? false : jobSettings.includeAudio,
+      includeAudio: isVisualOnlyFormat ? false : jobSettings.includeAudio,
       audioBitrateKbps: Number(jobSettings.audioBitrateKbps),
       audioSampleRate: Number(jobSettings.audioSampleRate),
       audioChannels: Number(jobSettings.audioChannels),
-      normalizeAudio: isPngSequence
+      normalizeAudio: isVisualOnlyFormat
         ? false
         : (jobSettings.includeAudio || jobSettings.format === 'audio') && !!jobSettings.normalizeAudio,
       loudnessTarget: Number(jobSettings.loudnessTarget) || -14,
       useCachedRenders: false,
       useProxyMedia: jobSettings.useProxyMedia,
       fastSeek: false,
-      useDirectFramePipe: isPngSequence ? false : jobSettings.useDirectFramePipe,
-      postProcessUpscale: isPngSequence ? 'none' : jobSettings.postProcessUpscale,
+      useDirectFramePipe: isVisualOnlyFormat ? false : jobSettings.useDirectFramePipe,
+      postProcessUpscale: isVisualOnlyFormat ? 'none' : jobSettings.postProcessUpscale,
     }
 
     if (window.electronAPI?.runExportInWorker && typeof currentProjectHandle === 'string') {
@@ -1219,11 +1236,13 @@ function ExportPanel() {
         } else {
           const outputExtension = jobSettings.format === 'audio'
             ? (jobSettings.audioCodec === 'mp3' ? 'mp3' : (jobSettings.audioCodec === 'wav' ? 'wav' : 'm4a'))
-            : (jobSettings.format === 'webm' ? 'webm' : (jobSettings.format === 'prores' ? 'mov' : 'mp4'))
+            : (isGif ? 'gif' : (jobSettings.format === 'webm' ? 'webm' : (jobSettings.format === 'prores' ? 'mov' : 'mp4')))
           const outputBaseName = shouldRunRtxUpscale ? `${options.filename}_rtx4k` : options.filename
           const defaultPath = await window.electronAPI.pathJoin(outputFolder, `${outputBaseName}.${outputExtension}`)
           finalOutputPath = await window.electronAPI.saveFileDialog({
-            title: shouldRunRtxUpscale ? 'Export Timeline with NVIDIA RTX 4K Upscale' : 'Export Timeline',
+            title: shouldRunRtxUpscale
+              ? 'Export Timeline with NVIDIA RTX 4K Upscale'
+              : (isGif ? t('export.exportGif') : 'Export Timeline'),
             defaultPath,
             filters: [{ name: outputExtension.toUpperCase(), extensions: [outputExtension] }],
           })
@@ -1317,10 +1336,10 @@ function ExportPanel() {
       )
     }
 
-    if (isPngSequence) {
+    if (isVisualOnlyFormat) {
       setExportStatus('Export failed')
       setIsExporting(false)
-      throw new Error('PNG image sequence export is available in the Velorn desktop app.')
+      throw new Error(`${isGif ? 'Animated GIF' : 'PNG image sequence'} export is available in the Velorn desktop app.`)
     }
 
     const directAbortController = new AbortController()
@@ -1489,7 +1508,7 @@ function ExportPanel() {
             <span className="ml-auto text-[10px] text-sf-text-muted">{t('export.savedForProject')}</span>
           </div>
 
-          {settings.format !== 'png-seq' && (
+          {settings.format !== 'png-seq' && settings.format !== 'gif' && (
           <div className="mb-3 shrink-0 rounded-lg border border-sf-dark-700 bg-sf-dark-950/45 p-2">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div>
@@ -1587,7 +1606,7 @@ function ExportPanel() {
               : t('export.outputLocationHelp')}
           </p>
           
-          {settings.format !== 'png-seq' && (
+          {settings.format !== 'png-seq' && settings.format !== 'gif' && (
           <div className="mt-2 flex items-center gap-2 text-[10px] text-sf-text-muted shrink-0">
             <span className="uppercase tracking-wider">{t('export.render')}</span>
             <button
@@ -1615,7 +1634,11 @@ function ExportPanel() {
             {settings.format !== 'audio' && (
             <div>
               <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">
-                {settings.format === 'png-seq' ? t('export.imageSequence') : t('export.video')}
+                {settings.format === 'png-seq'
+                  ? t('export.imageSequence')
+                  : settings.format === 'gif'
+                    ? t('export.animatedGif')
+                    : t('export.video')}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 {settings.format === 'png-seq' && (
@@ -1623,7 +1646,12 @@ function ExportPanel() {
                     {t('export.imageSequenceHelp')}
                   </div>
                 )}
-                {settings.format !== 'png-seq' && (
+                {settings.format === 'gif' && (
+                  <div className="col-span-2 rounded border border-sf-dark-700 bg-sf-dark-950/45 p-2 text-xs text-sf-text-secondary">
+                    {t('export.gifHelp')}
+                  </div>
+                )}
+                {settings.format !== 'png-seq' && settings.format !== 'gif' && (
                 <>
                 <div className="col-span-2">
                   <div className="flex items-center gap-2">
@@ -1925,8 +1953,8 @@ function ExportPanel() {
                     <div className="mt-1 grid grid-cols-[1fr_auto_1fr] items-center gap-1">
                       <input
                         type="number"
-                        min={settings.format === 'png-seq' ? 1 : 2}
-                        step={settings.format === 'png-seq' ? 1 : 2}
+                        min={settings.format === 'png-seq' || settings.format === 'gif' ? 1 : 2}
+                        step={settings.format === 'png-seq' || settings.format === 'gif' ? 1 : 2}
                         value={settings.customWidth}
                         onChange={(e) => handleSettingChange('customWidth', Number(e.target.value))}
                         className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
@@ -1935,15 +1963,15 @@ function ExportPanel() {
                       <span className="text-[10px] text-sf-text-muted">×</span>
                       <input
                         type="number"
-                        min={settings.format === 'png-seq' ? 1 : 2}
-                        step={settings.format === 'png-seq' ? 1 : 2}
+                        min={settings.format === 'png-seq' || settings.format === 'gif' ? 1 : 2}
+                        step={settings.format === 'png-seq' || settings.format === 'gif' ? 1 : 2}
                         value={settings.customHeight}
                         onChange={(e) => handleSettingChange('customHeight', Number(e.target.value))}
                         className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
                         aria-label="Custom export height"
                       />
                     </div>
-                    {settings.format !== 'png-seq' && (
+                    {settings.format !== 'png-seq' && settings.format !== 'gif' && (
                       <div className="mt-1 text-[10px] text-sf-text-muted">
                         {t('export.evenPixelsHelp')}
                       </div>
@@ -1996,7 +2024,7 @@ function ExportPanel() {
             )}
 
             {/* Audio */}
-            {settings.format !== 'png-seq' && (
+            {settings.format !== 'png-seq' && settings.format !== 'gif' && (
             <div>
               <div className="text-[10px] text-sf-text-muted uppercase tracking-wider mb-2">{t('export.audio')}</div>
               <div className="grid grid-cols-2 gap-3">
@@ -2162,12 +2190,18 @@ function ExportPanel() {
             >
               <Play className="w-3 h-3" />
               {isExporting
-                ? (settings.format === 'png-seq' ? t('export.exportingPngs') : t('export.exporting'))
+                ? (settings.format === 'png-seq'
+                    ? t('export.exportingPngs')
+                    : settings.format === 'gif'
+                      ? t('export.exportingGif')
+                      : t('export.exporting'))
                 : queueRunning
                   ? t('export.queueRunning')
                   : settings.format === 'png-seq'
                     ? t('export.exportPngSequence')
-                    : t('export.startExport')}
+                    : settings.format === 'gif'
+                      ? t('export.exportGif')
+                      : t('export.startExport')}
             </button>
             {isExporting && (
               <button
@@ -2338,6 +2372,8 @@ function ExportPanel() {
                     <div className="text-[10px] text-sf-text-muted">
                       {item.settings.format === 'png-seq'
                         ? `PNG Image Sequence • ${getResolutionLabel(item.settings)} • ${item.settings.fps === 'project' ? 'Project FPS' : `${item.settings.fps} fps`}`
+                        : item.settings.format === 'gif'
+                          ? `Animated GIF • ${getResolutionLabel(item.settings)} • ${item.settings.fps === 'project' ? 'Project FPS' : `${item.settings.fps} fps`}`
                         : item.settings.format === 'audio'
                           ? `${item.settings.audioCodec?.toUpperCase() || 'Audio'} only`
                           : `${item.settings.format.toUpperCase()} • ${item.settings.videoCodec?.toUpperCase()} • ${getResolutionLabel(item.settings)} • ${item.settings.fps === 'project' ? 'Project FPS' : `${item.settings.fps} fps`}`}

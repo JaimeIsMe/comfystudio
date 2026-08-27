@@ -4,6 +4,7 @@ import useAssetsStore from '../../stores/assetsStore'
 import useProjectStore from '../../stores/projectStore'
 import useTimelineStore from '../../stores/timelineStore'
 import { getAbsoluteFileUrl, importAsset, isElectron, writeGeneratedOverlayToProject, deleteProjectFile } from '../../services/fileSystem'
+import { canImportGifMedia, importGifAsset, isGifFilename } from '../../services/gifImport'
 import parseFcpXml from '../../services/fcpxmlImporter'
 import { enqueuePlaybackTranscode, generatePlaybackCachesForAllVideos, isPlaybackCacheableVideoAsset } from '../../services/playbackCache'
 import { enqueueProxyTranscode, isProxyPlaybackEnabled } from '../../services/proxyCache'
@@ -413,21 +414,31 @@ function AssetsPanel({ isActive = true }) {
       }
       
       try {
-        const assetInfo = await importAsset(currentProjectHandle, file, category)
+        const assetInfo = isGifFilename(file.name) && canImportGifMedia()
+          ? await importGifAsset(currentProjectHandle, file)
+          : await importAsset(currentProjectHandle, file, category)
+        const importedMediaCategory = assetInfo.type === 'video'
+          ? 'video'
+          : (assetInfo.type === 'audio' ? 'audio' : 'images')
+        const isNormalizedAnimatedGif = assetInfo.settings?.gifSource?.animated === true
         
         // Add to assets store with URL for playback
         const newAsset = addAsset({
           ...assetInfo,
-          url: URL.createObjectURL(file),
+          url: assetInfo.url || URL.createObjectURL(file),
           folderId: currentFolderId, // Add to current folder
           settings: {
+            ...(assetInfo.settings || {}),
             duration: assetInfo.duration,
             fps: assetInfo.fps,
           },
         })
         
         // Flame-style: transcode video for smooth playback (Electron only)
-        if (category === 'video' && isElectron() && currentProjectHandle && newAsset?.absolutePath) {
+        // Animated GIF masters are already edit-friendly, high-quality
+        // intermediates. Re-encoding one here would discard alpha and add an
+        // unnecessary generation of compression.
+        if (importedMediaCategory === 'video' && !isNormalizedAnimatedGif && isElectron() && currentProjectHandle && newAsset?.absolutePath) {
           enqueuePlaybackTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
           // Low-res preview proxy (NLE-style). Only spawned when the user
           // has proxies enabled — otherwise we'd waste disk/cpu on every
@@ -439,7 +450,7 @@ function AssetsPanel({ isActive = true }) {
         }
         
         // Auto-generate thumbnail sprites for videos in background
-        if (category === 'video' && assetInfo.duration > 0.5 && newAsset) {
+        if (importedMediaCategory === 'video' && assetInfo.duration > 0.5 && newAsset) {
           const projectPath = typeof currentProjectHandle === 'string' ? currentProjectHandle : null
           // Generate sprites asynchronously (don't await)
           generateAssetSprite(newAsset.id, projectPath).catch(err => {

@@ -198,7 +198,7 @@
     "format": "形式",
     "formatAudio": "音声のみ（WAV/MP3/M4A）",
     "formatPngSequence": "PNG画像シーケンス",
-    "formatGifSoon": "GIF（プレビュー・近日対応）",
+    "formatGif": "アニメーションGIF",
     "range": "範囲",
     "rangeFull": "タイムライン全体",
     "rangeInOut": "イン点／アウト点の範囲",
@@ -211,6 +211,8 @@
     "video": "映像",
     "imageSequence": "画像シーケンス",
     "imageSequenceHelp": "レンダーしたタイムラインの各フレームを、連番の可逆PNGとして書き出します。画像シーケンスには音声が含まれません。",
+    "animatedGif": "アニメーションGIF",
+    "gifHelp": "最適化された256色パレットで、不透明かつ音声なしのループGIFを作成します。解像度とフレームレートは自由に変更できます。共有には15 fps、720p以下がおすすめです。",
     "useHardware": "{{hardware}}を使用",
     "hardwareEncoding": "ハードウェアエンコード",
     "fastPipe": "高速FFmpegパイプ",
@@ -259,9 +261,11 @@
     "addToQueue": "キューに追加",
     "exporting": "書き出し中...",
     "exportingPngs": "PNGを書き出し中...",
+    "exportingGif": "GIFを書き出し中...",
     "queueRunning": "キューを実行中",
     "startExport": "書き出しを開始",
     "exportPngSequence": "PNGシーケンスを書き出す",
+    "exportGif": "アニメーションGIFを書き出す",
     "stop": "停止",
     "eta": "残り時間",
     "renderSpeed": "レンダー速度",
@@ -297,6 +301,9 @@
       "rtx": "RTX 4Kは通常のレンダー後に実行され、メモリ使用量を抑えるため1フレームずつ処理します。",
       "pngDiskSpace": "PNG画像シーケンスはフレームごとに可逆ファイルを作成するため、多くのディスク容量を使用する場合があります。",
       "pngNoAudio": "PNG画像シーケンスには音声が含まれません。",
+      "gifPalette": "GIFは最適化された256色の共通パレットを使用し、連続ループします。",
+      "gifNoAudio": "アニメーションGIFには音声を含められません。",
+      "gifSize": "15 fpsまたは720pを超えるとGIFのサイズが急増します。共有しやすくするにはフレームレートか解像度を下げてください。",
       "proxyCount": "準備済みの動画プロキシ{{total}}件中{{ready}}件を使用します。",
       "proxyMissing": "プロキシ書き出しは有効ですが、準備済みプロキシがないため元の素材を使用します。",
       "60fps": "60fpsでは処理するフレーム数が倍になります。高速化する場合はFPSを下げてください。",
@@ -311,12 +318,14 @@
     }
   },
   "topTabs": {
+    "navigation": "ワークスペースモード",
     "editor": "編集",
     "generate": "生成",
     "agent": "エージェント",
     "flow-ai": "Flow AI",
     "mog": "MoGraph",
     "stock": "ストック",
+    "discover": "見つける",
     "export": "書き出し"
   },
   "bottomBar": {
@@ -356,6 +365,9 @@
     "openLatestAutosaveFor": "{{project}}の最新の自動保存を開く",
     "openProject": "プロジェクトを開く",
     "newProject": "新規プロジェクト",
+    "discover": "作品を見る",
+    "discoverHelp": "Velornで制作された作品とチュートリアルを見ます。",
+    "discoverLoading": "Discoverを読み込み中...",
     "selectProject": "プロジェクトを選択",
     "noRecentProjects": "最近使ったプロジェクトはありません",
     "createFirstProject": "最初のプロジェクトを作成して始めましょう",
@@ -363,6 +375,79 @@
     "gridView": "グリッド表示",
     "listView": "リスト表示",
     "dismiss": "閉じる"
+  },
+  "discover": {
+    "title": "見つける",
+    "subtitle": "Velornでクリエイターが制作した作品を見て、その制作ワークフローを学びましょう。",
+    "visibilityHint": "Discoverタブは「設定」→「外観」からいつでも非表示にできます。",
+    "tabs": {
+      "featured": "おすすめ",
+      "showcase": "Velorn作品",
+      "tutorials": "チュートリアル"
+    },
+    "sections": {
+      "featured": "おすすめ",
+      "featuredDescription": "注目のコミュニティ作品と実践的なチュートリアルを紹介します。",
+      "showcase": "Velornで制作",
+      "showcaseDescription": "Velornコミュニティが制作または編集した動画です。",
+      "tutorials": "チュートリアル",
+      "tutorialsDescription": "実践的な解説を通してVelornの使い方を学べます。"
+    },
+    "actions": {
+      "watch": "{{title}}を再生",
+      "openYouTube": "YouTubeで開く",
+      "submit": "YouTube動画を投稿",
+      "retry": "再試行",
+      "close": "閉じる"
+    },
+    "labels": {
+      "by": "{{creator}}"
+    },
+    "player": {
+      "title": "YouTube動画: {{title}}",
+      "privacy": "サムネイルはYouTubeから提供されます。Velornは動画の再生を選択した後にのみプレーヤーを読み込みます。"
+    },
+    "states": {
+      "loading": "Discoverを読み込み中...",
+      "offline": "保存済みのDiscoverコンテンツを表示しています。オンラインに戻ると新しい動画が表示される場合があります。",
+      "error": "現在Discoverを読み込めません。",
+      "empty": "このセクションにはまだコンテンツがありません。"
+    },
+    "submit": {
+      "title": "作品を投稿",
+      "body": "Velornで制作したYouTube動画を共有してください。掲載前にすべての投稿を確認します。",
+      "youtubeUrl": "YouTube URL",
+      "youtubePlaceholder": "https://www.youtube.com/watch?v=...",
+      "creator": "クリエイター名または表示名",
+      "creatorPlaceholder": "掲載する名前を入力してください",
+      "category": "カテゴリー",
+      "categories": {
+        "musicVideo": "ミュージックビデオ",
+        "podcast": "ポッドキャスト",
+        "shortFilm": "短編映画",
+        "social": "ソーシャル動画",
+        "ad": "広告",
+        "animation": "アニメーション",
+        "other": "その他"
+      },
+      "description": "Velornをどのように使いましたか？",
+      "descriptionPlaceholder": "作品のどの部分をVelornで制作または編集したか、簡単に教えてください。",
+      "email": "連絡先メールアドレス",
+      "emailPlaceholder": "you@example.com",
+      "rights": "私はこの作品を所有しているか、投稿および共有に必要な許可を得ています。",
+      "featurePermission": "Velornが動画のタイトル、サムネイル、リンク、説明、クリエイター名を掲載することを許可します。",
+      "reviewNote": "投稿は非公開の審査キューに送られ、自動的に公開されることはありません。",
+      "requiredFields": "動画、クリエイター名、説明、連絡先をすべて入力してください。",
+      "permissionsRequired": "投稿する前に両方の許可を確認してください。",
+      "invalidYouTube": "有効なYouTube動画のURLを入力してください。",
+      "tooLong": "説明を短くしてから、もう一度お試しください。",
+      "sendFailed": "投稿を送信できませんでした。後でもう一度お試しください。",
+      "submitting": "送信中...",
+      "submit": "確認用に送信",
+      "successTitle": "確認用に送信しました",
+      "successBody": "ありがとうございます。Velornチームが投稿を確認します。自動的に公開されることはありません。",
+      "submitAnother": "別の作品を投稿"
+    }
   },
   "settings": {
     "title": "設定",
@@ -383,7 +468,7 @@
       "paths": { "title": "ファイルパス", "description": "出力先とワークフローのパスを確認します。" },
       "workflow-setup": { "title": "ワークフロー設定", "description": "ワークフローを検査し、不足する依存関係やモデルをインストールします。" },
       "language": { "title": "言語", "description": "Velornの画面で使用する言語を選択します。" },
-      "appearance": { "title": "外観", "description": "作業環境に合うエディターテーマを選択します。" },
+      "appearance": { "title": "外観", "description": "Velornのテーマとワークスペースのナビゲーションを設定します。" },
       "notifications": { "title": "通知", "description": "完了音とアプリ内通知を設定します。" },
       "hotkeys": { "title": "ショートカット", "description": "エディターのショートカットとキーマップを設定します。" },
       "project": { "title": "新規プロジェクトの初期値", "description": "新しいプロジェクトの解像度とフレームレートを設定します。" },
@@ -594,7 +679,11 @@
         "ember": "琥珀色をアクセントにした暖かみのあるダークトーン"
       },
       "timelineThumbnails": "タイムラインのクリップサムネイル",
-      "timelineThumbnailsHelp": "負荷の高い編集ではオフにすると、クリップを軽量な色付きブロックとして表示します。"
+      "timelineThumbnailsHelp": "負荷の高い編集ではオフにすると、クリップを軽量な色付きブロックとして表示します。",
+      "discoverTab": "Discoverタブを表示",
+      "discoverTabHelp": "コミュニティ作品とチュートリアルへのショートカットを上部のタブバーに表示します。",
+      "hideDiscoverTab": "Discoverタブを非表示",
+      "showDiscoverTab": "Discoverタブを表示"
     },
     "notifications": {
       "completionSound": "生成完了音",

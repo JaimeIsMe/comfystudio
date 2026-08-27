@@ -29,6 +29,7 @@
 
 import { comfyui } from './comfyui'
 import { importAsset } from './fileSystem'
+import { canImportGifMedia, importGifAsset, isGifFilename } from './gifImport'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 import { isPromptHandledByApp } from './comfyPromptGuard'
@@ -609,8 +610,12 @@ async function importSingleFile({ file, kind, apiWorkflow, promptId, projectDir 
 
   const url = comfyui.getMediaUrl(file.filename, file.subfolder || '', file.type || 'output')
 
-  const mimeHint = kind === 'video'
-    ? 'video/mp4'
+  const gifOutput = isGifFilename(file.filename)
+  const shouldNormalizeGif = gifOutput && canImportGifMedia()
+  const mimeHint = gifOutput
+    ? 'image/gif'
+    : kind === 'video'
+      ? 'video/mp4'
     : kind === 'audio'
       ? 'audio/mpeg'
       : 'image/png'
@@ -649,9 +654,15 @@ async function importSingleFile({ file, kind, apiWorkflow, promptId, projectDir 
 
   let assetInfo
   try {
-    assetInfo = await importAsset(projectDir, blobFile, category)
+    assetInfo = shouldNormalizeGif
+      ? await importGifAsset(projectDir, blobFile)
+      : await importAsset(projectDir, blobFile, category)
   } catch (err) {
     console.warn('[comfyAutoImport] importAsset failed:', err)
+    if (shouldNormalizeGif) {
+      appendLauncherLog('event', `! Auto-import could not normalize ${file.filename}: ${err?.message || err}`)
+      throw err
+    }
     const blobUrl = URL.createObjectURL(blobFile)
     addAsset({
       name: file.filename,
@@ -664,14 +675,16 @@ async function importSingleFile({ file, kind, apiWorkflow, promptId, projectDir 
     return
   }
 
-  const blobUrl = URL.createObjectURL(blobFile)
-  const assetType = kind === 'images' || kind === 'image' ? 'image' : kind
+  const assetType = assetInfo?.type || (kind === 'images' || kind === 'image' ? 'image' : kind)
+  const importedFolderKind = assetType === 'image' ? 'image' : kind
+  const importedFolderId = ensureAssetFolderPath(IMPORTED_COMFY_ASSET_FOLDERS[importedFolderKind]) || folderId
+  const assetUrl = assetInfo?.url || URL.createObjectURL(blobFile)
   const newAsset = addAsset({
     ...assetInfo,
     name: file.filename,
     type: assetType,
-    url: blobUrl,
-    folderId,
+    url: assetUrl,
+    folderId: importedFolderId,
     isImported: true,
     ...sourceFields,
   })

@@ -5,6 +5,7 @@ import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
 import { comfyui } from '../services/comfyui'
 import { importAsset } from '../services/fileSystem'
+import { canImportGifMedia, importGifAsset, isGifFilename } from '../services/gifImport'
 import { getVideoDurationPresets } from '../config/generateWorkspaceConfig'
 
 // Cinematography categories and options for filmmakers
@@ -264,24 +265,27 @@ function GeneratePanel() {
             )
             
             // Import it to the project's assets folder
-            const assetInfo = await importAsset(currentProjectHandle, videoFile, 'video')
-            
-            // Create blob URL for immediate playback
-            const blobUrl = URL.createObjectURL(videoFile)
+            const shouldNormalizeGif = isGifFilename(generationResult.filename) && canImportGifMedia()
+            const assetInfo = shouldNormalizeGif
+              ? await importGifAsset(currentProjectHandle, videoFile)
+              : await importAsset(currentProjectHandle, videoFile, 'video')
+            const normalizedGif = assetInfo?.settings?.gifSource?.animated === true
+            const assetUrl = assetInfo?.url || URL.createObjectURL(videoFile)
             
             // Add to assets store with local path (not ComfyUI URL)
             addAsset({
               ...assetInfo,
               name: autoName,
-              type: 'video',
-              url: blobUrl, // Local blob URL for playback
+              type: assetInfo?.type || 'video',
+              url: assetUrl,
               prompt: prompt,
               negativePrompt: negativePrompt,
               isImported: true, // Mark as imported so it persists
               settings: {
+                ...(assetInfo?.settings || {}),
                 resolution: `${resolution.width}x${resolution.height}`,
-                duration: duration,
-                fps: fps,
+                duration: normalizedGif ? assetInfo.duration : duration,
+                fps: normalizedGif ? assetInfo.fps : fps,
                 seed: seed,
                 workflow: selectedWorkflow
               }

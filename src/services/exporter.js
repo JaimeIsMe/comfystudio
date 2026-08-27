@@ -1164,12 +1164,14 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
     transparent: requestedTransparency = false,
   } = options
   const pngSequenceExport = format === 'png-seq'
-  // An image sequence is a visual-only delivery. Keep this defensive in the
-  // renderer even though the export panel also hides/disables video/audio
-  // encoder settings for the format.
-  const includeAudio = pngSequenceExport ? false : requestedIncludeAudio
-  const useDirectFramePipe = pngSequenceExport ? false : requestedDirectFramePipe
-  const transparent = pngSequenceExport ? false : requestedTransparency
+  const gifExport = format === 'gif'
+  const losslessFrameDelivery = pngSequenceExport || gifExport
+  // Image sequences and animated GIFs are visual-only deliveries. GIF uses
+  // the lossless PNG-frame path deliberately: a global palette on the live
+  // raw pipe buffers the entire animation and can consume multiple GB.
+  const includeAudio = losslessFrameDelivery ? false : requestedIncludeAudio
+  const useDirectFramePipe = losslessFrameDelivery ? false : requestedDirectFramePipe
+  const transparent = losslessFrameDelivery ? false : requestedTransparency
   const pngSequenceBaseName = pngSequenceExport
     ? sanitizePngSequenceBaseName(filename)
     : null
@@ -1184,11 +1186,11 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
   
   const totalDuration = Math.max(0, rangeEnd - rangeStart)
   const totalFrames = Math.ceil(totalDuration * fps)
-  if (pngSequenceExport && (!Number.isFinite(Number(fps)) || Number(fps) <= 0 || totalFrames <= 0)) {
-    throw new Error('The PNG sequence export range must contain at least one frame at a valid FPS.')
+  if (losslessFrameDelivery && (!Number.isFinite(Number(fps)) || Number(fps) <= 0 || totalFrames <= 0)) {
+    throw new Error(`The ${gifExport ? 'GIF' : 'PNG sequence'} export range must contain at least one frame at a valid FPS.`)
   }
-  if (pngSequenceExport && (!Number.isFinite(Number(width)) || Number(width) <= 0 || !Number.isFinite(Number(height)) || Number(height) <= 0)) {
-    throw new Error('The PNG sequence export dimensions must be greater than zero.')
+  if (losslessFrameDelivery && (!Number.isFinite(Number(width)) || Number(width) <= 0 || !Number.isFinite(Number(height)) || Number(height) <= 0)) {
+    throw new Error(`The ${gifExport ? 'GIF' : 'PNG sequence'} export dimensions must be greater than zero.`)
   }
   const normalizedDeliveryFraming = ['fill', 'cover', 'center_crop', 'center-crop'].includes(String(deliveryFraming || '').toLowerCase())
     ? 'fill'
@@ -1229,7 +1231,7 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
   const audioOnlyExport = format === 'audio'
   const outputExtension = audioOnlyExport
     ? (audioCodec === 'mp3' ? 'mp3' : (audioCodec === 'wav' ? 'wav' : 'm4a'))
-    : (format === 'webm' ? 'webm' : (format === 'prores' ? 'mov' : 'mp4'))
+    : (gifExport ? 'gif' : (format === 'webm' ? 'webm' : (format === 'prores' ? 'mov' : 'mp4')))
   let outputPath = options.outputPath
   if (pngSequenceExport && !outputPath) {
     throw new Error('Choose an output folder for the PNG sequence.')
@@ -1266,6 +1268,19 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
   } else {
     await window.electronAPI.createDirectory(tempFolder)
   }
+  let gifTempCleanupAttempted = false
+  const cleanupGifTempFolder = async () => {
+    gifTempCleanupAttempted = true
+    try {
+      const cleanup = await window.electronAPI.deleteDirectory(tempFolder, { recursive: true })
+      return cleanup?.success === false
+        ? (cleanup.error || 'Unknown temporary-folder cleanup error.')
+        : null
+    } catch (error) {
+      return error?.message || String(error)
+    }
+  }
+  try {
   const framesFolder = pngSequenceExport
     ? outputPath
     : await window.electronAPI.pathJoin(tempFolder, 'frames')
@@ -2535,10 +2550,11 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
         videoElement = video
         const assetFps = Number(asset?.settings?.fps)
         sourceFps = Number.isFinite(assetFps) && assetFps > 0 ? assetFps : null
+        const preserveGifFrameHolds = asset?.settings?.gifSource?.animated === true
 
         // Matted clips on the 2D path skip low-fps frame blending — the
         // matte needs the buffered draw, which the blend path bypasses.
-        shouldBlend = !isFullBake && !!(sourceFps && sourceFps < fps - 0.5 && !maskEffect && !hasMotionBlurSamples && !velocityMotionBlur) && !(matteInfo && !gpu)
+        shouldBlend = !preserveGifFrameHolds && !isFullBake && !!(sourceFps && sourceFps < fps - 0.5 && !maskEffect && !hasMotionBlurSamples && !velocityMotionBlur) && !(matteInfo && !gpu)
 
         // Prefer the WebCodecs sequential frame cursor; any doubt (or a
         // mid-clip cursor failure) falls back to the element seek path.
@@ -3860,11 +3876,38 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
     }
   }
   
-  onProgress({ status: EXPORT_STATUS.encoding, progress: 90 })
+  onProgress({
+    status: gifExport ? 'Building optimized 256-color GIF...' : EXPORT_STATUS.encoding,
+    progress: 90,
+  })
   await yieldToMain()
 
   let encodeResult = null
-  if (framePipeEncoderUsed) {
+  if (gifExport) {
+    if (!window.electronAPI?.encodeGif || !window.electronAPI?.abortGifEncode) {
+      throw new Error('GIF export requires the Velorn desktop app. Restart Velorn and try again.')
+    }
+    throwIfCancelled()
+    const gifEncodeSessionId = globalThis.crypto?.randomUUID?.()
+      || `gif-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    const abortNativeGifEncode = () => {
+      Promise.resolve(window.electronAPI.abortGifEncode(gifEncodeSessionId)).catch(() => {
+        // The main process may already have observed cancellation or exited.
+      })
+    }
+    signal?.addEventListener?.('abort', abortNativeGifEncode, { once: true })
+    try {
+      throwIfCancelled()
+      encodeResult = await window.electronAPI.encodeGif({
+        sessionId: gifEncodeSessionId,
+        framePattern,
+        fps,
+        outputPath,
+      })
+    } finally {
+      signal?.removeEventListener?.('abort', abortNativeGifEncode)
+    }
+  } else if (framePipeEncoderUsed) {
     if (audioFilePath && pipedVideoPath !== outputPath) {
       onProgress({ status: 'Muxing fast-pipe video with audio...', progress: 92 })
       const muxResult = await window.electronAPI.muxAudioVideo({
@@ -3921,8 +3964,15 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
     console.log(`Export encoded with: ${encodeResult.encoderUsed}`)
   }
 
-  // Cleanup temp render files
-  if (getLocalStorageFlag('exportKeepFrames')) {
+  // Cleanup temp render files. GIF scratch is never retained, but a cleanup
+  // failure is surfaced with the otherwise successful delivery.
+  let gifTempCleanupError = null
+  if (gifExport) {
+    gifTempCleanupError = await cleanupGifTempFolder()
+    if (gifTempCleanupError) {
+      console.warn('Failed to clean GIF export temp folder:', gifTempCleanupError)
+    }
+  } else if (getLocalStorageFlag('exportKeepFrames')) {
     console.log('[Export] Keeping temp frame folder for diagnostics:', tempFolder)
   } else {
     try {
@@ -3936,8 +3986,22 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
   
   const perFrameMs = (ms) => (totalFrames > 0 ? Number((ms / totalFrames).toFixed(2)) : 0)
   return {
+    ...(gifExport ? { format: 'gif' } : {}),
     outputPath,
     encoderUsed: encodeResult.encoderUsed || null,
+    ...(gifExport ? {
+      frameCount: totalFrames,
+      fps,
+      width,
+      height,
+      dimensions: { width, height },
+      cleanupWarning: [
+        encodeResult.cleanupWarning,
+        gifTempCleanupError
+          ? `The GIF was saved, but temporary render frames could not be removed: ${gifTempCleanupError}`
+          : null,
+      ].filter(Boolean).join(' ') || null,
+    } : {}),
     // Set when a requested hardware encoder failed its runtime probe and the
     // export fell back to software ({requestedEncoder, fallbackEncoder,
     // reason}); surfaced in the worker-complete log and MCP export results.
@@ -3966,6 +4030,15 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
       preSeek: { batches: exportPerf.preSeekBatches, clips: exportPerf.preSeekClips },
       frameSource: getFrameSourceStats(),
     },
+  }
+  } finally {
+    // GIF scratch is never a user-owned delivery. Remove its lossless frames
+    // after success, failure, or cancellation; the native encoder separately
+    // owns and cleans its palette/staged output files.
+    if (gifExport && !gifTempCleanupAttempted) {
+      const cleanupError = await cleanupGifTempFolder()
+      if (cleanupError) console.warn('Failed to clean GIF export temp folder:', cleanupError)
+    }
   }
 }
 

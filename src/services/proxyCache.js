@@ -104,6 +104,10 @@ export function hasUsableProxy(asset) {
  */
 export function isProxyableVideoAsset(asset) {
   if (!asset || asset.type !== 'video') return false
+  // Proxy output is H.264 MP4 and cannot represent alpha. Keep transparent
+  // masters on their canonical source path instead of baking opacity into a
+  // cache that preview could prefer over the source.
+  if (asset.settings?.hasAlpha === true) return false
   return Boolean(asset.absolutePath || asset.path)
 }
 

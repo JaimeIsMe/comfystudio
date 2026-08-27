@@ -431,18 +431,21 @@ export function useComfyUI() {
       }
       const blob = await response.blob();
       
-      // Get the original file extension from the asset name
+      // Use the stored media container before the display name. Normalized
+      // GIFs intentionally keep their original .gif name for users while the
+      // project-owned bytes are MP4 or WebM.
       let extension = '';
       let mimeType = blob.type || asset.mimeType;
-      
-      if (asset.name) {
-        const nameParts = asset.name.split('.');
-        if (nameParts.length > 1) {
-          extension = '.' + nameParts[nameParts.length - 1].toLowerCase();
+
+      for (const technicalName of [asset.path, asset.absolutePath]) {
+        const match = String(technicalName || '').match(/\.([a-zA-Z0-9]{1,8})(?:[?#].*)?$/)
+        if (match) {
+          extension = `.${match[1].toLowerCase()}`
+          break
         }
       }
-      
-      // If no extension from name, derive from mime type
+
+      // If no stored path is available, derive from the actual bytes/MIME.
       if (!extension) {
         const mimeToExt = {
           'image/jpeg': '.jpg',
@@ -454,8 +457,17 @@ export function useComfyUI() {
           'video/webm': '.webm',
           'video/quicktime': '.mov',
         };
-        extension = mimeToExt[mimeType] || '.png';
+        extension = mimeToExt[mimeType] || '';
       }
+
+      // Legacy/browser assets may only have a display name.
+      if (!extension && asset.name) {
+        const nameParts = asset.name.split('.');
+        if (nameParts.length > 1) {
+          extension = '.' + nameParts[nameParts.length - 1].toLowerCase();
+        }
+      }
+      extension ||= '.png';
       
       // For VHS_LoadVideo compatibility, convert webp to png
       // VHS_LoadVideo doesn't natively support webp in many installations

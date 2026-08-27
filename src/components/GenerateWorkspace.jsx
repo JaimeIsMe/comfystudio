@@ -53,6 +53,7 @@ import {
   loadProject as loadProjectFile,
   saveProject as saveProjectFile,
 } from '../services/fileSystem'
+import { canImportGifMedia, importGifAsset, isGifFilename } from '../services/gifImport'
 import { enqueuePlaybackTranscode } from '../services/playbackCache'
 import { enqueueProxyTranscode, isProxyPlaybackEnabled } from '../services/proxyCache'
 import { formatCaptionCuesAsSrt, transcribeAsset } from '../services/captionTranscription'
@@ -15409,37 +15410,47 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
       const shortFilmVideoName = shortFilmMeta?.kind === 'shot-video'
         ? `VID ${String((Number(shortFilmMeta.shotIndex) || 0) + 1).padStart(2, '0')} - ${shortFilmMeta.shotTitle || 'Shot'}`
         : ''
-      const generatedVideoFolderPath = generatedFolderPath('video')
-      const generatedVideoFolderId = getGeneratedFolderId('video', generatedVideoFolderPath)
       for (let videoIndex = 0; videoIndex < freshVideoItems.length; videoIndex += 1) {
         const item = freshVideoItems[videoIndex]
         const videoAssetName = `${shortFilmVideoName || resolvedName}${freshVideoItems.length > 1 ? ` (${videoIndex + 1})` : ''}`
+        const gifOutput = isGifFilename(item.filename)
+        const shouldNormalizeGif = gifOutput && canImportGifMedia()
         try {
           const videoFile = await comfyui.downloadVideo(item.filename, item.subfolder, item.outputType)
-          const assetInfo = await importAsset(targetProjectHandle, videoFile, 'video')
-          const blobUrl = importsIntoActiveProject ? URL.createObjectURL(videoFile) : null
+          const assetInfo = shouldNormalizeGif
+            ? await importGifAsset(targetProjectHandle, videoFile)
+            : await importAsset(targetProjectHandle, videoFile, 'video')
+          const assetType = assetInfo?.type || 'video'
+          const normalizedGif = assetInfo?.settings?.gifSource?.animated === true
+          const assetFolderKind = assetType === 'image' ? 'image' : 'video'
+          const assetFolderPath = generatedFolderPath(assetFolderKind)
+          const assetFolderId = getGeneratedFolderId(assetFolderKind, assetFolderPath)
+          const assetUrl = importsIntoActiveProject
+            ? (assetInfo?.url || URL.createObjectURL(videoFile))
+            : null
           const newAsset = await saveImportedAssetRecord({
             ...assetInfo,
             name: videoAssetName,
-            type: 'video',
-            url: blobUrl,
+            type: assetType,
+            url: assetUrl,
             prompt: jobPrompt,
             isImported: true,
             yolo: directorMeta || undefined,
             shortFilm: shortFilmMeta || undefined,
-            folderId: generatedVideoFolderId,
+            folderId: assetFolderId,
             settings: {
-              duration: jobDuration,
-              fps: jobFps,
+              ...(assetInfo?.settings || {}),
+              duration: normalizedGif ? assetInfo.duration : jobDuration,
+              fps: normalizedGif ? assetInfo.fps : jobFps,
               resolution: jobResolution ? `${jobResolution.width}x${jobResolution.height}` : undefined,
               seed: jobSeed,
               inputAssetId: job?.inputAssetId || undefined,
               keyframeAssetId: job?.inputAssetId || shortFilmMeta?.keyframeAssetId || undefined,
             }
-          }, generatedVideoFolderPath)
+          }, assetFolderPath)
           if (newAsset) importedAssets.push(newAsset)
           didImportAny = true
-          if (isElectron() && importsIntoActiveProject && currentProjectHandle && newAsset?.absolutePath) {
+          if (assetType === 'video' && isElectron() && importsIntoActiveProject && currentProjectHandle && newAsset?.absolutePath && !normalizedGif) {
             enqueuePlaybackTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
             if (isProxyPlaybackEnabled()) {
               enqueueProxyTranscode(currentProjectHandle, newAsset.id, newAsset.absolutePath).catch(() => {})
@@ -15447,6 +15458,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
           }
         } catch (err) {
           console.error('Failed to save video:', err)
+          if (shouldNormalizeGif) throw err
           if (!importsIntoActiveProject) throw err
           // Fallback: use ComfyUI URL
           const url = comfyui.getMediaUrl(item.filename, item.subfolder, item.outputType)
@@ -15457,7 +15469,7 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
             prompt: jobPrompt,
             yolo: directorMeta || undefined,
             shortFilm: shortFilmMeta || undefined,
-            folderId: generatedVideoFolderId,
+            folderId: getGeneratedFolderId('video', generatedFolderPath('video')),
             settings: {
               duration: jobDuration,
               fps: jobFps,
@@ -15776,8 +15788,9 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         return null
       }
       const getUploadExtension = (asset, blob, fallbackName) => {
-        const candidates = [fallbackName, asset?.path, asset?.name].filter(Boolean)
-        for (const candidate of candidates) {
+        // Prefer the stored container over user-facing names. Imported GIF
+        // animations keep a .gif display name but own MP4/WebM media.
+        for (const candidate of [asset?.path, asset?.absolutePath].filter(Boolean)) {
           const match = String(candidate).match(/\.([a-zA-Z0-9]{1,8})(?:[?#].*)?$/)
           if (match) return `.${match[1].toLowerCase()}`
         }
@@ -15789,6 +15802,10 @@ function GenerateWorkspace({ onOpenWorkflowSetup = null }) {
         if (mimeType.includes('mp4')) return '.mp4'
         if (mimeType.includes('mpeg')) return '.mp3'
         if (mimeType.includes('wav')) return '.wav'
+        for (const candidate of [fallbackName, asset?.name].filter(Boolean)) {
+          const match = String(candidate).match(/\.([a-zA-Z0-9]{1,8})(?:[?#].*)?$/)
+          if (match) return `.${match[1].toLowerCase()}`
+        }
         return ''
       }
       const getSafeUploadName = (asset, blob, fallbackName) => {

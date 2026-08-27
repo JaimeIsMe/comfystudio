@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-08-27T18:11:01.000Z",
+  "items": [
+    {
+      "id": "velorn-overview",
+      "youtubeId": "RVuGlRZheps",
+      "title": "Velorn Overview: AI Video Editing Powered by ComfyUI",
+      "kind": "tutorial",
+      "creator": "Velorn",
+      "description": "A guided overview of Velorn editing and AI generation.",
+      "category": "Getting started",
+      "tags": ["overview", "generation"],
+      "featured": true
+    },
+    {
+      "id": "velorn-mcp-ai-generations",
+      "youtubeId": "AT9usQS3m48",
+      "title": "Velorn MCP AI Generations",
+      "kind": "tutorial",
+      "creator": "Velorn",
+      "description": "See an MCP-connected agent drive AI generation from Velorn.",
+      "category": "MCP and agents",
+      "tags": ["mcp", "generation"],
+      "featured": false
+    },
+    {
+      "id": "velorn-music-video-tutorial",
+      "youtubeId": "8BsFbUsq1kE",
+      "title": "Velorn Music Video Tutorial",
+      "kind": "tutorial",
+      "creator": "Velorn",
+      "description": "Learn the guided workflow for creating a music video in Velorn.",
+      "category": "Music videos",
+      "tags": ["music video", "guided workflow"],
+      "featured": false
+    },
+    {
+      "id": "motion-graphics-with-an-agent",
+      "youtubeId": "Owel8zkMWkY",
+      "title": "Motion graphics with an agent",
+      "kind": "tutorial",
+      "creator": "Velorn",
+      "description": "A practical example of using an agent to build motion graphics.",
+      "category": "MCP and agents",
+      "tags": ["motion graphics", "showcase"],
+      "featured": false
+    },
+    {
+      "id": "claude-edits-solar-system-video",
+      "youtubeId": "_r4jf7ZDT2o",
+      "title": "Claude Edits a Solar System Info Video",
+      "kind": "showcase",
+      "creator": "Velorn",
+      "description": "An agent-assisted informational edit created in Velorn.",
+      "category": "Agent-assisted editing",
+      "tags": ["mcp", "editing"],
+      "featured": true
+    },
+    {
+      "id": "music-video-made-with-velorn",
+      "youtubeId": "iX-YdjVMDhg",
+      "title": "Music video made with Velorn",
+      "kind": "showcase",
+      "creator": "Velorn",
+      "description": "A finished music video created with Velorn.",
+      "category": "Music videos",
+      "tags": ["music video"],
+      "featured": false
+    },
+    {
+      "id": "ltx-23-ai-music-video",
+      "youtubeId": "ogJ08d2GlqI",
+      "title": "LTX 2.3 AI Music Video",
+      "kind": "showcase",
+      "creator": "j'aime",
+      "description": "An AI-generated music video created with Velorn and LTX 2.3.",
+      "category": "Music videos",
+      "tags": ["music video", "ai generation", "LTX 2.3"],
+      "featured": false
+    },
+    {
+      "id": "you-dont-need-saving",
+      "youtubeId": "WcHBs-7_G14",
+      "title": "You Don't Need Saving",
+      "kind": "showcase",
+      "creator": "j'aime",
+      "description": "An original AI-created music video made with Velorn.",
+      "category": "Music videos",
+      "tags": ["music video", "ai generation"],
+      "featured": false
+    }
+  ]
+}

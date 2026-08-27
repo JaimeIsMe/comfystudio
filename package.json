@@ -26,6 +26,8 @@
     "test:dirty-tracker": "node --experimental-default-type=module --test ./src/services/projectDirtyTracker.test.js",
     "test:premiere-xml": "node --experimental-default-type=module --test ./src/services/premiereXmlExporter.test.js",
     "test:editor-hotkeys": "node --test ./src/services/editorHotkeys.test.mjs",
+    "test:discover": "node --test ./src/services/discoverCatalog.test.mjs ./src/services/discoverTabVisibilitySettings.test.mjs ./src/utils/dialogFocus.test.mjs ./tests/requestHeaderRewrite.test.js",
+    "test:discover-catalog": "node --test ./src/services/discoverCatalog.test.mjs",
     "test:pexels-stock": "node --test ./src/services/pexelsStock.test.mjs",
     "test:png-sequence-export": "node --test ./src/services/pngSequenceExport.test.mjs",
     "test:qwen3-tts-workflow": "node --test --test-isolation=none ./tests/qwen3TtsWorkflowCompatibility.test.mjs",
@@ -36,6 +38,8 @@
     "test:audio-preview": "node --test ./src/utils/audioPreviewScheduling.test.js",
     "test:audio-clip-split": "node --test ./src/utils/audioClipSplit.test.js",
     "test:hardware-export-ffmpeg": "node --test ./tests/hardwareExportFfmpeg.test.js",
+    "test:gif-import": "node --test ./tests/animatedGifTranscode.test.js",
+    "test:gif-export": "node --test ./tests/gifExportFfmpeg.test.js",
     "test:mcp-h3": "node --test ./tests/mcpH3ReferenceVideo.test.js",
     "test:mcp-my-workflows": "node --test ./tests/myWorkflowCatalog.test.js"
   },

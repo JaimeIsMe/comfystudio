@@ -34,6 +34,7 @@ import {
 import { saveLocalComfyConnectionPort } from './localComfyConnection'
 import { getAbsoluteFileUrl, importAsset, isElectron, writeGeneratedOverlayToProject } from './fileSystem'
 import { canImportImageSequences, importImageSequenceAsAsset } from './imageSequenceImport'
+import { canImportGifMedia, importGifAsset, isGifFilename } from './gifImport'
 import { detectImageSequences, parseSequenceFileName } from '../utils/imageSequenceDetection'
 import buildFcpXml from './fcpxmlExporter'
 import buildPremiereXml from './premiereXmlExporter'
@@ -8154,7 +8155,7 @@ async function handleImportAssetFromPath(payload = {}) {
     }
   }
 
-  const category = inferMcpAssetCategory(sourcePath, payload.category || payload.type || payload.assetType)
+  let category = inferMcpAssetCategory(sourcePath, payload.category || payload.type || payload.assetType)
 
   let exists = true
   if (typeof window !== 'undefined' && window.electronAPI?.exists) {
@@ -8162,13 +8163,32 @@ async function handleImportAssetFromPath(payload = {}) {
   }
   if (!exists) throw new Error(`File does not exist: ${sourcePath}`)
 
+  const useGifImport = isGifFilename(sourcePath) && canImportGifMedia()
+  let gifProbe = null
+  if (useGifImport) {
+    gifProbe = await window.electronAPI.probeGif({ inputPath: sourcePath })
+    if (!gifProbe?.success) throw new Error(gifProbe?.error || 'Could not inspect the GIF.')
+    category = gifProbe.animated ? 'video' : 'images'
+  }
+
   if (payload.previewOnly !== false) {
     return {
       previewOnly: true,
       action: 'import_asset_from_path',
-      message: 'Asset import plan only. No file was copied.',
+      message: gifProbe?.animated
+        ? 'Animated GIF import plan only. It will be converted once into an editable video asset; no file was copied.'
+        : 'Asset import plan only. No file was copied.',
       sourcePath,
       category,
+      ...(gifProbe ? {
+        gif: {
+          animated: gifProbe.animated,
+          frameCount: gifProbe.frameCount,
+          duration: gifProbe.animated ? gifProbe.duration : null,
+          fps: gifProbe.animated ? gifProbe.fps : null,
+          hasTransparency: gifProbe.hasTransparency,
+        },
+      } : {}),
       targetFolder: payload.folderId || payload.folderPath || payload.folderName || null,
       suggestedApplyPayload: {
         ...payload,
@@ -8180,8 +8200,10 @@ async function handleImportAssetFromPath(payload = {}) {
 
   const folderId = await resolveMcpFolderIdForImportedAsset(payload)
   const projectHandle = useProjectStore.getState().currentProjectHandle
-  const imported = await importAsset(projectHandle, sourcePath, category)
-  const url = imported.absolutePath ? await getAbsoluteFileUrl(imported.absolutePath) : imported.url
+  const imported = useGifImport
+    ? await importGifAsset(projectHandle, sourcePath)
+    : await importAsset(projectHandle, sourcePath, category)
+  const url = imported.url || (imported.absolutePath ? await getAbsoluteFileUrl(imported.absolutePath) : null)
   const asset = useAssetsStore.getState().addAsset({
     ...imported,
     url: url || imported.url || null,
@@ -8190,7 +8212,10 @@ async function handleImportAssetFromPath(payload = {}) {
     settings: {
       ...(imported.settings || {}),
       importedViaMcp: true,
-      sourcePath,
+      // Normalized GIF assets already carry portable source-format
+      // provenance. Do not persist the external machine's absolute path into
+      // that project-owned master.
+      ...(useGifImport ? {} : { sourcePath }),
     },
   })
   const savedProject = typeof useProjectStore.getState().saveProject === 'function'
