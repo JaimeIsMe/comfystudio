@@ -317,6 +317,7 @@
     "flow-ai": "Flow AI",
     "mog": "MoGraph",
     "stock": "Stock",
+    "discover": "Discover",
     "export": "Export"
   },
   "bottomBar": {
@@ -356,6 +357,9 @@
     "openLatestAutosaveFor": "Open latest autosave for {{project}}",
     "openProject": "Open Project",
     "newProject": "New Project",
+    "discover": "Discover",
+    "discoverHelp": "Explore videos made with Velorn and learn from tutorials.",
+    "discoverLoading": "Loading Discover...",
     "selectProject": "Select a project",
     "noRecentProjects": "No recent projects",
     "createFirstProject": "Create your first project to get started",
@@ -363,6 +367,78 @@
     "gridView": "Grid view",
     "listView": "List view",
     "dismiss": "Dismiss"
+  },
+  "discover": {
+    "title": "Discover",
+    "subtitle": "See what creators make with Velorn and learn the workflows behind it.",
+    "tabs": {
+      "featured": "Featured",
+      "showcase": "Made with Velorn",
+      "tutorials": "Tutorials"
+    },
+    "sections": {
+      "featured": "Featured",
+      "featuredDescription": "A curated mix of standout community work and practical lessons.",
+      "showcase": "Made with Velorn",
+      "showcaseDescription": "Videos created or edited by the Velorn community.",
+      "tutorials": "Tutorials",
+      "tutorialsDescription": "Learn Velorn through focused, practical walkthroughs."
+    },
+    "actions": {
+      "watch": "Watch {{title}}",
+      "openYouTube": "Open on YouTube",
+      "submit": "Submit your work",
+      "retry": "Retry",
+      "close": "Close"
+    },
+    "labels": {
+      "by": "By {{creator}}"
+    },
+    "player": {
+      "title": "YouTube video: {{title}}",
+      "privacy": "Thumbnails are provided by YouTube. Velorn loads the player only after you choose to watch a video."
+    },
+    "states": {
+      "loading": "Loading Discover...",
+      "offline": "Showing saved Discover content. New videos may appear when you are back online.",
+      "error": "Could not load Discover right now.",
+      "empty": "There is nothing in this section yet."
+    },
+    "submit": {
+      "title": "Submit your work",
+      "body": "Share a YouTube video made with Velorn. Every submission is reviewed before anything is featured.",
+      "youtubeUrl": "YouTube URL",
+      "youtubePlaceholder": "https://www.youtube.com/watch?v=...",
+      "creator": "Creator or display name",
+      "creatorPlaceholder": "How should we credit you?",
+      "category": "Category",
+      "categories": {
+        "musicVideo": "Music video",
+        "podcast": "Podcast",
+        "shortFilm": "Short film",
+        "social": "Social video",
+        "ad": "Advertisement",
+        "animation": "Animation",
+        "other": "Other"
+      },
+      "description": "How did you use Velorn?",
+      "descriptionPlaceholder": "Tell us briefly which parts of the project you made or edited in Velorn.",
+      "email": "Contact email",
+      "emailPlaceholder": "you@example.com",
+      "rights": "I own this work or have the authorization required to submit and share it.",
+      "featurePermission": "Velorn may feature the video title, thumbnail, link, description, and creator attribution.",
+      "reviewNote": "Submissions go to a private moderation queue and are never published automatically.",
+      "requiredFields": "Complete the video, creator, description, and contact fields.",
+      "permissionsRequired": "Confirm both permissions before submitting.",
+      "invalidYouTube": "Enter a valid YouTube video URL.",
+      "tooLong": "Please shorten the description and try again.",
+      "sendFailed": "Could not send the submission. Try again later.",
+      "submitting": "Submitting...",
+      "submit": "Submit for review",
+      "successTitle": "Submitted for review",
+      "successBody": "Thank you. The Velorn team will review your submission; it will not be published automatically.",
+      "submitAnother": "Submit another"
+    }
   },
   "settings": {
     "title": "Settings",
@@ -383,7 +459,7 @@
       "paths": { "title": "File Paths", "description": "Review output and workflow path settings." },
       "workflow-setup": { "title": "Workflow Setup", "description": "Scan workflows, review missing dependencies, and install curated models or node packs." },
       "language": { "title": "Language", "description": "Choose the language used in the Velorn interface." },
-      "appearance": { "title": "Appearance", "description": "Pick the editor theme that best fits your workspace." },
+      "appearance": { "title": "Appearance", "description": "Customize Velorn's theme and workspace navigation." },
       "notifications": { "title": "Notifications", "description": "Control completion sounds and lightweight app alerts." },
       "hotkeys": { "title": "Hotkeys", "description": "Customize editor shortcuts and apply familiar keymap presets." },
       "project": { "title": "New Project Defaults", "description": "Set default resolution and frame rate for new projects." },
@@ -594,7 +670,11 @@
         "ember": "Warm dark tones with an amber accent"
       },
       "timelineThumbnails": "Timeline clip thumbnails",
-      "timelineThumbnailsHelp": "Turn off for heavy edits so clips draw as lightweight colored blocks."
+      "timelineThumbnailsHelp": "Turn off for heavy edits so clips draw as lightweight colored blocks.",
+      "discoverTab": "Show Discover tab",
+      "discoverTabHelp": "Keep a shortcut to community work and tutorials in the top tab bar.",
+      "hideDiscoverTab": "Hide the Discover tab",
+      "showDiscoverTab": "Show the Discover tab"
     },
     "notifications": {
       "completionSound": "Generation complete sound",

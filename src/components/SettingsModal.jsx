@@ -57,6 +57,12 @@ import {
   getShowCloudCreditBalance,
   setShowCloudCreditBalance,
 } from '../services/cloudCreditDisplaySettings'
+import {
+  DISCOVER_TAB_VISIBILITY_CHANGED_EVENT,
+  getShowDiscoverTab,
+  hydrateShowDiscoverTab,
+  setShowDiscoverTab,
+} from '../services/discoverTabVisibilitySettings.mjs'
 import { useI18n } from '../i18n/I18nContext'
 
 const AUTO_IMPORT_KEY = 'comfystudio-auto-import-comfy-outputs'
@@ -215,6 +221,7 @@ function GeneralTab({ initialSection = null }) {
     getGenerationCompletionSoundSettings()
   ))
   const [showCloudCreditBalance, setShowCloudCreditBalanceState] = useState(() => getShowCloudCreditBalance())
+  const [showDiscoverTab, setShowDiscoverTabState] = useState(getShowDiscoverTab)
   const [pexelsApiKey, setPexelsApiKeyLocal] = useState('')
   const [comfyOrgApiKey, setComfyOrgApiKey] = useState('')
   const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false)
@@ -413,6 +420,22 @@ function GeneralTab({ initialSection = null }) {
     return () => window.removeEventListener(GENERATION_COMPLETION_SOUND_CHANGED_EVENT, handler)
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    hydrateShowDiscoverTab().then((show) => {
+      if (!cancelled) setShowDiscoverTabState(show)
+    }).catch(() => {})
+
+    const handler = (event) => {
+      setShowDiscoverTabState(event?.detail?.show !== false)
+    }
+    window.addEventListener(DISCOVER_TAB_VISIBILITY_CHANGED_EVENT, handler)
+    return () => {
+      cancelled = true
+      window.removeEventListener(DISCOVER_TAB_VISIBILITY_CHANGED_EVENT, handler)
+    }
+  }, [])
+
   // Keep the Settings view in sync if the key is saved/cleared from any
   // other surface (Onboarding, Workflow Setup gallery, Generate tab).
   useEffect(() => {
@@ -442,6 +465,12 @@ function GeneralTab({ initialSection = null }) {
   const handleToggleCloudCreditBalance = () => {
     const next = setShowCloudCreditBalance(!showCloudCreditBalance)
     setShowCloudCreditBalanceState(next)
+  }
+
+  const handleToggleDiscoverTab = () => {
+    const next = !showDiscoverTab
+    setShowDiscoverTabState(next)
+    setShowDiscoverTab(next).catch(() => {})
   }
 
   const handleCopyMcpText = async (id, text) => {
@@ -1470,6 +1499,27 @@ function GeneralTab({ initialSection = null }) {
               className={`w-10 h-5 rounded-full transition-colors ${showTimelineClipThumbnails ? 'bg-sf-accent' : 'bg-sf-dark-600'}`}
             >
               <div className={`w-4 h-4 bg-white rounded-full transition-transform ${showTimelineClipThumbnails ? 'translate-x-5' : 'translate-x-0.5'}`} />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between rounded-lg border border-sf-dark-700 bg-sf-dark-900/60 px-3 py-3">
+            <div className="pr-4">
+              <label className="text-sm text-sf-text-primary">{t('settings.appearance.discoverTab')}</label>
+              <p className="text-[10px] text-sf-text-muted">{t('settings.appearance.discoverTabHelp')}</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={showDiscoverTab}
+              aria-label={t('settings.appearance.discoverTab')}
+              onClick={handleToggleDiscoverTab}
+              className={`relative h-5 w-10 flex-shrink-0 rounded-full transition-colors ${showDiscoverTab ? 'bg-sf-accent' : 'bg-sf-dark-600'}`}
+              title={t(showDiscoverTab ? 'settings.appearance.hideDiscoverTab' : 'settings.appearance.showDiscoverTab')}
+            >
+              <span
+                className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${showDiscoverTab ? 'left-[calc(100%-1.25rem)]' : 'left-0.5'}`}
+                aria-hidden
+              />
             </button>
           </div>
         </div>

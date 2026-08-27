@@ -26,6 +26,8 @@
     "test:dirty-tracker": "node --experimental-default-type=module --test ./src/services/projectDirtyTracker.test.js",
     "test:premiere-xml": "node --experimental-default-type=module --test ./src/services/premiereXmlExporter.test.js",
     "test:editor-hotkeys": "node --test ./src/services/editorHotkeys.test.mjs",
+    "test:discover": "node --test ./src/services/discoverCatalog.test.mjs ./src/services/discoverTabVisibilitySettings.test.mjs ./src/utils/dialogFocus.test.mjs ./tests/requestHeaderRewrite.test.js",
+    "test:discover-catalog": "node --test ./src/services/discoverCatalog.test.mjs",
     "test:pexels-stock": "node --test ./src/services/pexelsStock.test.mjs",
     "test:png-sequence-export": "node --test ./src/services/pngSequenceExport.test.mjs",
     "test:qwen3-tts-workflow": "node --test --test-isolation=none ./tests/qwen3TtsWorkflowCompatibility.test.mjs",

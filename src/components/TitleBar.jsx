@@ -17,6 +17,7 @@ const TOP_TABS = [
   { id: 'flow-ai', label: 'Flow AI' },
   { id: 'mog', label: 'MoGraph' },
   { id: 'stock', label: 'Stock' },
+  { id: 'discover', label: 'Discover' },
   { id: 'comfyui', label: 'ComfyUI' },
   { id: 'export', label: 'Export' },
 ]
@@ -31,11 +32,15 @@ function TitleBar({
   projectName,
   activeTab = 'editor',
   onTabChange,
+  showDiscoverTab = true,
   editorLayout = 'default',
   onEditorLayoutChange,
 }) {
   const { t } = useI18n()
-  const tabs = TOP_TABS.filter((tab) => !HIDDEN_TOP_TAB_IDS.has(tab.id))
+  const tabs = TOP_TABS.filter((tab) => (
+    !HIDDEN_TOP_TAB_IDS.has(tab.id)
+    && (tab.id !== 'discover' || showDiscoverTab)
+  ))
   const [windowState, setWindowState] = useState({
     isMaximized: false,
     isFullScreen: false,

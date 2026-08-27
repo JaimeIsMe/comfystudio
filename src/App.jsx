@@ -32,6 +32,11 @@ import { startMcpSnapshotPublisher } from './services/mcpSnapshot'
 import { MCP_ACTION_BRIDGE_VERSION, startMcpActionBridge } from './services/mcpActions'
 import { attachProjectDirtyWatchers, isProjectDirty } from './services/projectDirtyTracker'
 import { VELORN_OPEN_STOCK_EVENT } from './services/pexelsStock'
+import {
+  DISCOVER_TAB_VISIBILITY_CHANGED_EVENT,
+  getShowDiscoverTab,
+  hydrateShowDiscoverTab,
+} from './services/discoverTabVisibilitySettings.mjs'
 
 // Tab workspaces load on first visit instead of shipping in the startup
 // bundle. This keeps launch parse time down; GenerateWorkspace alone carries
@@ -44,6 +49,7 @@ const FlowAIWorkspace = lazy(() => import('./components/FlowAIWorkspace'))
 const AgentWorkspace = lazy(() => import('./components/AgentWorkspace'))
 const MOGWorkspace = lazy(() => import('./components/MOGWorkspace'))
 const StockPanel = lazy(() => import('./components/StockPanel'))
+const DiscoverWorkspace = lazy(() => import('./components/DiscoverWorkspace'))
 
 const WORKSPACE_LOADING_FALLBACK = (
   <div className="flex-1 flex items-center justify-center bg-sf-dark-950 text-xs text-sf-text-muted">
@@ -73,6 +79,7 @@ function App() {
   const [mainTab, setMainTab] = useState('editor')
   const [hasMountedFlowAi, setHasMountedFlowAi] = useState(false)
   const [hasMountedGenerate, setHasMountedGenerate] = useState(false)
+  const [showDiscoverTab, setShowDiscoverTabState] = useState(getShowDiscoverTab)
   const [bottomEditorView, setBottomEditorView] = useState('timeline')
   const [activeTimelineToolLabel, setActiveTimelineToolLabel] = useState('Move tool')
   const [timelineStatusText, setTimelineStatusText] = useState('')
@@ -330,6 +337,28 @@ function App() {
       setHasMountedGenerate(true)
     }
   }, [mainTab])
+
+  useEffect(() => {
+    let cancelled = false
+    hydrateShowDiscoverTab().then((show) => {
+      if (!cancelled) setShowDiscoverTabState(show)
+    }).catch(() => {})
+
+    const handleVisibilityChanged = (event) => {
+      setShowDiscoverTabState(event?.detail?.show !== false)
+    }
+    window.addEventListener(DISCOVER_TAB_VISIBILITY_CHANGED_EVENT, handleVisibilityChanged)
+    return () => {
+      cancelled = true
+      window.removeEventListener(DISCOVER_TAB_VISIBILITY_CHANGED_EVENT, handleVisibilityChanged)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!showDiscoverTab && mainTab === 'discover') {
+      setMainTab('editor')
+    }
+  }, [mainTab, showDiscoverTab])
 
   // When user sends timeline frame to Generate (right-click preview → Extend with AI / Starting keyframe for AI)
   useEffect(() => {
@@ -597,6 +626,7 @@ function App() {
         projectName={currentProject?.name || 'Untitled'}
         activeTab={mainTab}
         onTabChange={setMainTab}
+        showDiscoverTab={showDiscoverTab}
         editorLayout={editorLayout}
         onEditorLayoutChange={handleEditorLayoutChange}
       />
@@ -816,6 +846,13 @@ function App() {
           <WorkspaceErrorBoundary>
             <Suspense fallback={WORKSPACE_LOADING_FALLBACK}>
               <StockPanel />
+            </Suspense>
+          </WorkspaceErrorBoundary>
+        )}
+        {mainTab === 'discover' && showDiscoverTab && (
+          <WorkspaceErrorBoundary>
+            <Suspense fallback={WORKSPACE_LOADING_FALLBACK}>
+              <DiscoverWorkspace />
             </Suspense>
           </WorkspaceErrorBoundary>
         )}

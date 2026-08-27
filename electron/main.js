@@ -40,6 +40,10 @@ const {
   createComfyStudioMcpServer,
 } = require('./mcpServer')
 const { loadMyWorkflowCatalog } = require('./myWorkflowCatalog')
+const {
+  REQUEST_HEADER_REWRITE_URLS,
+  rewriteAppRequestHeaders,
+} = require('./requestHeaderRewrite')
 
 const isDev = !app.isPackaged
 
@@ -7527,6 +7531,10 @@ ipcMain.handle('export:checkNvenc', async (event, options = {}) => {
 // App Lifecycle
 // ============================================
 
+// Chromium adds or withholds a few forbidden request headers that renderer
+// JavaScript cannot safely correct. Keep these narrowly scoped rewrites in a
+// single webRequest listener (Electron supports only one listener per event).
+//
 // ComfyUI's origin-only middleware (installed whenever --enable-cors-header
 // is absent) rejects our renderer's API calls with a silent 403 — blank
 // embedded tab, dead queue/history polling. It trips on two headers that
@@ -7541,38 +7549,20 @@ ipcMain.handle('export:checkNvenc', async (event, options = {}) => {
 // traffic those checks exist to allow, so for loopback requests we rewrite
 // both headers to look same-origin: no launch flag needed, any ComfyUI
 // version. Scoped to 127.0.0.1/localhost only (http and ws) — remote hosts
-// are untouched.
-function installLoopbackHeaderRewrite() {
-  const filter = {
-    urls: [
-      'http://127.0.0.1/*',
-      'http://localhost/*',
-      'ws://127.0.0.1/*',
-      'ws://localhost/*',
-    ],
-  }
+// are untouched. Packaged file:// pages also have no HTTP Referer, while the
+// YouTube embedded-player contract requires desktop clients to identify
+// themselves with one. requestHeaderRewrite adds Velorn's installed app ID
+// only to youtube.com/youtube-nocookie.com /embed/ document requests.
+function installRequestHeaderRewrite() {
+  const filter = { urls: REQUEST_HEADER_REWRITE_URLS }
   session.defaultSession.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
-    const headers = details.requestHeaders || {}
-    try {
-      const target = new URL(details.url)
-      // WebSocket handshakes carry an http(s) Origin, not ws(s).
-      const scheme = target.protocol === 'ws:' ? 'http:' : target.protocol === 'wss:' ? 'https:' : target.protocol
-      const originValue = `${scheme}//${target.host}`
-      for (const key of Object.keys(headers)) {
-        const lower = key.toLowerCase()
-        if (lower === 'origin') headers[key] = originValue
-        else if (lower === 'sec-fetch-site') headers[key] = 'same-origin'
-      }
-    } catch {
-      // Malformed URL — leave the request untouched.
-    }
-    callback({ requestHeaders: headers })
+    callback({ requestHeaders: rewriteAppRequestHeaders(details) })
   })
 }
 
 app.whenReady().then(async () => {
   registerFileProtocol()
-  installLoopbackHeaderRewrite()
+  installRequestHeaderRewrite()
   mcpServer = createComfyStudioMcpServer({
     port: DEFAULT_MCP_PORT,
     version: app.getVersion(),
