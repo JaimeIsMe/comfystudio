@@ -318,6 +318,7 @@
     }
   },
   "topTabs": {
+    "navigation": "Workspace modes",
     "editor": "Editor",
     "generate": "Generate",
     "agent": "Agent",
@@ -378,6 +379,7 @@
   "discover": {
     "title": "Discover",
     "subtitle": "See what creators make with Velorn and learn the workflows behind it.",
+    "visibilityHint": "You can hide the Discover tab anytime in Settings → Appearance.",
     "tabs": {
       "featured": "Featured",
       "showcase": "Made with Velorn",
@@ -394,7 +396,7 @@
     "actions": {
       "watch": "Watch {{title}}",
       "openYouTube": "Open on YouTube",
-      "submit": "Submit your work",
+      "submit": "Submit a YouTube video",
       "retry": "Retry",
       "close": "Close"
     },

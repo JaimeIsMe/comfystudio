@@ -318,6 +318,7 @@
     }
   },
   "topTabs": {
+    "navigation": "ワークスペースモード",
     "editor": "編集",
     "generate": "生成",
     "agent": "エージェント",
@@ -378,6 +379,7 @@
   "discover": {
     "title": "見つける",
     "subtitle": "Velornでクリエイターが制作した作品を見て、その制作ワークフローを学びましょう。",
+    "visibilityHint": "Discoverタブは「設定」→「外観」からいつでも非表示にできます。",
     "tabs": {
       "featured": "おすすめ",
       "showcase": "Velorn作品",
@@ -394,7 +396,7 @@
     "actions": {
       "watch": "{{title}}を再生",
       "openYouTube": "YouTubeで開く",
-      "submit": "作品を投稿",
+      "submit": "YouTube動画を投稿",
       "retry": "再試行",
       "close": "閉じる"
     },

@@ -39,7 +39,7 @@ test('the public starter catalog matches the embedded, validated fallback', () =
   ))
 
   assert.deepEqual(parseDiscoverCatalog(publicCatalog), parseDiscoverCatalog(DEFAULT_BUNDLED_DISCOVER_CATALOG))
-  assert.equal(publicCatalog.items.length, 6)
+  assert.equal(publicCatalog.items.length, 8)
 })
 
 test('catalog parsing keeps only constrained metadata and rejects unsafe entries', () => {
@@ -132,7 +132,7 @@ test('loads a validated remote catalog first and caches it', async () => {
   assert.equal(requested[0].options.referrerPolicy, 'no-referrer')
   assert.equal(requested[0].options.redirect, 'error')
   assert.ok(storage.values.has(DISCOVER_CATALOG_CACHE_KEY))
-  assert.equal(readDiscoverCatalogCache({ storage, now: 1000 })?.items.length, 6)
+  assert.equal(readDiscoverCatalogCache({ storage, now: 1000 })?.items.length, 8)
 })
 
 test('falls back from a failed remote request to a valid cache', async () => {
@@ -168,13 +168,13 @@ test('falls back to the bundled catalog when remote and cache data are invalid',
 
   assert.equal(result.source, 'bundled')
   assert.deepEqual(requested, [DEFAULT_DISCOVER_CATALOG_URL, './discover/catalog.json'])
-  assert.equal(result.catalog.items.length, 6)
+  assert.equal(result.catalog.items.length, 8)
 })
 
 test('uses the embedded bundled catalog if asset fetching is unavailable', async () => {
   const result = await loadDiscoverCatalog({ fetchImpl: null, storage: makeStorage(), remoteUrl: '' })
   assert.equal(result.source, 'bundled')
-  assert.equal(result.catalog.items.length, 6)
+  assert.equal(result.catalog.items.length, 8)
 })
 
 test('an untrusted remote URL is never requested', async () => {
@@ -212,6 +212,6 @@ test('bounds a stalled remote request before falling back to the bundled catalog
 
   assert.equal(result.source, 'bundled')
   assert.deepEqual(requested, [DEFAULT_DISCOVER_CATALOG_URL, './discover/catalog.json'])
-  assert.equal(result.catalog.items.length, 6)
+  assert.equal(result.catalog.items.length, 8)
   assert.ok(result.warning)
 })

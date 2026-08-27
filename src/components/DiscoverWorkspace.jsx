@@ -9,8 +9,6 @@ import {
   Play,
   RefreshCw,
   Send,
-  Sparkles,
-  Upload,
   WifiOff,
   X,
 } from 'lucide-react'
@@ -599,35 +597,6 @@ function SubmissionModal({ onClose }) {
   )
 }
 
-function SubmissionCallout({ onSubmit }) {
-  const { t } = useI18n()
-  return (
-    <div className="mt-6 flex flex-col gap-4 rounded-2xl border border-sf-accent/25 bg-sf-accent/10 p-5 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2 text-sm font-semibold text-sf-text-primary">
-          <Upload className="h-4 w-4 text-sf-accent" />
-          {t('discover.submit.title', undefined, 'Submit your work')}
-        </div>
-        <p className="mt-1 max-w-2xl text-xs leading-relaxed text-sf-text-muted">
-          {t(
-            'discover.submit.body',
-            undefined,
-            'Share a YouTube video made with Velorn. Every submission is reviewed before anything is featured.',
-          )}
-        </p>
-      </div>
-      <button
-        type="button"
-        onClick={onSubmit}
-        className="inline-flex flex-shrink-0 items-center justify-center gap-1.5 rounded-lg bg-sf-accent px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-sf-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-sf-accent focus-visible:ring-offset-2 focus-visible:ring-offset-sf-dark-900"
-      >
-        <Send className="h-3.5 w-3.5" />
-        {t('discover.actions.submit', undefined, 'Submit your work')}
-      </button>
-    </div>
-  )
-}
-
 export default function DiscoverWorkspace({ onClose }) {
   const { t } = useI18n()
   const loadRequestRef = useRef(0)
@@ -707,12 +676,9 @@ export default function DiscoverWorkspace({ onClose }) {
       <header className="flex-shrink-0 border-b border-sf-dark-700 bg-sf-dark-950/95 px-5 py-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-sf-accent" />
-              <h1 className="text-lg font-semibold text-sf-text-primary">
-                {t('discover.title', undefined, 'Discover')}
-              </h1>
-            </div>
+            <h1 className="text-lg font-semibold text-sf-text-primary">
+              {t('discover.title', undefined, 'Discover')}
+            </h1>
             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-sf-text-muted">
               {t(
                 'discover.subtitle',
@@ -720,15 +686,22 @@ export default function DiscoverWorkspace({ onClose }) {
                 'See what creators make with Velorn and learn the workflows behind it.',
               )}
             </p>
+            <p className="mt-1 text-[11px] leading-relaxed text-sf-text-secondary">
+              {t(
+                'discover.visibilityHint',
+                undefined,
+                'You can hide the Discover tab anytime in Settings → Appearance.',
+              )}
+            </p>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setSubmissionOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-sf-accent/40 bg-sf-accent/10 px-3 py-2 text-xs font-medium text-sf-accent transition-colors hover:bg-sf-accent/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-sf-accent"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-sf-accent/70 bg-sf-accent/25 px-4 py-2 text-xs font-semibold text-sf-text-primary shadow-md shadow-sf-accent/10 transition-colors hover:bg-sf-accent/35 focus:outline-none focus-visible:ring-2 focus-visible:ring-sf-accent focus-visible:ring-offset-2 focus-visible:ring-offset-sf-dark-950"
             >
-              <Upload className="h-3.5 w-3.5" />
-              {t('discover.actions.submit', undefined, 'Submit your work')}
+              <Send className="h-3.5 w-3.5" aria-hidden="true" />
+              {t('discover.actions.submit', undefined, 'Submit a YouTube video')}
             </button>
             {onClose && (
               <button
@@ -844,8 +817,6 @@ export default function DiscoverWorkspace({ onClose }) {
                 </p>
               </div>
             )}
-
-            {activeSection !== 'tutorials' && <SubmissionCallout onSubmit={() => setSubmissionOpen(true)} />}
           </div>
         )}
       </main>

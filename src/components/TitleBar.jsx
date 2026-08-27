@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react'
-import { Copy, LayoutTemplate, Minus, PanelLeft, Square, X } from 'lucide-react'
+import { Copy, LayoutTemplate, Minus, PanelLeft, PlayCircle, Square, X } from 'lucide-react'
 import ComfyLauncherChip from './ComfyLauncherChip'
 import CreditsChip from './CreditsChip'
 import GenerationMonitorChip from './GenerationMonitorChip'
@@ -17,9 +17,9 @@ const TOP_TABS = [
   { id: 'flow-ai', label: 'Flow AI' },
   { id: 'mog', label: 'MoGraph' },
   { id: 'stock', label: 'Stock' },
-  { id: 'discover', label: 'Discover' },
   { id: 'comfyui', label: 'ComfyUI' },
   { id: 'export', label: 'Export' },
+  { id: 'discover', label: 'Discover' },
 ]
 
 const HIDDEN_TOP_TAB_IDS = new Set([
@@ -107,22 +107,36 @@ function TitleBar({
           height: 'calc(100% + 1px)'
         }}
       >
-        <div className="no-drag flex items-center gap-0 h-full bg-sf-dark-800 border-x border-sf-dark-700 border-t-0 rounded-none p-0.5">
+        <nav
+          className="no-drag flex items-center gap-0 h-full bg-sf-dark-800 border-x border-sf-dark-700 border-t-0 rounded-none p-0.5"
+          aria-label={t('topTabs.navigation', undefined, 'Workspace modes')}
+        >
           {tabs.map((tab, index) => (
             <Fragment key={tab.id}>
               {index > 0 && (
-                <div className="w-px h-4 bg-sf-dark-600 flex-shrink-0" aria-hidden="true" />
+                <div
+                  className={tab.id === 'discover'
+                    ? 'mx-0.5 h-5 w-px flex-shrink-0 bg-sf-dark-500 2xl:mx-1.5'
+                    : 'h-4 w-px flex-shrink-0 bg-sf-dark-600'}
+                  aria-hidden="true"
+                />
               )}
               <div className="relative flex h-full items-center">
                 <button
                   onClick={() => onTabChange?.(tab.id)}
-                  className={`px-3 py-1 text-[11px] rounded-none transition-colors ${
-                    activeTab === tab.id
-                      ? 'bg-sf-accent text-white'
-                      : 'text-sf-text-muted hover:text-sf-text-primary hover:bg-sf-dark-700'
+                  aria-current={activeTab === tab.id ? 'page' : undefined}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 text-[11px] transition-colors ${
+                    tab.id === 'discover'
+                      ? (activeTab === tab.id
+                          ? 'rounded border border-sf-accent/70 bg-sf-accent/20 font-medium text-sf-text-primary'
+                          : 'rounded border border-sf-dark-600 bg-sf-dark-900/70 text-sf-text-secondary hover:border-sf-dark-500 hover:bg-sf-dark-700 hover:text-sf-text-primary')
+                      : (activeTab === tab.id
+                          ? 'rounded-none bg-sf-accent text-white'
+                          : 'rounded-none text-sf-text-muted hover:bg-sf-dark-700 hover:text-sf-text-primary')
                   }`}
                 >
-              {tab.id === 'comfyui' ? tab.label : t(`topTabs.${tab.id}`)}
+                  {tab.id === 'discover' && <PlayCircle className="hidden h-3.5 w-3.5 2xl:block" aria-hidden="true" />}
+                  {tab.id === 'comfyui' ? tab.label : t(`topTabs.${tab.id}`)}
                 </button>
                 {tab.id === 'mog' && activeTab === 'mog' && (
                   <div className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 rounded-full bg-pink-300/12 px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.18em] text-pink-200/65 shadow-[0_0_10px_rgba(244,114,182,0.12)]">
@@ -132,7 +146,7 @@ function TitleBar({
               </div>
             </Fragment>
           ))}
-        </div>
+        </nav>
       </div>
       
       {/* Right - Launcher chip + Window Controls (Windows style) */}

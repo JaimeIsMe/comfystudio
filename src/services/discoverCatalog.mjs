@@ -19,7 +19,7 @@ const MAX_CATALOG_ITEMS = 200
 // available even if both the network and a file:// asset request are unavailable.
 export const DEFAULT_BUNDLED_DISCOVER_CATALOG = Object.freeze({
   schemaVersion: DISCOVER_CATALOG_SCHEMA_VERSION,
-  updatedAt: '2026-08-27T00:00:00.000Z',
+  updatedAt: '2026-08-27T18:11:01.000Z',
   items: Object.freeze([
     Object.freeze({
       id: 'velorn-overview',
@@ -85,6 +85,28 @@ export const DEFAULT_BUNDLED_DISCOVER_CATALOG = Object.freeze({
       description: 'A finished music video created with Velorn.',
       category: 'Music videos',
       tags: Object.freeze(['music video']),
+      featured: false,
+    }),
+    Object.freeze({
+      id: 'ltx-23-ai-music-video',
+      youtubeId: 'ogJ08d2GlqI',
+      title: 'LTX 2.3 AI Music Video',
+      kind: 'showcase',
+      creator: "j'aime",
+      description: 'An AI-generated music video created with Velorn and LTX 2.3.',
+      category: 'Music videos',
+      tags: Object.freeze(['music video', 'ai generation', 'LTX 2.3']),
+      featured: false,
+    }),
+    Object.freeze({
+      id: 'you-dont-need-saving',
+      youtubeId: 'WcHBs-7_G14',
+      title: "You Don't Need Saving",
+      kind: 'showcase',
+      creator: "j'aime",
+      description: 'An original AI-created music video made with Velorn.',
+      category: 'Music videos',
+      tags: Object.freeze(['music video', 'ai generation']),
       featured: false,
     }),
   ]),
