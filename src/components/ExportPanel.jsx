@@ -704,10 +704,11 @@ function ExportPanel() {
         next.videoCodec = supportedVideo.some((codec) => codec.id === prev.videoCodec)
           ? prev.videoCodec
           : supportedVideo[0]?.id || prev.videoCodec
+        const videoCodecChanged = next.videoCodec !== prev.videoCodec
         next.audioCodec = supportedAudio.some((codec) => codec.id === prev.audioCodec)
           ? prev.audioCodec
           : supportedAudio[0]?.id || prev.audioCodec
-        if (next.videoCodec && DEFAULT_CRF[next.videoCodec]) {
+        if (videoCodecChanged && next.videoCodec && DEFAULT_CRF[next.videoCodec]) {
           next.crf = DEFAULT_CRF[next.videoCodec]
         }
         if (value === 'webm' || value === 'prores' || value === 'audio') {
