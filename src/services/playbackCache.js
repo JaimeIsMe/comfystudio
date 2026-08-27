@@ -31,6 +31,10 @@ export function hasUsablePlaybackCache(asset) {
 
 export function isPlaybackCacheableVideoAsset(asset) {
   if (!asset || asset.type !== 'video') return false
+  // The H.264 playback-cache format has no alpha channel. Falling back to the
+  // project-owned source is preferable to silently replacing transparency
+  // with opaque pixels (notably for normalized animated GIFs).
+  if (asset.settings?.hasAlpha === true) return false
   return Boolean(asset.absolutePath || asset.path)
 }
 

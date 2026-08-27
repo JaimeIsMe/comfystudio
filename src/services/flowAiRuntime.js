@@ -18,6 +18,7 @@ import { BUILTIN_WORKFLOW_PATHS } from '../config/workflowRegistry'
 import { checkWorkflowDependencies } from './workflowDependencies'
 import { GENERATED_ASSET_FOLDERS, getWorkflowHardwareInfo } from '../config/generateWorkspaceConfig'
 import { importAsset, isElectron } from './fileSystem'
+import { canImportGifMedia, importGifAsset, isGifFilename } from './gifImport'
 import { enqueuePlaybackTranscode } from './playbackCache'
 import { enqueueProxyTranscode, isProxyPlaybackEnabled } from './proxyCache'
 import { markPromptHandledByApp } from './comfyPromptGuard'
@@ -59,8 +60,8 @@ const TEXT_OUTPUT_WORKFLOW_IDS = new Set([
   'google-gemini-flash-lite',
 ])
 
-const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'])
-const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'mkv', 'avi'])
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp'])
+const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'mkv', 'avi', 'gif'])
 const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'ogg', 'm4a', 'flac'])
 
 const WORKFLOW_MODIFIERS = Object.freeze({
@@ -781,6 +782,16 @@ async function pollForResult(promptId, workflowId, expectedOutputPrefix = '', on
             ))
             if (info) return { type: 'video', ...info }
           }
+          // Custom nodes often publish GIFs under `images` (or another
+          // arbitrary array key) even though the filename is animated media.
+          for (const [key, items] of Object.entries(nodeOutput)) {
+            if (['videos', 'gifs', 'video'].includes(key)) continue
+            if (!Array.isArray(items) || items.length === 0) continue
+            const info = pickBestFromItems(items, (entry) => (
+              isVideoFilename(entry.filename) && matchesExpectedPrefix(entry.filename)
+            ))
+            if (info) return { type: 'video', ...info }
+          }
         }
 
         const images = []
@@ -903,39 +914,53 @@ async function importRunResult({
   }
 
   if (result?.type === 'video') {
-    const folderId = outputTarget?.folderId || ensureAssetFolderPath(GENERATED_ASSET_FOLDERS.video)
+    const gifOutput = isGifFilename(result.filename)
+    const shouldNormalizeGif = gifOutput && canImportGifMedia()
     try {
       const videoFile = await comfyui.downloadVideo(result.filename, result.subfolder, result.outputType)
-      const assetInfo = await importAsset(projectHandle, videoFile, 'video')
-      const blobUrl = URL.createObjectURL(videoFile)
+      const assetInfo = shouldNormalizeGif
+        ? await importGifAsset(projectHandle, videoFile)
+        : await importAsset(projectHandle, videoFile, gifOutput ? 'images' : 'video')
+      const assetType = assetInfo?.type || 'video'
+      const folderId = outputTarget?.folderId || ensureAssetFolderPath(
+        assetType === 'image' ? GENERATED_ASSET_FOLDERS.image : GENERATED_ASSET_FOLDERS.video
+      )
+      const normalizedGif = assetInfo?.settings?.gifSource?.animated === true
+      const assetUrl = assetInfo?.url || URL.createObjectURL(videoFile)
       const asset = addAsset({
         ...assetInfo,
         name: baseName,
-        type: 'video',
-        url: blobUrl,
+        type: assetType,
+        url: assetUrl,
         prompt: promptText,
         isImported: true,
         folderId,
         settings: {
-          duration: node?.data?.duration,
-          fps: node?.data?.fps,
+          ...(assetInfo?.settings || {}),
+          duration: normalizedGif ? assetInfo.duration : node?.data?.duration,
+          fps: normalizedGif ? assetInfo.fps : node?.data?.fps,
           seed: node?.data?.seed,
           resolution: `${node?.data?.width || ''}x${node?.data?.height || ''}`,
         },
         flowAi: flowMetadata,
       })
       if (asset) importedAssets.push(asset)
-      if (isElectron() && projectHandle && asset?.absolutePath) {
+      if (assetType === 'video' && isElectron() && projectHandle && asset?.absolutePath && !normalizedGif) {
         enqueuePlaybackTranscode(projectHandle, asset.id, asset.absolutePath).catch(() => {})
         if (isProxyPlaybackEnabled()) {
           enqueueProxyTranscode(projectHandle, asset.id, asset.absolutePath).catch(() => {})
         }
       }
     } catch (error) {
+      if (shouldNormalizeGif) throw error
       const fallbackUrl = comfyui.getMediaUrl(result.filename, result.subfolder, result.outputType)
+      const fallbackType = gifOutput ? 'image' : 'video'
+      const folderId = outputTarget?.folderId || ensureAssetFolderPath(
+        fallbackType === 'image' ? GENERATED_ASSET_FOLDERS.image : GENERATED_ASSET_FOLDERS.video
+      )
       const asset = addAsset({
         name: baseName,
-        type: 'video',
+        type: fallbackType,
         url: fallbackUrl,
         prompt: promptText,
         folderId,
@@ -1566,4 +1591,3 @@ export async function runFlowGraph(document, options = {}) {
     textOutputNodeIds,
   }
 }
-

@@ -5672,6 +5672,22 @@ ipcMain.handle('workflowSetup:install', async (event, payload = {}) => {
 // Export Operations
 // ============================================
 
+// GIF delivery is a two-pass native encode after the worker has rendered its
+// lossless PNG frames. Track each native job by an unguessable renderer-side
+// session id so Stop, worker crashes, and window teardown can kill whichever
+// palette/encode pass is active without affecting another renderer.
+const activeGifExportJobs = new Map()
+
+const abortGifExportsForOwner = (ownerId) => {
+  let aborted = 0
+  for (const job of activeGifExportJobs.values()) {
+    if (job.ownerId !== ownerId || job.controller.signal.aborted) continue
+    job.controller.abort()
+    aborted += 1
+  }
+  return aborted
+}
+
 ipcMain.handle('export:runInWorker', async (event, payload) => {
   if (exportWorkerWindow && !exportWorkerWindow.isDestroyed()) {
     return { success: false, error: 'Export already in progress' }
@@ -5701,6 +5717,7 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
   })
   exportWorkerWindow = workerWindow
   const workerContents = workerWindow.webContents
+  const workerContentsId = workerContents.id
   // The export worker is a hidden window, so its console is invisible in
   // normal use. Mirror it to userData/export-worker.log so export failures
   // are diagnosable from disk — including renderer crashes, which otherwise
@@ -5762,6 +5779,7 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
   // line forever AND blocks every future export with "already in progress".
   workerContents.on('render-process-gone', (_event, details) => {
     workerLog(`!!! RENDER PROCESS GONE: ${JSON.stringify(details)}`)
+    abortGifExportsForOwner(workerContentsId)
     const pngSequenceRecoveryNote = jobPayload?.options?.format === 'png-seq' && jobPayload?.outputPath
       ? ` An incomplete PNG sequence may remain at ${jobPayload.outputPath}; Velorn did not delete it because the worker could not confirm folder ownership after the crash.`
       : ''
@@ -5802,6 +5820,7 @@ ipcMain.handle('export:runInWorker', async (event, payload) => {
   }
   ipcMain.on('export:workerReady', onWorkerReady)
   workerWindow.on('closed', () => {
+    abortGifExportsForOwner(workerContentsId)
     ipcMain.removeListener('export:progress', onProgress)
     ipcMain.removeListener('export:complete', onComplete)
     ipcMain.removeListener('export:error', onError)
@@ -5915,6 +5934,7 @@ ipcMain.handle('export:cancel', async () => {
     return { success: true, cancelled: false }
   }
   try {
+    abortGifExportsForOwner(exportWorkerWindow.webContents.id)
     exportWorkerWindow.webContents.send('export:cancel-job')
     return { success: true, cancelled: true }
   } catch (err) {
@@ -6800,6 +6820,59 @@ async function resolveHardwareEncoderDowngrade(options = {}, selection = null) {
   }
 }
 
+ipcMain.handle('export:gifEncode', async (event, options = {}) => {
+  const gifFfmpegUnavailable = getFfmpegUnavailableError()
+  if (gifFfmpegUnavailable) {
+    return { success: false, error: gifFfmpegUnavailable }
+  }
+
+  const sessionId = typeof options.sessionId === 'string' ? options.sessionId.trim() : ''
+  if (!/^[a-zA-Z0-9._-]{1,120}$/.test(sessionId)) {
+    return { success: false, error: 'Invalid GIF export session.' }
+  }
+  if (activeGifExportJobs.has(sessionId)) {
+    return { success: false, error: 'This GIF export session is already active.' }
+  }
+
+  const controller = new AbortController()
+  const ownerId = event.sender.id
+  activeGifExportJobs.set(sessionId, { controller, ownerId })
+
+  try {
+    const { encodeGifFromPngSequence } = require('./gifExportFfmpeg')
+    const result = await encodeGifFromPngSequence({
+      ffmpegPath,
+      framePattern: options.framePattern,
+      fps: options.fps,
+      outputPath: options.outputPath,
+      sessionId,
+      signal: controller.signal,
+      onPhase: phase => console.log(`[GIF Export] ${sessionId}: ${phase}`),
+    })
+    return { success: true, ...result }
+  } catch (error) {
+    const cancelled = controller.signal.aborted || error?.code === 'EXPORT_CANCELLED'
+    return {
+      success: false,
+      cancelled,
+      error: cancelled ? 'Export cancelled' : (error?.message || String(error)),
+    }
+  } finally {
+    activeGifExportJobs.delete(sessionId)
+  }
+})
+
+ipcMain.handle('export:abortGifEncode', async (event, sessionIdValue) => {
+  const sessionId = typeof sessionIdValue === 'string' ? sessionIdValue.trim() : ''
+  const job = activeGifExportJobs.get(sessionId)
+  if (!job) return { success: true, cancelled: false }
+  if (job.ownerId !== event.sender.id) {
+    return { success: false, cancelled: false, error: 'GIF export session belongs to another renderer.' }
+  }
+  job.controller.abort()
+  return { success: true, cancelled: true }
+})
+
 ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
   const {
     framePattern,
@@ -7295,6 +7368,34 @@ ipcMain.handle('playback:transcode', async (event, { inputPath, outputPath }) =>
         await finish({ success: false, error: stderr || `FFmpeg exited with code ${code}` })
       }
     })
+  })
+})
+
+// ============================================
+// GIF import (static probe + animated editing intermediate)
+// ============================================
+ipcMain.handle('gif:probe', async (event, options = {}) => {
+  const inputPath = typeof options.inputPath === 'string' ? options.inputPath.trim() : ''
+  if (!inputPath) return { success: false, error: 'Missing GIF input path.' }
+  const { probeGifFile } = require('./animatedGifTranscode')
+  const result = await probeGifFile(inputPath)
+  if (!result?.success) return result
+  // Per-frame delay arrays are useful to the pure helper tests, but sending
+  // tens of thousands of entries across IPC would add no value to import.
+  const { rawDelaysCentiseconds, delaysCentiseconds, ...summary } = result
+  return summary
+})
+
+ipcMain.handle('gif:transcodeAnimated', async (event, options = {}) => {
+  const ffmpegUnavailable = getFfmpegUnavailableError()
+  if (ffmpegUnavailable) return { success: false, error: ffmpegUnavailable }
+  const { transcodeAnimatedGif } = require('./animatedGifTranscode')
+  return await transcodeAnimatedGif({
+    ffmpegPath,
+    ffprobePath,
+    inputPath: options.inputPath,
+    outputDir: options.outputDir,
+    baseName: options.baseName,
   })
 })
 
