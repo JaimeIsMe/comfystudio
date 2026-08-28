@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform info
   platform: process.platform,
   isElectron: true,
+  getSystemFonts: (forceRefresh = false) => ipcRenderer.invoke('fonts:listSystem', forceRefresh === true),
   
   // ============================================
   // Dialog Operations

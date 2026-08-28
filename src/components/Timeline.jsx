@@ -47,6 +47,7 @@ import { analyzeAudioSource } from '../services/audioAnalysis'
 import { getClipPlaybackTimeAtTimeline } from './CanvasPreviewRenderer'
 import { canRevealAssetInFileManager, getRevealInFileManagerLabel, revealAssetInFileManager } from '../utils/revealInFileManager'
 import { useI18n } from '../i18n/I18nContext'
+import { quoteCssFontFamily } from '../utils/fontFamily'
 
 const TRANSITION_DEFAULT_DURATION_KEY = 'comfystudio-transition-default-duration-frames'
 const DEFAULT_WAVEFORM_SAMPLES = 8192
@@ -6277,7 +6278,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
                             className="text-[11px] text-sf-text-primary font-medium truncate"
                             style={{
                               textShadow: '0 1px 2px rgba(0,0,0,0.5)',
-                              fontFamily: clip.textProperties?.fontFamily || 'Inter'
+                              fontFamily: quoteCssFontFamily(clip.textProperties?.fontFamily)
                             }}
                           >
                             {clip.textProperties?.text || 'Text'}

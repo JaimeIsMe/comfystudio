@@ -841,6 +841,12 @@
       "motion-test": { "name": "Motion Test", "description": "短いモーションテスト" }
     }
   },
+  "fontPicker": {
+    "ariaLabel": "フォント",
+    "loading": "インストール済みフォントを読み込み中…",
+    "retry": "インストール済みフォントを取得できません · 再試行",
+    "unavailableTitle": "インストール済みフォントを一時的に取得できません。"
+  },
   "textPanel": {
     "sampleText": "サンプルテキスト",
     "textContent": "テキスト内容",

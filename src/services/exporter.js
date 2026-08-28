@@ -41,6 +41,7 @@ import { parseTrackMatte, resolveTrackMatteAssignments, applyTrackMatteToCanvas 
 import { hasSpeedRamp, getRampedSourceOffset } from '../utils/timeRemap'
 import { hasActiveCornerPin, applyCornerPinToQuad } from '../utils/cornerPin'
 import { drawShape, getShapeCanvasRect } from '../utils/shapes'
+import { quoteCssFontFamily } from '../utils/fontFamily'
 import { getMotionBlurSamples, getVelocityMotionBlurOptions } from '../utils/motionBlur'
 import { applyVelocityMotionBlurToCanvas, buildVelocityBlurUniformValues, canUseVelocityMotionBlur } from '../utils/velocityMotionBlur'
 import {
@@ -874,7 +875,7 @@ export const drawText = (ctx, rect, clip, textScale = 1, clipTime = null) => {
   const verticalAlign = textProps.verticalAlign || 'center'
   const padding = (textProps.backgroundPadding || 20) * scale
   
-  ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`
+  ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${quoteCssFontFamily(fontFamily)}`
   ctx.textAlign = textAlign
   ctx.textBaseline = 'middle'
   

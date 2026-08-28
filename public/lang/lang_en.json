@@ -841,6 +841,12 @@
       "motion-test": { "name": "Motion Test", "description": "Short motion tests" }
     }
   },
+  "fontPicker": {
+    "ariaLabel": "Font family",
+    "loading": "Loading installed fonts…",
+    "retry": "Installed fonts unavailable · Retry",
+    "unavailableTitle": "Installed fonts are temporarily unavailable."
+  },
   "textPanel": {
     "sampleText": "Sample Text",
     "textContent": "Text Content",

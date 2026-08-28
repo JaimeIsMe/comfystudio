@@ -32,6 +32,7 @@ import {
 import { canUseGlslEffects, hasGlslEffect, snapshotAdjustmentGlslEffectsForOverlay } from '../utils/glslEffects'
 import { cullVisualLayerEntries } from '../utils/layerCompositing'
 import { getShapePolygonPoints, getShapeSvgProps, normalizeShapeProperties } from '../utils/shapes'
+import { quoteCssFontFamily } from '../utils/fontFamily'
 import ClipEffectSvgFilter from './effects/ClipEffectSvgFilter'
 import GlslEffectCanvas from './effects/GlslEffectCanvas'
 
@@ -2229,7 +2230,7 @@ const TextLayer = memo(function TextLayer({
   
   // Build text styles from textProperties
   const textStyle = {
-    fontFamily: textProps.fontFamily || 'Inter',
+    fontFamily: quoteCssFontFamily(textProps.fontFamily),
     fontSize: `${scaledFontSize}px`,
     fontWeight: textProps.fontWeight || 'bold',
     fontStyle: textProps.fontStyle || 'normal',

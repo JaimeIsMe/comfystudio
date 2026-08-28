@@ -3,12 +3,8 @@ import { useMemo, useState } from 'react'
 import { useTimelineStore } from '../../stores/timelineStore'
 import { TEXT_ANIMATION_PRESETS, TEXT_ANIMATION_MODE_OPTIONS } from '../../utils/textAnimationPresets'
 import { useI18n } from '../../i18n/I18nContext'
-
-// Available fonts for text clips
-const FONT_OPTIONS = [
-  'Inter', 'Arial', 'Helvetica', 'Times New Roman', 'Georgia', 
-  'Courier New', 'Verdana', 'Impact', 'Comic Sans MS', 'Trebuchet MS'
-]
+import { quoteCssFontFamily } from '../../utils/fontFamily'
+import FontFamilyPicker from '../FontFamilyPicker'
 
 function TextPanel() {
   const { t } = useI18n()
@@ -90,15 +86,12 @@ function TextPanel() {
         <div className="space-y-3">
           <div>
             <label className="text-[10px] text-sf-text-secondary mb-1 block">{t('textPanel.fontFamily')}</label>
-            <select
+            <FontFamilyPicker
               value={textFontFamily}
-              onChange={(e) => setTextFontFamily(e.target.value)}
+              onChange={setTextFontFamily}
+              ariaLabel={t('textPanel.fontFamily')}
               className="w-full bg-sf-dark-800 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
-            >
-              {FONT_OPTIONS.map(font => (
-                <option key={font} value={font} style={{ fontFamily: font }}>{font}</option>
-              ))}
-            </select>
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -362,7 +355,7 @@ function TextPanel() {
           >
             <span
               style={{
-                fontFamily: textFontFamily,
+                fontFamily: quoteCssFontFamily(textFontFamily),
                 fontSize: `${Math.min(textFontSize, 32)}px`,
                 fontWeight: textFontWeight,
                 color: textColor,

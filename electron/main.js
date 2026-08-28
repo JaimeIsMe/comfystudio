@@ -44,6 +44,13 @@ const {
   REQUEST_HEADER_REWRITE_URLS,
   rewriteAppRequestHeaders,
 } = require('./requestHeaderRewrite')
+const { listSystemFonts } = require('./systemFonts')
+const {
+  DEFAULT_MAIN_WINDOW_BOUNDS,
+  clampWindowBoundsToWorkArea,
+  getAdaptiveMainWindowMinimum,
+  sanitizeWindowBounds,
+} = require('./mainWindowBounds')
 
 const isDev = !app.isPackaged
 
@@ -57,7 +64,6 @@ const COMFY_CONNECTION_SETTING_KEY = 'comfyConnection'
 const DEFAULT_LOCAL_COMFY_PORT = 8188
 const COMFY_CLOUD_CREDITS_PER_USD = 211
 const MAIN_WINDOW_STATE_SETTING_KEY = 'mainWindowState'
-const DEFAULT_MAIN_WINDOW_BOUNDS = Object.freeze({ width: 1600, height: 1000 })
 const COMFYSTUDIO_BRIDGE_DIR_NAME = 'comfystudio_bridge'
 const COMFYSTUDIO_BRIDGE_VERSION = '0.1.0'
 const EXTRA_MODEL_PATH_CONFIG_NAMES = Object.freeze(['extra_model_paths.yaml', 'extra_model_paths.yml'])
@@ -370,21 +376,6 @@ function sendWindowState() {
   mainWindow.webContents.send('window:stateChanged', getWindowState())
 }
 
-function sanitizeWindowBounds(bounds) {
-  if (!bounds || typeof bounds !== 'object') return null
-  const x = Number(bounds.x)
-  const y = Number(bounds.y)
-  const width = Number(bounds.width)
-  const height = Number(bounds.height)
-  if (![x, y, width, height].every(Number.isFinite)) return null
-  return {
-    x: Math.round(x),
-    y: Math.round(y),
-    width: Math.max(1200, Math.round(width)),
-    height: Math.max(800, Math.round(height)),
-  }
-}
-
 function getBoundsIntersectionArea(bounds, area) {
   if (!bounds || !area) return 0
   const left = Math.max(bounds.x, area.x)
@@ -419,26 +410,7 @@ function getDisplayForSavedWindowState(savedState, bounds) {
 
 function clampWindowBoundsToDisplay(bounds, display) {
   const workArea = display?.workArea || screen.getPrimaryDisplay().workArea
-  const width = Math.min(Math.max(1200, bounds?.width || DEFAULT_MAIN_WINDOW_BOUNDS.width), workArea.width)
-  const height = Math.min(Math.max(800, bounds?.height || DEFAULT_MAIN_WINDOW_BOUNDS.height), workArea.height)
-  const requestedX = Number(bounds?.x)
-  const requestedY = Number(bounds?.y)
-  const centeredX = workArea.x + Math.round((workArea.width - width) / 2)
-  const centeredY = workArea.y + Math.round((workArea.height - height) / 2)
-  const x = Math.min(
-    Math.max(workArea.x, Number.isFinite(requestedX) ? requestedX : centeredX),
-    workArea.x + Math.max(0, workArea.width - width)
-  )
-  const y = Math.min(
-    Math.max(workArea.y, Number.isFinite(requestedY) ? requestedY : centeredY),
-    workArea.y + Math.max(0, workArea.height - height)
-  )
-  return {
-    x: Math.round(x),
-    y: Math.round(y),
-    width: Math.round(width),
-    height: Math.round(height),
-  }
+  return clampWindowBoundsToWorkArea(bounds, workArea)
 }
 
 function centerBoundsInDisplay(width, height, display) {
@@ -3560,10 +3532,11 @@ function createSplashWindow(restoredWindowState = null) {
 
 async function createWindow(restoredWindowState = null) {
   restoredWindowState = restoredWindowState || await getRestoredMainWindowState()
+  const adaptiveMinimum = getAdaptiveMainWindowMinimum(restoredWindowState.bounds)
   mainWindow = new BrowserWindow({
     ...restoredWindowState.bounds,
-    minWidth: 1200,
-    minHeight: 800,
+    minWidth: adaptiveMinimum.width,
+    minHeight: adaptiveMinimum.height,
     icon: iconPath,
     backgroundColor: '#0a0a0b',
     titleBarStyle: 'hiddenInset',
@@ -4888,6 +4861,10 @@ ipcMain.handle('captions:mixTimelineAudio', async (event, options = {}) => {
 // ============================================
 // IPC Handlers - App Settings Storage
 // ============================================
+
+ipcMain.handle('fonts:listSystem', async (_event, forceRefresh = false) => (
+  listSystemFonts({ forceRefresh: forceRefresh === true })
+))
 
 ipcMain.handle('settings:get', async (event, key) => {
   try {

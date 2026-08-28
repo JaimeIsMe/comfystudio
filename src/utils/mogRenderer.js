@@ -1,5 +1,6 @@
 import { buildMogStateFromPreset } from './mogPresets'
 import { drawMogTextBlock, getMogMotionState } from './mogTextEngine'
+import { quoteCssFontFamily } from './fontFamily'
 
 const PREVIEW_CARD_BACKGROUND = ['#09111F', '#0F172A', '#1D4ED8']
 
@@ -38,7 +39,7 @@ function drawRoundedRect(ctx, x, y, width, height, radius) {
 }
 
 function setFont(ctx, size, family, weight = '700') {
-  ctx.font = `${weight} ${Math.round(size)}px "${family}", sans-serif`
+  ctx.font = `${weight} ${Math.round(size)}px ${quoteCssFontFamily(family)}, sans-serif`
 }
 
 function applyMotionWrapper(ctx, bounds, motion, direction, drawFn) {

@@ -42,6 +42,7 @@ import ColorWheels from './ColorWheels'
 import { isManagedEffectType } from '../utils/effects'
 import { FRAME_RATE, TRANSITION_TYPES, TRANSITION_DEFAULT_SETTINGS } from '../constants/transitions'
 import { useI18n } from '../i18n/I18nContext'
+import FontFamilyPicker from './FontFamilyPicker'
 
 // Clip speed UI: the store accepts 0.1x-8x continuously (timelineStore
 // clamps in updateClipSpeed). The slider is log-scaled so the slow-motion
@@ -421,12 +422,6 @@ function DraggableNumberInput({ value, onChange, onCommit, min, max, step = 1, s
     </div>
   )
 }
-
-// Available fonts for text clips
-const FONT_OPTIONS = [
-  'Inter', 'Arial', 'Helvetica', 'Times New Roman', 'Georgia', 
-  'Courier New', 'Verdana', 'Impact', 'Comic Sans MS', 'Trebuchet MS'
-]
 
 /**
  * Keyframe button component - shows diamond icon that can be clicked to toggle keyframes
@@ -5027,15 +5022,11 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
             {/* Font Family */}
             <div>
               <label className="text-[10px] text-sf-text-muted block mb-1">Font</label>
-              <select
+              <FontFamilyPicker
                 value={textProps.fontFamily}
-                onChange={(e) => handleTextPropertyCommit('fontFamily', e.target.value)}
+                onCommit={(value) => handleTextPropertyCommit('fontFamily', value)}
                 className="w-full bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
-              >
-                {FONT_OPTIONS.map(font => (
-                  <option key={font} value={font} style={{ fontFamily: font }}>{font}</option>
-                ))}
-              </select>
+              />
             </div>
 
             {/* Font Size and Weight */}

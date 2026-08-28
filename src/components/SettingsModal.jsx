@@ -1778,12 +1778,12 @@ function GeneralTab({ initialSection = null }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        <aside className="w-[250px] flex-shrink-0 border-r border-sf-dark-700 bg-sf-dark-950/60">
-          <div className="border-b border-sf-dark-700 px-4 py-4">
+        <aside className="flex w-[250px] min-h-0 flex-shrink-0 flex-col border-r border-sf-dark-700 bg-sf-dark-950/60">
+          <div className="flex-shrink-0 border-b border-sf-dark-700 px-4 py-4">
             <div className="text-[10px] uppercase tracking-[0.18em] text-sf-text-muted">{t('settings.categories')}</div>
             <p className="mt-1 text-xs text-sf-text-secondary">{t('settings.pickArea')}</p>
           </div>
-          <div className="overflow-y-auto p-2">
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
             <div className="space-y-1">
               {localizedSections.map((section) => (
                 <SettingsRailItem
@@ -1798,7 +1798,7 @@ function GeneralTab({ initialSection = null }) {
         </aside>
 
         <section className="flex flex-1 min-w-0 min-h-0 flex-col">
-          <div className="border-b border-sf-dark-700 px-5 py-4">
+          <div className="flex-shrink-0 border-b border-sf-dark-700 px-5 py-4">
             <div className="flex items-start gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sf-dark-800 text-sf-text-secondary">
                 <ActiveSectionIcon className="h-5 w-5" />
@@ -1825,7 +1825,7 @@ function GeneralTab({ initialSection = null }) {
         onSaved={(value) => setComfyOrgApiKey(value || '')}
       />
 
-      <div className="flex items-center justify-between gap-4 border-t border-sf-dark-700 px-5 py-4">
+      <div className="flex flex-shrink-0 items-center justify-between gap-4 border-t border-sf-dark-700 px-5 py-4">
         <p className="text-[11px] text-sf-text-muted">
           {isWorkflowSetupActive
             ? t('settings.saveHelpWorkflow')
