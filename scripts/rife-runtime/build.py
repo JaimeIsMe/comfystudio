@@ -382,6 +382,7 @@ def configure_and_build(
         "-G",
         args.generator,
         "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
         "-DCMAKE_SKIP_RPATH=ON",
         "-DUSE_SYSTEM_NCNN=OFF",
         "-DNCNN_SYSTEM_GLSLANG=OFF",
