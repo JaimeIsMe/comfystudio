@@ -534,6 +534,12 @@ def parse_macos_dependency_output(otool_output: str) -> str:
     return "\n".join(lines)
 
 
+def parse_windows_dependency_output(inspector_output: str) -> str:
+    """Retain imported DLL names without inspector headers or input paths."""
+    dependencies = re.findall(r"[A-Za-z0-9_.+-]+\.dll\b", inspector_output, re.IGNORECASE)
+    return "\n".join(dict.fromkeys(dependencies))
+
+
 def audit_binary(
     executable: Path,
     work_dir: Path,
@@ -577,17 +583,23 @@ def audit_binary(
         objdump = shutil.which("objdump")
         if dumpbin:
             header = run([dumpbin, "/HEADERS", executable], capture=True)
-            dependency_output = run([dumpbin, "/DEPENDENTS", executable], capture=True)
+            dependency_output = parse_windows_dependency_output(
+                run([dumpbin, "/DEPENDENTS", executable], capture=True)
+            )
             valid_arch = "machine (x64)" in header.lower()
             inspector = "dumpbin"
         elif llvm_readobj:
             header = run([llvm_readobj, "--file-headers", executable], capture=True)
-            dependency_output = run([llvm_readobj, "--needed-libs", executable], capture=True)
+            dependency_output = parse_windows_dependency_output(
+                run([llvm_readobj, "--needed-libs", executable], capture=True)
+            )
             valid_arch = "x86_64" in header.lower()
             inspector = "llvm-readobj"
         elif objdump:
             header = run([objdump, "-f", executable], capture=True)
-            dependency_output = run([objdump, "-p", executable], capture=True)
+            dependency_output = parse_windows_dependency_output(
+                run([objdump, "-p", executable], capture=True)
+            )
             valid_arch = "pei-x86-64" in header.lower() or "i386:x86-64" in header.lower()
             inspector = "objdump"
         else:
