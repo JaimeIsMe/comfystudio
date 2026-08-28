@@ -7,7 +7,7 @@ const { spawnSync } = require('node:child_process')
 const test = require('node:test')
 
 const ffmpegPath = require('ffmpeg-static')
-const ffprobePackage = require('ffprobe-static')
+const ffprobePackage = require('@derhuerst/ffprobe-static')
 const ffprobePath = ffprobePackage?.path || ffprobePackage
 const { transcodeImageSequence } = require('../electron/imageSequenceTranscode')
 const { probeStreamHasAlpha } = require('../electron/mediaAlpha')
