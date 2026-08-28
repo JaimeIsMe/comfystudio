@@ -210,6 +210,26 @@ test('builder enables the pinned ncnn source on modern CMake releases', () => {
   assert.match(source, /-DCMAKE_POLICY_VERSION_MINIMUM=3\.5/)
 })
 
+test('macOS dependency audit ignores the inspected-file otool header', () => {
+  const probe = [
+    'import importlib.util, sys',
+    'spec = importlib.util.spec_from_file_location("velorn_rife_builder", sys.argv[1])',
+    'module = importlib.util.module_from_spec(spec)',
+    'spec.loader.exec_module(module)',
+    'print(module.parse_macos_dependency_output(sys.argv[2]))',
+  ].join('; ')
+  const otoolOutput = [
+    '/private/tmp/velorn-rife/cmake-build/rife-ncnn-vulkan:',
+    '\t/usr/lib/libc++.1.dylib (compatibility version 1.0.0, current version 1800.65.0)',
+  ].join('\n')
+  const result = spawnSync('python3', ['-c', probe, scriptPath, otoolOutput], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stdout.trim(), otoolOutput.split('\n')[1].trim())
+})
+
 test('macOS plan resolves the pinned static MoltenVK archive layout', (t) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'velorn-moltenvk-layout-test-'))
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))

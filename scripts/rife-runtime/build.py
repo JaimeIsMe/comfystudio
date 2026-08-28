@@ -526,6 +526,14 @@ def validate_linux_abi(output: str) -> dict[str, str]:
     return {"glibcRequired": glibc, "glibcxxRequired": glibcxx}
 
 
+def parse_macos_dependency_output(otool_output: str) -> str:
+    """Remove otool's inspected-file header and retain linked libraries only."""
+    lines = otool_output.splitlines()
+    if lines and lines[0].strip().endswith(":"):
+        lines = lines[1:]
+    return "\n".join(lines)
+
+
 def audit_binary(
     executable: Path,
     work_dir: Path,
@@ -559,7 +567,9 @@ def audit_binary(
         expected = "x86_64" if arch == "x64" else "arm64"
         if architectures != [expected]:
             raise BuildError(f"macOS runtime architecture mismatch: expected {expected}, got {architectures}")
-        dependency_output = run([otool, "-L", executable], capture=True)
+        dependency_output = parse_macos_dependency_output(
+            run([otool, "-L", executable], capture=True)
+        )
         metadata.update({"architecture": expected, "inspector": Path(otool).name})
     elif platform_name == "win32":
         dumpbin = shutil.which("dumpbin")
