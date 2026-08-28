@@ -3,6 +3,7 @@ import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import videoCache from '../services/videoCache'
 import { hasUsablePlaybackCache } from '../services/playbackCache'
+import { hasUsableProxy } from '../services/proxyCache'
 import { getAnimatedAdjustmentSettings, getAnimatedTransform, getAnimatedShapeProperties, getAnimatedShapeMask } from '../utils/keyframes'
 import {
   applyAdjustmentSettingsToImageData,
@@ -146,7 +147,7 @@ function resolvePreviewUrl(clip, getAssetById, useProxyPlaybackForAssets) {
       ...getOpticalFlowContextOptions(clip),
     })
     if (opticalFlow.usable) return opticalFlow.cache.url
-    const useProxy = useProxyPlaybackForAssets && !!asset?.proxyUrl && asset?.proxyStatus !== 'failed'
+    const useProxy = useProxyPlaybackForAssets && !!asset?.proxyUrl && hasUsableProxy(asset)
     if (useProxy) return asset.proxyUrl
     const usePlaybackCache = !!asset?.playbackCacheUrl && hasUsablePlaybackCache(asset)
     return (usePlaybackCache ? asset?.playbackCacheUrl : null) || asset?.url || clip.url || null

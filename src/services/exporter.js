@@ -1,6 +1,8 @@
 import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import useProjectStore from '../stores/projectStore'
+import { hasUsableProxy } from './proxyCache'
+import { shouldUseWebCodecsForAsset, supportsTransparentExport } from '../utils/alphaMedia.mjs'
 import { getAnimatedTransform, getAnimatedAdjustmentSettings, getAnimatedTextProperties, getAnimatedShapeProperties, getAnimatedShapeMask } from '../utils/keyframes'
 import {
   applyAdjustmentSettingsToImageData,
@@ -247,7 +249,7 @@ async function getExportAssetSignature(asset, projectHandle) {
 
 async function getExportProxyUrl(asset, projectHandle) {
   if (!asset || asset.type !== 'video') return null
-  if (asset.proxyStatus !== 'ready' || !asset.proxyPath) return null
+  if (!hasUsableProxy(asset)) return null
   if (isElectron() && projectHandle && asset.proxyPath) {
     try {
       const filePath = await window.electronAPI.pathJoin(projectHandle, asset.proxyPath)
@@ -1202,7 +1204,12 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
   // raw pipe buffers the entire animation and can consume multiple GB.
   const includeAudio = losslessFrameDelivery ? false : requestedIncludeAudio
   const useDirectFramePipe = losslessFrameDelivery ? false : requestedDirectFramePipe
+  // Image-sequence and GIF transparency remain separate follow-up work.
+  // V1 delivery supports WebM and ProRes 4444 only.
   const transparent = losslessFrameDelivery ? false : requestedTransparency
+  if (transparent && !supportsTransparentExport({ format, proresProfile })) {
+    throw new Error('Transparent export requires WebM (VP9) or ProRes 4444.')
+  }
   const pngSequenceBaseName = pngSequenceExport
     ? sanitizePngSequenceBaseName(filename)
     : null
@@ -1688,6 +1695,8 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
     const candidates = new Map()
     for (const clip of renderableVideoClips) {
       if (clip.type !== 'video' || clip.reverse || cachedVideoSources.has(clip.id) || opticalFlowSources.has(clip.id)) continue
+      const asset = assetsState.getAssetById(clip.assetId)
+      if (asset?.settings?.hasAlpha === true) continue
       const sourceUrl = resolvedClipSourceUrls.get(clip.id)
       const sourceVideo = sourceUrl ? videoElements.get(sourceUrl) : null
       if (!sourceUrl || !sourceVideo || candidates.has(sourceUrl)) continue
@@ -1697,7 +1706,6 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
         startTime: cursorStartTime,
       })
       if (!needsPreparation) continue
-      const asset = assetsState.getAssetById(clip.assetId)
       candidates.set(sourceUrl, {
         sourceUrl,
         inputPath: resolvedVideoInputPaths.get(sourceUrl) || null,
@@ -1713,10 +1721,11 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
     // undecodable codec would still be undecodable.
     for (const clip of renderableVideoClips) {
       if (clip.type !== 'video' || cachedVideoSources.has(clip.id) || opticalFlowSources.has(clip.id)) continue
+      const asset = assetsState.getAssetById(clip.assetId)
+      if (asset?.settings?.hasAlpha === true) continue
       const sourceUrl = resolvedClipSourceUrls.get(clip.id)
       if (!sourceUrl || !failedVideoSourceNames.has(sourceUrl)) continue
       if (candidates.get(sourceUrl)?.mode === 'transcode') continue
-      const asset = assetsState.getAssetById(clip.assetId)
       candidates.set(sourceUrl, {
         sourceUrl,
         inputPath: resolvedVideoInputPaths.get(sourceUrl) || null,
@@ -1874,6 +1883,10 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
 
   const getClipCursorEntry = (clip) => {
     if (!webCodecsEnabled || clip.type !== 'video' || clip.reverse || standardDecoderClipIds.has(clip.id)) return null
+    const asset = assetsState.getAssetById(clip.assetId)
+    // The WebCodecs cursor composites into an opaque canvas. Chromium's
+    // HTMLVideoElement path is required for VP9's separate alpha plane.
+    if (!shouldUseWebCodecsForAsset(asset)) return null
     const existing = clipFrameCursors.get(clip.id)
     if (existing) return existing
     const cachedUrl = cachedVideoSources.get(clip.id)
@@ -1980,6 +1993,7 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
       format: outputExtension,
       duration: totalDuration,
       alpha: !!transparent,
+      alphaCache: Boolean(soloClipSet),
       videoCodec,
       proresProfile: format === 'prores' ? proresProfile : undefined,
       useHardwareEncoder,
@@ -4097,6 +4111,8 @@ const runExportTimeline = async (options = {}, onProgress = () => {}) => {
       audioSampleRate,
       normalizeAudio,
       loudnessTarget,
+      alpha: !!transparent,
+      alphaCache: Boolean(soloClipSet),
     })
   }
   

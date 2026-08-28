@@ -51,6 +51,7 @@
     "test:optical-flow-cache": "node --test ./tests/opticalFlowCache.test.js",
     "test:rife-interpolation": "node --test ./tests/rifeRuntime.test.js ./tests/rifeInterpolation.test.js ./tests/runtimePackageGate.test.js",
     "test:rife-hardening": "node --test ./tests/rifeRuntime.test.js ./tests/rifeInterpolation.test.js ./tests/runtimePackageGate.test.js ./tests/rifeRuntimeSourceBuild.test.js",
+    "test:alpha-media": "node --test ./tests/mediaAlpha.test.js ./tests/imageSequenceTranscode.test.js ./src/utils/alphaMedia.test.mjs",
     "test:mcp-h3": "node --test ./tests/mcpH3ReferenceVideo.test.js",
     "test:mcp-my-workflows": "node --test ./tests/myWorkflowCatalog.test.js"
   },

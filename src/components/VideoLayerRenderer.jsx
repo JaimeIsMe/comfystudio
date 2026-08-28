@@ -16,6 +16,7 @@ import {
 import { isBetweenClipTransition } from '../utils/transitionKinds'
 import { getClipPlaybackTimeAtTimeline as getMappedClipPlaybackTimeAtTimeline } from '../utils/clipPlaybackTiming'
 import { isFullBakeFresh } from '../utils/clipBakeSignature'
+import { hasUsableProxy } from '../services/proxyCache'
 import { getSpriteFramePosition } from '../services/thumbnailSprites'
 import {
   buildCssFilterFromAdjustments,
@@ -475,7 +476,7 @@ function useClipUrl(clip) {
     // Each tier is only used when its status is not 'failed' and the URL
     // is actually populated. A cache in 'encoding' state is ignored until
     // it flips to 'ready'.
-    const useProxy = useProxyPlaybackForAssets && !!asset.proxyUrl && asset.proxyStatus !== 'failed'
+    const useProxy = useProxyPlaybackForAssets && !!asset.proxyUrl && hasUsableProxy(asset)
     if (useProxy) return asset.proxyUrl
     const usePlaybackCache = !!asset.playbackCacheUrl && hasUsablePlaybackCache(asset)
     return usePlaybackCache ? asset.playbackCacheUrl : (asset.url || null)
@@ -1123,7 +1124,7 @@ function resolvePlaybackUrl(clip, getAssetById, options = {}) {
   const useProxyPreference = Object.prototype.hasOwnProperty.call(options, 'useProxyPlaybackForAssets')
     ? Boolean(options.useProxyPlaybackForAssets)
     : Boolean(useTimelineStore.getState().useProxyPlaybackForAssets)
-  const useProxy = useProxyPreference && !!asset?.proxyUrl && asset?.proxyStatus !== 'failed'
+  const useProxy = useProxyPreference && !!asset?.proxyUrl && hasUsableProxy(asset)
   if (useProxy) return asset.proxyUrl
   const usePlaybackCache = !!asset?.playbackCacheUrl && hasUsablePlaybackCache(asset)
   return (usePlaybackCache ? asset?.playbackCacheUrl : null) || asset?.url || clip.url || null

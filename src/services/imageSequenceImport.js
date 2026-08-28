@@ -134,6 +134,7 @@ export async function importImageSequenceAsAsset({ projectDir, sequence, fps, jo
     settings: {
       duration: assetInfo.duration,
       fps: assetInfo.fps || safeFps,
+      hasAlpha: Boolean(result.alpha),
       // The provenance tag: everything needed to re-interpret or regenerate
       // this sequence later (different fps, better transform) from the
       // original frames on disk.

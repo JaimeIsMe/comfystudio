@@ -12,6 +12,7 @@ const yaml = require('js-yaml')
 const ffmpegStaticPath = require('ffmpeg-static')
 const ffprobeStaticPath = require('@derhuerst/ffprobe-static')
 const {
+  appendAlphaCacheEncoderArgs,
   HARDWARE_EXPORT_FFMPEG_ENV_KEY,
   HARDWARE_EXPORT_FFMPEG_SETTING_KEY,
   getHardwareEncoderProbeCacheKey,
@@ -20,6 +21,12 @@ const {
   resolveHardwareExportRoute,
 } = require('./hardwareExportFfmpeg')
 const { inspectIsoBmffLayout } = require('./exportSourcePreparation')
+const {
+  appendVp9AlphaArgs,
+  getAlphaExportError,
+  getExportVideoPixelFormat,
+  probeStreamHasAlpha,
+} = require('./mediaAlpha')
 const { registerCaptionWhisperHandlers } = require('./captionWhisper')
 const {
   cancelRtxVideoUpscale,
@@ -263,7 +270,7 @@ async function probeVideoInfo(filePath) {
   return await new Promise((resolve) => {
     const args = [
       '-v', 'error',
-      '-show_entries', 'stream=codec_type,codec_name,avg_frame_rate,r_frame_rate',
+      '-show_entries', 'stream=codec_type,codec_name,profile,pix_fmt,avg_frame_rate,r_frame_rate:stream_tags=alpha_mode',
       '-of', 'json',
       filePath
     ]
@@ -299,6 +306,9 @@ async function probeVideoInfo(filePath) {
           hasAudio: streams.some((stream) => stream?.codec_type === 'audio'),
           videoCodec: videoStream?.codec_name || null,
           audioCodec: audioStream?.codec_name || null,
+          pixelFormat: videoStream?.pix_fmt || null,
+          videoProfile: videoStream?.profile || null,
+          hasAlpha: probeStreamHasAlpha(videoStream),
         })
       } catch (err) {
         resolve({ success: false, error: err.message })
@@ -4291,6 +4301,9 @@ ipcMain.handle('media:getVideoFps', async (event, filePath) => {
     hasAudio: result.hasAudio,
     videoCodec: result.videoCodec || null,
     audioCodec: result.audioCodec || null,
+    pixelFormat: result.pixelFormat || null,
+    videoProfile: result.videoProfile || null,
+    hasAlpha: result.hasAlpha === true,
   }
 })
 
@@ -6342,6 +6355,7 @@ function appendExportVideoEncoderArgs(args, options = {}) {
     crf = 18,
     bitrateKbps = 8000,
     keyframeInterval = null,
+    alpha = false,
   } = options
   // Hardware encoding is NVENC on Windows/Linux, VideoToolbox on macOS
   // (Apple Silicon / T2 media engine). Availability is gated up front by
@@ -6376,7 +6390,7 @@ function appendExportVideoEncoderArgs(args, options = {}) {
     args.push(
       '-c:v', 'prores_ks',
       '-profile:v', String(profileNum),
-      '-pix_fmt', profileNum === 4 ? 'yuva444p10le' : 'yuv422p10le'
+      '-pix_fmt', getExportVideoPixelFormat({ codec: 'prores', proresProfile: profileNum, alpha })
     )
     encoderUsed = 'prores_ks'
   } else if (normalizedCodec === 'vp9') {
@@ -6393,10 +6407,16 @@ function appendExportVideoEncoderArgs(args, options = {}) {
     }
     args.push(
       '-c:v', 'libvpx-vp9',
-      '-pix_fmt', 'yuv420p',
+      '-pix_fmt', getExportVideoPixelFormat({ codec: 'vp9', alpha }),
       '-row-mt', '1',
       '-cpu-used', String(vp9SpeedMap[preset] ?? 3)
     )
+    if (alpha) {
+      // libvpx rejects alpha together with alternate-reference frames.
+      // Keep the ordinary quality controls below; this is a deliverable,
+      // not the low-quality realtime cache path.
+      appendVp9AlphaArgs(args, alpha)
+    }
     encoderUsed = 'libvpx-vp9'
     if (qualityMode === 'bitrate') {
       args.push('-b:v', `${bitrateKbps}k`)
@@ -7004,6 +7024,10 @@ ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
   if (!framePattern || !outputPath) {
     return { success: false, error: 'Missing export inputs.' }
   }
+  const alphaExportError = getAlphaExportError(options)
+  if (alphaExportError) {
+    return { success: false, error: alphaExportError }
+  }
 
   const hardwareRequested = isHardwareVideoEncodingRequested(options)
   const hardwareFfmpegSelection = hardwareRequested
@@ -7033,7 +7057,15 @@ ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
     args.push('-t', String(duration))
   }
 
-  const encoderUsed = appendExportVideoEncoderArgs(args, options)
+  let encoderUsed
+  if (options.alpha === true && options.alphaCache === true) {
+    // Internal per-clip render bakes prioritize interactive turnaround. They
+    // are project cache derivatives, unlike user-selected alpha deliveries.
+    appendAlphaCacheEncoderArgs(args)
+    encoderUsed = 'libvpx-vp9-alpha-cache'
+  } else {
+    encoderUsed = appendExportVideoEncoderArgs(args, options)
+  }
 
   if (audioPath) {
     appendExportAudioEncoderArgs(args, {
@@ -7097,6 +7129,10 @@ ipcMain.handle('export:startFramePipe', async (event, options = {}) => {
   if (!width || !height || !outputPath) {
     return { success: false, error: 'Missing frame pipe inputs.' }
   }
+  const alphaExportError = getAlphaExportError(options)
+  if (alphaExportError) {
+    return { success: false, error: alphaExportError }
+  }
 
   const hardwareRequested = isHardwareVideoEncodingRequested(options)
   const hardwareFfmpegSelection = hardwareRequested
@@ -7136,23 +7172,9 @@ ipcMain.handle('export:startFramePipe', async (event, options = {}) => {
   }
 
   let encoderUsed
-  if (options.alpha) {
-    // Alpha-preserving path for per-clip render bakes: VP9 with an alpha
-    // plane so baked text/masked/transformed clips still composite over
-    // lower layers. auto-alt-ref MUST be off — libvpx rejects transparency
-    // with alt-ref frames. Realtime deadline keeps bakes fast; these are
-    // preview caches, not deliverables.
-    args.push(
-      '-c:v', 'libvpx-vp9',
-      '-pix_fmt', 'yuva420p',
-      '-deadline', 'realtime',
-      '-cpu-used', '8',
-      '-row-mt', '1',
-      '-crf', '30',
-      '-b:v', '0',
-      '-auto-alt-ref', '0'
-    )
-    encoderUsed = 'libvpx-vp9-alpha'
+  if (options.alpha === true && options.alphaCache === true) {
+    appendAlphaCacheEncoderArgs(args)
+    encoderUsed = 'libvpx-vp9-alpha-cache'
   } else {
     encoderUsed = appendExportVideoEncoderArgs(args, options)
   }
