@@ -183,6 +183,11 @@ test('builder forces LF source checkouts instead of inheriting Windows autocrlf'
   assert.doesNotMatch(source, /\b(?:str|Path) \| (?:str|Path|None)\b/)
 })
 
+test('builder enables the pinned ncnn source on modern CMake releases', () => {
+  const source = fs.readFileSync(scriptPath, 'utf8')
+  assert.match(source, /-DCMAKE_POLICY_VERSION_MINIMUM=3\.5/)
+})
+
 test('macOS plan resolves the pinned static MoltenVK archive layout', (t) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'velorn-moltenvk-layout-test-'))
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
