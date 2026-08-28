@@ -628,6 +628,136 @@ const clampFiniteMediaClipToSource = (clip, fps) => {
   }
 }
 
+const applyClipTrimUpdate = (clip, updates, timelineFps) => {
+  const next = { ...clip, ...updates }
+  const timeScale = Math.max(0.0001, Number(getClipTimeScale(next)) || 1)
+  const fps = timelineFps || 24
+  const minDuration = 1 / fps
+  const minSourceSpan = minDuration * timeScale
+
+  const parsedStartTime = Number(next.startTime)
+  const startTime = Number.isFinite(parsedStartTime)
+    ? Math.max(0, parsedStartTime)
+    : Math.max(0, Number(clip.startTime) || 0)
+
+  const parsedTrimStart = Number(next.trimStart)
+  let trimStart = Number.isFinite(parsedTrimStart)
+    ? Math.max(0, parsedTrimStart)
+    : Math.max(0, Number(clip.trimStart) || 0)
+
+  let sourceDuration = parseClipSourceDuration(next.sourceDuration)
+  if (isInfinitelyExtendableClipType(next)) {
+    sourceDuration = Infinity
+  } else if (sourceDuration === null) {
+    sourceDuration = parseClipSourceDuration(next.trimEnd) ?? Infinity
+  }
+  if (Number.isFinite(sourceDuration)) {
+    const maxTrimStart = Math.max(0, sourceDuration - minSourceSpan)
+    trimStart = Math.min(trimStart, maxTrimStart)
+  }
+
+  let trimEnd
+  if (next.trimEnd !== undefined && next.trimEnd !== null && Number.isFinite(Number(next.trimEnd))) {
+    trimEnd = Number(next.trimEnd)
+  } else if (clip.trimEnd !== undefined && clip.trimEnd !== null && Number.isFinite(Number(clip.trimEnd))) {
+    trimEnd = Number(clip.trimEnd)
+  } else if (Number.isFinite(sourceDuration)) {
+    trimEnd = sourceDuration
+  } else {
+    const fallbackDuration = Number.isFinite(Number(next.duration))
+      ? Number(next.duration)
+      : (Number(clip.duration) || minDuration)
+    trimEnd = trimStart + fallbackDuration * timeScale
+  }
+
+  if (Number.isFinite(sourceDuration)) {
+    trimEnd = Math.min(trimEnd, sourceDuration)
+  }
+  trimEnd = Math.max(trimStart + minSourceSpan, trimEnd)
+
+  let duration = Number(next.duration)
+  if (!Number.isFinite(duration)) duration = Number(clip.duration)
+  if (!Number.isFinite(duration)) duration = minDuration
+  duration = Math.max(minDuration, duration)
+
+  const hasDurationUpdate = updates.duration !== undefined && updates.duration !== null
+  const hasTrimStartUpdate = updates.trimStart !== undefined && updates.trimStart !== null
+  const hasTrimEndUpdate = updates.trimEnd !== undefined && updates.trimEnd !== null
+
+  if (hasDurationUpdate && !hasTrimEndUpdate) {
+    trimEnd = trimStart + duration * timeScale
+    if (Number.isFinite(sourceDuration)) {
+      trimEnd = Math.min(trimEnd, sourceDuration)
+    }
+    trimEnd = Math.max(trimStart + minSourceSpan, trimEnd)
+    duration = (trimEnd - trimStart) / timeScale
+  } else if (hasTrimStartUpdate || hasTrimEndUpdate) {
+    duration = (trimEnd - trimStart) / timeScale
+  } else {
+    trimEnd = trimStart + duration * timeScale
+    if (Number.isFinite(sourceDuration)) {
+      trimEnd = Math.min(trimEnd, sourceDuration)
+    }
+    trimEnd = Math.max(trimStart + minSourceSpan, trimEnd)
+    duration = (trimEnd - trimStart) / timeScale
+  }
+
+  duration = Math.max(minDuration, duration)
+
+  // Quantize to frame boundaries (no sub-frame clip positions)
+  const alignedStartTime = roundToFrame(startTime, fps)
+  const alignedDuration = roundDurationToFrame(duration, fps)
+  let alignedTrimEnd = trimStart + alignedDuration * timeScale
+  if (Number.isFinite(sourceDuration)) {
+    alignedTrimEnd = Math.min(alignedTrimEnd, sourceDuration)
+  }
+  alignedTrimEnd = Math.max(trimStart + (1 / fps) * timeScale, alignedTrimEnd)
+
+  const normalized = clampFiniteMediaClipToSource({
+    ...next,
+    sourceDuration,
+    startTime: alignedStartTime,
+    duration: alignedDuration,
+    trimStart,
+    trimEnd: alignedTrimEnd,
+  }, fps)
+
+  if (isTrimDebugEnabled()) {
+    const durationBefore = Number(next.duration)
+    const trimStartBefore = Number(next.trimStart)
+    const trimEndBefore = Number(next.trimEnd)
+    const changed = (
+      (Number.isFinite(durationBefore) && Math.abs(durationBefore - normalized.duration) > 0.05)
+      || (Number.isFinite(trimStartBefore) && Math.abs(trimStartBefore - trimStart) > 0.05)
+      || (Number.isFinite(trimEndBefore) && Math.abs(trimEndBefore - normalized.trimEnd) > 0.05)
+    )
+    if (changed) {
+      console.log('[TrimDebug] Normalized trim update', {
+        clipId: clip.id,
+        updates,
+        before: {
+          startTime: clip.startTime,
+          duration: clip.duration,
+          trimStart: clip.trimStart,
+          trimEnd: clip.trimEnd,
+          speed: clip.speed,
+          sourceDuration: clip.sourceDuration,
+        },
+        after: {
+          startTime: normalized.startTime,
+          duration: normalized.duration,
+          trimStart: normalized.trimStart,
+          trimEnd: normalized.trimEnd,
+          speed: normalized.speed,
+          sourceDuration: normalized.sourceDuration,
+        }
+      })
+    }
+  }
+
+  return isSyncLockedClip(clip) ? applySyncLockToClip(normalized, fps) : normalized
+}
+
 const createDefaultClipTransform = () => ({
   positionX: 0,
   positionY: 0,
@@ -2988,137 +3118,27 @@ export const useTimelineStore = create(
     set((state) => ({
       clips: state.clips.map(clip =>
         clip.id === clipId
-          ? (() => {
-              const next = { ...clip, ...updates }
-              const timeScale = Math.max(0.0001, Number(getClipTimeScale(next)) || 1)
-              const fps = state.timelineFps || 24
-              const minDuration = 1 / fps
-              const minSourceSpan = minDuration * timeScale
-
-              const parsedStartTime = Number(next.startTime)
-              const startTime = Number.isFinite(parsedStartTime)
-                ? Math.max(0, parsedStartTime)
-                : Math.max(0, Number(clip.startTime) || 0)
-
-              const parsedTrimStart = Number(next.trimStart)
-              let trimStart = Number.isFinite(parsedTrimStart)
-                ? Math.max(0, parsedTrimStart)
-                : Math.max(0, Number(clip.trimStart) || 0)
-
-              let sourceDuration = parseClipSourceDuration(next.sourceDuration)
-              if (isInfinitelyExtendableClipType(next)) {
-                sourceDuration = Infinity
-              } else if (sourceDuration === null) {
-                sourceDuration = parseClipSourceDuration(next.trimEnd) ?? Infinity
-              }
-              if (Number.isFinite(sourceDuration)) {
-                const maxTrimStart = Math.max(0, sourceDuration - minSourceSpan)
-                trimStart = Math.min(trimStart, maxTrimStart)
-              }
-
-              let trimEnd
-              if (next.trimEnd !== undefined && next.trimEnd !== null && Number.isFinite(Number(next.trimEnd))) {
-                trimEnd = Number(next.trimEnd)
-              } else if (clip.trimEnd !== undefined && clip.trimEnd !== null && Number.isFinite(Number(clip.trimEnd))) {
-                trimEnd = Number(clip.trimEnd)
-              } else if (Number.isFinite(sourceDuration)) {
-                trimEnd = sourceDuration
-              } else {
-                const fallbackDuration = Number.isFinite(Number(next.duration))
-                  ? Number(next.duration)
-                  : (Number(clip.duration) || minDuration)
-                trimEnd = trimStart + fallbackDuration * timeScale
-              }
-
-              if (Number.isFinite(sourceDuration)) {
-                trimEnd = Math.min(trimEnd, sourceDuration)
-              }
-              trimEnd = Math.max(trimStart + minSourceSpan, trimEnd)
-
-              let duration = Number(next.duration)
-              if (!Number.isFinite(duration)) duration = Number(clip.duration)
-              if (!Number.isFinite(duration)) duration = minDuration
-              duration = Math.max(minDuration, duration)
-
-              const hasDurationUpdate = updates.duration !== undefined && updates.duration !== null
-              const hasTrimStartUpdate = updates.trimStart !== undefined && updates.trimStart !== null
-              const hasTrimEndUpdate = updates.trimEnd !== undefined && updates.trimEnd !== null
-
-              if (hasDurationUpdate && !hasTrimEndUpdate) {
-                trimEnd = trimStart + duration * timeScale
-                if (Number.isFinite(sourceDuration)) {
-                  trimEnd = Math.min(trimEnd, sourceDuration)
-                }
-                trimEnd = Math.max(trimStart + minSourceSpan, trimEnd)
-                duration = (trimEnd - trimStart) / timeScale
-              } else if (hasTrimStartUpdate || hasTrimEndUpdate) {
-                duration = (trimEnd - trimStart) / timeScale
-              } else {
-                trimEnd = trimStart + duration * timeScale
-                if (Number.isFinite(sourceDuration)) {
-                  trimEnd = Math.min(trimEnd, sourceDuration)
-                }
-                trimEnd = Math.max(trimStart + minSourceSpan, trimEnd)
-                duration = (trimEnd - trimStart) / timeScale
-              }
-
-              duration = Math.max(minDuration, duration)
-
-              // Quantize to frame boundaries (no sub-frame clip positions)
-              const alignedStartTime = roundToFrame(startTime, fps)
-              const alignedDuration = roundDurationToFrame(duration, fps)
-              let alignedTrimEnd = trimStart + alignedDuration * timeScale
-              if (Number.isFinite(sourceDuration)) {
-                alignedTrimEnd = Math.min(alignedTrimEnd, sourceDuration)
-              }
-              alignedTrimEnd = Math.max(trimStart + (1 / fps) * timeScale, alignedTrimEnd)
-
-              const normalized = clampFiniteMediaClipToSource({
-                ...next,
-                sourceDuration,
-                startTime: alignedStartTime,
-                duration: alignedDuration,
-                trimStart,
-                trimEnd: alignedTrimEnd,
-              }, fps)
-
-              if (isTrimDebugEnabled()) {
-                const durationBefore = Number(next.duration)
-                const trimStartBefore = Number(next.trimStart)
-                const trimEndBefore = Number(next.trimEnd)
-                const changed = (
-                  (Number.isFinite(durationBefore) && Math.abs(durationBefore - normalized.duration) > 0.05)
-                  || (Number.isFinite(trimStartBefore) && Math.abs(trimStartBefore - trimStart) > 0.05)
-                  || (Number.isFinite(trimEndBefore) && Math.abs(trimEndBefore - normalized.trimEnd) > 0.05)
-                )
-                if (changed) {
-                  console.log('[TrimDebug] Normalized trim update', {
-                    clipId,
-                    updates,
-                    before: {
-                      startTime: clip.startTime,
-                      duration: clip.duration,
-                      trimStart: clip.trimStart,
-                      trimEnd: clip.trimEnd,
-                      speed: clip.speed,
-                      sourceDuration: clip.sourceDuration,
-                    },
-                    after: {
-                      startTime: normalized.startTime,
-                      duration: normalized.duration,
-                      trimStart: normalized.trimStart,
-                      trimEnd: normalized.trimEnd,
-                      speed: normalized.speed,
-                      sourceDuration: normalized.sourceDuration,
-                    }
-                  })
-                }
-              }
-
-              return isSyncLockedClip(clip) ? applySyncLockToClip(normalized, fps) : normalized
-            })()
+          ? applyClipTrimUpdate(clip, updates, state.timelineFps)
           : clip
       )
+    }))
+  },
+
+  /**
+   * Update multiple clips in one store write during a shared trim gesture.
+   * @param {Array<{id: string, updates: object}>} trimUpdates
+   */
+  updateClipsTrim: (trimUpdates) => {
+    const entries = Array.isArray(trimUpdates)
+      ? trimUpdates.filter((entry) => entry?.id && entry?.updates && typeof entry.updates === 'object')
+      : []
+    if (entries.length === 0) return
+    const updatesById = new Map(entries.map((entry) => [entry.id, entry.updates]))
+    set((state) => ({
+      clips: state.clips.map((clip) => {
+        const updates = updatesById.get(clip.id)
+        return updates ? applyClipTrimUpdate(clip, updates, state.timelineFps) : clip
+      }),
     }))
   },
 

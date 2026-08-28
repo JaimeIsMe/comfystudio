@@ -37,6 +37,7 @@
     "test:png-sequence-export": "node --test ./src/services/pngSequenceExport.test.mjs",
     "test:qwen3-tts-workflow": "node --test --test-isolation=none ./tests/qwen3TtsWorkflowCompatibility.test.mjs",
     "test:transition-clip-moves": "node ./src/utils/transitionClipMoves.test.mjs",
+    "test:multi-clip-trim": "node --test ./src/utils/multiClipTrim.test.mjs",
     "test:export-frame-source": "node --experimental-default-type=module --test ./src/services/exportFrameSource.test.js",
     "test:export-source-preparation": "node --test ./tests/exportSourcePreparation.test.js",
     "test:audio-mix-eligibility": "node --test ./tests/audioMixEligibility.test.mjs",
