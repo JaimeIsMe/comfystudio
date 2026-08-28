@@ -231,6 +231,30 @@ test('macOS dependency audit ignores the inspected-file otool header', () => {
   assert.equal(result.stdout.trim(), otoolOutput.split('\n')[1].trim())
 })
 
+test('Windows dependency audit ignores inspector headers and build paths', () => {
+  const probe = [
+    'import importlib.util, sys',
+    'spec = importlib.util.spec_from_file_location("velorn_rife_builder", sys.argv[1])',
+    'module = importlib.util.module_from_spec(spec)',
+    'spec.loader.exec_module(module)',
+    'print(module.parse_windows_dependency_output(sys.argv[2]))',
+  ].join('; ')
+  const inspectorOutput = [
+    'File: D:\\a\\_temp\\vrife\\cmake-build\\Release\\rife-ncnn-vulkan.exe',
+    'NeededLibraries [',
+    '  KERNEL32.dll',
+    '  vulkan-1.dll',
+    ']',
+  ].join('\n')
+  const result = spawnSync('python3', ['-c', probe, scriptPath, inspectorOutput], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stdout.trim(), ['KERNEL32.dll', 'vulkan-1.dll'].join('\n'))
+  assert.doesNotMatch(result.stdout, /vrife|cmake-build/i)
+})
+
 test('macOS plan resolves the pinned static MoltenVK archive layout', (t) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'velorn-moltenvk-layout-test-'))
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
