@@ -1,3 +1,5 @@
+import { getFrameSamplingSignature } from './frameSampling'
+
 /**
  * Content signature for per-clip render bakes.
  *
@@ -31,6 +33,7 @@ export const getClipBakeSignature = (clip) => {
     sourceTimeScale: clip.sourceTimeScale ?? null,
     speed: clip.speed ?? null,
     reverse: !!clip.reverse,
+    frameSampling: getFrameSamplingSignature(clip),
     // Opacity/blendMode stay live; everything else about the transform is baked.
     transform: { ...transform, opacity: undefined, blendMode: undefined },
     keyframes: clip.keyframes || null,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronDown, Copy, Download, Loader2, Pause, Play, RefreshCw, RotateCcw, Sparkles, Wand2, X } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, Copy, Download, Loader2, Pause, Play, Plus, RefreshCw, RotateCcw, Scissors, Sparkles, Trash2, Wand2, X } from 'lucide-react'
 import {
   CAPTION_PRESETS,
   DEFAULT_CAPTION_PRESET_ID,
@@ -32,6 +32,15 @@ import {
   renderCaptionFrame,
   renderCaptionPresetPreviewDataUrl,
 } from '../utils/captionRenderer'
+import {
+  addCaptionCue,
+  buildCaptionTranscript as cuesToTranscript,
+  resolveCaptionMediaDuration,
+  retimeCaptionCue,
+  splitCaptionCueAtCaret,
+  validateCaptionCues,
+} from '../utils/captionCueEditing'
+import FontFamilyPicker from './FontFamilyPicker'
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value))
@@ -87,15 +96,6 @@ function normalizeCueOrder(cues = [], fallbackDuration = 0) {
     .sort((a, b) => a.start - b.start)
 }
 
-function cuesToTranscript(cues = []) {
-  return cues
-    .map((cue) => String(cue?.text || '').trim())
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
 const CUE_VERTICAL_OPTIONS = [
   { id: 'auto', label: 'Auto' },
   { id: 'top', label: 'Top' },
@@ -115,15 +115,6 @@ const CUE_MOTION_OPTIONS = [
   { id: 'tamed', label: 'Tamed' },
   { id: 'excited', label: 'Excited' },
   { id: 'frenetic', label: 'Frenetic' },
-]
-
-const CAPTION_FONT_OPTIONS = [
-  { id: 'Inter', label: 'Inter', value: 'Inter' },
-  { id: 'Arial', label: 'Arial', value: 'Arial' },
-  { id: 'Impact', label: 'Impact', value: 'Impact' },
-  { id: 'Trebuchet', label: 'Trebuchet', value: 'Trebuchet MS' },
-  { id: 'Georgia', label: 'Georgia', value: 'Georgia' },
-  { id: 'Mono', label: 'Mono', value: 'Courier New' },
 ]
 
 const SAVED_CAPTION_STYLES_KEY = 'comfystudio-saved-caption-styles'
@@ -176,7 +167,7 @@ function normalizeCueOverride(override = {}) {
   }
 }
 
-function CueOverrideChips({ label, value, options, onChange }) {
+function CueOverrideChips({ label, value, options, onChange, disabled = false }) {
   return (
     <div className="space-y-1">
       <div className="text-[10px] uppercase tracking-[0.12em] text-sf-text-muted">
@@ -188,7 +179,8 @@ function CueOverrideChips({ label, value, options, onChange }) {
             key={option.id}
             type="button"
             onClick={() => onChange(option.id)}
-            className={`rounded-full border px-2.5 py-1 text-[10px] transition-colors ${
+            disabled={disabled}
+            className={`rounded-full border px-2.5 py-1 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
               value === option.id
                 ? 'border-sf-accent bg-sf-accent/20 text-sf-text-primary'
                 : 'border-sf-dark-600 bg-sf-dark-900 text-sf-text-muted hover:border-sf-dark-500 hover:text-sf-text-primary'
@@ -466,6 +458,9 @@ function CaptionWorkspace({
   // strip once cues exist.
   const [selectedCueId, setSelectedCueId] = useState(null)
   const [cueSearch, setCueSearch] = useState('')
+  const cueInputRefs = useRef(new Map())
+  const cueCaretOffsetsRef = useRef(new Map())
+  const [pendingCueFocus, setPendingCueFocus] = useState(null)
   // The preview is always visible: style controls (size, nudge, colors) are
   // meaningless without live feedback. A collapsible preview shipped briefly
   // and died the same night — collapsed, dragging Size showed nothing.
@@ -496,6 +491,26 @@ function CaptionWorkspace({
   const [globalMotion, setGlobalMotion] = useState('auto')
   // Continuous size multiplier (1 = default), shared by both preset modes.
   const [globalSizeScale, setGlobalSizeScale] = useState(1)
+
+  useEffect(() => {
+    if (!pendingCueFocus) return undefined
+    const frameId = requestAnimationFrame(() => {
+      const input = cueInputRefs.current.get(pendingCueFocus.cueId)
+      if (!input) {
+        setPendingCueFocus(null)
+        return
+      }
+      input.focus()
+      const caret = Math.max(0, Math.min(
+        Number(pendingCueFocus.caret) || 0,
+        String(input.value || '').length
+      ))
+      input.setSelectionRange(caret, caret)
+      cueCaretOffsetsRef.current.set(pendingCueFocus.cueId, caret)
+      setPendingCueFocus(null)
+    })
+    return () => cancelAnimationFrame(frameId)
+  }, [draft.cues, pendingCueFocus])
   // Continuous up/down nudge as a fraction of frame height (−0.45 = higher, +0.45 = lower).
   const [globalVerticalOffset, setGlobalVerticalOffset] = useState(0)
 
@@ -744,11 +759,19 @@ function CaptionWorkspace({
     }
   }, [renderSettings])
 
-  // Total timeline the preview plays over: the real cues' span, or the sample.
+  const captionMediaDuration = resolveCaptionMediaDuration(
+    draft.audioDuration,
+    asset?.duration,
+    asset?.settings?.duration
+  )
+
+  // The scrubber spans the source/timeline duration, not only the last cue, so
+  // Add Cue can place a caption anywhere the preview playhead can reach.
   const previewDuration = useMemo(() => {
     const maxEnd = (draft.cues || []).reduce((m, c) => Math.max(m, Number(c?.end) || 0), 0)
-    return maxEnd > 0.4 ? maxEnd : 2.6
-  }, [draft.cues])
+    const actualDuration = Math.max(maxEnd, captionMediaDuration || 0)
+    return actualDuration > 0 ? actualDuration : 2.6
+  }, [captionMediaDuration, draft.cues])
 
   // Cues fed to the preview, each carrying the current global style overrides.
   const previewCues = useMemo(() => {
@@ -835,6 +858,10 @@ function CaptionWorkspace({
     let cancelled = false
     setError('')
     setStatusMessage('Transcribe audio locally to begin.')
+    setSelectedCueId(null)
+    setCueSearch('')
+    setPendingCueFocus(null)
+    cueCaretOffsetsRef.current.clear()
     setPlaceOnTimeline(true)
     setActiveSavedStyleId(null)
     setCaptionStyleName('')
@@ -994,6 +1021,17 @@ function CaptionWorkspace({
     }
   }, [asset, scope, currentProjectHandle, timelineCaptionSidecarPath, seedFromClipId, isOpen])
 
+  // Keep the displayed scrubber and the imperative playback clock aligned if
+  // a newly opened/restored source is shorter than the previous preview.
+  // Add Cue reads the ref directly, so clamping only the range input's value
+  // would leave it targeting a hidden out-of-bounds time.
+  useEffect(() => {
+    if (!isOpen) return
+    const nextTime = clamp(previewTimeRef.current, 0, previewDuration)
+    previewTimeRef.current = nextTime
+    setScrubDisplay((current) => (current === nextTime ? current : nextTime))
+  }, [isOpen, previewDuration])
+
   // Grab a representative still for the positioning preview. Asset scope uses
   // the source clip (mid-point); timeline scope uses the frame under the
   // playhead (passed in via the pseudo-asset). Falls back to the gradient when
@@ -1063,6 +1101,17 @@ function CaptionWorkspace({
     return () => { cancelled = true }
   }, [isOpen])
 
+  const cueValidation = useMemo(() => validateCaptionCues(draft.cues), [draft.cues])
+  const cueValidationMessage = cueValidation.errors[0]?.message || ''
+  const invalidCueIds = useMemo(
+    () => new Set(cueValidation.errors.flatMap((validationError) => (
+      Array.isArray(validationError.cueIds)
+        ? validationError.cueIds
+        : [validationError.cueId]
+    )).filter(Boolean)),
+    [cueValidation.errors]
+  )
+
   if (!isOpen || !asset) return null
 
   const busy = isTranscribing || isGenerating
@@ -1109,9 +1158,11 @@ function CaptionWorkspace({
   const canTranscribe = engineReady && !isInstallingEngine && (isTimelineScope
     ? !busy
     : (asset.type === 'video' && asset.hasAudio !== false && !busy))
-  const canGenerate = draft.cues.length > 0 && !busy && addAsset
+  const canGenerate = draft.cues.length > 0 && cueValidation.valid && !busy && addAsset
 
   const updateCue = (cueId, field, value) => {
+    if (busy) return
+    setError('')
     setDraft((prev) => {
       const nextCues = normalizeCueOrder(
         prev.cues.map((cue) => (
@@ -1130,6 +1181,7 @@ function CaptionWorkspace({
   }
 
   const updateCueOverride = (cueId, field, value) => {
+    if (busy) return
     setDraft((prev) => {
       const nextCues = normalizeCueOrder(
         prev.cues.map((cue) => (
@@ -1155,6 +1207,11 @@ function CaptionWorkspace({
   }
 
   const removeCue = (cueId) => {
+    if (busy) return
+    setError('')
+    cueCaretOffsetsRef.current.delete(cueId)
+    setPendingCueFocus((current) => (current?.cueId === cueId ? null : current))
+    setSelectedCueId((current) => (current === cueId ? null : current))
     setDraft((prev) => {
       const nextCues = prev.cues.filter((cue) => cue.id !== cueId)
       return {
@@ -1163,6 +1220,94 @@ function CaptionWorkspace({
         transcriptText: cuesToTranscript(nextCues),
       }
     })
+    setStatusMessage('Removed the caption cue.')
+  }
+
+  const updateCueTiming = (cueId, changes) => {
+    if (busy) return
+    setError('')
+    try {
+      const result = retimeCaptionCue(draft.cues, cueId, {
+        ...changes,
+        maxEnd: captionMediaDuration,
+      })
+      const nextCues = normalizeCueOrder(result.cues, draft.audioDuration || cueDuration)
+      setDraft((prev) => ({
+        ...prev,
+        cues: nextCues,
+        transcriptText: cuesToTranscript(nextCues),
+      }))
+      if (changes.start !== null && changes.start !== undefined) {
+        const nextTime = clamp(result.cue.start, 0, previewDuration)
+        previewTimeRef.current = nextTime
+        setScrubDisplay(nextTime)
+        setIsPreviewPlaying(false)
+      }
+    } catch (timingError) {
+      setError(timingError?.message || 'Could not adjust this caption cue.')
+    }
+  }
+
+  const selectCueForPreview = (cue) => {
+    if (!cue) return
+    setSelectedCueId(cue.id)
+    const nextTime = clamp(Number(cue.start) || 0, 0, previewDuration)
+    previewTimeRef.current = nextTime
+    setScrubDisplay(nextTime)
+    if (isPreviewPlaying) setIsPreviewPlaying(false)
+    else drawPreview(nextTime, true)
+  }
+
+  const focusCueForEditing = (cue, caret = 0) => {
+    if (!cue) return
+    setCueSearch('')
+    selectCueForPreview(cue)
+    setPendingCueFocus({ cueId: cue.id, caret })
+  }
+
+  const handleAddCue = () => {
+    if (busy) return
+    setError('')
+    try {
+      const result = addCaptionCue(draft.cues, {
+        atTime: previewTimeRef.current,
+        audioDuration: captionMediaDuration,
+      })
+      setDraft((prev) => ({
+        ...prev,
+        cues: result.cues,
+        transcriptText: cuesToTranscript(result.cues),
+      }))
+      focusCueForEditing(result.cue, 0)
+      setStatusMessage(`Added a caption cue at ${formatSeconds(result.cue.start)}. Type its text or adjust Start and Duration.`)
+    } catch (addError) {
+      setError(addError?.message || 'Could not add a caption cue.')
+    }
+  }
+
+  const handleSplitCue = (cueId, caretOffset = null) => {
+    if (busy) return
+    setError('')
+    const cue = draft.cues.find((item) => item.id === cueId)
+    const fallbackCaret = Math.floor(String(cue?.text || '').length / 2)
+    const hasExplicitCaret = caretOffset !== null
+      && caretOffset !== undefined
+      && Number.isFinite(Number(caretOffset))
+    const requestedCaret = hasExplicitCaret
+      ? Number(caretOffset)
+      : (cueCaretOffsetsRef.current.get(cueId) ?? fallbackCaret)
+    try {
+      const result = splitCaptionCueAtCaret(draft.cues, cueId, requestedCaret)
+      setDraft((prev) => ({
+        ...prev,
+        cues: result.cues,
+        transcriptText: cuesToTranscript(result.cues),
+      }))
+      focusCueForEditing(result.rightCue, 0)
+      setStatusMessage('Split the caption into two cues with continuous timing.')
+    } catch (splitError) {
+      setError(splitError?.message || 'Could not split this caption cue.')
+    }
   }
 
   // Persist the timeline caption setup so reopening the dialog restores the
@@ -1273,6 +1418,10 @@ function CaptionWorkspace({
         ...nextDraft,
         cues: normalizeCueOrder(nextDraft.cues, nextDraft.audioDuration || asset?.duration),
       }
+      setSelectedCueId(null)
+      setCueSearch('')
+      setPendingCueFocus(null)
+      cueCaretOffsetsRef.current.clear()
       setDraft(normalizedDraft)
       stashTimelineSession(normalizedDraft)
 
@@ -1291,6 +1440,10 @@ function CaptionWorkspace({
   }
 
   const handleGenerate = async () => {
+    if (!cueValidation.valid) {
+      setError(cueValidationMessage || 'Fix the caption cue timing before generating.')
+      return
+    }
     if (!canGenerate) return
     if (!currentProjectHandle || typeof currentProjectHandle !== 'string') {
       setError('Open a desktop project before generating captions.')
@@ -1749,19 +1902,31 @@ function CaptionWorkspace({
               )}
             </div>
 
-            <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 xl:grid-cols-[1.25fr_1fr]">
+            <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 overflow-y-auto [@media(min-width:1024px)_and_(min-height:800px)]:grid-cols-[1.25fr_1fr] [@media(min-width:1024px)_and_(min-height:800px)]:overflow-hidden">
             {/* The hero: the captions themselves. */}
-            <div className="flex min-h-0 flex-col border-r border-sf-dark-700">
+            <div className="flex min-h-[320px] flex-col border-b border-sf-dark-700 [@media(min-width:1024px)_and_(min-height:800px)]:min-h-0 [@media(min-width:1024px)_and_(min-height:800px)]:border-b-0 [@media(min-width:1024px)_and_(min-height:800px)]:border-r">
               <div className="flex flex-shrink-0 items-center gap-3 border-b border-sf-dark-700 px-5 py-3">
                 <div className="text-sm font-medium text-sf-text-primary">Captions</div>
                 <div className="text-[11px] text-sf-text-muted">{cueDuration.toFixed(2)}s</div>
-                <input
-                  type="text"
-                  value={cueSearch}
-                  onChange={(event) => setCueSearch(event.target.value)}
-                  placeholder="Find in captions…"
-                  className="ml-auto w-48 rounded-lg border border-sf-dark-600 bg-sf-dark-900 px-3 py-1.5 text-xs text-sf-text-primary placeholder:text-sf-text-muted/60 focus:border-sf-accent focus:outline-none"
-                />
+                <div className="ml-auto flex min-w-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleAddCue}
+                    disabled={busy}
+                    className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-sf-accent/50 bg-sf-accent/10 px-2.5 py-1.5 text-xs font-medium text-sf-text-primary hover:bg-sf-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
+                    title="Add a blank caption at the preview playhead"
+                  >
+                    <Plus className="h-3.5 w-3.5 text-sf-accent" />
+                    Add cue
+                  </button>
+                  <input
+                    type="text"
+                    value={cueSearch}
+                    onChange={(event) => setCueSearch(event.target.value)}
+                    placeholder="Find in captions…"
+                    className="w-40 min-w-0 rounded-lg border border-sf-dark-600 bg-sf-dark-900 px-3 py-1.5 text-xs text-sf-text-primary placeholder:text-sf-text-muted/60 focus:border-sf-accent focus:outline-none xl:w-48"
+                  />
+                </div>
               </div>
               <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3">
                 {(() => {
@@ -1779,46 +1944,121 @@ function CaptionWorkspace({
                   return visibleCues.map((cue) => {
                     const cueIndex = draft.cues.indexOf(cue)
                     const selected = cue.id === selectedCueId
+                    const invalid = invalidCueIds.has(cue.id)
                     return (
                       <div
                         key={cue.id}
-                        onClick={() => {
-                          setSelectedCueId(cue.id)
-                          const t = clamp(Number(cue.start) || 0, 0, previewDuration)
-                          previewTimeRef.current = t
-                          setScrubDisplay(t)
-                          if (isPreviewPlaying) setIsPreviewPlaying(false)
-                          else drawPreview(t, true)
+                        onClick={() => selectCueForPreview(cue)}
+                        onFocusCapture={() => {
+                          if (cue.id !== selectedCueId) selectCueForPreview(cue)
                         }}
-                        className={`grid w-full cursor-pointer grid-cols-[28px_64px_1fr_auto] items-center gap-2 rounded-lg border-l-2 px-2.5 py-1.5 ${
+                        className={`grid w-full cursor-pointer grid-cols-[28px_72px_minmax(0,1fr)_64px_28px] items-center gap-2 rounded-lg border-l-2 px-2.5 py-1.5 ${
                           selected
                             ? 'border-sf-accent bg-sf-dark-800'
-                            : 'border-transparent hover:bg-sf-dark-800/60'
+                            : invalid
+                              ? 'border-sf-error/70 bg-sf-error/5 hover:bg-sf-error/10'
+                              : 'border-transparent hover:bg-sf-dark-800/60'
                         }`}
                       >
                         <span className="text-right text-[11px] text-sf-text-muted">{cueIndex + 1}</span>
-                        <span className="font-mono text-[11px] text-sf-text-muted">{formatSeconds(cue.start)}</span>
+                        {selected ? (
+                          <label className="min-w-0 text-[9px] uppercase tracking-wide text-sf-text-muted">
+                            Start
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={cue.start}
+                              disabled={busy}
+                              onChange={(event) => {
+                                if (event.target.value === '') return
+                                updateCueTiming(cue.id, { start: Number(event.target.value) })
+                              }}
+                              className="mt-0.5 w-full rounded border border-sf-dark-600 bg-sf-dark-900 px-1.5 py-1 font-mono text-[10px] normal-case tracking-normal text-sf-text-primary focus:border-sf-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                              aria-label={`Cue ${cueIndex + 1} start time in seconds`}
+                            />
+                          </label>
+                        ) : (
+                          <span className="font-mono text-[11px] text-sf-text-muted">{formatSeconds(cue.start)}</span>
+                        )}
                         <input
+                          ref={(node) => {
+                            if (node) cueInputRefs.current.set(cue.id, node)
+                            else cueInputRefs.current.delete(cue.id)
+                          }}
                           type="text"
                           value={cue.text}
-                          onChange={(e) => updateCue(cue.id, 'text', e.target.value)}
-                          className="w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm text-sf-text-primary focus:border-sf-accent focus:bg-sf-dark-900 focus:outline-none"
+                          disabled={busy}
+                          onChange={(event) => {
+                            cueCaretOffsetsRef.current.set(cue.id, event.currentTarget.selectionStart ?? 0)
+                            updateCue(cue.id, 'text', event.target.value)
+                          }}
+                          onSelect={(event) => {
+                            cueCaretOffsetsRef.current.set(cue.id, event.currentTarget.selectionStart ?? 0)
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key !== 'Enter' || event.isComposing || event.nativeEvent?.isComposing) return
+                            event.preventDefault()
+                            handleSplitCue(cue.id, event.currentTarget.selectionStart)
+                          }}
+                          title="Edit caption text · press Enter to split at the cursor"
+                          className="w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm text-sf-text-primary focus:border-sf-accent focus:bg-sf-dark-900 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
                         />
-                        <span className="font-mono text-[10px] text-sf-text-muted">
-                          {Math.max(0, (Number(cue.end) || 0) - (Number(cue.start) || 0)).toFixed(1)}s
-                        </span>
+                        {selected ? (
+                          <label className="min-w-0 text-[9px] uppercase tracking-wide text-sf-text-muted">
+                            Duration
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0.1"
+                              value={Number(Math.max(
+                                0.1,
+                                (Number(cue.end) || 0) - (Number(cue.start) || 0)
+                              ).toFixed(3))}
+                              disabled={busy}
+                              onChange={(event) => {
+                                if (event.target.value === '') return
+                                updateCueTiming(cue.id, { duration: Number(event.target.value) })
+                              }}
+                              className="mt-0.5 w-full rounded border border-sf-dark-600 bg-sf-dark-900 px-1.5 py-1 font-mono text-[10px] normal-case tracking-normal text-sf-text-primary focus:border-sf-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                              aria-label={`Cue ${cueIndex + 1} duration in seconds`}
+                            />
+                          </label>
+                        ) : (
+                          <span className="font-mono text-[10px] text-sf-text-muted">
+                            {Math.max(0, (Number(cue.end) || 0) - (Number(cue.start) || 0)).toFixed(1)}s
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            removeCue(cue.id)
+                          }}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-sf-text-muted hover:bg-sf-error/10 hover:text-sf-error disabled:cursor-not-allowed disabled:opacity-40"
+                          title={`Delete cue ${cueIndex + 1}`}
+                          aria-label={`Delete cue ${cueIndex + 1}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
                       </div>
                     )
                   })
                 })()}
               </div>
-              <div className="flex-shrink-0 border-t border-sf-dark-700 px-5 py-2 text-[11px] text-sf-text-muted">
-                Click a cue to preview it · type in the row to edit its text · timing and placement on the right
+              <div className={`flex flex-shrink-0 items-center gap-2 border-t border-sf-dark-700 px-5 py-2 text-[11px] ${cueValidation.valid ? 'text-sf-text-muted' : 'text-sf-error'}`}>
+                {!cueValidation.valid && <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />}
+                <span className="truncate">
+                  {cueValidation.valid
+                    ? 'Move the preview playhead, then Add cue · edit text · press Enter to split at the cursor'
+                    : cueValidationMessage}
+                </span>
               </div>
             </div>
 
 
-          <div className="flex min-h-0 flex-col">
+          <div className="flex min-h-[620px] flex-col [@media(min-width:1024px)_and_(min-height:800px)]:min-h-0">
           <div className="flex-shrink-0 border-b border-sf-dark-700 bg-sf-dark-950 p-5">
             <section className="rounded-2xl border border-sf-dark-700 bg-sf-dark-900/60 p-4">
               <div className="flex items-center justify-between gap-3 mb-3">
@@ -1899,8 +2139,8 @@ function CaptionWorkspace({
                   className="flex-1 accent-sf-accent"
                   aria-label="Preview scrubber"
                 />
-                <span className="text-[10px] text-sf-text-muted font-mono w-16 text-right">
-                  {scrubDisplay.toFixed(1)}s / {previewDuration.toFixed(1)}s
+                <span className="min-w-[132px] whitespace-nowrap text-right font-mono text-[10px] text-sf-text-muted">
+                  {formatSeconds(scrubDisplay)} / {formatSeconds(previewDuration)}
                 </span>
               </div>
               {showTikTokOverlay && (
@@ -1922,40 +2162,18 @@ function CaptionWorkspace({
                   <span className="font-mono text-[11px] text-sf-text-muted">
                     {formatSeconds(selectedCue.start)} → {formatSeconds(selectedCue.end)}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      removeCue(selectedCue.id)
-                      setSelectedCueId(null)
-                    }}
-                    className="ml-auto rounded-lg border border-sf-dark-600 bg-sf-dark-900 px-2.5 py-1 text-[11px] text-sf-text-muted hover:border-sf-error/60 hover:text-sf-error"
-                  >
-                    Remove
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="text-[11px] text-sf-text-muted">
-                    Start
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={selectedCue.start}
-                      onChange={(e) => updateCue(selectedCue.id, 'start', e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-sf-dark-600 bg-sf-dark-900 px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
-                    />
-                  </label>
-                  <label className="text-[11px] text-sf-text-muted">
-                    End
-                    <input
-                      type="number"
-                      step="0.01"
-                      min={selectedCue.start + 0.1}
-                      value={selectedCue.end}
-                      onChange={(e) => updateCue(selectedCue.id, 'end', e.target.value)}
-                      className="mt-1 w-full rounded-lg border border-sf-dark-600 bg-sf-dark-900 px-2 py-1.5 text-xs text-sf-text-primary focus:outline-none focus:border-sf-accent"
-                    />
-                  </label>
+                  <div className="ml-auto flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleSplitCue(selectedCue.id)}
+                      disabled={busy}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-sf-dark-600 bg-sf-dark-900 px-2.5 py-1 text-[11px] text-sf-text-secondary hover:border-sf-accent/60 hover:text-sf-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                      title="Place the cursor inside the cue text, then split"
+                    >
+                      <Scissors className="h-3 w-3" />
+                      Split at cursor
+                    </button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-1 gap-2">
                   <CueOverrideChips
@@ -1963,22 +2181,26 @@ function CaptionWorkspace({
                     value={selectedCue.override?.verticalPlacement || 'auto'}
                     options={CUE_VERTICAL_OPTIONS}
                     onChange={(nextValue) => updateCueOverride(selectedCue.id, 'verticalPlacement', nextValue)}
+                    disabled={busy}
                   />
                   <CueOverrideChips
                     label="Horizontal"
                     value={selectedCue.override?.horizontalPlacement || 'auto'}
                     options={CUE_HORIZONTAL_OPTIONS}
                     onChange={(nextValue) => updateCueOverride(selectedCue.id, 'horizontalPlacement', nextValue)}
+                    disabled={busy}
                   />
                   <CueOverrideChips
                     label="Motion"
                     value={selectedCue.override?.motionProfile || 'auto'}
                     options={CUE_MOTION_OPTIONS}
                     onChange={(nextValue) => updateCueOverride(selectedCue.id, 'motionProfile', nextValue)}
+                    disabled={busy}
                   />
                 </div>
               </section>
             )}
+            <fieldset disabled={busy} className="m-0 min-w-0 border-0 p-0 disabled:opacity-70">
             <section className="rounded-2xl border border-sf-dark-700 bg-sf-dark-900/60 p-4 space-y-3">
               <div>
                 <div className="text-sm font-medium text-sf-text-primary">Style</div>
@@ -2073,22 +2295,16 @@ function CaptionWorkspace({
                 )}
               </div>
 
-              <label className="block text-xs text-sf-text-secondary">
+              <div className="block text-xs text-sf-text-secondary">
                 <span className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-sf-text-muted">
                   Font
                 </span>
-                <select
+                <FontFamilyPicker
                   value={globalFontFamily}
-                  onChange={(event) => setGlobalFontFamily(event.target.value)}
+                  onChange={setGlobalFontFamily}
                   className="w-full rounded-lg border border-sf-dark-600 bg-sf-dark-950 px-3 py-2 text-sm text-sf-text-primary focus:border-sf-accent focus:outline-none"
-                >
-                  {CAPTION_FONT_OPTIONS.map((font) => (
-                    <option key={font.id} value={font.value}>
-                      {font.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                />
+              </div>
 
               <CueOverrideChips
                 label="Text Style"
@@ -2354,7 +2570,9 @@ function CaptionWorkspace({
                 </div>
               </div>
             </section>
+            </fieldset>
 
+            <fieldset disabled={busy} className="m-0 min-w-0 border-0 p-0 disabled:opacity-70">
             <section className="rounded-2xl border border-sf-dark-700 bg-sf-dark-900/60 p-4 space-y-3">
               <div className="text-sm font-medium text-sf-text-primary">Export</div>
               <label className="flex items-center gap-2 text-xs text-sf-text-primary">
@@ -2370,6 +2588,7 @@ function CaptionWorkspace({
                 Output: transparent WebM overlay in the root-level `Captions` asset folder.
               </div>
             </section>
+            </fieldset>
 
           </div>
           </div>

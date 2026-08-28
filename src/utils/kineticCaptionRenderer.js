@@ -1,4 +1,5 @@
 import { getSupportedMogMimeType } from './mogRenderer'
+import { quoteCssFontFamily } from './fontFamily'
 
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)) }
 function lerp(a, b, t) { return a + (b - a) * t }
@@ -459,7 +460,7 @@ function computeFontSize(wordCount, canvasWidth, canvasHeight) {
 // ---------------------------------------------------------------------------
 
 function setFont(ctx, size, family, weight) {
-  ctx.font = `${weight} ${Math.round(size)}px "${family}", "Helvetica Neue", Arial, sans-serif`
+  ctx.font = `${weight} ${Math.round(size)}px ${quoteCssFontFamily(family)}, "Helvetica Neue", Arial, sans-serif`
 }
 
 function layoutMicroCue(ctx, microCue, fontSize, style, canvasWidth, canvasHeight) {

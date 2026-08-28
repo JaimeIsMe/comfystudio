@@ -19,14 +19,14 @@
   - `app.asar.unpacked` is still used as a fallback
 - Updated `package.json` build config
   - explicitly bundles `ffmpeg-static` into `resources/bin/ffmpeg.exe`
-  - explicitly bundles `ffprobe-static` into `resources/bin/ffprobe-static/...`
+  - explicitly bundles `@derhuerst/ffprobe-static` into `resources/bin/ffprobe.exe`
 
 ## Validation already completed
 - `npm run build` passed
 - packed app validation succeeded in a clean output folder
 - confirmed packaged files exist:
   - `release-test/win-unpacked/resources/bin/ffmpeg.exe`
-  - `release-test/win-unpacked/resources/bin/ffprobe-static/win32/x64/ffprobe.exe`
+  - `release-test/win-unpacked/resources/bin/ffprobe.exe`
 
 ## Test artifacts created
 - `release-test/Velorn-0.1.5-setup-x64.exe`

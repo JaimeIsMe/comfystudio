@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { PLAYBACK_CACHE_VERSION } from '../services/playbackCache'
+import { hasUsablePlaybackCache, PLAYBACK_CACHE_VERSION } from '../services/playbackCache'
 import {
   getProjectRelativeAssetPath,
   isAbsoluteRecordedPath,
@@ -1220,9 +1220,7 @@ export const useAssetsStore = create(
     const asset = get().assets.find(a => a.id === assetId)
     if (!asset) return null
     // Use playback cache URL when available (Flame-style: optimized for playback)
-    const useCache = !!asset.playbackCacheUrl
-      && asset.playbackCacheStatus === 'ready'
-      && asset.playbackCacheVersion === PLAYBACK_CACHE_VERSION
+    const useCache = !!asset.playbackCacheUrl && hasUsablePlaybackCache(asset)
     const url = useCache ? asset.playbackCacheUrl : (asset.url || null)
     if (typeof localStorage !== 'undefined' && localStorage.getItem('comfystudio-debug-playback') === '1' && asset.type === 'video') {
       console.log('[PlaybackCache] getAssetUrl:', { assetId, useCache, urlHint: url ? (url.startsWith('file:') ? 'file:// (cache or original)' : url.slice(0, 50) + '...') : 'null' })

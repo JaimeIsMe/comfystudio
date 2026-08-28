@@ -321,6 +321,7 @@ async function stitchSequenceToVideo({
     // -framerate pattern is trivial. We always re-encode to PNG for
     // predictability; ComfyUI almost always emits PNG here anyway.
     const pad = Math.max(5, String(files.length).length)
+    const framePaths = []
     for (let i = 0; i < files.length; i += 1) {
       const src = files[i]
       const indexStr = String(i).padStart(pad, '0')
@@ -332,47 +333,41 @@ async function stitchSequenceToVideo({
       const ab = await resp.arrayBuffer()
       const res = await window.electronAPI.writeFileFromArrayBuffer(destPath, ab)
       if (!res?.success) throw new Error(`Failed to write frame ${outName}: ${res?.error}`)
+      framePaths.push(destPath)
     }
 
-    const framePattern = await window.electronAPI.pathJoin(frameDir, `frame_%0${pad}d.png`)
     const videosDir = await window.electronAPI.pathJoin(projectDir, 'assets', 'video')
     await window.electronAPI.createDirectory(videosDir)
 
-    const outputBase = `comfy_import_${sanePromptId}_${saneNodeId}.mp4`
-    // Unique-ify if needed.
-    let finalName = outputBase
-    let counter = 1
-    let outputPath = await window.electronAPI.pathJoin(videosDir, finalName)
-    while (await window.electronAPI.exists(outputPath)) {
-      const ext = '.mp4'
-      const base = outputBase.replace(/\.mp4$/i, '')
-      finalName = `${base}_${counter}${ext}`
-      outputPath = await window.electronAPI.pathJoin(videosDir, finalName)
-      counter += 1
-    }
-
-    const encodeResult = await window.electronAPI.encodeVideo({
-      framePattern,
+    // Use the shared sequence transcoder so transparent PNGs become a
+    // VP9-alpha WebM master while opaque sequences retain the H.264 path.
+    // This is import-time detection—the asset flag below then keeps every
+    // opaque cache tier away from an alpha master.
+    const encodeResult = await window.electronAPI.transcodeImageSequence({
+      entries: framePaths.map((framePath) => ({ path: framePath, duration: 1 / fps })),
       fps,
-      outputPath,
-      format: 'mp4',
-      videoCodec: 'h264',
-      qualityMode: 'crf',
-      crf: 18,
-      preset: 'medium',
+      outputDir: videosDir,
+      baseName: `comfy_import_${sanePromptId}_${saneNodeId}`,
+      alpha: 'auto',
     })
-    if (!encodeResult?.success) {
+    if (!encodeResult?.success || !encodeResult.outputPath) {
       throw new Error(encodeResult?.error || 'ffmpeg encoding failed')
     }
+    const finalName = await window.electronAPI.pathBasename(encodeResult.outputPath)
 
     return {
       success: true,
-      absolutePath: outputPath,
+      absolutePath: encodeResult.outputPath,
       relativePath: `assets/video/${finalName}`,
       frameDir,
       frameCount: files.length,
       fps,
       filename: finalName,
+      alpha: encodeResult.alpha === true,
+      duration: encodeResult.duration ?? (files.length / fps),
+      width: encodeResult.width || null,
+      height: encodeResult.height || null,
+      encoder: encodeResult.encoder || null,
     }
   } catch (err) {
     return { success: false, error: err?.message || String(err) }
@@ -740,7 +735,7 @@ async function importStitchedSequence({ classification, apiWorkflow, promptId, p
   let assetInfo = null
   try {
     // We can reuse importAsset by passing the absolute path as the source;
-    // it will copy to assets/video/<name>.mp4 (renaming if needed). But we
+    // it will copy to assets/video/ (renaming if needed). But we
     // already wrote it there — pass the path so it copies in-place to a
     // unique name. To avoid a needless copy, just fabricate the asset
     // record manually.
@@ -754,12 +749,32 @@ async function importStitchedSequence({ classification, apiWorkflow, promptId, p
       absolutePath: stitchResult.absolutePath,
       imported: new Date().toISOString(),
       size: info?.info?.size || 0,
+      duration: stitchResult.duration,
+      width: stitchResult.width,
+      height: stitchResult.height,
+      hasAudio: false,
+      audioEnabled: false,
+      settings: {
+        hasAlpha: stitchResult.alpha === true,
+        duration: stitchResult.duration,
+        fps: stitchResult.fps,
+      },
     }
     // Try to enrich with media info (duration/dims/fps) via the existing
     // getVideoFps IPC, which also returns basic codec info.
     try {
       const fpsInfo = await electron.getVideoFps(stitchResult.absolutePath)
       if (fpsInfo?.success && fpsInfo.fps) assetInfo.fps = fpsInfo.fps
+      if (fpsInfo?.success && fpsInfo.videoCodec) assetInfo.videoCodec = fpsInfo.videoCodec
+      if (fpsInfo?.success && typeof fpsInfo.hasAudio === 'boolean') {
+        assetInfo.hasAudio = fpsInfo.hasAudio
+        assetInfo.audioEnabled = fpsInfo.hasAudio
+      }
+      if (fpsInfo?.success && fpsInfo.pixelFormat) assetInfo.pixelFormat = fpsInfo.pixelFormat
+      if (fpsInfo?.success && fpsInfo.videoProfile) assetInfo.videoProfile = fpsInfo.videoProfile
+      if (fpsInfo?.success && fpsInfo.hasAlpha === true) {
+        assetInfo.settings.hasAlpha = true
+      }
     } catch (_) { /* ignore */ }
   } catch (err) {
     console.warn('[comfyAutoImport] could not stat stitched video:', err)
@@ -772,6 +787,8 @@ async function importStitchedSequence({ classification, apiWorkflow, promptId, p
       type: 'video',
       path: stitchResult.relativePath,
       absolutePath: stitchResult.absolutePath,
+      hasAudio: false,
+      audioEnabled: false,
     }),
     folderId,
     isImported: true,
@@ -781,6 +798,12 @@ async function importStitchedSequence({ classification, apiWorkflow, promptId, p
     sourceFilename: stitchResult.filename,
     sourceSubfolder: '',
     sourceOutputType: 'output',
+    settings: {
+      ...(assetInfo?.settings || {}),
+      hasAlpha: stitchResult.alpha === true || assetInfo?.settings?.hasAlpha === true,
+      duration: stitchResult.duration,
+      fps: stitchResult.fps,
+    },
     sequenceSource: {
       kind: 'comfy-stitched',
       frameDir: stitchResult.frameDir,
@@ -1059,11 +1082,11 @@ export async function unstitchSequenceAsset(asset) {
     console.warn('[comfyAutoImport] could not remove stitched asset from store:', err)
   }
 
-  // Best-effort file cleanup: delete the MP4 and the frame cache dir.
+  // Best-effort file cleanup: delete the stitched master and frame cache.
   if (isElectron()) {
     try {
       if (asset.absolutePath) await window.electronAPI.deleteFile?.(asset.absolutePath)
-    } catch (err) { console.warn('[comfyAutoImport] could not delete stitched MP4:', err) }
+    } catch (err) { console.warn('[comfyAutoImport] could not delete stitched media:', err) }
     try {
       if (sequenceSource.frameDir) await window.electronAPI.deleteDirectory?.(sequenceSource.frameDir)
     } catch (err) { console.warn('[comfyAutoImport] could not delete frame cache dir:', err) }

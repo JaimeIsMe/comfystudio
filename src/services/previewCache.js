@@ -12,6 +12,7 @@ import useAssetsStore from '../stores/assetsStore'
 import { normalizeAdjustmentSettings } from '../utils/adjustments'
 import { normalizeClipCompositeMode } from '../utils/layerCompositing'
 import { hasVideoSolo, isVideoTrackVisible } from '../utils/videoTrackVisibility'
+import { getFrameSamplingSignature } from '../utils/frameSampling'
 
 const CACHE_DIR = 'cache'
 // v2: frame-start sampling (sampleAtFrameCenter: false) — files rendered
@@ -179,6 +180,7 @@ function buildClipSignature(clip) {
     timelineFps: roundNumber(clip.timelineFps),
     speed: roundNumber(clip.speed),
     reverse: Boolean(clip.reverse),
+    frameSampling: getFrameSamplingSignature(clip),
     transform: {
       positionX: roundNumber(transform.positionX),
       positionY: roundNumber(transform.positionY),

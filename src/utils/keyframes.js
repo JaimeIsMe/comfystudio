@@ -17,8 +17,8 @@ import {
   getAdjustmentValue,
   normalizeAdjustmentSettings,
   setAdjustmentValue,
-} from './adjustments'
-import { normalizeShapeProperties } from './shapes'
+} from './adjustments.js'
+import { normalizeShapeProperties } from './shapes.js'
 
 // Easing functions (t is normalized 0-1)
 export const easingFunctions = {

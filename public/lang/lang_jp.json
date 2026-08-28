@@ -213,6 +213,9 @@
     "imageSequenceHelp": "レンダーしたタイムラインの各フレームを、連番の可逆PNGとして書き出します。画像シーケンスには音声が含まれません。",
     "animatedGif": "アニメーションGIF",
     "gifHelp": "最適化された256色パレットで、不透明かつ音声なしのループGIFを作成します。解像度とフレームレートは自由に変更できます。共有には15 fps、720p以下がおすすめです。",
+    "transparentBackground": "背景を透明にする",
+    "transparentBackgroundHelp": "空白部分とアルファ付き素材の透明度を保持します。WebMとProRes 4444で使用できます。",
+    "transparentBackgroundFormats": "透明度を保持するには、WebMまたはProResを選択してください。",
     "useHardware": "{{hardware}}を使用",
     "hardwareEncoding": "ハードウェアエンコード",
     "fastPipe": "高速FFmpegパイプ",
@@ -299,6 +302,7 @@
     "hints": {
       "4k": "4K書き出しは負荷が高くなります。確認用途ではプロキシまたは低い解像度を検討してください。",
       "rtx": "RTX 4Kは通常のレンダー後に実行され、メモリ使用量を抑えるため1フレームずつ処理します。",
+      "transparent": "透明度を保持する書き出しはアルファ対応のソフトウェアエンコーダーを使用するため、MP4より時間がかかる場合があります。",
       "pngDiskSpace": "PNG画像シーケンスはフレームごとに可逆ファイルを作成するため、多くのディスク容量を使用する場合があります。",
       "pngNoAudio": "PNG画像シーケンスには音声が含まれません。",
       "gifPalette": "GIFは最適化された256色の共通パレットを使用し、連続ループします。",
@@ -840,6 +844,12 @@
       "sketch-to-render": { "name": "Sketch to Render", "description": "スケッチを完成フレームへ変換" },
       "motion-test": { "name": "Motion Test", "description": "短いモーションテスト" }
     }
+  },
+  "fontPicker": {
+    "ariaLabel": "フォント",
+    "loading": "インストール済みフォントを読み込み中…",
+    "retry": "インストール済みフォントを取得できません · 再試行",
+    "unavailableTitle": "インストール済みフォントを一時的に取得できません。"
   },
   "textPanel": {
     "sampleText": "サンプルテキスト",

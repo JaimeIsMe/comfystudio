@@ -28,7 +28,6 @@ import {
   MOG_COLOR_PALETTES,
   MOG_DIRECTION_OPTIONS,
   MOG_EXIT_OPTIONS,
-  MOG_FONT_OPTIONS,
   MOG_LINE_OPTIONS,
   MOG_MASK_MODE_OPTIONS,
   MOG_PACE_OPTIONS,
@@ -42,6 +41,7 @@ import {
 } from '../utils/mogRenderer'
 import { captureTimelineFrameAt } from '../utils/captureTimelineFrame'
 import { isElectron, writeGeneratedOverlayToProject } from '../services/fileSystem'
+import FontFamilyPicker from './FontFamilyPicker'
 
 const MOG_FOLDER_NAME = 'MoGraph Rendered Assets'
 const MOG_FAVORITES_STORAGE_KEY = 'comfystudio-mog-favorite-presets'
@@ -1338,15 +1338,11 @@ function MOGWorkspace() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-[11px] text-sf-text-muted block mb-1.5">Font</label>
-                    <select
+                    <FontFamilyPicker
                       value={controls.fontFamily}
-                      onChange={(e) => updateControl('fontFamily', e.target.value)}
+                      onChange={(value) => updateControl('fontFamily', value)}
                       className="w-full rounded-xl border border-sf-dark-600 bg-sf-dark-800 px-3 py-2 text-sm text-sf-text-primary focus:outline-none focus:border-sf-accent"
-                    >
-                      {MOG_FONT_OPTIONS.map((font) => (
-                        <option key={font} value={font}>{font}</option>
-                      ))}
-                    </select>
+                    />
                   </div>
                   <div>
                     <label className="text-[11px] text-sf-text-muted block mb-1.5">Weight</label>

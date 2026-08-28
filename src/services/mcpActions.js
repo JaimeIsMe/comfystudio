@@ -5035,6 +5035,17 @@ function buildReplaceClipWithAssetPlan(payload = {}) {
     cacheProgress: 0,
     cacheUrl: null,
     cachePath: null,
+    frameSampling: assetType === 'video' ? clip.frameSampling : 'frame',
+    opticalFlowCache: clip.opticalFlowCache?.path
+      ? {
+          ...clip.opticalFlowCache,
+          status: 'stale',
+          progress: 0,
+          url: undefined,
+          jobId: undefined,
+          error: 'The source asset changed. Rebuild Optical Flow.',
+        }
+      : undefined,
     metadata: {
       ...(safeClone(clip.metadata) || {}),
       replacedByMcp: true,
@@ -6072,6 +6083,7 @@ function handleDuplicateClip(payload = {}) {
     cacheProgress: 0,
     cacheUrl: null,
     cachePath: null,
+    opticalFlowCache: undefined,
     ...(preserveLinkGroup ? {} : { linkGroupId: undefined }),
     ...(preserveSyncLock ? {} : { lockMode: undefined, syncLock: undefined }),
     metadata: {
@@ -8314,6 +8326,35 @@ async function handleRelinkAsset(payload = {}) {
         previewOnly: false,
       },
     }
+  }
+
+  const affectedOpticalFlowClips = (useTimelineStore.getState().clips || [])
+    .filter((clip) => clip?.type === 'video' && clip.assetId === asset.id)
+  if (affectedOpticalFlowClips.length > 0) {
+    try {
+      const { cancelOpticalFlowCache } = await import('./opticalFlowCache')
+      await Promise.all(affectedOpticalFlowClips.map((clip) => cancelOpticalFlowCache(clip.id)))
+    } catch (error) {
+      console.warn('Could not cancel active Optical Flow work during relink:', error)
+    }
+    useTimelineStore.setState((timelineState) => ({
+      clips: (timelineState.clips || []).map((clip) => {
+        if (clip?.type !== 'video' || clip.assetId !== asset.id) return clip
+        return {
+          ...clip,
+          opticalFlowCache: clip.opticalFlowCache?.path
+            ? {
+                ...clip.opticalFlowCache,
+                status: 'stale',
+                progress: 0,
+                url: undefined,
+                error: 'The source media was relinked. Rebuild Optical Flow.',
+                jobId: undefined,
+              }
+            : undefined,
+        }
+      }),
+    }))
   }
 
   useAssetsStore.getState().updateAsset(asset.id, updates)

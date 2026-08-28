@@ -3,6 +3,7 @@ import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
 import videoCache from '../services/videoCache'
 import { hasUsablePlaybackCache } from '../services/playbackCache'
+import { hasUsableProxy } from '../services/proxyCache'
 import { getAnimatedAdjustmentSettings, getAnimatedTransform, getAnimatedShapeProperties, getAnimatedShapeMask } from '../utils/keyframes'
 import {
   applyAdjustmentSettingsToImageData,
@@ -40,7 +41,22 @@ import { parseTrackMatte, resolveTrackMatteAssignments, applyTrackMatteToCanvas 
 import { applyTransitionClip, getFadeOverlayInfo, getTransitionStyleForClip } from '../utils/transitionStyles'
 import { isFullBakeFresh } from '../utils/clipBakeSignature'
 import { getMotionBlurSamples, getVelocityMotionBlurOptions } from '../utils/motionBlur'
-import { hasSpeedRamp, getRampedSourceOffset, getRampedSpeedAtTime } from '../utils/timeRemap'
+import { hasSpeedRamp, getRampedSpeedAtTime } from '../utils/timeRemap'
+import {
+  FRAME_SAMPLING_MODE,
+  getOpticalFlowCacheUsability,
+  getRequiredOpticalFlowHandleSeconds,
+  normalizeFrameSamplingMode,
+} from '../utils/frameSampling'
+import { getClipPlaybackTimeAtTimeline, getClipPlaybackTimingAtTimeline } from '../utils/clipPlaybackTiming'
+import {
+  doesPresentedVideoFrameMatchTarget,
+  getPreciseVideoSeekFps,
+  getTargetVideoFrameIndex,
+  isFrameStepSeekIntentAtTime,
+  isSamePreciseVideoSeekTarget,
+  shouldIssuePreciseVideoSeek,
+} from '../utils/previewVideoSeeking'
 import { registerLivePreviewCapture, unregisterLivePreviewCapture } from '../services/previewFrameBridge'
 import { applyVelocityMotionBlurToCanvas, buildVelocityBlurUniformValues, canUseVelocityMotionBlur } from '../utils/velocityMotionBlur'
 import {
@@ -71,6 +87,7 @@ const getScrubReadyTolerance = (fps) => Math.max(0.04, 1 / Math.max(1, Number(fp
 // If a scrub seek never presents a frame (element evicted, src cleared),
 // allow a replacement seek after this long instead of blocking the element.
 const SCRUB_SEEK_STALL_MS = 400
+const PRECISE_SEEK_STALL_MS = 750
 // How long playback may hold the previous frame while a visible clip's
 // media is not yet drawable (cold element at a cut, mid-seek decoder dip)
 // before black is allowed through.
@@ -95,46 +112,19 @@ function logCanvasDiag(event, payload = {}) {
   console.log(`[CanvasPreview] ${event}`, { t: nowSeconds, ...payload })
 }
 
-// Exported for Match Frame (Timeline.jsx): maps a timeline time to the clip's
-// source time with the same speed/ramp/reverse/trim math the preview uses.
-export function getClipPlaybackTimingAtTimeline(clip, timelineTime, endOffset = 0.01, options = {}) {
-  if (!clip) return { time: 0, rawTime: 0, clamped: false, minTime: 0, maxTime: 0 }
-  const baseScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
-    ? clip.timelineFps / clip.sourceFps
-    : 1)
-  const speed = Number(clip.speed)
-  const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
-  const timeScale = baseScale * speedScale
-  const reverse = !!clip.reverse
-  const trimStart = clip.trimStart || 0
-  const rawTrimEnd = clip.trimEnd ?? clip.sourceDuration ?? (trimStart + (clip.duration || 0) * timeScale)
-  const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
-  const sourceDuration = Number(clip.sourceDuration)
-  const allowHandles = !!options.allowHandles && Number.isFinite(sourceDuration) && sourceDuration > 0
-  const minTime = allowHandles ? 0 : Math.min(trimStart, trimEnd)
-  const maxTime = allowHandles ? sourceDuration : Math.max(trimStart, trimEnd)
-  const clipLocalTime = timelineTime - (clip.startTime || 0)
-  const sourceTime = hasSpeedRamp(clip)
-    // Speed ramp: source consumed = integral of the keyframed speed curve.
-    ? trimStart + getRampedSourceOffset(clip, clipLocalTime) * baseScale
-    : (reverse
-      ? trimEnd - clipLocalTime * timeScale
-      : trimStart + clipLocalTime * timeScale)
-  const safeMaxTime = Math.max(minTime, maxTime - endOffset)
-  const clampedTime = Math.max(minTime, Math.min(sourceTime, safeMaxTime))
+function getOpticalFlowContextOptions(clip) {
+  const timelineState = useTimelineStore.getState()
   return {
-    time: clampedTime,
-    rawTime: sourceTime,
-    clamped: Math.abs(clampedTime - sourceTime) > 0.001,
-    minTime,
-    maxTime,
+    handleSeconds: getRequiredOpticalFlowHandleSeconds(
+      clip,
+      timelineState.transitions,
+      timelineState.clips
+    ),
   }
 }
 
-export function getClipPlaybackTimeAtTimeline(clip, timelineTime, endOffset = 0.01, options = {}) {
-  return getClipPlaybackTimingAtTimeline(clip, timelineTime, endOffset, options).time
-}
-
+// Exported for Match Frame (Timeline.jsx): maps a timeline time to the clip's
+// source time with the same speed/ramp/reverse/trim math the preview uses.
 function resolvePreviewUrl(clip, getAssetById, useProxyPlaybackForAssets) {
   if (!clip) return null
   // Render caches: legacy (mask) bakes apply to video clips; full bakes
@@ -143,13 +133,21 @@ function resolvePreviewUrl(clip, getAssetById, useProxyPlaybackForAssets) {
   if (clip.cacheStatus === 'cached' && clip.cacheUrl) {
     if (clip.cacheKind === 'full') {
       if (isFullBakeFresh(clip)) return clip.cacheUrl
-    } else if (clip.type === 'video') {
+    } else if (
+      clip.type === 'video'
+      && normalizeFrameSamplingMode(clip.frameSampling) !== FRAME_SAMPLING_MODE.OPTICAL_FLOW
+    ) {
       return clip.cacheUrl
     }
   }
   const asset = clip.assetId ? getAssetById(clip.assetId) : null
   if (clip.type === 'video') {
-    const useProxy = useProxyPlaybackForAssets && !!asset?.proxyUrl && asset?.proxyStatus !== 'failed'
+    const opticalFlow = getOpticalFlowCacheUsability(clip, {
+      requireUrl: true,
+      ...getOpticalFlowContextOptions(clip),
+    })
+    if (opticalFlow.usable) return opticalFlow.cache.url
+    const useProxy = useProxyPlaybackForAssets && !!asset?.proxyUrl && hasUsableProxy(asset)
     if (useProxy) return asset.proxyUrl
     const usePlaybackCache = !!asset?.playbackCacheUrl && hasUsablePlaybackCache(asset)
     return (usePlaybackCache ? asset?.playbackCacheUrl : null) || asset?.url || clip.url || null
@@ -335,7 +333,7 @@ function clipContainsCanvasPoint(point, clip, rect, transform = {}, transitionSt
   )
 }
 
-function getMaskInfo(clip, getAssetById, time, isCachedRender = false) {
+function getMaskInfo(clip, getAssetById, time, isCachedRender = false, allowHandles = false) {
   if (isClipBypassed(clip, 'mask')) return null
   if (isCachedRender) return null
   // Parametric shape mask (clip.shapeMask) wins over a raster mask effect
@@ -368,7 +366,10 @@ function getMaskInfo(clip, getAssetById, time, isCachedRender = false) {
   let frameIndex = 0
   let url = maskAsset.url
   if (Array.isArray(maskAsset.maskFrames) && maskAsset.maskFrames.length > 1) {
-    const sourceTime = getClipPlaybackTimeAtTimeline(clip, time, 0.001)
+    const sourceTime = getClipPlaybackTimeAtTimeline(clip, time, 0.001, {
+      useFrameSampling: false,
+      allowHandles,
+    })
     const sourceProgress = sourceDuration > 0 ? clamp(sourceTime / sourceDuration, 0, 1) : 0
     frameIndex = Math.min(Math.max(0, Math.floor(sourceProgress * maskFrameCount)), maskFrameCount - 1)
     url = maskAsset.maskFrames[frameIndex]?.url || url
@@ -412,6 +413,8 @@ function CanvasPreviewRenderer({
   const scrubSettleTimerRef = useRef(0)
   const scrubPreviewStateRef = useRef({ lastPlayhead: 0, activeUntil: 0 })
   const scrubPendingSeeksRef = useRef(new WeakMap())
+  const preciseVideoSeeksRef = useRef(new WeakMap())
+  const preciseSeekSerialRef = useRef(0)
   const unreadyHoldUntilRef = useRef(0)
   const hasPaintedFrameRef = useRef(false)
   const lastPreloadTimeRef = useRef(0)
@@ -432,6 +435,7 @@ function CanvasPreviewRenderer({
     transitions,
     isPlaying,
     playheadPosition,
+    playheadSeekIntent,
     playbackRate,
     useProxyPlaybackForAssets,
     glslPreviewQuality,
@@ -530,6 +534,7 @@ function CanvasPreviewRenderer({
     transitions,
     isPlaying,
     playheadPosition,
+    playheadSeekIntent,
     playbackRate,
     useProxyPlaybackForAssets,
     glslPreviewQuality,
@@ -551,6 +556,177 @@ function CanvasPreviewRenderer({
     }, 40)
   }, [])
 
+  const clearPreciseVideoSeek = useCallback((video) => {
+    if (!video) return
+    const pendingSeeks = preciseVideoSeeksRef.current
+    const state = pendingSeeks.get(video)
+    if (!state) return
+    if (state.frameCallbackId != null && typeof video.cancelVideoFrameCallback === 'function') {
+      try { video.cancelVideoFrameCallback(state.frameCallbackId) } catch (_) { /* element may be detached */ }
+    }
+    if (state.seekedListener) video.removeEventListener('seeked', state.seekedListener)
+    pendingSeeks.delete(video)
+  }, [])
+
+  // Exact paused stepping cannot trust video.currentTime: Chromium updates
+  // that property as soon as a seek is requested, before the newly decoded
+  // picture reaches the compositor. Keep a per-element target/token and only
+  // let drawFrame proceed after rVFC confirms the requested encoded frame (or
+  // after seeked on the compatibility path). Until then the existing canvas
+  // remains untouched, so a stale frame can never be committed under the new
+  // timeline time.
+  const ensurePreciseVideoSeekReady = useCallback((video, targetTime, targetFps, sourceKey = '') => {
+    if (!video || video.readyState < 1) return false
+    const normalizedTarget = Math.max(0, Number(targetTime) || 0)
+    const normalizedFps = Number(targetFps)
+    const resolvedSourceKey = sourceKey || video.currentSrc || video.src || ''
+    const pendingSeeks = preciseVideoSeeksRef.current
+    let previous = pendingSeeks.get(video)
+
+    if (previous && previous.sourceKey !== resolvedSourceKey) {
+      clearPreciseVideoSeek(video)
+      previous = null
+    }
+
+    if (
+      previous?.settledTargetTime != null
+      && isSamePreciseVideoSeekTarget(previous.settledTargetTime, normalizedTarget)
+      && previous.settledFrameIndex === getTargetVideoFrameIndex(normalizedTarget, normalizedFps)
+      && isSamePreciseVideoSeekTarget(video.currentTime, normalizedTarget)
+      && !video.seeking
+    ) {
+      return true
+    }
+
+    const nowMs = getNowMs()
+    const pendingMatches = previous?.pendingTargetTime != null
+      && isSamePreciseVideoSeekTarget(previous.pendingTargetTime, normalizedTarget)
+    if (pendingMatches && nowMs - (previous.issuedAt || 0) < PRECISE_SEEK_STALL_MS) {
+      return false
+    }
+
+    // A cold element that is already settled exactly at the target has a
+    // drawable current frame without needing a no-op seek (which some engines
+    // do not acknowledge with rVFC while paused).
+    if (
+      !previous
+      && video.readyState >= 2
+      && video.videoWidth
+      && video.videoHeight
+      && !video.seeking
+      && isSamePreciseVideoSeekTarget(video.currentTime, normalizedTarget)
+    ) {
+      pendingSeeks.set(video, {
+        sourceKey: resolvedSourceKey,
+        pendingTargetTime: null,
+        settledTargetTime: normalizedTarget,
+        settledFrameIndex: getTargetVideoFrameIndex(normalizedTarget, normalizedFps),
+        presentedMediaTime: Number(video.currentTime) || 0,
+        issuedAt: nowMs,
+      })
+      return true
+    }
+
+    const settledTargetIsStillPresented = previous?.settledTargetTime != null
+      && !video.seeking
+      && isSamePreciseVideoSeekTarget(video.currentTime, previous.settledTargetTime)
+      && previous.settledFrameIndex === getTargetVideoFrameIndex(normalizedTarget, normalizedFps)
+    if (!shouldIssuePreciseVideoSeek({
+      targetTime: normalizedTarget,
+      pendingTargetTime: pendingMatches ? previous.pendingTargetTime : null,
+      settledTargetTime: settledTargetIsStillPresented ? previous.settledTargetTime : null,
+    }) && !pendingMatches) {
+      return false
+    }
+
+    if (previous) clearPreciseVideoSeek(video)
+    const requestId = ++preciseSeekSerialRef.current
+    const targetFrameIndex = getTargetVideoFrameIndex(normalizedTarget, normalizedFps)
+    const request = {
+      sourceKey: resolvedSourceKey,
+      requestId,
+      issuedAt: nowMs,
+      pendingTargetTime: normalizedTarget,
+      pendingFrameIndex: targetFrameIndex,
+      settledTargetTime: previous?.settledTargetTime ?? null,
+      settledFrameIndex: previous?.settledFrameIndex ?? null,
+      presentedMediaTime: previous?.presentedMediaTime ?? null,
+      frameCallbackId: null,
+      seekedListener: null,
+    }
+    pendingSeeks.set(video, request)
+
+    const isCurrentRequest = () => {
+      const current = preciseVideoSeeksRef.current.get(video)
+      return current?.requestId === requestId
+        && current.sourceKey === resolvedSourceKey
+        && isSamePreciseVideoSeekTarget(current.pendingTargetTime, normalizedTarget)
+    }
+    const settle = (mediaTime) => {
+      if (!isCurrentRequest()) return
+      if (request.frameCallbackId != null && typeof video.cancelVideoFrameCallback === 'function') {
+        try { video.cancelVideoFrameCallback(request.frameCallbackId) } catch (_) { /* callback may have fired */ }
+      }
+      if (request.seekedListener) video.removeEventListener('seeked', request.seekedListener)
+      request.frameCallbackId = null
+      request.seekedListener = null
+      request.pendingTargetTime = null
+      request.pendingFrameIndex = null
+      request.settledTargetTime = normalizedTarget
+      request.settledFrameIndex = targetFrameIndex
+      request.presentedMediaTime = mediaTime != null && Number.isFinite(Number(mediaTime))
+        ? Number(mediaTime)
+        : (targetFrameIndex / normalizedFps)
+      drawFrameRef.current?.()
+    }
+
+    const armFrameCallback = () => {
+      if (!isCurrentRequest() || typeof video.requestVideoFrameCallback !== 'function') return
+      try {
+        request.frameCallbackId = video.requestVideoFrameCallback((_now, metadata = {}) => {
+          request.frameCallbackId = null
+          if (!isCurrentRequest()) return
+          if (doesPresentedVideoFrameMatchTarget({
+            mediaTime: metadata.mediaTime,
+            targetTime: normalizedTarget,
+            fps: normalizedFps,
+          })) {
+            settle(metadata.mediaTime)
+            return
+          }
+          // A callback queued just before currentTime changed can report the old
+          // picture. Keep holding the canvas and wait for the seek's real frame.
+          armFrameCallback()
+        })
+      } catch (_) {
+        request.frameCallbackId = null
+      }
+    }
+
+    request.seekedListener = () => {
+      if (!isCurrentRequest()) return
+      if (typeof video.requestVideoFrameCallback !== 'function') {
+        settle(video.currentTime)
+        return
+      }
+      // Seeking to another timestamp inside the same encoded frame may not
+      // produce a second presentation callback. The already-confirmed frame
+      // is exactly the one this target maps to, so seek completion is enough.
+      if (previous?.settledFrameIndex === targetFrameIndex) {
+        settle(previous.presentedMediaTime)
+      }
+    }
+    video.addEventListener('seeked', request.seekedListener)
+    armFrameCallback()
+    try {
+      video.currentTime = normalizedTarget
+    } catch (_) {
+      clearPreciseVideoSeek(video)
+      return false
+    }
+    return false
+  }, [clearPreciseVideoSeek])
+
   // Completion-driven scrub seeking: at most one in-flight seek per video
   // element. Assigning currentTime restarts an in-flight seek, so a fixed
   // throttle re-issued per mousemove starves frame presentation whenever
@@ -561,6 +737,7 @@ function CanvasPreviewRenderer({
   // presentation, so prefer requestVideoFrameCallback (same pattern as
   // exporter.js).
   const issueScrubSeek = useCallback((video, targetTime) => {
+    clearPreciseVideoSeek(video)
     const pendingSeeks = scrubPendingSeeksRef.current
     const pending = pendingSeeks.get(video)
     const nowMs = getNowMs()
@@ -576,7 +753,7 @@ function CanvasPreviewRenderer({
       video.addEventListener('seeked', finish, { once: true })
     }
     video.currentTime = targetTime
-  }, [])
+  }, [clearPreciseVideoSeek])
 
   // Phase 4: the live preview composites through the same WebGL2 compositor
   // as export (previewCompositorMode 'gpu', the default; 'canvas' is the 2D
@@ -737,7 +914,9 @@ function CanvasPreviewRenderer({
           scheduleDeferredDraw('track-matte-video-missing')
           return null
         }
-        const targetTime = getClipPlaybackTimingAtTimeline(matteClip, time, 0.01).time
+        const targetTime = getClipPlaybackTimingAtTimeline(matteClip, time, 0.01, {
+          ...getOpticalFlowContextOptions(matteClip),
+        }).time
         const timeDiff = Math.abs((video.currentTime || 0) - targetTime)
         const seekThreshold = state.isPlaying ? 0.16 : 0.025
         if (!state.isScrubbingPreview && video.readyState >= 1 && timeDiff > seekThreshold) {
@@ -969,6 +1148,7 @@ function CanvasPreviewRenderer({
         }
         const transitionPlayback = getClipPlaybackTimingAtTimeline(clip, time, 0.01, {
           allowHandles: !!transitionStyle,
+          ...getOpticalFlowContextOptions(clip),
         })
         const targetTime = isCachedRender
           ? clamp(clipTime, 0, Math.max(0, clip.duration - 0.01))
@@ -1033,7 +1213,9 @@ function CanvasPreviewRenderer({
       // exporter's GPU block. Masked clips with velocity blur keep the 2D
       // path (same exclusion as export).
       const gpuStage = state.gpuStage
-      const gpuMaskInfo = gpuStage ? getMaskInfo(clip, getAssetById, time, isCachedRender) : null
+      const gpuMaskInfo = gpuStage
+        ? getMaskInfo(clip, getAssetById, time, isCachedRender, !!transitionStyle)
+        : null
       if (gpuStage && !(velocityMotionBlur && gpuMaskInfo)) {
         offCtx.restore()
         const rect = getBaseDrawRect(sourceWidth, sourceHeight, width, height)
@@ -1131,7 +1313,7 @@ function CanvasPreviewRenderer({
       }
       offCtx.restore()
 
-      const maskInfo = getMaskInfo(clip, getAssetById, time, isCachedRender)
+      const maskInfo = getMaskInfo(clip, getAssetById, time, isCachedRender, !!transitionStyle)
       if (maskInfo) {
         const maskCanvas = maskInfo.shapeCanvasAlpha || getProcessedMaskForUrl(maskInfo.url)
         if (maskCanvas) {
@@ -1314,7 +1496,12 @@ function CanvasPreviewRenderer({
       const video = videoCache.getVideoElement({ ...clip, url }, true)
       if (!video || isActive) return
       const targetTimelineTime = isForward ? clipStart : clipEnd
-      const targetTime = getClipPlaybackTimeAtTimeline(clip, targetTimelineTime)
+      const targetTime = getClipPlaybackTimeAtTimeline(
+        clip,
+        targetTimelineTime,
+        0.01,
+        getOpticalFlowContextOptions(clip)
+      )
       if (video.readyState >= 1) {
         if (Math.abs((video.currentTime || 0) - targetTime) > 0.03) {
           video.currentTime = targetTime
@@ -1363,9 +1550,13 @@ function CanvasPreviewRenderer({
       })
     }
     const loopSeekHoldActive = state.isPlaying && nowMs < loopSeekHoldUntilRef.current
+    const isPreciseFrameStep = !state.isPlaying
+      && isFrameStepSeekIntentAtTime(state.playheadSeekIntent, time)
     const isScrubbingPreview = !state.isPlaying
+      && !isPreciseFrameStep
       && nowMs < (scrubPreviewStateRef.current.activeUntil || 0)
     state.isScrubbingPreview = isScrubbingPreview
+    state.isPreciseFrameStep = isPreciseFrameStep
     const transitionInfo = state.getTransitionAtTime(time)
     const transitionClipIds = getTransitionClipIds(transitionInfo)
     const frameIndex = Math.floor(time * fps)
@@ -1388,16 +1579,29 @@ function CanvasPreviewRenderer({
 
     preloadVideosAroundTime(state, time)
 
+    const videoReadinessEntries = visualClips.map(({ clip }) => ({
+      clip,
+      allowHandles: transitionClipIds.has(clip?.id),
+      role: 'picture',
+    }))
+    const readinessClipIds = new Set(videoReadinessEntries.map(({ clip }) => clip?.id).filter(Boolean))
+    for (const { clip } of visualClips) {
+      const matteClip = matteEntryByClipId.get(clip?.id)?.clip
+      if (!matteClip?.id || readinessClipIds.has(matteClip.id)) continue
+      videoReadinessEntries.push({ clip: matteClip, allowHandles: false, role: 'track-matte' })
+      readinessClipIds.add(matteClip.id)
+    }
+
     const shouldGateVideoReadiness = !state.isPlaying
       || transitionClipIds.size > 0
       || loopSeekHoldActive
       || visualClips.some(({ clip }) => clip?.type === 'video' && isSeekDrivenPlayback(state, clip))
 
     if (shouldGateVideoReadiness) {
-      for (const { clip } of visualClips) {
+      for (const { clip, allowHandles, role } of videoReadinessEntries) {
         if (!clip || (clip.type !== 'video' && !isFullBakeFresh(clip))) continue
         const seekDriven = isSeekDrivenPlayback(state, clip)
-        const isTransitionClip = transitionClipIds.has(clip.id)
+        const isTransitionClip = role === 'picture' && !!allowHandles
         if (state.isPlaying && !seekDriven && !isTransitionClip && !loopSeekHoldActive) continue
         const clipUrl = resolvePreviewUrl(clip, getAssetById, state.useProxyPlaybackForAssets)
         if (!clipUrl) continue
@@ -1409,7 +1613,8 @@ function CanvasPreviewRenderer({
         const isCachedRender = clip.cacheStatus === 'cached' && clip.cacheUrl && clipUrl === clip.cacheUrl
         const clipTime = time - (clip.startTime || 0)
         const transitionPlayback = getClipPlaybackTimingAtTimeline(clip, time, 0.01, {
-          allowHandles: isTransitionClip,
+          allowHandles,
+          ...getOpticalFlowContextOptions(clip),
         })
         const targetTime = isCachedRender
           ? clamp(clipTime, 0, Math.max(0, clip.duration - 0.01))
@@ -1418,6 +1623,31 @@ function CanvasPreviewRenderer({
         if (video.readyState < 1) {
           scheduleDeferredDraw(seekDriven ? 'seek-video-metadata' : 'paused-video-metadata')
           return
+        }
+
+        if (state.isPreciseFrameStep) {
+          const asset = clip.assetId ? getAssetById(clip.assetId) : null
+          const targetFps = getPreciseVideoSeekFps({
+            usingOpticalFlow: !isCachedRender && transitionPlayback.usingOpticalFlow,
+            opticalFlowFps: clip.opticalFlowCache?.targetFps,
+            isTimelineCache: isCachedRender,
+            timelineFps: fps,
+            clipSourceFps: clip.sourceFps,
+            assetFps: asset?.settings?.fps ?? asset?.fps ?? asset?.metadata?.fps,
+          })
+          if (!ensurePreciseVideoSeekReady(video, targetTime, targetFps, clipUrl)) {
+            scheduleDeferredDraw(role === 'track-matte'
+              ? 'precise-track-matte-video-seek'
+              : 'precise-video-seek')
+            return
+          }
+          if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+            scheduleDeferredDraw(role === 'track-matte'
+              ? 'precise-track-matte-video-frame'
+              : 'precise-video-frame')
+            return
+          }
+          continue
         }
 
         const readyTolerance = state.isScrubbingPreview
@@ -1567,7 +1797,7 @@ function CanvasPreviewRenderer({
     if (loopSeekHoldActive) {
       loopSeekHoldUntilRef.current = 0
     }
-  }, [applyAdjustmentLayer, drawVisualClip, issueScrubSeek, preloadVideosAroundTime, safeFps, safeHeight, safeWidth, scheduleDeferredDraw])
+  }, [applyAdjustmentLayer, drawVisualClip, ensurePreciseVideoSeekReady, issueScrubSeek, preloadVideosAroundTime, safeFps, safeHeight, safeWidth, scheduleDeferredDraw])
 
   drawFrameRef.current = drawFrame
 
@@ -1639,6 +1869,20 @@ function CanvasPreviewRenderer({
     if (isPlaying) {
       scrubState.lastPlayhead = currentPlayhead
       scrubState.activeUntil = 0
+      // Native playback advances cached videos outside the exact seek gate.
+      // Drop settled targets so the first paused frame-step must establish a
+      // fresh decoder presentation instead of trusting pre-playback state.
+      preciseVideoSeeksRef.current = new WeakMap()
+      if (scrubSettleTimerRef.current) {
+        window.clearTimeout(scrubSettleTimerRef.current)
+        scrubSettleTimerRef.current = 0
+      }
+      return
+    }
+
+    if (isFrameStepSeekIntentAtTime(playheadSeekIntent, currentPlayhead)) {
+      scrubState.lastPlayhead = currentPlayhead
+      scrubState.activeUntil = 0
       if (scrubSettleTimerRef.current) {
         window.clearTimeout(scrubSettleTimerRef.current)
         scrubSettleTimerRef.current = 0
@@ -1658,7 +1902,7 @@ function CanvasPreviewRenderer({
       scrubSettleTimerRef.current = 0
       drawFrameRef.current?.()
     }, SCRUB_SETTLE_DELAY_MS)
-  }, [isPlaying, playheadPosition])
+  }, [isPlaying, playheadPosition, playheadSeekIntent])
 
   // Timeline dispatches this on scrub mouseup. Exit scrub mode and run the
   // strict-tolerance draw immediately instead of waiting out the settle
@@ -1728,6 +1972,7 @@ function CanvasPreviewRenderer({
     drawFrame,
     isPlaying,
     playheadPosition,
+    playheadSeekIntent,
     safeFps,
     safeHeight,
     safeWidth,

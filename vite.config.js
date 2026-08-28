@@ -16,6 +16,17 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Native runtime builds can contain extracted Linux root filesystems with
+    // system symlink cycles (for example /var/run -> /run). They are generated
+    // artifacts, never renderer source, so keep Vite's recursive watcher out of
+    // build/package output instead of letting chokidar terminate dev startup
+    // with ELOOP.
+    watch: {
+      ignored: [
+        '**/build/**',
+        '**/release/**',
+      ],
+    },
     // Allow the JS Self-Profiling API in dev builds so playback performance
     // can be profiled from the console (new Profiler(...)).
     headers: {

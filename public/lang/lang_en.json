@@ -213,6 +213,9 @@
     "imageSequenceHelp": "Exports one numbered, lossless PNG for every rendered timeline frame. Image sequences do not include audio.",
     "animatedGif": "Animated GIF",
     "gifHelp": "Creates an opaque, looping, audio-free GIF with an optimized 256-color palette. Resolution and frame rate remain fully adjustable; 15 fps and 720p or smaller are best for sharing.",
+    "transparentBackground": "Transparent background",
+    "transparentBackgroundHelp": "Preserves empty areas and alpha media. Available for WebM and ProRes 4444.",
+    "transparentBackgroundFormats": "Choose WebM or ProRes to preserve transparency.",
     "useHardware": "Use {{hardware}}",
     "hardwareEncoding": "Hardware encoding",
     "fastPipe": "Fast FFmpeg pipe",
@@ -299,6 +302,7 @@
     "hints": {
       "4k": "4K exports are heavy. Consider proxies or lower resolution for previews.",
       "rtx": "RTX 4K runs after the normal render and streams one frame at a time to keep memory bounded.",
+      "transparent": "Transparent delivery uses an alpha-capable software encoder and may take longer than MP4.",
       "pngDiskSpace": "PNG image sequences create one lossless file per frame and can use substantial disk space.",
       "pngNoAudio": "PNG image sequences do not contain audio.",
       "gifPalette": "GIF uses an optimized global 256-color palette and loops continuously.",
@@ -840,6 +844,12 @@
       "sketch-to-render": { "name": "Sketch to Render", "description": "Transform sketches to frames" },
       "motion-test": { "name": "Motion Test", "description": "Short motion tests" }
     }
+  },
+  "fontPicker": {
+    "ariaLabel": "Font family",
+    "loading": "Loading installed fonts…",
+    "retry": "Installed fonts unavailable · Retry",
+    "unavailableTitle": "Installed fonts are temporarily unavailable."
   },
   "textPanel": {
     "sampleText": "Sample Text",

@@ -1,3 +1,5 @@
+import { quoteCssFontFamily } from './fontFamily'
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value))
 }
@@ -34,7 +36,7 @@ function withAlpha(color, alpha = 1) {
 }
 
 function setFont(ctx, size, family, weight = '700') {
-  ctx.font = `${weight} ${Math.round(size)}px "${family}", sans-serif`
+  ctx.font = `${weight} ${Math.round(size)}px ${quoteCssFontFamily(family)}, sans-serif`
 }
 
 function measureTextWidth(ctx, text, letterSpacing = 0) {
@@ -795,4 +797,3 @@ export function drawMogTextBlock(ctx, rect, preset, controls, motion) {
   }
   ctx.restore()
 }
-

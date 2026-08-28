@@ -27,6 +27,8 @@ import {
   resolveRtx4kDimensions,
 } from '../config/rtxVideoUpscaleConfig'
 import { useI18n } from '../i18n/I18nContext'
+import { hasUsableProxy } from '../services/proxyCache'
+import { normalizeTransparentExportSettings, supportsTransparentExport } from '../utils/alphaMedia.mjs'
 
 const EXPORT_SETTINGS_STORAGE_PREFIX = 'comfystudio-export-settings-v1'
 
@@ -188,6 +190,7 @@ const createDefaultExportSettings = (filename) => ({
   useDirectFramePipe: true,
   postProcessUpscale: 'none',
   rtxUpscaleQuality: RTX_VIDEO_UPSCALE_DEFAULTS.quality,
+  transparent: false,
 })
 
 const EXPORT_PRESETS = [
@@ -316,7 +319,7 @@ function loadSavedExportSettings(storageKey, defaultSettings) {
     if (!raw) return defaultSettings
     const saved = JSON.parse(raw)
     if (!saved || typeof saved !== 'object') return defaultSettings
-    return {
+    return normalizeTransparentExportSettings({
       ...defaultSettings,
       ...saved,
       filename: typeof saved.filename === 'string' && saved.filename.trim()
@@ -333,7 +336,7 @@ function loadSavedExportSettings(storageKey, defaultSettings) {
       renderMode: 'single',
       useCachedRenders: false,
       fastSeek: false,
-    }
+    })
   } catch (_) {
     return defaultSettings
   }
@@ -698,7 +701,11 @@ function ExportPanel() {
         // GIF has no codec controls of its own. Keep every hidden delivery
         // choice untouched so returning to MP4 restores the user's exact
         // codec, CRF, audio, hardware, pipe, RTX, resolution, and FPS setup.
-        if (value === 'gif') return next
+        // Transparency is intentionally cleared because GIF is opaque.
+        if (value === 'gif') {
+          next.transparent = false
+          return next
+        }
         const supportedVideo = VIDEO_CODECS[value] || []
         const supportedAudio = AUDIO_CODECS[value] || []
         next.videoCodec = supportedVideo.some((codec) => codec.id === prev.videoCodec)
@@ -738,6 +745,14 @@ function ExportPanel() {
         }
       }
 
+      if (key === 'proresProfile' && String(value) !== '4') {
+        next.transparent = false
+      }
+
+      if (key === 'transparent' && value === true && next.format === 'prores') {
+        next.proresProfile = '4'
+      }
+
       if (key === 'resolution' && value === 'custom') {
         const timelineSettings = getCurrentTimelineSettings() || { width: 1920, height: 1080 }
         next.customWidth = Number(prev.customWidth) || timelineSettings.width || 1920
@@ -750,7 +765,7 @@ function ExportPanel() {
         next[key] = numeric
       }
       
-      return next
+      return normalizeTransparentExportSettings(next)
     })
   }
 
@@ -760,6 +775,7 @@ function ExportPanel() {
       const next = {
         ...prev,
         postProcessUpscale: 'none',
+        transparent: false,
         ...exportPreset.settings,
       }
       const requestedCodec = next.videoCodec
@@ -793,7 +809,7 @@ function ExportPanel() {
   }
 
   const activeExportPresetId = useMemo(() => {
-    if (settings.postProcessUpscale === 'rtx-4k') return null
+    if (settings.postProcessUpscale === 'rtx-4k' || settings.transparent) return null
     const isEqual = (a, b) => String(a) === String(b)
     return EXPORT_PRESETS.find((exportPreset) => (
       Object.entries(exportPreset.settings).every(([key, value]) => isEqual(settings[key], value))
@@ -810,6 +826,9 @@ function ExportPanel() {
   const hardwareLabel = hardwareKind === 'videotoolbox' ? 'VideoToolbox' : 'NVENC'
   const hardwareVendorLabel = hardwareKind === 'videotoolbox' ? 'Apple VideoToolbox' : 'NVIDIA NVENC'
   const nvencToggleDisabledReason = useMemo(() => {
+    if (settings.transparent) {
+      return 'Transparent exports use a software alpha-capable codec.'
+    }
     if (settings.format === 'gif' || settings.format === 'png-seq') {
       return 'Image-based exports do not use hardware video encoding.'
     }
@@ -829,7 +848,7 @@ function ExportPanel() {
       return `H.264 ${hardwareLabel} is not available in the active FFmpeg.`
     }
     return null
-  }, [settings.format, settings.videoCodec, nvencStatus, hardwareLabel])
+  }, [settings.format, settings.videoCodec, settings.transparent, nvencStatus, hardwareLabel])
   const nvencSummaryText = useMemo(() => {
     if (!nvencStatus.checked) {
       return t('export.hardwareChecking')
@@ -1006,11 +1025,14 @@ function ExportPanel() {
   }
 
   const rtxUpscaleEnabled = settings.postProcessUpscale === 'rtx-4k'
+  const transparentFormatAvailable = ['webm', 'prores'].includes(settings.format)
   const rtxSourceResolution = resolveResolution()
   const rtxTargetResolution = resolveRtx4kDimensions(rtxSourceResolution.width, rtxSourceResolution.height)
   const rtxToggleDisabledReason = !window.electronAPI?.checkRtxVideoUpscaleRuntime
     ? 'RTX upscale is available only in the Velorn desktop app.'
-    : window.electronAPI.platform !== 'win32'
+    : settings.transparent
+      ? 'RTX upscale does not preserve transparent backgrounds.'
+      : window.electronAPI.platform !== 'win32'
       ? 'NVIDIA RTX Video Super Resolution is currently available on Windows only.'
       : settings.format !== 'mp4'
         ? 'NVIDIA RTX Video Super Resolution currently requires an MP4 export.'
@@ -1053,7 +1075,7 @@ function ExportPanel() {
       const asset = assets.find((entry) => entry.id === assetId)
       if (!asset || asset.type !== 'video') continue
       total += 1
-      if (asset.proxyStatus === 'ready' && asset.proxyPath) ready += 1
+      if (hasUsableProxy(asset)) ready += 1
     }
     return { ready, total, missing: Math.max(0, total - ready) }
   }, [assets, clips])
@@ -1075,6 +1097,9 @@ function ExportPanel() {
       if (!isVisualOnlyFormat) {
         hints.push(t('export.hints.rtx'))
       }
+    }
+    if (settings.transparent) {
+      hints.push(t('export.hints.transparent'))
     }
     if (settings.useProxyMedia && proxyCoverage.ready > 0) {
       hints.push(t('export.hints.proxyCount', { ready: proxyCoverage.ready, total: proxyCoverage.total }))
@@ -1131,7 +1156,11 @@ function ExportPanel() {
     const isPngSequence = jobSettings.format === 'png-seq'
     const isGif = jobSettings.format === 'gif'
     const isVisualOnlyFormat = isPngSequence || isGif
-    const shouldRunRtxUpscale = !isVisualOnlyFormat && jobSettings.postProcessUpscale === 'rtx-4k'
+    const transparent = jobSettings.transparent === true
+    if (transparent && !supportsTransparentExport(jobSettings)) {
+      throw new Error('Transparent export requires WebM (VP9) or ProRes 4444.')
+    }
+    const shouldRunRtxUpscale = !transparent && !isVisualOnlyFormat && jobSettings.postProcessUpscale === 'rtx-4k'
     if (shouldRunRtxUpscale && jobSettings.format !== 'mp4') {
       throw new Error('NVIDIA RTX Video Super Resolution currently requires an MP4 export.')
     }
@@ -1175,7 +1204,7 @@ function ExportPanel() {
       videoCodec: isVisualOnlyFormat ? null : jobSettings.videoCodec,
       audioCodec: isVisualOnlyFormat ? null : jobSettings.audioCodec,
       proresProfile: jobSettings.proresProfile,
-      useHardwareEncoder: isVisualOnlyFormat ? false : jobSettings.useHardwareEncoder,
+      useHardwareEncoder: isVisualOnlyFormat || transparent ? false : jobSettings.useHardwareEncoder,
       nvencPreset: jobSettings.nvencPreset,
       preset: jobSettings.preset,
       qualityMode: jobSettings.qualityMode,
@@ -1201,7 +1230,8 @@ function ExportPanel() {
       useProxyMedia: jobSettings.useProxyMedia,
       fastSeek: false,
       useDirectFramePipe: isVisualOnlyFormat ? false : jobSettings.useDirectFramePipe,
-      postProcessUpscale: isVisualOnlyFormat ? 'none' : jobSettings.postProcessUpscale,
+      postProcessUpscale: isVisualOnlyFormat || transparent ? 'none' : jobSettings.postProcessUpscale,
+      transparent,
     }
 
     if (window.electronAPI?.runExportInWorker && typeof currentProjectHandle === 'string') {
@@ -1651,6 +1681,38 @@ function ExportPanel() {
                     {t('export.gifHelp')}
                   </div>
                 )}
+                <div className="col-span-2 rounded border border-sf-dark-700 bg-sf-dark-950/35 p-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div id="transparent-export-label" className="text-xs font-medium text-sf-text-primary">
+                        {t('export.transparentBackground')}
+                      </div>
+                      <div id="transparent-export-help" className="mt-0.5 text-[10px] text-sf-text-muted">
+                        {transparentFormatAvailable
+                          ? t('export.transparentBackgroundHelp')
+                          : t('export.transparentBackgroundFormats')}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-labelledby="transparent-export-label"
+                      aria-describedby="transparent-export-help"
+                      aria-checked={settings.transparent === true}
+                      disabled={!transparentFormatAvailable}
+                      onClick={() => handleSettingChange('transparent', !settings.transparent)}
+                      className={`relative h-5 w-9 shrink-0 rounded-full border transition-colors ${
+                        settings.transparent
+                          ? 'border-sf-accent bg-sf-accent'
+                          : 'border-sf-dark-600 bg-sf-dark-800'
+                      } ${transparentFormatAvailable ? '' : 'cursor-not-allowed opacity-50'}`}
+                    >
+                      <span className={`absolute left-0.5 top-0.5 h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+                        settings.transparent ? 'translate-x-4' : 'translate-x-0'
+                      }`} />
+                    </button>
+                  </div>
+                </div>
                 {settings.format !== 'png-seq' && settings.format !== 'gif' && (
                 <>
                 <div className="col-span-2">

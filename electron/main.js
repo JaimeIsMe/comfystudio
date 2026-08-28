@@ -10,9 +10,9 @@ const { Readable } = require('stream')
 const { fileURLToPath } = require('url')
 const yaml = require('js-yaml')
 const ffmpegStaticPath = require('ffmpeg-static')
-const ffprobeStatic = require('ffprobe-static')
-const ffprobeStaticPath = ffprobeStatic?.path || ffprobeStatic
+const ffprobeStaticPath = require('@derhuerst/ffprobe-static')
 const {
+  appendAlphaCacheEncoderArgs,
   HARDWARE_EXPORT_FFMPEG_ENV_KEY,
   HARDWARE_EXPORT_FFMPEG_SETTING_KEY,
   getHardwareEncoderProbeCacheKey,
@@ -21,6 +21,12 @@ const {
   resolveHardwareExportRoute,
 } = require('./hardwareExportFfmpeg')
 const { inspectIsoBmffLayout } = require('./exportSourcePreparation')
+const {
+  appendVp9AlphaArgs,
+  getAlphaExportError,
+  getExportVideoPixelFormat,
+  probeStreamHasAlpha,
+} = require('./mediaAlpha')
 const { registerCaptionWhisperHandlers } = require('./captionWhisper')
 const {
   cancelRtxVideoUpscale,
@@ -44,6 +50,15 @@ const {
   REQUEST_HEADER_REWRITE_URLS,
   rewriteAppRequestHeaders,
 } = require('./requestHeaderRewrite')
+const { listSystemFonts } = require('./systemFonts')
+const {
+  DEFAULT_MAIN_WINDOW_BOUNDS,
+  clampWindowBoundsToWorkArea,
+  getAdaptiveMainWindowMinimum,
+  sanitizeWindowBounds,
+} = require('./mainWindowBounds')
+const { createRifeInterpolationCache } = require('./rifeInterpolation')
+const { resolveRifeRuntime } = require('./rifeRuntime')
 
 const isDev = !app.isPackaged
 
@@ -57,7 +72,6 @@ const COMFY_CONNECTION_SETTING_KEY = 'comfyConnection'
 const DEFAULT_LOCAL_COMFY_PORT = 8188
 const COMFY_CLOUD_CREDITS_PER_USD = 211
 const MAIN_WINDOW_STATE_SETTING_KEY = 'mainWindowState'
-const DEFAULT_MAIN_WINDOW_BOUNDS = Object.freeze({ width: 1600, height: 1000 })
 const COMFYSTUDIO_BRIDGE_DIR_NAME = 'comfystudio_bridge'
 const COMFYSTUDIO_BRIDGE_VERSION = '0.1.0'
 const EXTRA_MODEL_PATH_CONFIG_NAMES = Object.freeze(['extra_model_paths.yaml', 'extra_model_paths.yml'])
@@ -124,7 +138,7 @@ function resolvePackagedBinaryPath(binaryPath) {
 
   if (binaryPath === ffprobeStaticPath) {
     packagedCandidates.push(
-      path.join(process.resourcesPath, 'bin', 'ffprobe-static', process.platform, process.arch, path.basename(binaryPath))
+      path.join(process.resourcesPath, 'bin', path.basename(binaryPath))
     )
   }
 
@@ -256,7 +270,7 @@ async function probeVideoInfo(filePath) {
   return await new Promise((resolve) => {
     const args = [
       '-v', 'error',
-      '-show_entries', 'stream=codec_type,codec_name,avg_frame_rate,r_frame_rate',
+      '-show_entries', 'stream=codec_type,codec_name,profile,pix_fmt,avg_frame_rate,r_frame_rate:stream_tags=alpha_mode',
       '-of', 'json',
       filePath
     ]
@@ -292,6 +306,9 @@ async function probeVideoInfo(filePath) {
           hasAudio: streams.some((stream) => stream?.codec_type === 'audio'),
           videoCodec: videoStream?.codec_name || null,
           audioCodec: audioStream?.codec_name || null,
+          pixelFormat: videoStream?.pix_fmt || null,
+          videoProfile: videoStream?.profile || null,
+          hasAlpha: probeStreamHasAlpha(videoStream),
         })
       } catch (err) {
         resolve({ success: false, error: err.message })
@@ -370,21 +387,6 @@ function sendWindowState() {
   mainWindow.webContents.send('window:stateChanged', getWindowState())
 }
 
-function sanitizeWindowBounds(bounds) {
-  if (!bounds || typeof bounds !== 'object') return null
-  const x = Number(bounds.x)
-  const y = Number(bounds.y)
-  const width = Number(bounds.width)
-  const height = Number(bounds.height)
-  if (![x, y, width, height].every(Number.isFinite)) return null
-  return {
-    x: Math.round(x),
-    y: Math.round(y),
-    width: Math.max(1200, Math.round(width)),
-    height: Math.max(800, Math.round(height)),
-  }
-}
-
 function getBoundsIntersectionArea(bounds, area) {
   if (!bounds || !area) return 0
   const left = Math.max(bounds.x, area.x)
@@ -419,26 +421,7 @@ function getDisplayForSavedWindowState(savedState, bounds) {
 
 function clampWindowBoundsToDisplay(bounds, display) {
   const workArea = display?.workArea || screen.getPrimaryDisplay().workArea
-  const width = Math.min(Math.max(1200, bounds?.width || DEFAULT_MAIN_WINDOW_BOUNDS.width), workArea.width)
-  const height = Math.min(Math.max(800, bounds?.height || DEFAULT_MAIN_WINDOW_BOUNDS.height), workArea.height)
-  const requestedX = Number(bounds?.x)
-  const requestedY = Number(bounds?.y)
-  const centeredX = workArea.x + Math.round((workArea.width - width) / 2)
-  const centeredY = workArea.y + Math.round((workArea.height - height) / 2)
-  const x = Math.min(
-    Math.max(workArea.x, Number.isFinite(requestedX) ? requestedX : centeredX),
-    workArea.x + Math.max(0, workArea.width - width)
-  )
-  const y = Math.min(
-    Math.max(workArea.y, Number.isFinite(requestedY) ? requestedY : centeredY),
-    workArea.y + Math.max(0, workArea.height - height)
-  )
-  return {
-    x: Math.round(x),
-    y: Math.round(y),
-    width: Math.round(width),
-    height: Math.round(height),
-  }
+  return clampWindowBoundsToWorkArea(bounds, workArea)
 }
 
 function centerBoundsInDisplay(width, height, display) {
@@ -3560,10 +3543,11 @@ function createSplashWindow(restoredWindowState = null) {
 
 async function createWindow(restoredWindowState = null) {
   restoredWindowState = restoredWindowState || await getRestoredMainWindowState()
+  const adaptiveMinimum = getAdaptiveMainWindowMinimum(restoredWindowState.bounds)
   mainWindow = new BrowserWindow({
     ...restoredWindowState.bounds,
-    minWidth: 1200,
-    minHeight: 800,
+    minWidth: adaptiveMinimum.width,
+    minHeight: adaptiveMinimum.height,
     icon: iconPath,
     backgroundColor: '#0a0a0b',
     titleBarStyle: 'hiddenInset',
@@ -3577,6 +3561,7 @@ async function createWindow(restoredWindowState = null) {
       webSecurity: !isDev,
     }
   })
+  const mainWindowContentsId = mainWindow.webContents.id
 
   // Mirror the main window's console and crash events to userData/app.log
   // (same append+cap pattern as export-worker.log). Failures before the
@@ -3599,6 +3584,9 @@ async function createWindow(restoredWindowState = null) {
   } else {
     console.error(`[Velorn] Could not write ${appLogPath}; main-window console mirroring disabled for this session.`)
   }
+  mainWindow.webContents.on('render-process-gone', () => {
+    abortOpticalFlowJobsForOwner(mainWindowContentsId)
+  })
 
   // Start maximized rather than true fullscreen. Maximized uses the full
   // work area (entire screen minus the OS taskbar/dock) so the user still
@@ -3926,6 +3914,7 @@ async function createWindow(restoredWindowState = null) {
   })
 
   mainWindow.on('closed', () => {
+    abortOpticalFlowJobsForOwner(mainWindowContentsId)
     if (mainWindowStateSaveTimer) {
       clearTimeout(mainWindowStateSaveTimer)
       mainWindowStateSaveTimer = null
@@ -4312,6 +4301,9 @@ ipcMain.handle('media:getVideoFps', async (event, filePath) => {
     hasAudio: result.hasAudio,
     videoCodec: result.videoCodec || null,
     audioCodec: result.audioCodec || null,
+    pixelFormat: result.pixelFormat || null,
+    videoProfile: result.videoProfile || null,
+    hasAlpha: result.hasAlpha === true,
   }
 })
 
@@ -4888,6 +4880,10 @@ ipcMain.handle('captions:mixTimelineAudio', async (event, options = {}) => {
 // ============================================
 // IPC Handlers - App Settings Storage
 // ============================================
+
+ipcMain.handle('fonts:listSystem', async (_event, forceRefresh = false) => (
+  listSystemFonts({ forceRefresh: forceRefresh === true })
+))
 
 ipcMain.handle('settings:get', async (event, key) => {
   try {
@@ -5677,6 +5673,8 @@ ipcMain.handle('workflowSetup:install', async (event, payload = {}) => {
 // session id so Stop, worker crashes, and window teardown can kill whichever
 // palette/encode pass is active without affecting another renderer.
 const activeGifExportJobs = new Map()
+const activeOpticalFlowJobs = new Map()
+const activeOpticalFlowOutputs = new Map()
 
 const abortGifExportsForOwner = (ownerId) => {
   let aborted = 0
@@ -5686,6 +5684,27 @@ const abortGifExportsForOwner = (ownerId) => {
     aborted += 1
   }
   return aborted
+}
+
+const normalizeOpticalFlowOutputKey = (outputPath) => {
+  const resolved = path.resolve(String(outputPath || ''))
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+const abortOpticalFlowJobsForOwner = (ownerId) => {
+  let aborted = 0
+  for (const job of activeOpticalFlowJobs.values()) {
+    if (job.ownerId !== ownerId || job.controller.signal.aborted) continue
+    job.controller.abort()
+    aborted += 1
+  }
+  return aborted
+}
+
+const abortAllOpticalFlowJobs = () => {
+  for (const job of activeOpticalFlowJobs.values()) {
+    if (!job.controller.signal.aborted) job.controller.abort()
+  }
 }
 
 ipcMain.handle('export:runInWorker', async (event, payload) => {
@@ -6336,6 +6355,7 @@ function appendExportVideoEncoderArgs(args, options = {}) {
     crf = 18,
     bitrateKbps = 8000,
     keyframeInterval = null,
+    alpha = false,
   } = options
   // Hardware encoding is NVENC on Windows/Linux, VideoToolbox on macOS
   // (Apple Silicon / T2 media engine). Availability is gated up front by
@@ -6370,7 +6390,7 @@ function appendExportVideoEncoderArgs(args, options = {}) {
     args.push(
       '-c:v', 'prores_ks',
       '-profile:v', String(profileNum),
-      '-pix_fmt', profileNum === 4 ? 'yuva444p10le' : 'yuv422p10le'
+      '-pix_fmt', getExportVideoPixelFormat({ codec: 'prores', proresProfile: profileNum, alpha })
     )
     encoderUsed = 'prores_ks'
   } else if (normalizedCodec === 'vp9') {
@@ -6387,10 +6407,16 @@ function appendExportVideoEncoderArgs(args, options = {}) {
     }
     args.push(
       '-c:v', 'libvpx-vp9',
-      '-pix_fmt', 'yuv420p',
+      '-pix_fmt', getExportVideoPixelFormat({ codec: 'vp9', alpha }),
       '-row-mt', '1',
       '-cpu-used', String(vp9SpeedMap[preset] ?? 3)
     )
+    if (alpha) {
+      // libvpx rejects alpha together with alternate-reference frames.
+      // Keep the ordinary quality controls below; this is a deliverable,
+      // not the low-quality realtime cache path.
+      appendVp9AlphaArgs(args, alpha)
+    }
     encoderUsed = 'libvpx-vp9'
     if (qualityMode === 'bitrate') {
       args.push('-b:v', `${bitrateKbps}k`)
@@ -6873,6 +6899,115 @@ ipcMain.handle('export:abortGifEncode', async (event, sessionIdValue) => {
   return { success: true, cancelled: true }
 })
 
+ipcMain.handle('opticalFlow:generate', async (event, options = {}) => {
+  const unavailable = getFfmpegUnavailableError()
+  if (unavailable) return { success: false, error: unavailable }
+  if (!ffprobePath || !fsSync.existsSync(ffprobePath)) {
+    return { success: false, error: 'FFprobe is unavailable. Reinstall Velorn to restore native media tools.' }
+  }
+  const rifeRuntime = resolveRifeRuntime({
+    packaged: app.isPackaged,
+    appRoot: path.join(__dirname, '..'),
+    resourcesPath: process.resourcesPath,
+  })
+  if (!rifeRuntime.available) {
+    return { success: false, code: 'OPTICAL_FLOW_UNAVAILABLE', error: rifeRuntime.error }
+  }
+
+  const jobId = typeof options.jobId === 'string' ? options.jobId.trim() : ''
+  if (!/^[a-zA-Z0-9._-]{1,120}$/.test(jobId)) {
+    return { success: false, error: 'Invalid Optical Flow job identifier.' }
+  }
+  if (activeOpticalFlowJobs.has(jobId)) {
+    return { success: false, error: 'This Optical Flow job is already active.' }
+  }
+  if (activeOpticalFlowJobs.size > 0) {
+    return {
+      success: false,
+      code: 'OPTICAL_FLOW_BUSY',
+      error: 'Another Optical Flow cache is already being built. Wait for it to finish or cancel it first.',
+    }
+  }
+
+  const projectPath = typeof options.projectPath === 'string' ? path.resolve(options.projectPath) : ''
+  const inputPath = typeof options.inputPath === 'string' ? path.resolve(options.inputPath) : ''
+  const outputPath = typeof options.outputPath === 'string' ? path.resolve(options.outputPath) : ''
+  if (!projectPath || !path.isAbsolute(projectPath) || !inputPath || !path.isAbsolute(inputPath)) {
+    return { success: false, error: 'Optical Flow requires absolute project and source paths.' }
+  }
+  const allowedOutputRoot = path.resolve(projectPath, 'cache')
+  if (
+    !outputPath
+    || normalizeOpticalFlowOutputKey(path.dirname(outputPath)) !== normalizeOpticalFlowOutputKey(allowedOutputRoot)
+    || path.extname(outputPath).toLowerCase() !== '.mp4'
+  ) {
+    return { success: false, error: 'Optical Flow output must be a project-owned MP4 in the cache folder.' }
+  }
+
+  const outputKey = normalizeOpticalFlowOutputKey(outputPath)
+  if (activeOpticalFlowOutputs.has(outputKey)) {
+    return { success: false, error: 'Another Optical Flow job is already writing this cache file.' }
+  }
+
+  const controller = new AbortController()
+  const ownerId = event.sender.id
+  const job = { controller, ownerId, outputKey }
+  activeOpticalFlowJobs.set(jobId, job)
+  activeOpticalFlowOutputs.set(outputKey, jobId)
+  const abortForDestroyedSender = () => controller.abort()
+  event.sender.once('destroyed', abortForDestroyedSender)
+
+  try {
+    const result = await createRifeInterpolationCache({
+      ffmpegPath,
+      ffprobePath,
+      rifeExecutablePath: rifeRuntime.executablePath,
+      modelPath: rifeRuntime.modelPath,
+      requireSecureBuild: rifeRuntime.trusted,
+      jobId,
+      inputPath,
+      outputPath,
+      allowedOutputRoot,
+      sourceStart: options.sourceStart,
+      sourceEnd: options.sourceEnd,
+      targetFps: options.targetFps,
+      expectedDuration: options.expectedDuration,
+      maxFrames: options.maxFrames,
+      signal: controller.signal,
+      onProgress: (progress) => {
+        if (controller.signal.aborted || event.sender.isDestroyed()) return
+        event.sender.send('opticalFlow:progress', { ...progress, jobId })
+      },
+    })
+    return { success: true, ...result }
+  } catch (error) {
+    const cancelled = controller.signal.aborted || error?.code === 'OPTICAL_FLOW_CANCELLED'
+    return {
+      success: false,
+      cancelled,
+      code: error?.code || null,
+      error: cancelled ? 'Optical Flow cancelled' : (error?.message || String(error)),
+    }
+  } finally {
+    if (!event.sender.isDestroyed()) {
+      event.sender.removeListener('destroyed', abortForDestroyedSender)
+    }
+    if (activeOpticalFlowJobs.get(jobId) === job) activeOpticalFlowJobs.delete(jobId)
+    if (activeOpticalFlowOutputs.get(outputKey) === jobId) activeOpticalFlowOutputs.delete(outputKey)
+  }
+})
+
+ipcMain.handle('opticalFlow:cancel', async (event, jobIdValue) => {
+  const jobId = typeof jobIdValue === 'string' ? jobIdValue.trim() : ''
+  const job = activeOpticalFlowJobs.get(jobId)
+  if (!job) return { success: true, cancelled: false }
+  if (job.ownerId !== event.sender.id) {
+    return { success: false, cancelled: false, error: 'Optical Flow job belongs to another renderer.' }
+  }
+  job.controller.abort()
+  return { success: true, cancelled: true }
+})
+
 ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
   const {
     framePattern,
@@ -6888,6 +7023,10 @@ ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
 
   if (!framePattern || !outputPath) {
     return { success: false, error: 'Missing export inputs.' }
+  }
+  const alphaExportError = getAlphaExportError(options)
+  if (alphaExportError) {
+    return { success: false, error: alphaExportError }
   }
 
   const hardwareRequested = isHardwareVideoEncodingRequested(options)
@@ -6918,7 +7057,15 @@ ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
     args.push('-t', String(duration))
   }
 
-  const encoderUsed = appendExportVideoEncoderArgs(args, options)
+  let encoderUsed
+  if (options.alpha === true && options.alphaCache === true) {
+    // Internal per-clip render bakes prioritize interactive turnaround. They
+    // are project cache derivatives, unlike user-selected alpha deliveries.
+    appendAlphaCacheEncoderArgs(args)
+    encoderUsed = 'libvpx-vp9-alpha-cache'
+  } else {
+    encoderUsed = appendExportVideoEncoderArgs(args, options)
+  }
 
   if (audioPath) {
     appendExportAudioEncoderArgs(args, {
@@ -6982,6 +7129,10 @@ ipcMain.handle('export:startFramePipe', async (event, options = {}) => {
   if (!width || !height || !outputPath) {
     return { success: false, error: 'Missing frame pipe inputs.' }
   }
+  const alphaExportError = getAlphaExportError(options)
+  if (alphaExportError) {
+    return { success: false, error: alphaExportError }
+  }
 
   const hardwareRequested = isHardwareVideoEncodingRequested(options)
   const hardwareFfmpegSelection = hardwareRequested
@@ -7021,23 +7172,9 @@ ipcMain.handle('export:startFramePipe', async (event, options = {}) => {
   }
 
   let encoderUsed
-  if (options.alpha) {
-    // Alpha-preserving path for per-clip render bakes: VP9 with an alpha
-    // plane so baked text/masked/transformed clips still composite over
-    // lower layers. auto-alt-ref MUST be off — libvpx rejects transparency
-    // with alt-ref frames. Realtime deadline keeps bakes fast; these are
-    // preview caches, not deliverables.
-    args.push(
-      '-c:v', 'libvpx-vp9',
-      '-pix_fmt', 'yuva420p',
-      '-deadline', 'realtime',
-      '-cpu-used', '8',
-      '-row-mt', '1',
-      '-crf', '30',
-      '-b:v', '0',
-      '-auto-alt-ref', '0'
-    )
-    encoderUsed = 'libvpx-vp9-alpha'
+  if (options.alpha === true && options.alphaCache === true) {
+    appendAlphaCacheEncoderArgs(args)
+    encoderUsed = 'libvpx-vp9-alpha-cache'
   } else {
     encoderUsed = appendExportVideoEncoderArgs(args, options)
   }
@@ -7766,6 +7903,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  abortAllOpticalFlowJobs()
   if (mcpServer) {
     mcpServer.stop().catch((error) => {
       console.warn('[MCP] server shutdown error:', error?.message || error)

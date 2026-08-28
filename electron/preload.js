@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform info
   platform: process.platform,
   isElectron: true,
+  getSystemFonts: (forceRefresh = false) => ipcRenderer.invoke('fonts:listSystem', forceRefresh === true),
   
   // ============================================
   // Dialog Operations
@@ -103,6 +104,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // encode after the renderer writes its lossless temporary PNG frames.
   encodeGif: (options) => ipcRenderer.invoke('export:gifEncode', options),
   abortGifEncode: (sessionId) => ipcRenderer.invoke('export:abortGifEncode', sessionId),
+  generateOpticalFlowCache: (options) => ipcRenderer.invoke('opticalFlow:generate', options),
+  cancelOpticalFlowCache: (jobId) => ipcRenderer.invoke('opticalFlow:cancel', jobId),
+  onOpticalFlowProgress: (callback) => {
+    const handler = (_event, progress) => callback(progress)
+    ipcRenderer.on('opticalFlow:progress', handler)
+    return () => ipcRenderer.removeListener('opticalFlow:progress', handler)
+  },
   startFramePipe: (options) => ipcRenderer.invoke('export:startFramePipe', options),
   writeFrameToPipe: (sessionId, frameBuffer) => ipcRenderer.invoke('export:writeFrameToPipe', sessionId, frameBuffer),
   finishFramePipe: (sessionId) => ipcRenderer.invoke('export:finishFramePipe', sessionId),

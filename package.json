@@ -1,6 +1,6 @@
 {
   "name": "velorn",
-  "version": "0.3.31",
+  "version": "0.3.32",
   "description": "AI-native video editing built around real creative timelines, generative workflows, and local agent control.",
   "main": "electron/main.js",
   "scripts": {
@@ -15,31 +15,44 @@
     "electron:build:mac": "npm run build && electron-builder --mac",
     "electron:build:linux": "npm run build && electron-builder --linux",
     "electron:pack": "npm run build && electron-builder --dir",
+    "rife-runtime:verify": "node ./scripts/runtime-package-gate.cjs rife",
+    "runtime:verify-native": "node ./scripts/runtime-package-gate.cjs native",
+    "runtime:verify-staged": "node ./scripts/runtime-package-gate.cjs staged",
     "angles:sheet": "node ./scripts/build-angle-sheet.mjs",
     "starter-pack:build": "node ./scripts/build-workflow-starter-pack.mjs",
     "starter-pack:package": "npm run starter-pack:build && node ./scripts/package-workflow-starter-pack.mjs",
     "test:asset-relink-fallback": "node --experimental-default-type=module --test ./src/services/assetRelinkFallback.test.js",
     "test:caption-vocabulary": "node --experimental-default-type=module --test ./src/services/captionVocabulary.test.js",
     "test:caption-word-timing": "node --experimental-default-type=module --test ./src/services/captionWordTiming.test.js",
+    "test:caption-cue-editing": "node --test ./src/utils/captionCueEditing.test.mjs",
     "test:music-visual-style": "node --experimental-default-type=module --test ./src/utils/musicVisualStyle.test.js",
     "test:i18n": "node --test ./src/i18n/core.test.js",
     "test:dirty-tracker": "node --experimental-default-type=module --test ./src/services/projectDirtyTracker.test.js",
     "test:premiere-xml": "node --experimental-default-type=module --test ./src/services/premiereXmlExporter.test.js",
     "test:editor-hotkeys": "node --test ./src/services/editorHotkeys.test.mjs",
+    "test:main-window-bounds": "node --test ./tests/mainWindowBounds.test.js",
     "test:discover": "node --test ./src/services/discoverCatalog.test.mjs ./src/services/discoverTabVisibilitySettings.test.mjs ./src/utils/dialogFocus.test.mjs ./tests/requestHeaderRewrite.test.js",
     "test:discover-catalog": "node --test ./src/services/discoverCatalog.test.mjs",
     "test:pexels-stock": "node --test ./src/services/pexelsStock.test.mjs",
     "test:png-sequence-export": "node --test ./src/services/pngSequenceExport.test.mjs",
     "test:qwen3-tts-workflow": "node --test --test-isolation=none ./tests/qwen3TtsWorkflowCompatibility.test.mjs",
     "test:transition-clip-moves": "node ./src/utils/transitionClipMoves.test.mjs",
+    "test:multi-clip-trim": "node --test ./src/utils/multiClipTrim.test.mjs",
     "test:export-frame-source": "node --experimental-default-type=module --test ./src/services/exportFrameSource.test.js",
     "test:export-source-preparation": "node --test ./tests/exportSourcePreparation.test.js",
     "test:audio-mix-eligibility": "node --test ./tests/audioMixEligibility.test.mjs",
     "test:audio-preview": "node --test ./src/utils/audioPreviewScheduling.test.js",
     "test:audio-clip-split": "node --test ./src/utils/audioClipSplit.test.js",
     "test:hardware-export-ffmpeg": "node --test ./tests/hardwareExportFfmpeg.test.js",
+    "test:system-fonts": "node --test ./tests/systemFonts.test.js ./src/services/systemFonts.test.js ./src/utils/fontFamily.test.mjs",
     "test:gif-import": "node --test ./tests/animatedGifTranscode.test.js",
     "test:gif-export": "node --test ./tests/gifExportFfmpeg.test.js",
+    "test:frame-sampling": "node --test ./src/utils/frameSampling.test.js ./src/utils/exportVideoClipEligibility.test.js ./src/utils/clipPlaybackTiming.test.js",
+    "test:preview-video-seeking": "node --test ./src/utils/previewVideoSeeking.test.js",
+    "test:optical-flow-cache": "node --test ./tests/opticalFlowCache.test.js",
+    "test:rife-interpolation": "node --test ./tests/rifeRuntime.test.js ./tests/rifeInterpolation.test.js ./tests/runtimePackageGate.test.js",
+    "test:rife-hardening": "node --test ./tests/rifeRuntime.test.js ./tests/rifeInterpolation.test.js ./tests/runtimePackageGate.test.js ./tests/rifeRuntimeSourceBuild.test.js",
+    "test:alpha-media": "node --test ./tests/mediaAlpha.test.js ./tests/imageSequenceTranscode.test.js ./src/utils/alphaMedia.test.mjs",
     "test:mcp-h3": "node --test ./tests/mcpH3ReferenceVideo.test.js",
     "test:mcp-my-workflows": "node --test ./tests/myWorkflowCatalog.test.js"
   },
@@ -63,10 +76,10 @@
   },
   "license": "GPL-3.0-only",
   "dependencies": {
+    "@derhuerst/ffprobe-static": "5.3.0",
     "@xyflow/react": "^12.10.2",
     "clsx": "^2.0.0",
-    "ffmpeg-static": "^5.3.0",
-    "ffprobe-static": "^3.1.0",
+    "ffmpeg-static": "5.3.0",
     "html2canvas": "^1.4.1",
     "js-yaml": "^4.1.1",
     "jsonata": "^2.1.0",
@@ -78,6 +91,7 @@
     "zustand": "^4.4.7"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^4.2.1",
@@ -96,10 +110,8 @@
     "appId": "com.comfystudio.app",
     "productName": "Velorn",
     "copyright": "Copyright © 2024-2026",
-    "asarUnpack": [
-      "**/node_modules/ffmpeg-static/**",
-      "**/node_modules/ffprobe-static/**"
-    ],
+    "beforePack": "scripts/electron-builder-before-pack.cjs",
+    "afterPack": "scripts/electron-builder-after-pack.cjs",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -108,7 +120,9 @@
       "dist/**/*",
       "electron/**/*",
       "build/icon.png",
-      "package.json"
+      "package.json",
+      "!node_modules/ffmpeg-static/ffmpeg*",
+      "!node_modules/@derhuerst/ffprobe-static/ffprobe*"
     ],
     "extraResources": [
       {
@@ -123,12 +137,28 @@
         "to": "bin",
         "filter": [
           "ffmpeg.exe",
-          "ffmpeg"
+          "ffmpeg",
+          "ffmpeg.README",
+          "ffmpeg.LICENSE",
+          "ffmpeg.exe.README",
+          "ffmpeg.exe.LICENSE"
         ]
       },
       {
-        "from": "node_modules/ffprobe-static/bin",
-        "to": "bin/ffprobe-static",
+        "from": "node_modules/@derhuerst/ffprobe-static",
+        "to": "bin",
+        "filter": [
+          "ffprobe.exe",
+          "ffprobe",
+          "ffprobe.README",
+          "ffprobe.LICENSE",
+          "ffprobe.exe.README",
+          "ffprobe.exe.LICENSE"
+        ]
+      },
+      {
+        "from": "build/rife-runtime/${os}-${arch}/rife",
+        "to": "bin/rife",
         "filter": [
           "**/*"
         ]

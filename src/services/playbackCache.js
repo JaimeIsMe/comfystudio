@@ -7,6 +7,7 @@
 
 import { isElectron } from './fileSystem'
 import { getProjectFileUrl } from './fileSystem'
+import { canUseOpaqueVideoDerivative } from '../utils/alphaMedia.mjs'
 
 const CACHE_DIR = 'cache'
 const PREFIX = 'playback_'
@@ -23,7 +24,8 @@ function safeFilename(assetId) {
 
 export function hasUsablePlaybackCache(asset) {
   return Boolean(
-    asset?.playbackCacheStatus === 'ready'
+    canUseOpaqueVideoDerivative(asset)
+    && asset?.playbackCacheStatus === 'ready'
     && asset?.playbackCachePath
     && asset?.playbackCacheVersion === PLAYBACK_CACHE_VERSION
   )
@@ -117,7 +119,11 @@ export async function enqueuePlaybackTranscode(projectDir, assetId, sourcePath, 
 
   const { useAssetsStore } = await import('../stores/assetsStore')
   const store = useAssetsStore.getState()
-  const previousPlaybackCachePath = store.assets.find((asset) => asset.id === assetId)?.playbackCachePath || ''
+  const currentAsset = store.assets.find((asset) => asset.id === assetId)
+  if (currentAsset && !isPlaybackCacheableVideoAsset(currentAsset)) {
+    return { success: false, skipped: true, error: 'Alpha video uses its original source.' }
+  }
+  const previousPlaybackCachePath = currentAsset?.playbackCachePath || ''
   store.setPlaybackCacheStatus?.(assetId, 'encoding')
 
   try {
