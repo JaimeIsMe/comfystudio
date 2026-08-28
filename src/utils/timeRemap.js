@@ -15,7 +15,7 @@
  * localStorage 'comfystudio-speed-ramp' = '0'.
  */
 
-import { getValueAtTime } from './keyframes'
+import { getValueAtTime } from './keyframes.js'
 
 const SPEED_RAMP_FLAG_KEY = 'comfystudio-speed-ramp'
 const INTEGRAL_SAMPLES_PER_SECOND = 240
@@ -63,15 +63,24 @@ function buildSpeedIntegral(clip) {
   const cumulative = new Float64Array(sampleCount)
 
   let previousSpeed = getRampedSpeedAtTime(clip, 0)
+  let minSpeed = previousSpeed
+  let maxSpeed = previousSpeed
   for (let index = 1; index < sampleCount; index += 1) {
     const t = index * step
     const speed = getRampedSpeedAtTime(clip, t)
+    minSpeed = Math.min(minSpeed, speed)
+    maxSpeed = Math.max(maxSpeed, speed)
     // Trapezoid rule over the eased speed curve.
     cumulative[index] = cumulative[index - 1] + ((previousSpeed + speed) / 2) * step
     previousSpeed = speed
   }
 
-  return { cumulative, step, duration }
+  return { cumulative, step, duration, minSpeed, maxSpeed }
+}
+
+export function getRampedSpeedBounds(clip) {
+  const { minSpeed, maxSpeed } = getSpeedIntegral(clip)
+  return { min: minSpeed, max: maxSpeed }
 }
 
 function getSpeedIntegral(clip) {

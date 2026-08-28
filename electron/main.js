@@ -10,8 +10,7 @@ const { Readable } = require('stream')
 const { fileURLToPath } = require('url')
 const yaml = require('js-yaml')
 const ffmpegStaticPath = require('ffmpeg-static')
-const ffprobeStatic = require('ffprobe-static')
-const ffprobeStaticPath = ffprobeStatic?.path || ffprobeStatic
+const ffprobeStaticPath = require('@derhuerst/ffprobe-static')
 const {
   HARDWARE_EXPORT_FFMPEG_ENV_KEY,
   HARDWARE_EXPORT_FFMPEG_SETTING_KEY,
@@ -51,6 +50,8 @@ const {
   getAdaptiveMainWindowMinimum,
   sanitizeWindowBounds,
 } = require('./mainWindowBounds')
+const { createRifeInterpolationCache } = require('./rifeInterpolation')
+const { resolveRifeRuntime } = require('./rifeRuntime')
 
 const isDev = !app.isPackaged
 
@@ -130,7 +131,7 @@ function resolvePackagedBinaryPath(binaryPath) {
 
   if (binaryPath === ffprobeStaticPath) {
     packagedCandidates.push(
-      path.join(process.resourcesPath, 'bin', 'ffprobe-static', process.platform, process.arch, path.basename(binaryPath))
+      path.join(process.resourcesPath, 'bin', path.basename(binaryPath))
     )
   }
 
@@ -3550,6 +3551,7 @@ async function createWindow(restoredWindowState = null) {
       webSecurity: !isDev,
     }
   })
+  const mainWindowContentsId = mainWindow.webContents.id
 
   // Mirror the main window's console and crash events to userData/app.log
   // (same append+cap pattern as export-worker.log). Failures before the
@@ -3572,6 +3574,9 @@ async function createWindow(restoredWindowState = null) {
   } else {
     console.error(`[Velorn] Could not write ${appLogPath}; main-window console mirroring disabled for this session.`)
   }
+  mainWindow.webContents.on('render-process-gone', () => {
+    abortOpticalFlowJobsForOwner(mainWindowContentsId)
+  })
 
   // Start maximized rather than true fullscreen. Maximized uses the full
   // work area (entire screen minus the OS taskbar/dock) so the user still
@@ -3899,6 +3904,7 @@ async function createWindow(restoredWindowState = null) {
   })
 
   mainWindow.on('closed', () => {
+    abortOpticalFlowJobsForOwner(mainWindowContentsId)
     if (mainWindowStateSaveTimer) {
       clearTimeout(mainWindowStateSaveTimer)
       mainWindowStateSaveTimer = null
@@ -5654,6 +5660,8 @@ ipcMain.handle('workflowSetup:install', async (event, payload = {}) => {
 // session id so Stop, worker crashes, and window teardown can kill whichever
 // palette/encode pass is active without affecting another renderer.
 const activeGifExportJobs = new Map()
+const activeOpticalFlowJobs = new Map()
+const activeOpticalFlowOutputs = new Map()
 
 const abortGifExportsForOwner = (ownerId) => {
   let aborted = 0
@@ -5663,6 +5671,27 @@ const abortGifExportsForOwner = (ownerId) => {
     aborted += 1
   }
   return aborted
+}
+
+const normalizeOpticalFlowOutputKey = (outputPath) => {
+  const resolved = path.resolve(String(outputPath || ''))
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+const abortOpticalFlowJobsForOwner = (ownerId) => {
+  let aborted = 0
+  for (const job of activeOpticalFlowJobs.values()) {
+    if (job.ownerId !== ownerId || job.controller.signal.aborted) continue
+    job.controller.abort()
+    aborted += 1
+  }
+  return aborted
+}
+
+const abortAllOpticalFlowJobs = () => {
+  for (const job of activeOpticalFlowJobs.values()) {
+    if (!job.controller.signal.aborted) job.controller.abort()
+  }
 }
 
 ipcMain.handle('export:runInWorker', async (event, payload) => {
@@ -6850,6 +6879,115 @@ ipcMain.handle('export:abortGifEncode', async (event, sessionIdValue) => {
   return { success: true, cancelled: true }
 })
 
+ipcMain.handle('opticalFlow:generate', async (event, options = {}) => {
+  const unavailable = getFfmpegUnavailableError()
+  if (unavailable) return { success: false, error: unavailable }
+  if (!ffprobePath || !fsSync.existsSync(ffprobePath)) {
+    return { success: false, error: 'FFprobe is unavailable. Reinstall Velorn to restore native media tools.' }
+  }
+  const rifeRuntime = resolveRifeRuntime({
+    packaged: app.isPackaged,
+    appRoot: path.join(__dirname, '..'),
+    resourcesPath: process.resourcesPath,
+  })
+  if (!rifeRuntime.available) {
+    return { success: false, code: 'OPTICAL_FLOW_UNAVAILABLE', error: rifeRuntime.error }
+  }
+
+  const jobId = typeof options.jobId === 'string' ? options.jobId.trim() : ''
+  if (!/^[a-zA-Z0-9._-]{1,120}$/.test(jobId)) {
+    return { success: false, error: 'Invalid Optical Flow job identifier.' }
+  }
+  if (activeOpticalFlowJobs.has(jobId)) {
+    return { success: false, error: 'This Optical Flow job is already active.' }
+  }
+  if (activeOpticalFlowJobs.size > 0) {
+    return {
+      success: false,
+      code: 'OPTICAL_FLOW_BUSY',
+      error: 'Another Optical Flow cache is already being built. Wait for it to finish or cancel it first.',
+    }
+  }
+
+  const projectPath = typeof options.projectPath === 'string' ? path.resolve(options.projectPath) : ''
+  const inputPath = typeof options.inputPath === 'string' ? path.resolve(options.inputPath) : ''
+  const outputPath = typeof options.outputPath === 'string' ? path.resolve(options.outputPath) : ''
+  if (!projectPath || !path.isAbsolute(projectPath) || !inputPath || !path.isAbsolute(inputPath)) {
+    return { success: false, error: 'Optical Flow requires absolute project and source paths.' }
+  }
+  const allowedOutputRoot = path.resolve(projectPath, 'cache')
+  if (
+    !outputPath
+    || normalizeOpticalFlowOutputKey(path.dirname(outputPath)) !== normalizeOpticalFlowOutputKey(allowedOutputRoot)
+    || path.extname(outputPath).toLowerCase() !== '.mp4'
+  ) {
+    return { success: false, error: 'Optical Flow output must be a project-owned MP4 in the cache folder.' }
+  }
+
+  const outputKey = normalizeOpticalFlowOutputKey(outputPath)
+  if (activeOpticalFlowOutputs.has(outputKey)) {
+    return { success: false, error: 'Another Optical Flow job is already writing this cache file.' }
+  }
+
+  const controller = new AbortController()
+  const ownerId = event.sender.id
+  const job = { controller, ownerId, outputKey }
+  activeOpticalFlowJobs.set(jobId, job)
+  activeOpticalFlowOutputs.set(outputKey, jobId)
+  const abortForDestroyedSender = () => controller.abort()
+  event.sender.once('destroyed', abortForDestroyedSender)
+
+  try {
+    const result = await createRifeInterpolationCache({
+      ffmpegPath,
+      ffprobePath,
+      rifeExecutablePath: rifeRuntime.executablePath,
+      modelPath: rifeRuntime.modelPath,
+      requireSecureBuild: rifeRuntime.trusted,
+      jobId,
+      inputPath,
+      outputPath,
+      allowedOutputRoot,
+      sourceStart: options.sourceStart,
+      sourceEnd: options.sourceEnd,
+      targetFps: options.targetFps,
+      expectedDuration: options.expectedDuration,
+      maxFrames: options.maxFrames,
+      signal: controller.signal,
+      onProgress: (progress) => {
+        if (controller.signal.aborted || event.sender.isDestroyed()) return
+        event.sender.send('opticalFlow:progress', { ...progress, jobId })
+      },
+    })
+    return { success: true, ...result }
+  } catch (error) {
+    const cancelled = controller.signal.aborted || error?.code === 'OPTICAL_FLOW_CANCELLED'
+    return {
+      success: false,
+      cancelled,
+      code: error?.code || null,
+      error: cancelled ? 'Optical Flow cancelled' : (error?.message || String(error)),
+    }
+  } finally {
+    if (!event.sender.isDestroyed()) {
+      event.sender.removeListener('destroyed', abortForDestroyedSender)
+    }
+    if (activeOpticalFlowJobs.get(jobId) === job) activeOpticalFlowJobs.delete(jobId)
+    if (activeOpticalFlowOutputs.get(outputKey) === jobId) activeOpticalFlowOutputs.delete(outputKey)
+  }
+})
+
+ipcMain.handle('opticalFlow:cancel', async (event, jobIdValue) => {
+  const jobId = typeof jobIdValue === 'string' ? jobIdValue.trim() : ''
+  const job = activeOpticalFlowJobs.get(jobId)
+  if (!job) return { success: true, cancelled: false }
+  if (job.ownerId !== event.sender.id) {
+    return { success: false, cancelled: false, error: 'Optical Flow job belongs to another renderer.' }
+  }
+  job.controller.abort()
+  return { success: true, cancelled: true }
+})
+
 ipcMain.handle('export:encodeVideo', async (event, options = {}) => {
   const {
     framePattern,
@@ -7743,6 +7881,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  abortAllOpticalFlowJobs()
   if (mcpServer) {
     mcpServer.stop().catch((error) => {
       console.warn('[MCP] server shutdown error:', error?.message || error)

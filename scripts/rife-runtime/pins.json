@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "sources": {
+    "wrapper": {
+      "name": "rife-ncnn-vulkan",
+      "repository": "https://github.com/nihui/rife-ncnn-vulkan.git",
+      "commit": "a7532fc3f9f8f008cd6eecd6f2ffe2a9698e0cf7",
+      "licensePath": "LICENSE",
+      "licenseSha256": "a73beab18143600af0b10c6050a953ec233775ce31c2bf3373a794db535329fd",
+      "licenseSize": 1072
+    },
+    "ncnn": {
+      "name": "ncnn",
+      "repository": "https://github.com/Tencent/ncnn.git",
+      "commit": "b4ba207c18d3103d6df890c0e3a97b469b196b26",
+      "licensePath": "LICENSE.txt",
+      "licenseSha256": "6495f972a09ad7f64ccd953e79adba91a93d862edc7135e6d95210bbf4002a01",
+      "licenseSize": 6502
+    },
+    "glslang": {
+      "name": "glslang",
+      "repository": "https://github.com/KhronosGroup/glslang.git",
+      "commit": "86ff4bca1ddc7e2262f119c16e7228d0efb67610",
+      "licensePath": "LICENSE.txt",
+      "licenseSha256": "adb783e734e906d1f46db5df29991dbde84bdb0ceab502ac2febb44fe3c2b5f4",
+      "licenseSize": 54705
+    },
+    "stb": {
+      "name": "stb",
+      "repository": "https://github.com/nothings/stb.git",
+      "commit": "2c980bb59875b0d32144a71867fbdebb2f77cd20",
+      "licensePath": "LICENSE",
+      "licenseSha256": "bebfe904b14301657e4e5d655c811d51fd31b97c455b9cc2d8600d6bac6cff63",
+      "licenseSize": 2510,
+      "files": {
+        "stb_image.h": {
+          "sha256": "594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3"
+        },
+        "stb_image_write.h": {
+          "sha256": "cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05"
+        }
+      }
+    },
+    "practicalRife": {
+      "name": "Practical-RIFE",
+      "repository": "https://github.com/hzwer/Practical-RIFE.git",
+      "commit": "bbfd2ea90910789a860ea3e2b32a240cd577b75e",
+      "licensePath": "LICENSE",
+      "licenseSha256": "7932fb49341512b959b1744a6d9cbb39e5a1ec89da438a34d0454d5d8df9fecd",
+      "licenseSize": 1062,
+      "modelLicenseEvidence": {
+        "path": "README.md",
+        "line": 16,
+        "sha256": "b695ac5d4a69c2f551512678883f8234d784c286d805ca546f4873cb465959b4"
+      }
+    },
+    "moltenVk": {
+      "name": "MoltenVK",
+      "repository": "https://github.com/KhronosGroup/MoltenVK.git",
+      "commit": "db445ff2042d9ce348c439ad8451112f354b8d2a",
+      "tag": "v1.4.1",
+      "licensePath": "LICENSE",
+      "licenseSha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "licenseSize": 11358
+    }
+  },
+  "model": {
+    "name": "rife-v4.6",
+    "repository": "https://github.com/nihui/rife-ncnn-vulkan.git",
+    "commit": "a7532fc3f9f8f008cd6eecd6f2ffe2a9698e0cf7",
+    "sourcePath": "models/rife-v4.6",
+    "files": {
+      "flownet.bin": {
+        "sha256": "f334ed2260149ce0188a6dcf049844e8b0cdd912e01cbcfb63553157d2508958",
+        "size": 10614320
+      },
+      "flownet.param": {
+        "sha256": "724569596bcd1e7b9fa50455c604777ebed99746d2ef40aa86e31b5725f1053c",
+        "size": 16532
+      }
+    }
+  },
+  "runtime": {
+    "executableBaseName": "rife-ncnn-vulkan",
+    "pngOnly": true,
+    "webpDisabled": true,
+    "sourceDateEpoch": 1666515970
+  },
+  "optionalSdks": {
+    "vulkanLinuxX64": {
+      "version": "1.4.335.0",
+      "url": "https://sdk.lunarg.com/sdk/download/1.4.335.0/linux/vulkansdk-linux-x86_64-1.4.335.0.tar.xz",
+      "sha256": "ccab8047f33ef848e3928c7fdd19987b35da3085ad20178f473acc230fa3c5f2",
+      "size": 278570172
+    },
+    "vulkanWindowsX64": {
+      "version": "1.4.335.0",
+      "url": "https://sdk.lunarg.com/sdk/download/1.4.335.0/windows/vulkansdk-windows-X64-1.4.335.0.exe",
+      "sha256": "15096bafc1488177b094fe5f5c8070e8cb5331d665f6905ebbaa44a75cfa316c",
+      "size": 304722960
+    },
+    "moltenVkMac": {
+      "version": "1.4.1",
+      "url": "https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.1/MoltenVK-all.tar",
+      "sha256": "2c498bf8c98b88ba1e84c1f153403d4c1a8490c122d9e2a3df238b25d4e10557",
+      "size": 173033984
+    },
+    "llvmOpenMpMac": {
+      "repository": "https://github.com/llvm/llvm-project.git",
+      "tag": "llvmorg-18.1.8",
+      "commit": "3b5b5c1ec4a3095ab096dd780e84d7ab81f3d7ff"
+    }
+  }
+}

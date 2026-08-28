@@ -15,6 +15,9 @@
     "electron:build:mac": "npm run build && electron-builder --mac",
     "electron:build:linux": "npm run build && electron-builder --linux",
     "electron:pack": "npm run build && electron-builder --dir",
+    "rife-runtime:verify": "node ./scripts/runtime-package-gate.cjs rife",
+    "runtime:verify-native": "node ./scripts/runtime-package-gate.cjs native",
+    "runtime:verify-staged": "node ./scripts/runtime-package-gate.cjs staged",
     "angles:sheet": "node ./scripts/build-angle-sheet.mjs",
     "starter-pack:build": "node ./scripts/build-workflow-starter-pack.mjs",
     "starter-pack:package": "npm run starter-pack:build && node ./scripts/package-workflow-starter-pack.mjs",
@@ -43,6 +46,11 @@
     "test:system-fonts": "node --test ./tests/systemFonts.test.js ./src/services/systemFonts.test.js ./src/utils/fontFamily.test.mjs",
     "test:gif-import": "node --test ./tests/animatedGifTranscode.test.js",
     "test:gif-export": "node --test ./tests/gifExportFfmpeg.test.js",
+    "test:frame-sampling": "node --test ./src/utils/frameSampling.test.js ./src/utils/exportVideoClipEligibility.test.js ./src/utils/clipPlaybackTiming.test.js",
+    "test:preview-video-seeking": "node --test ./src/utils/previewVideoSeeking.test.js",
+    "test:optical-flow-cache": "node --test ./tests/opticalFlowCache.test.js",
+    "test:rife-interpolation": "node --test ./tests/rifeRuntime.test.js ./tests/rifeInterpolation.test.js ./tests/runtimePackageGate.test.js",
+    "test:rife-hardening": "node --test ./tests/rifeRuntime.test.js ./tests/rifeInterpolation.test.js ./tests/runtimePackageGate.test.js ./tests/rifeRuntimeSourceBuild.test.js",
     "test:mcp-h3": "node --test ./tests/mcpH3ReferenceVideo.test.js",
     "test:mcp-my-workflows": "node --test ./tests/myWorkflowCatalog.test.js"
   },
@@ -66,10 +74,10 @@
   },
   "license": "GPL-3.0-only",
   "dependencies": {
+    "@derhuerst/ffprobe-static": "5.3.0",
     "@xyflow/react": "^12.10.2",
     "clsx": "^2.0.0",
-    "ffmpeg-static": "^5.3.0",
-    "ffprobe-static": "^3.1.0",
+    "ffmpeg-static": "5.3.0",
     "html2canvas": "^1.4.1",
     "js-yaml": "^4.1.1",
     "jsonata": "^2.1.0",
@@ -81,6 +89,7 @@
     "zustand": "^4.4.7"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^4.2.1",
@@ -99,10 +108,8 @@
     "appId": "com.comfystudio.app",
     "productName": "Velorn",
     "copyright": "Copyright © 2024-2026",
-    "asarUnpack": [
-      "**/node_modules/ffmpeg-static/**",
-      "**/node_modules/ffprobe-static/**"
-    ],
+    "beforePack": "scripts/electron-builder-before-pack.cjs",
+    "afterPack": "scripts/electron-builder-after-pack.cjs",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -111,7 +118,9 @@
       "dist/**/*",
       "electron/**/*",
       "build/icon.png",
-      "package.json"
+      "package.json",
+      "!node_modules/ffmpeg-static/ffmpeg*",
+      "!node_modules/@derhuerst/ffprobe-static/ffprobe*"
     ],
     "extraResources": [
       {
@@ -126,12 +135,28 @@
         "to": "bin",
         "filter": [
           "ffmpeg.exe",
-          "ffmpeg"
+          "ffmpeg",
+          "ffmpeg.README",
+          "ffmpeg.LICENSE",
+          "ffmpeg.exe.README",
+          "ffmpeg.exe.LICENSE"
         ]
       },
       {
-        "from": "node_modules/ffprobe-static/bin",
-        "to": "bin/ffprobe-static",
+        "from": "node_modules/@derhuerst/ffprobe-static",
+        "to": "bin",
+        "filter": [
+          "ffprobe.exe",
+          "ffprobe",
+          "ffprobe.README",
+          "ffprobe.LICENSE",
+          "ffprobe.exe.README",
+          "ffprobe.exe.LICENSE"
+        ]
+      },
+      {
+        "from": "build/rife-runtime/${os}-${arch}/rife",
+        "to": "bin/rife",
         "filter": [
           "**/*"
         ]

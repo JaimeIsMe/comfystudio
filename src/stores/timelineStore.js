@@ -14,7 +14,9 @@ import { getKeyframeTimeTolerance } from '../utils/keyframes'
 import { DEFAULT_SHAPE_MASK, normalizeShapeMask } from '../utils/shapeMask'
 import { normalizeTrackMatte } from '../utils/trackMatte'
 import { translateTransitionsForClipMoves } from '../utils/transitionClipMoves.mjs'
+import { isBetweenClipTransition } from '../utils/transitionKinds'
 import { DEFAULT_LINE_THICKNESS, DEFAULT_SHAPE_PROPERTIES, getShapeDisplayName, normalizeShapeProperties } from '../utils/shapes'
+import { normalizeFrameSamplingMode } from '../utils/frameSampling'
 import {
   quantizeTimeToFrame as roundToFrame,
   roundDurationToFrame,
@@ -654,8 +656,44 @@ const createDefaultClipTransform = () => ({
   blur: 0,
 })
 
+const sanitizeClipForHistory = (clip) => {
+  const cloned = JSON.parse(JSON.stringify(clip))
+  if (!cloned?.opticalFlowCache) return cloned
+  const {
+    url: _url,
+    progress: _progress,
+    error: _error,
+    jobId: _jobId,
+    frame: _frame,
+    fps: _fps,
+    ...descriptor
+  } = cloned.opticalFlowCache
+  return {
+    ...cloned,
+    opticalFlowCache: descriptor.path
+      ? { ...descriptor, status: 'stale', progress: 0 }
+      : undefined,
+  }
+}
+
+const restoreHistoryClips = (snapshotClips = [], currentClips = []) => {
+  const currentById = new Map(currentClips.map((clip) => [clip.id, clip]))
+  return snapshotClips.map((snapshotClip) => {
+    const currentClip = currentById.get(snapshotClip.id)
+    const canKeepRuntimeCache = currentClip
+      && currentClip.assetId === snapshotClip.assetId
+      && currentClip.opticalFlowCache
+    return {
+      ...snapshotClip,
+      opticalFlowCache: canKeepRuntimeCache
+        ? { ...currentClip.opticalFlowCache }
+        : snapshotClip.opticalFlowCache,
+    }
+  })
+}
+
 const createHistorySnapshot = (state) => ({
-  clips: JSON.parse(JSON.stringify(state.clips)),
+  clips: state.clips.map(sanitizeClipForHistory),
   tracks: JSON.parse(JSON.stringify(state.tracks)),
   transitions: JSON.parse(JSON.stringify(state.transitions)),
   markers: JSON.parse(JSON.stringify(state.markers)),
@@ -697,8 +735,15 @@ export const useTimelineStore = create(
   // Timeline settings
   duration: 60, // Total timeline duration in seconds
   timelineFps: 24, // Timeline frame rate; clips are quantized to frame boundaries
+  timelineSessionId: 1, // Increments whenever a project/timeline payload replaces the store
   zoom: 100, // Zoom level (100 = 1 second = ~20px)
   playheadPosition: 0, // Current playhead position in seconds
+  // Transient transport intent. A one-frame step must survive preview-source
+  // swaps (for example Canvas -> rendered In→Out chunk) long enough for the
+  // newly mounted renderer to request the exact decoded frame. Ordinary seeks
+  // clear it in setPlayheadPosition.
+  playheadSeekIntent: null,
+  playheadSeekRevision: 0,
   isPlaying: false,
   
   // JKL Shuttle playback
@@ -1014,7 +1059,7 @@ export const useTimelineStore = create(
         : [...state.history, currentSnapshot]
 
       set({
-        clips: lastHistoryState.clips,
+        clips: restoreHistoryClips(lastHistoryState.clips, state.clips),
         tracks: lastHistoryState.tracks,
         transitions: lastHistoryState.transitions,
         markers: lastHistoryState.markers || [],
@@ -1033,7 +1078,7 @@ export const useTimelineStore = create(
     if (state.historyIndex > 0) {
       const prevState = state.history[state.historyIndex - 1]
       set({
-        clips: prevState.clips,
+        clips: restoreHistoryClips(prevState.clips, state.clips),
         tracks: prevState.tracks,
         transitions: prevState.transitions,
         markers: prevState.markers || [],
@@ -1059,7 +1104,7 @@ export const useTimelineStore = create(
     if (state.historyIndex >= 0 && state.historyIndex < state.history.length - 1) {
       const nextState = state.history[state.historyIndex + 1]
       set({
-        clips: nextState.clips,
+        clips: restoreHistoryClips(nextState.clips, state.clips),
         tracks: nextState.tracks,
         transitions: nextState.transitions,
         markers: nextState.markers || [],
@@ -1189,7 +1234,8 @@ export const useTimelineStore = create(
             startTime: secondPartStart,
             duration: secondPartDuration,
             trimStart: secondPartTrimStart,
-            trimEnd: getClipTrimEnd(clip)
+            trimEnd: getClipTrimEnd(clip),
+            opticalFlowCache: undefined,
           })
         }
       }
@@ -1312,6 +1358,9 @@ export const useTimelineStore = create(
         : 1,
       speed: Number.isFinite(optionSpeed) && optionSpeed > 0 ? optionSpeed : 1,
       reverse: options?.reverse === true,
+      frameSampling: isVideo
+        ? normalizeFrameSamplingMode(options?.frameSampling)
+        : undefined,
       gainDb: asset.type === 'audio' ? normalizeAudioClipGainDb(options?.gainDb) : undefined,
       fadeIn: asset.type === 'audio' ? clampAudioFadeDuration(options?.fadeIn, finalDuration) : undefined,
       fadeOut: asset.type === 'audio' ? clampAudioFadeDuration(options?.fadeOut, finalDuration) : undefined,
@@ -2139,6 +2188,9 @@ export const useTimelineStore = create(
           sourceTimeScale: template.sourceTimeScale ?? 1,
           speed: template.speed ?? 1,
           reverse: template.reverse ?? false,
+          frameSampling: template.type === 'video'
+            ? normalizeFrameSamplingMode(template.frameSampling)
+            : undefined,
           gainDb: template.type === 'audio' ? normalizeAudioClipGainDb(template.gainDb) : undefined,
           fadeIn: template.type === 'audio' ? clampAudioFadeDuration(template.fadeIn, duration) : undefined,
           fadeOut: template.type === 'audio' ? clampAudioFadeDuration(template.fadeOut, duration) : undefined,
@@ -2358,6 +2410,7 @@ export const useTimelineStore = create(
                   clipsToAdd.push({
                     ...existingClip,
                     id: `clip-${state.clipCounter + clipsToAdd.length + 1}`,
+                    opticalFlowCache: undefined,
                     startTime: secondPartStart,
                     duration: secondPartDuration,
                     trimStart: secondPartTrimStart,
@@ -2593,6 +2646,7 @@ export const useTimelineStore = create(
               clipsToAdd.push({
                 ...existingClip,
                 id: `clip-${state.clipCounter + addedCounter + 1}`,
+                opticalFlowCache: undefined,
                 startTime: secondPartStart,
                 duration: secondPartDuration,
                 trimStart: secondPartTrimStart,
@@ -2697,6 +2751,7 @@ export const useTimelineStore = create(
         cacheProgress: 0,
         cacheUrl: null,
         cachePath: null,
+        opticalFlowCache: undefined,
         linkGroupId: getDuplicateLinkGroupId(clip.linkGroupId),
         lockMode: undefined,
         syncLock: undefined,
@@ -2848,6 +2903,51 @@ export const useTimelineStore = create(
         )
       }
     })
+  },
+
+  /**
+   * Choose how a video clip synthesizes frames while retimed.
+   * Cache generation is intentionally separate: selecting Optical Flow is
+   * an undoable creative setting, while native cache progress is transient.
+   */
+  updateClipFrameSampling: (clipId, mode, saveHistory = true) => {
+    const normalizedMode = normalizeFrameSamplingMode(mode)
+    const target = get().clips.find((clip) => clip.id === clipId)
+    if (!target || target.type !== 'video') return false
+    if (normalizeFrameSamplingMode(target.frameSampling) === normalizedMode) return false
+    if (saveHistory) get().saveToHistory()
+    set((state) => ({
+      clips: state.clips.map((clip) => (
+        clip.id === clipId ? { ...clip, frameSampling: normalizedMode } : clip
+      )),
+    }))
+    return true
+  },
+
+  /** Native optical-flow cache state. This never creates an undo entry. */
+  setOpticalFlowCache: (clipId, opticalFlowCache) => {
+    set((state) => ({
+      clips: state.clips.map((clip) => (
+        clip.id === clipId
+          ? { ...clip, opticalFlowCache: opticalFlowCache ? { ...opticalFlowCache } : null }
+          : clip
+      )),
+    }))
+  },
+
+  updateOpticalFlowCache: (clipId, updates = {}) => {
+    set((state) => ({
+      clips: state.clips.map((clip) => {
+        if (clip.id !== clipId) return clip
+        return {
+          ...clip,
+          opticalFlowCache: {
+            ...(clip.opticalFlowCache || {}),
+            ...updates,
+          },
+        }
+      }),
+    }))
   },
 
   /**
@@ -3786,7 +3886,10 @@ export const useTimelineStore = create(
     }
     
     if (nextTime !== Infinity) {
-      set({ playheadPosition: roundToFrame(clip.startTime + nextTime, state.timelineFps || FRAME_RATE) })
+      set({
+        playheadPosition: roundToFrame(clip.startTime + nextTime, state.timelineFps || FRAME_RATE),
+        playheadSeekIntent: null,
+      })
     }
   },
 
@@ -3824,7 +3927,10 @@ export const useTimelineStore = create(
     }
     
     if (prevTime !== -Infinity) {
-      set({ playheadPosition: roundToFrame(clip.startTime + prevTime, state.timelineFps || FRAME_RATE) })
+      set({
+        playheadPosition: roundToFrame(clip.startTime + prevTime, state.timelineFps || FRAME_RATE),
+        playheadSeekIntent: null,
+      })
     }
   },
 
@@ -4639,7 +4745,7 @@ export const useTimelineStore = create(
     }
 
     const addTransitionClipsAtTime = (transition, progress = 0) => {
-      if (!transition || transition.kind !== 'between') return
+      if (!isBetweenClipTransition(transition)) return
       const clipA = state.clips.find(c => c.id === transition.clipAId)
       const clipB = state.clips.find(c => c.id === transition.clipBId)
       if (!clipA || !clipB) return
@@ -4672,7 +4778,7 @@ export const useTimelineStore = create(
     }
 
     for (const transition of state.transitions) {
-      if (!transition || transition.kind !== 'between') continue
+      if (!isBetweenClipTransition(transition)) continue
       const clipA = state.clips.find(c => c.id === transition.clipAId)
       const clipB = state.clips.find(c => c.id === transition.clipBId)
       if (!clipA || !clipB) continue
@@ -4971,7 +5077,15 @@ export const useTimelineStore = create(
     const safePosition = Number.isFinite(parsedPosition) ? parsedPosition : 0
     const clampedPosition = Math.max(0, safePosition)
     const shouldSnap = options?.snap === true || options?.snapToFrame === true
-    set({ playheadPosition: shouldSnap ? roundToFrame(clampedPosition, fps) : clampedPosition })
+    const nextPosition = shouldSnap ? roundToFrame(clampedPosition, fps) : clampedPosition
+    const nextRevision = (Number(state.playheadSeekRevision) || 0) + 1
+    set({
+      playheadPosition: nextPosition,
+      playheadSeekRevision: nextRevision,
+      playheadSeekIntent: options?.intent === 'frame-step'
+        ? { type: 'frame-step', targetTime: nextPosition, revision: nextRevision }
+        : null,
+    })
   },
 
   /**
@@ -4992,6 +5106,7 @@ export const useTimelineStore = create(
 
       return {
         isPlaying: nextIsPlaying,
+        playheadSeekIntent: null,
         // Restart from beginning when pressing play at the timeline end in normal mode.
         playheadPosition: roundToFrame(
           (!state.isPlaying && nextIsPlaying && state.loopMode === 'normal' && atOrPastEnd)
@@ -5410,10 +5525,13 @@ export const useTimelineStore = create(
    * Clear all project data (for "New Project")
    */
   clearProject: () => {
-    set({
+    set((state) => ({
+      timelineSessionId: (Number(state.timelineSessionId) || 0) + 1,
       duration: 60,
       zoom: 100,
       playheadPosition: 0,
+      playheadSeekIntent: null,
+      playheadSeekRevision: 0,
       isPlaying: false,
       playbackRate: 1,
       shuttleMode: false,
@@ -5444,7 +5562,7 @@ export const useTimelineStore = create(
       history: [],
       historyIndex: -1,
       historyLastChangedAt: 0,
-    })
+    }))
   },
 
   /**
@@ -5483,6 +5601,19 @@ export const useTimelineStore = create(
         : clip.adjustments
       const normalizedClip = clampFiniteMediaClipToSource({
         ...clip,
+        frameSampling: clip.type === 'video'
+          ? normalizeFrameSamplingMode(clip.frameSampling)
+          : undefined,
+        opticalFlowCache: clip.type === 'video' && clip.opticalFlowCache
+          ? {
+              ...clip.opticalFlowCache,
+              url: undefined,
+              status: clip.opticalFlowCache.path ? 'hydrating' : 'none',
+              progress: 0,
+              error: undefined,
+              jobId: undefined,
+            }
+          : undefined,
         startTime,
         duration,
         trimEnd,
@@ -5504,7 +5635,8 @@ export const useTimelineStore = create(
     const restoredClipCounter = Number(timelineData.clipCounter) || 1
     const nextClipCounter = Math.max(restoredClipCounter, getNextClipCounter(frameAlignedClips, 1))
 
-    set({
+    set((state) => ({
+      timelineSessionId: (Number(state.timelineSessionId) || 0) + 1,
       duration: timelineData.duration || 60,
       timelineFps: fps,
       zoom: timelineData.zoom || 100,
@@ -5522,6 +5654,8 @@ export const useTimelineStore = create(
       rippleEditMode: timelineData.rippleEditMode || false,
       // Reset playback state
       playheadPosition: 0,
+      playheadSeekIntent: null,
+      playheadSeekRevision: 0,
       isPlaying: false,
       playbackRate: 1,
       shuttleMode: false,
@@ -5540,7 +5674,7 @@ export const useTimelineStore = create(
       previewProxyStatus: 'none',
       previewProxyPath: null,
       previewProxySignature: null,
-    })
+    }))
   },
 
   /**
@@ -5554,7 +5688,24 @@ export const useTimelineStore = create(
       masterAudioVolume: state.masterAudioVolume,
       masterAudioInserts: state.masterAudioInserts,
       tracks: state.tracks,
-      clips: state.clips,
+      clips: state.clips.map((clip) => ({
+        ...clip,
+        ...(clip.opticalFlowCache
+          ? {
+              opticalFlowCache: {
+                ...clip.opticalFlowCache,
+                // Native file URLs and live progress belong to this renderer
+                // session. The portable project keeps only the relative path
+                // and deterministic cache metadata.
+                url: undefined,
+                status: clip.opticalFlowCache.path ? 'ready' : 'none',
+                progress: clip.opticalFlowCache.path ? 100 : 0,
+                error: undefined,
+                jobId: undefined,
+              },
+            }
+          : {}),
+      })),
       transitions: state.transitions,
       markers: state.markers,
       clipCounter: state.clipCounter,
@@ -5575,6 +5726,7 @@ export const useTimelineStore = create(
       set((state) => ({
         timelineFps: value,
         playheadPosition: roundToFrame(state.playheadPosition, value),
+        playheadSeekIntent: null,
         inPoint: state.inPoint !== null ? roundToFrame(state.inPoint, value) : null,
         outPoint: state.outPoint !== null ? roundToFrame(state.outPoint, value) : null,
         markers: (state.markers || []).map((marker) => ({
@@ -5703,7 +5855,10 @@ export const useTimelineStore = create(
   goToInPoint: () => {
     const state = get()
     if (state.inPoint !== null) {
-      set({ playheadPosition: roundToFrame(state.inPoint, state.timelineFps || FRAME_RATE) })
+      set({
+        playheadPosition: roundToFrame(state.inPoint, state.timelineFps || FRAME_RATE),
+        playheadSeekIntent: null,
+      })
     }
   },
 
@@ -5713,7 +5868,10 @@ export const useTimelineStore = create(
   goToOutPoint: () => {
     const state = get()
     if (state.outPoint !== null) {
-      set({ playheadPosition: roundToFrame(state.outPoint, state.timelineFps || FRAME_RATE) })
+      set({
+        playheadPosition: roundToFrame(state.outPoint, state.timelineFps || FRAME_RATE),
+        playheadSeekIntent: null,
+      })
     }
   },
 
@@ -5825,7 +5983,7 @@ export const useTimelineStore = create(
         snappingThreshold: state.snappingThreshold,
         rippleEditMode: state.rippleEditMode,
         // Note: Transient UI state NOT persisted:
-        // - activeSnapTime, selectedClipIds, playheadPosition
+        // - activeSnapTime, selectedClipIds, playheadPosition, playheadSeekIntent
         // - isPlaying, playbackRate, shuttleMode
         // - inPoint, outPoint, selectedMarkerId, selectedGap (session-specific)
       }),

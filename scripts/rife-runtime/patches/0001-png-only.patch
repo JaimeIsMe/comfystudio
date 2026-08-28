@@ -1,0 +1,349 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 822b908..4757cd5 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -1,6 +1,6 @@
+ cmake_policy(SET CMP0091 NEW)
+ set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
+-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
++set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+ 
+ project(rife-ncnn-vulkan)
+ 
+@@ -11,7 +11,6 @@ if(NOT CMAKE_BUILD_TYPE)
+ endif()
+ 
+ option(USE_SYSTEM_NCNN "build with system libncnn" OFF)
+-option(USE_SYSTEM_WEBP "build with system libwebp" OFF)
+ option(USE_STATIC_MOLTENVK "link moltenvk static library" OFF)
+ 
+ find_package(Threads)
+@@ -205,40 +204,6 @@ if(NOT USE_SYSTEM_NCNN)
+     add_subdirectory(ncnn)
+ endif()
+ 
+-if(USE_SYSTEM_WEBP)
+-    set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")
+-    find_package(WebP)
+-    if(NOT TARGET webp)
+-        message(WARNING "webp target not found! USE_SYSTEM_WEBP will be turned off.")
+-        set(USE_SYSTEM_WEBP OFF)
+-    endif()
+-endif()
+-
+-if(NOT USE_SYSTEM_WEBP)
+-    # build libwebp library
+-    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libwebp/CMakeLists.txt")
+-        message(FATAL_ERROR "The submodules were not downloaded! Please update submodules with \"git submodule update --init --recursive\" and try again.")
+-    endif()
+-
+-    option(WEBP_ENABLE_SIMD "" ON)
+-    option(WEBP_BUILD_ANIM_UTILS "" OFF)
+-    option(WEBP_BUILD_CWEBP "" OFF)
+-    option(WEBP_BUILD_DWEBP "" OFF)
+-    option(WEBP_BUILD_GIF2WEBP "" OFF)
+-    option(WEBP_BUILD_IMG2WEBP "" OFF)
+-    option(WEBP_BUILD_VWEBP "" OFF)
+-    option(WEBP_BUILD_WEBPINFO "" OFF)
+-    option(WEBP_BUILD_WEBPMUX "" OFF)
+-    option(WEBP_BUILD_EXTRAS "" OFF)
+-    option(WEBP_BUILD_WEBP_JS "" OFF)
+-    option(WEBP_NEAR_LOSSLESS "" OFF)
+-    option(WEBP_ENABLE_SWAP_16BIT_CSP "" OFF)
+-
+-    add_subdirectory(libwebp)
+-
+-    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/libwebp/src)
+-endif()
+-
+ rife_add_shader(rife_preproc.comp)
+ rife_add_shader(rife_postproc.comp)
+ rife_add_shader(rife_preproc_tta.comp)
+@@ -266,7 +231,7 @@ add_executable(rife-ncnn-vulkan
+ 
+ add_dependencies(rife-ncnn-vulkan generate-spirv)
+ 
+-set(RIFE_LINK_LIBRARIES ncnn webp ${Vulkan_LIBRARY})
++set(RIFE_LINK_LIBRARIES ncnn ${Vulkan_LIBRARY})
+ 
+ if(USE_STATIC_MOLTENVK)
+     find_library(CoreFoundation NAMES CoreFoundation)
+diff --git a/src/main.cpp b/src/main.cpp
+index 2b47317..666b9b7 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -6,23 +6,16 @@
+ #include <vector>
+ #include <clocale>
+ 
+-#if _WIN32
+-// image decoder and encoder with wic
+-#include "wic_image.h"
+-#else // _WIN32
+-// image decoder and encoder with stb
++// Velorn's runtime intentionally accepts and writes PNG only. Keeping the
++// decoder surface this narrow avoids carrying the obsolete libwebp revision
++// from the upstream wrapper and rejects disguised non-PNG input by signature.
+ #define STB_IMAGE_IMPLEMENTATION
+-#define STBI_NO_PSD
+-#define STBI_NO_TGA
+-#define STBI_NO_GIF
+-#define STBI_NO_HDR
+-#define STBI_NO_PIC
++#define STBI_ONLY_PNG
+ #define STBI_NO_STDIO
+ #include "stb_image.h"
+ #define STB_IMAGE_WRITE_IMPLEMENTATION
++#define STBI_WRITE_NO_STDIO
+ #include "stb_image_write.h"
+-#endif // _WIN32
+-#include "webp_image.h"
+ 
+ #if _WIN32
+ #include <wchar.h>
+@@ -103,12 +96,13 @@ static void print_usage()
+ {
+     fprintf(stderr, "Usage: rife-ncnn-vulkan -0 infile -1 infile1 -o outfile [options]...\n");
+     fprintf(stderr, "       rife-ncnn-vulkan -i indir -o outdir [options]...\n\n");
++    fprintf(stderr, "  Velorn secure build: PNG input and output only; WebP is disabled.\n\n");
+     fprintf(stderr, "  -h                   show this help\n");
+     fprintf(stderr, "  -v                   verbose output\n");
+-    fprintf(stderr, "  -0 input0-path       input image0 path (jpg/png/webp)\n");
+-    fprintf(stderr, "  -1 input1-path       input image1 path (jpg/png/webp)\n");
+-    fprintf(stderr, "  -i input-path        input image directory (jpg/png/webp)\n");
+-    fprintf(stderr, "  -o output-path       output image path (jpg/png/webp) or directory\n");
++    fprintf(stderr, "  -0 input0-path       input image0 path (png)\n");
++    fprintf(stderr, "  -1 input1-path       input image1 path (png)\n");
++    fprintf(stderr, "  -i input-path        input image directory (png)\n");
++    fprintf(stderr, "  -o output-path       output image path (png) or directory\n");
+     fprintf(stderr, "  -n num-frame         target frame count (default=N*2)\n");
+     fprintf(stderr, "  -s time-step         time step (0~1, default=0.5)\n");
+     fprintf(stderr, "  -m model-path        rife model path (default=rife-v2.3)\n");
+@@ -117,12 +111,14 @@ static void print_usage()
+     fprintf(stdout, "  -x                   enable spatial tta mode\n");
+     fprintf(stdout, "  -z                   enable temporal tta mode\n");
+     fprintf(stdout, "  -u                   enable UHD mode\n");
+-    fprintf(stderr, "  -f pattern-format    output image filename pattern format (%%08d.jpg/png/webp, default=ext/%%08d.png)\n");
++    fprintf(stderr, "  -f pattern-format    output image filename pattern (%%08d.png)\n");
+ }
+ 
+-static int decode_image(const path_t& imagepath, ncnn::Mat& image, int* webp)
++static int decode_image(const path_t& imagepath, ncnn::Mat& image)
+ {
+-    *webp = 0;
++    path_t ext = get_file_extension(imagepath);
++    if (ext != PATHSTR("png") && ext != PATHSTR("PNG"))
++        return -1;
+ 
+     unsigned char* pixeldata = 0;
+     int w;
+@@ -153,22 +149,8 @@ static int decode_image(const path_t& imagepath, ncnn::Mat& image, int* webp)
+ 
+         if (filedata)
+         {
+-            pixeldata = webp_load(filedata, length, &w, &h, &c);
+-            if (pixeldata)
+-            {
+-                *webp = 1;
+-            }
+-            else
+-            {
+-                // not webp, try jpg png etc.
+-#if _WIN32
+-                pixeldata = wic_decode_image(imagepath.c_str(), &w, &h, &c);
+-#else // _WIN32
+-                pixeldata = stbi_load_from_memory(filedata, length, &w, &h, &c, 3);
+-                c = 3;
+-#endif // _WIN32
+-            }
+-
++            pixeldata = stbi_load_from_memory(filedata, length, &w, &h, &c, 3);
++            c = 3;
+             free(filedata);
+         }
+     }
+@@ -189,33 +171,54 @@ static int decode_image(const path_t& imagepath, ncnn::Mat& image, int* webp)
+     return 0;
+ }
+ 
+-static int encode_image(const path_t& imagepath, const ncnn::Mat& image)
++struct PngWriteContext
+ {
+-    int success = 0;
++    FILE* fp;
++    bool failed;
++};
+ 
+-    path_t ext = get_file_extension(imagepath);
++static void write_png_bytes(void* context, void* data, int size)
++{
++    PngWriteContext* output = (PngWriteContext*)context;
++    if (fwrite(data, 1, size, output->fp) != (size_t)size)
++        output->failed = true;
++}
+ 
+-    if (ext == PATHSTR("webp") || ext == PATHSTR("WEBP"))
+-    {
+-        success = webp_save(imagepath.c_str(), image.w, image.h, image.elempack, (const unsigned char*)image.data);
+-    }
+-    else if (ext == PATHSTR("png") || ext == PATHSTR("PNG"))
+-    {
++static int encode_image(const path_t& imagepath, const ncnn::Mat& image)
++{
++    path_t ext = get_file_extension(imagepath);
++    if (ext != PATHSTR("png") && ext != PATHSTR("PNG"))
++        return -1;
++
+ #if _WIN32
+-        success = wic_encode_image(imagepath.c_str(), image.w, image.h, image.elempack, image.data);
++    FILE* fp = _wfopen(imagepath.c_str(), L"wb");
+ #else
+-        success = stbi_write_png(imagepath.c_str(), image.w, image.h, image.elempack, image.data, 0);
++    FILE* fp = fopen(imagepath.c_str(), "wb");
+ #endif
+-    }
+-    else if (ext == PATHSTR("jpg") || ext == PATHSTR("JPG") || ext == PATHSTR("jpeg") || ext == PATHSTR("JPEG"))
++    if (!fp)
+     {
+ #if _WIN32
+-        success = wic_encode_jpeg_image(imagepath.c_str(), image.w, image.h, image.elempack, image.data);
++        fwprintf(stderr, L"open output image %ls failed\n", imagepath.c_str());
+ #else
+-        success = stbi_write_jpg(imagepath.c_str(), image.w, image.h, image.elempack, image.data, 100);
++        fprintf(stderr, "open output image %s failed\n", imagepath.c_str());
+ #endif
++        return -1;
+     }
+ 
++    PngWriteContext output = { fp, false };
++    int success = stbi_write_png_to_func(
++        write_png_bytes,
++        &output,
++        image.w,
++        image.h,
++        image.elempack,
++        image.data,
++        0
++    );
++    if (fclose(fp) != 0)
++        output.failed = true;
++
++    success = success && !output.failed;
+     if (!success)
+     {
+ #if _WIN32
+@@ -232,8 +235,6 @@ class Task
+ {
+ public:
+     int id;
+-    int webp0;
+-    int webp1;
+ 
+     path_t in0path;
+     path_t in1path;
+@@ -324,14 +325,21 @@ void* load(void* args)
+         v.outpath = ltp->output_files[i];
+         v.timestep = ltp->timesteps[i];
+ 
+-        int ret0 = decode_image(image0path, v.in0image, &v.webp0);
+-        int ret1 = decode_image(image1path, v.in1image, &v.webp1);
++        int ret0 = decode_image(image0path, v.in0image);
++        int ret1 = decode_image(image1path, v.in1image);
+ 
+-        if (ret0 != 0 || ret1 != 1)
++        if (ret0 == 0 && ret1 == 0)
+         {
+             v.outimage = ncnn::Mat(v.in0image.w, v.in0image.h, (size_t)3, 3);
+             toproc.put(v);
+         }
++        else
++        {
++            if (ret0 == 0)
++                stbi_image_free(v.in0image.data);
++            if (ret1 == 0)
++                stbi_image_free(v.in1image.data);
++        }
+     }
+ 
+     return 0;
+@@ -389,34 +397,10 @@ void* save(void* args)
+ 
+         // free input pixel data
+         {
+-            unsigned char* pixeldata = (unsigned char*)v.in0image.data;
+-            if (v.webp0 == 1)
+-            {
+-                free(pixeldata);
+-            }
+-            else
+-            {
+-#if _WIN32
+-                free(pixeldata);
+-#else
+-                stbi_image_free(pixeldata);
+-#endif
+-            }
++            stbi_image_free(v.in0image.data);
+         }
+         {
+-            unsigned char* pixeldata = (unsigned char*)v.in1image.data;
+-            if (v.webp1 == 1)
+-            {
+-                free(pixeldata);
+-            }
+-            else
+-            {
+-#if _WIN32
+-                free(pixeldata);
+-#else
+-                stbi_image_free(pixeldata);
+-#endif
+-            }
++            stbi_image_free(v.in1image.data);
+         }
+ 
+         if (ret == 0)
+@@ -512,5 +496,7 @@ int main(int argc, char** argv)
+         case L'h':
++            print_usage();
++            return 0;
+         default:
+             print_usage();
+             return -1;
+         }
+@@ -567,5 +553,7 @@ int main(int argc, char** argv)
+         case 'h':
++            print_usage();
++            return 0;
+         default:
+             print_usage();
+             return -1;
+         }
+@@ -634,24 +624,16 @@ int main(int argc, char** argv)
+         {
+             format = PATHSTR("png");
+         }
+-        else if (ext == PATHSTR("webp") || ext == PATHSTR("WEBP"))
+-        {
+-            format = PATHSTR("webp");
+-        }
+-        else if (ext == PATHSTR("jpg") || ext == PATHSTR("JPG") || ext == PATHSTR("jpeg") || ext == PATHSTR("JPEG"))
+-        {
+-            format = PATHSTR("jpg");
+-        }
+         else
+         {
+-            fprintf(stderr, "invalid outputpath extension type\n");
++            fprintf(stderr, "invalid outputpath extension type; PNG is required\n");
+             return -1;
+         }
+     }
+ 
+-    if (format != PATHSTR("png") && format != PATHSTR("webp") && format != PATHSTR("jpg"))
++    if (format != PATHSTR("png"))
+     {
+-        fprintf(stderr, "invalid format argument\n");
++        fprintf(stderr, "invalid format argument; PNG is required\n");
+         return -1;
+     }
+ 

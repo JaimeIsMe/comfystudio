@@ -131,9 +131,9 @@ function TransportControls() {
     }
   }
   
-  const seekTo = (time) => {
+  const seekTo = (time, options = {}) => {
     if (timelineMode) {
-      setPlayheadPosition(Math.max(0, Math.min(duration, time)), { snap: true })
+      setPlayheadPosition(Math.max(0, Math.min(duration, time)), { ...options, snap: true })
     } else {
       assetSeekTo(time)
     }
@@ -144,11 +144,11 @@ function TransportControls() {
   const goToEnd = () => seekTo(duration)
   
   const frameBack = () => {
-    seekTo(stepTimeByFrames(currentTime, -1, fps, { min: 0, max: duration }))
+    seekTo(stepTimeByFrames(currentTime, -1, fps, { min: 0, max: duration }), { intent: 'frame-step' })
   }
   
   const frameForward = () => {
-    seekTo(stepTimeByFrames(currentTime, 1, fps, { min: 0, max: duration }))
+    seekTo(stepTimeByFrames(currentTime, 1, fps, { min: 0, max: duration }), { intent: 'frame-step' })
   }
   
   const previousClip = () => {

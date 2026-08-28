@@ -7,8 +7,7 @@ const { execFile } = require('node:child_process')
 const { EventEmitter } = require('node:events')
 
 const ffmpegPath = require('ffmpeg-static')
-const ffprobeStatic = require('ffprobe-static')
-const ffprobePath = ffprobeStatic?.path || ffprobeStatic
+const ffprobePath = require('@derhuerst/ffprobe-static')
 const {
   MAX_GIF_DECODE_PIXELS,
   MAX_GIF_FRAMES,

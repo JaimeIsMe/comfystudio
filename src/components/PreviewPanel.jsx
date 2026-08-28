@@ -27,6 +27,7 @@ import { importAsset } from '../services/fileSystem'
 import { getGlslPreviewQualityScale } from '../utils/glslEffects'
 import { getShapeCanvasRect } from '../utils/shapes'
 import { getClipQuadCorners } from '../services/exporter'
+import { isFrameStepSeekIntentAtTime, isSamePreciseVideoSeekTarget } from '../utils/previewVideoSeeking'
 import { useI18n } from '../i18n/I18nContext'
 
 const SPACE_MODIFIER_USED_EVENT = 'comfystudio-space-modifier-used'
@@ -356,6 +357,7 @@ function PreviewPanel() {
     addClip, 
     isPlaying: timelineIsPlaying,
     playheadPosition,
+    playheadSeekIntent,
     setPlayheadPosition,
     togglePlay: timelineTogglePlay,
     getActiveClipAtTime,
@@ -998,7 +1000,12 @@ function PreviewPanel() {
     if (!chunkVideoRef.current || !activePreviewChunk?.url) return
     const video = chunkVideoRef.current
     const chunkTime = Math.max(0, playheadPosition - activePreviewChunk.rangeStart)
-    if (Math.abs((video.currentTime || 0) - chunkTime) > 0.08) {
+    const isPreciseFrameStep = !timelineIsPlaying
+      && isFrameStepSeekIntentAtTime(playheadSeekIntent, playheadPosition)
+    const shouldSeek = isPreciseFrameStep
+      ? !isSamePreciseVideoSeekTarget(video.currentTime, chunkTime)
+      : Math.abs((video.currentTime || 0) - chunkTime) > 0.08
+    if (shouldSeek) {
       video.currentTime = chunkTime
     }
     if (timelineIsPlaying) {
@@ -1006,7 +1013,7 @@ function PreviewPanel() {
     } else {
       video.pause()
     }
-  }, [activePreviewChunk, playheadPosition, timelineIsPlaying])
+  }, [activePreviewChunk, playheadPosition, playheadSeekIntent, timelineIsPlaying])
   
   // Register video ref with store (for asset preview mode - only for video assets)
   // Use a timeout to ensure the video element is mounted after switching previews

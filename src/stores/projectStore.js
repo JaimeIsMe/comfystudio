@@ -122,6 +122,15 @@ const getDisplayName = (handleOrPath) => {
   return handleOrPath.name
 }
 
+const hydrateActiveOpticalFlowCaches = (projectHandle) => {
+  if (!projectHandle || typeof projectHandle !== 'string') return
+  import('../services/opticalFlowCache')
+    .then((mod) => mod.hydrateOpticalFlowCaches(projectHandle))
+    .catch((error) => {
+      console.warn('Background Optical Flow cache hydration failed:', error)
+    })
+}
+
 const normalizeOpenedProjectData = (projectData) => {
   const normalizedProject = { ...(projectData || {}) }
 
@@ -198,6 +207,7 @@ const hydrateOpenedProjectSession = async (projectHandleOrPath, rawProjectData, 
     // is not immediately "overdue" from a previous session's timestamp.
     lastAutoSave: new Date().toISOString(),
   }))
+  hydrateActiveOpticalFlowCaches(projectHandleOrPath)
 
   // Hydration replaced every watched store slice; none of it is an unsaved
   // user change.
@@ -743,6 +753,7 @@ export const useProjectStore = create(
           projectFuture: nextFuture,
           projectHistoryLastChangedAt: Date.now(),
         }))
+        hydrateActiveOpticalFlowCaches(state.currentProjectHandle)
 
         return true
       },
@@ -780,6 +791,7 @@ export const useProjectStore = create(
           projectFuture: remainingFuture,
           projectHistoryLastChangedAt: Date.now(),
         }))
+        hydrateActiveOpticalFlowCaches(state.currentProjectHandle)
 
         return true
       },
@@ -901,6 +913,7 @@ export const useProjectStore = create(
         
         // Update current timeline ID
         set({ currentTimelineId: timelineId })
+        hydrateActiveOpticalFlowCaches(state.currentProjectHandle)
         
         return true
       },
@@ -1104,6 +1117,7 @@ export const useProjectStore = create(
             },
             currentTimelineId: nextTimeline.id,
           }))
+          hydrateActiveOpticalFlowCaches(state.currentProjectHandle)
         } else {
           set((state) => ({
             currentProject: {

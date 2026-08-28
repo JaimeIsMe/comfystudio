@@ -7,6 +7,15 @@ import renderCacheService from '../services/renderCache'
 import { getAnimatedTransform, getAnimatedAdjustmentSettings, getAnimatedTextProperties, getAnimatedShapeProperties } from '../utils/keyframes'
 import { loadRenderCache, saveRenderCache } from '../services/fileSystem'
 import { hasUsablePlaybackCache } from '../services/playbackCache'
+import {
+  FRAME_SAMPLING_MODE,
+  getOpticalFlowCacheUsability,
+  getRequiredOpticalFlowHandleSeconds,
+  normalizeFrameSamplingMode,
+} from '../utils/frameSampling'
+import { isBetweenClipTransition } from '../utils/transitionKinds'
+import { getClipPlaybackTimeAtTimeline as getMappedClipPlaybackTimeAtTimeline } from '../utils/clipPlaybackTiming'
+import { isFullBakeFresh } from '../utils/clipBakeSignature'
 import { getSpriteFramePosition } from '../services/thumbnailSprites'
 import {
   buildCssFilterFromAdjustments,
@@ -217,24 +226,32 @@ function getCenteredMediaFitStyle() {
   }
 }
 
+function getOpticalFlowContextOptions(clip) {
+  const timelineState = useTimelineStore.getState()
+  return {
+    handleSeconds: getRequiredOpticalFlowHandleSeconds(
+      clip,
+      timelineState.transitions,
+      timelineState.clips
+    ),
+  }
+}
+
 function getClipPlaybackTimeAtTimeline(clip, timelineTime, endOffset = 0.01) {
   if (!clip) return 0
-  const baseScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
-    ? clip.timelineFps / clip.sourceFps
-    : 1)
-  const speed = Number(clip.speed)
-  const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
-  const timeScale = baseScale * speedScale
-  const reverse = !!clip.reverse
-  const trimStart = clip.trimStart || 0
-  const rawTrimEnd = clip.trimEnd ?? clip.sourceDuration ?? (trimStart + (clip.duration || 0) * timeScale)
-  const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
-  const minTime = Math.min(trimStart, trimEnd)
-  const maxTime = Math.max(trimStart, trimEnd)
-  const sourceTime = reverse
-    ? trimEnd - (timelineTime - (clip.startTime || 0)) * timeScale
-    : trimStart + (timelineTime - (clip.startTime || 0)) * timeScale
-  return Math.max(minTime, Math.min(sourceTime, Math.max(minTime, maxTime - endOffset)))
+  const cacheCanOverrideSampling = clip.cacheKind === 'full'
+    ? isFullBakeFresh(clip)
+    : normalizeFrameSamplingMode(clip.frameSampling) !== FRAME_SAMPLING_MODE.OPTICAL_FLOW
+  if (clip.cacheStatus === 'cached' && clip.cacheUrl && cacheCanOverrideSampling) {
+    const localTime = Number(timelineTime) - (Number(clip.startTime) || 0)
+    return Math.max(0, Math.min(localTime, Math.max(0, (Number(clip.duration) || 0) - endOffset)))
+  }
+  return getMappedClipPlaybackTimeAtTimeline(
+    clip,
+    timelineTime,
+    endOffset,
+    getOpticalFlowContextOptions(clip)
+  )
 }
 
 const CUT_FRAME_CACHE_LIMIT = 64
@@ -359,6 +376,10 @@ function useDiskCacheLoader(clip) {
     // 3. We have a project handle to read from disk
     // 4. We're not already loading this clip
     if (!clip || !clip.cachePath || !currentProjectHandle) return
+    if (
+      clip.cacheKind !== 'full'
+      && normalizeFrameSamplingMode(clip.frameSampling) === FRAME_SAMPLING_MODE.OPTICAL_FLOW
+    ) return
     if (loadingCacheFromDisk.has(clip.id)) return
     
     // Check if we already have a valid loaded URL for this clip
@@ -413,7 +434,16 @@ function useDiskCacheLoader(clip) {
     }
     
     loadFromDisk()
-  }, [clip?.id, clip?.cachePath, clip?.cacheUrl, clip?.cacheStatus, currentProjectHandle, setCacheUrl])
+  }, [
+    clip?.id,
+    clip?.cachePath,
+    clip?.cacheUrl,
+    clip?.cacheStatus,
+    clip?.cacheKind,
+    clip?.frameSampling,
+    currentProjectHandle,
+    setCacheUrl,
+  ])
   
   return loadedUrl
 }
@@ -428,6 +458,11 @@ function useClipUrl(clip) {
   // Subscribe to the global proxy-preference toggle so the preview switches
   // tier live when the user flips it, without remounting components.
   const useProxyPlaybackForAssets = useTimelineStore(state => state.useProxyPlaybackForAssets)
+  const opticalFlowHandleSeconds = useTimelineStore((state) => getRequiredOpticalFlowHandleSeconds(
+    clip,
+    state.transitions,
+    state.clips
+  ))
   // Subscribe to this asset's URL so we re-render when playback cache is set (getAssetUrl alone doesn't trigger re-render)
   const assetUrl = useAssetsStore(state => {
     if (!clip?.assetId) return null
@@ -456,7 +491,10 @@ function useClipUrl(clip) {
 
     // Check if we have a valid cached render
     // Priority: diskLoadedUrl (freshly loaded) > clip.cacheUrl (from store)
-    if (clip.cacheStatus === 'cached') {
+    const cacheCanOverrideSampling = clip.cacheKind === 'full'
+      ? isFullBakeFresh(clip)
+      : normalizeFrameSamplingMode(clip.frameSampling) !== FRAME_SAMPLING_MODE.OPTICAL_FLOW
+    if (clip.cacheStatus === 'cached' && cacheCanOverrideSampling) {
       // Use disk-loaded URL if available (this is guaranteed fresh)
       if (diskLoadedUrl) {
         return { url: diskLoadedUrl, isCached: true }
@@ -471,13 +509,26 @@ function useClipUrl(clip) {
       }
     }
 
+    const opticalFlow = getOpticalFlowCacheUsability(clip, {
+      requireUrl: true,
+      handleSeconds: opticalFlowHandleSeconds,
+    })
+    if (opticalFlow.usable) {
+      return {
+        url: opticalFlow.cache.url,
+        isCached: false,
+        isOpticalFlow: true,
+        opticalFlowCache: opticalFlow.cache,
+      }
+    }
+
     // Use URL from assets store (includes playback cache when ready — subscription above ensures we re-render when it's set)
     if (clip.assetId && assetUrl) {
       return { url: assetUrl, isCached: false }
     }
     // Fallback to clip's stored URL (may be stale after refresh)
     return { url: clip.url, isCached: false }
-  }, [clip, clip?.assetId, clip?.cacheStatus, clip?.cacheUrl, clip?.id, diskLoadedUrl, assetUrl])
+  }, [clip, clip?.assetId, clip?.cacheStatus, clip?.cacheUrl, clip?.id, diskLoadedUrl, assetUrl, opticalFlowHandleSeconds])
 }
 
 /**
@@ -686,20 +737,12 @@ function useMaskFrameSelection(clip, playheadPosition, isCachedRender = false) {
   const frameIndex = useMemo(() => {
     if (!meta.isActive || !meta.maskAsset) return 0
     if (!Array.isArray(meta.maskAsset.maskFrames) || meta.maskAsset.maskFrames.length <= 1) return 0
-    const clipTime = playheadPosition - clip.startTime
-    const rawTimeScale = clip?.sourceTimeScale || (clip?.timelineFps && clip?.sourceFps
-      ? clip.timelineFps / clip.sourceFps
-      : 1)
-    const speed = Number(clip?.speed)
-    const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
-    const timeScale = rawTimeScale * speedScale
-    const reverse = !!clip?.reverse
-    const trimStart = clip.trimStart || 0
-    const rawTrimEnd = clip.trimEnd ?? meta.sourceDuration ?? trimStart
-    const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
-    const sourceTime = reverse
-      ? trimEnd - clipTime * timeScale
-      : trimStart + clipTime * timeScale
+    const sourceTime = getMappedClipPlaybackTimeAtTimeline(
+      clip,
+      playheadPosition,
+      0.001,
+      { useFrameSampling: false }
+    )
     const sourceProgress = meta.sourceDuration > 0
       ? Math.max(0, Math.min(1, sourceTime / meta.sourceDuration))
       : 0
@@ -712,14 +755,7 @@ function useMaskFrameSelection(clip, playheadPosition, isCachedRender = false) {
     meta.maskAsset,
     meta.maskFrameCount,
     meta.sourceDuration,
-    clip?.startTime,
-    clip?.sourceTimeScale,
-    clip?.timelineFps,
-    clip?.sourceFps,
-    clip?.speed,
-    clip?.reverse,
-    clip?.trimStart,
-    clip?.trimEnd,
+    clip,
     playheadPosition,
   ])
 
@@ -873,9 +909,11 @@ const MaskedVideoCanvas = memo(function MaskedVideoCanvas({
   const maskAssetRef = useRef(maskAsset)
   const frameIndexRef = useRef(frameIndex)
   const invertMaskRef = useRef(invertMask)
+  const clipRef = useRef(clip)
   useEffect(() => { maskAssetRef.current = maskAsset }, [maskAsset])
   useEffect(() => { frameIndexRef.current = frameIndex }, [frameIndex])
   useEffect(() => { invertMaskRef.current = invertMask }, [invertMask])
+  useEffect(() => { clipRef.current = clip }, [clip])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -899,11 +937,12 @@ const MaskedVideoCanvas = memo(function MaskedVideoCanvas({
     }
 
     const getVideo = () => {
-      const resolvedUrl = resolvePlaybackUrl(clip, getAssetById)
+      const currentClip = clipRef.current
+      const resolvedUrl = resolvePlaybackUrl(currentClip, getAssetById)
       if (!resolvedUrl) return null
       // videoCache keys on a { ...clip, url } shape. We build the same shape
       // rather than mutating the caller's clip object.
-      const clipWithUrl = { ...clip, url: resolvedUrl }
+      const clipWithUrl = { ...currentClip, url: resolvedUrl }
       return videoCache.getVideoElement(clipWithUrl)
     }
 
@@ -1063,9 +1102,17 @@ function logPlaybackDiag(event, payload = {}) {
 
 function resolvePlaybackUrl(clip, getAssetById, options = {}) {
   if (!clip || clip.type !== 'video') return null
-  if (clip.cacheStatus === 'cached' && clip.cacheUrl) {
+  const cacheCanOverrideSampling = clip.cacheKind === 'full'
+    ? isFullBakeFresh(clip)
+    : normalizeFrameSamplingMode(clip.frameSampling) !== FRAME_SAMPLING_MODE.OPTICAL_FLOW
+  if (clip.cacheStatus === 'cached' && clip.cacheUrl && cacheCanOverrideSampling) {
     return clip.cacheUrl
   }
+  const opticalFlow = getOpticalFlowCacheUsability(clip, {
+    requireUrl: true,
+    ...getOpticalFlowContextOptions(clip),
+  })
+  if (opticalFlow.usable) return opticalFlow.cache.url
   const asset = clip.assetId ? getAssetById(clip.assetId) : null
   // Tier chain (preview only): proxy → playback cache → source.
   // If callers don't explicitly pass the preference (e.g. a RAF tick inside
@@ -1116,7 +1163,12 @@ const VideoLayer = memo(function VideoLayer({
   const attemptedPlaybackFallbackRef = useRef(false)
   
   // Get the current valid URL (may be cached render or original)
-  const { url: clipUrl, isCached: isCachedRender } = useClipUrl(clip)
+  const {
+    url: clipUrl,
+    isCached: isCachedRender,
+    isOpticalFlow,
+    opticalFlowCache,
+  } = useClipUrl(clip)
   
   // Get sprite data for this clip's asset
   const getAssetSprite = useAssetsStore(state => state.getAssetSprite)
@@ -1155,8 +1207,12 @@ const VideoLayer = memo(function VideoLayer({
   const trimStart = clip?.trimStart || 0
   const rawTrimEnd = clip?.trimEnd ?? clip?.sourceDuration ?? (trimStart + (clip?.duration || 0) * timeScale)
   const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
-  const minTime = Math.min(trimStart, trimEnd)
-  const maxTime = Math.max(trimStart, trimEnd)
+  const rawOpticalCacheDuration = Number(opticalFlowCache?.sourceEnd) - Number(opticalFlowCache?.sourceStart)
+  const opticalCacheDuration = isOpticalFlow && Number.isFinite(rawOpticalCacheDuration)
+    ? Math.max(0, rawOpticalCacheDuration)
+    : null
+  const minTime = isOpticalFlow ? 0 : Math.min(trimStart, trimEnd)
+  const maxTime = isOpticalFlow ? opticalCacheDuration : Math.max(trimStart, trimEnd)
   
   // Calculate source time for sprite frame lookup
   const sourceTime = reverse
@@ -1595,10 +1651,7 @@ const VideoLayer = memo(function VideoLayer({
         const video = videoElementRef.current
         if (video && clip) {
           const currentPlayhead = useTimelineStore.getState().playheadPosition
-          const sourceTime = reverse
-            ? trimEnd - (currentPlayhead - clip.startTime) * timeScale
-            : trimStart + (currentPlayhead - clip.startTime) * timeScale
-          const clampedTime = Math.max(minTime, Math.min(sourceTime, maxTime))
+          const clampedTime = getClampedTimeForPlayhead(currentPlayhead)
           video.currentTime = clampedTime
         }
       }, 150)
@@ -1622,12 +1675,7 @@ const VideoLayer = memo(function VideoLayer({
   useEffect(() => {
     const video = videoElementRef.current
     if (!video || !clip) return
-    const sourceTime = reverse
-      ? trimEnd - clipTime * timeScale
-      : trimStart + clipTime * timeScale
-    
-    // Clamp sourceTime to valid range
-    const clampedTime = Math.max(minTime, Math.min(sourceTime, maxTime - 0.01)) // Stay slightly before end
+    const clampedTime = getClampedTimeForPlayhead(playheadPosition)
     
     // Calculate time difference
     const timeDiff = Math.abs(video.currentTime - clampedTime)
@@ -2786,14 +2834,14 @@ function VideoLayerRenderer({
     const transitionInfo = state.getTransitionAtTime(currentTime)
     const ids = new Set()
 
-    if (transitionInfo && transitionInfo.transition?.kind === 'between') {
+    if (transitionInfo && isBetweenClipTransition(transitionInfo.transition)) {
       for (const id of getTransitionClipIds(transitionInfo)) {
         ids.add(id)
       }
     }
 
     const nextTransition = state.transitions
-      .filter((transition) => transition?.kind === 'between')
+      .filter(isBetweenClipTransition)
       .map((transition) => {
         const clipA = state.clips.find((clip) => clip.id === transition.clipAId)
         const clipB = state.clips.find((clip) => clip.id === transition.clipBId)
@@ -2822,6 +2870,7 @@ function VideoLayerRenderer({
 
   const autoCacheClip = useCallback(async (clip) => {
     if (!clip || clip.type !== 'video') return
+    if (normalizeFrameSamplingMode(clip.frameSampling) === FRAME_SAMPLING_MODE.OPTICAL_FLOW) return
     if (clip.cacheStatus === 'cached' || renderCacheService.isRendering(clip.id)) return
 
     const enabledEffects = getEnabledEffects(clip.id)
@@ -2901,7 +2950,7 @@ function VideoLayerRenderer({
       const isCurrentlyActive = playheadPosition >= clipStart && playheadPosition < clipEnd
       const transitionInfo = useTimelineStore.getState().getTransitionAtTime(playheadPosition)
       const isTransitionIncomingClip = Boolean(
-        transitionInfo?.transition?.kind === 'between' &&
+        isBetweenClipTransition(transitionInfo?.transition) &&
         transitionInfo?.clipB?.id === clip.id
       )
       if (cachedVideo && cachedVideo.readyState >= 1 && (!isPlaying || !isCurrentlyActive || isTransitionIncomingClip)) {
@@ -3010,22 +3059,7 @@ function VideoLayerRenderer({
         const clipWithUrl = { ...clip, url: resolvedUrl }
         const cachedVideo = videoCache.getVideoElement(clipWithUrl)
         if (cachedVideo && cachedVideo.readyState >= 1) {
-          const baseScale = clip.sourceTimeScale || (clip.timelineFps && clip.sourceFps
-            ? clip.timelineFps / clip.sourceFps
-            : 1)
-          const speed = Number(clip.speed)
-          const speedScale = Number.isFinite(speed) && speed > 0 ? speed : 1
-          const timeScale = baseScale * speedScale
-          const reverse = !!clip.reverse
-          const trimStart = clip.trimStart || 0
-          const rawTrimEnd = clip.trimEnd ?? clip.sourceDuration ?? (trimStart + (clip.duration || 0) * timeScale)
-          const trimEnd = Number.isFinite(rawTrimEnd) ? rawTrimEnd : trimStart
-          const minTime = Math.min(trimStart, trimEnd)
-          const maxTime = Math.max(trimStart, trimEnd)
-          const sourceTime = reverse
-            ? trimEnd - (playheadPosition - clip.startTime) * timeScale
-            : trimStart + (playheadPosition - clip.startTime) * timeScale
-          const clampedTime = Math.max(minTime, Math.min(sourceTime, maxTime - 0.01))
+          const clampedTime = getClipPlaybackTimeAtTimeline(clip, playheadPosition)
           cachedVideo.currentTime = clampedTime
         }
       })

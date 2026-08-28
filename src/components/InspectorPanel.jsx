@@ -43,6 +43,16 @@ import { isManagedEffectType } from '../utils/effects'
 import { FRAME_RATE, TRANSITION_TYPES, TRANSITION_DEFAULT_SETTINGS } from '../constants/transitions'
 import { useI18n } from '../i18n/I18nContext'
 import FontFamilyPicker from './FontFamilyPicker'
+import {
+  buildOpticalFlowCache,
+  cancelOpticalFlowCache,
+  getOpticalFlowClipStatus,
+} from '../services/opticalFlowCache'
+import {
+  FRAME_SAMPLING_MODE,
+  getRequiredOpticalFlowTargetFps,
+  normalizeFrameSamplingMode,
+} from '../utils/frameSampling'
 
 // Clip speed UI: the store accepts 0.1x-8x continuously (timelineStore
 // clamps in updateClipSpeed). The slider is log-scaled so the slow-motion
@@ -549,6 +559,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
   const [isUpdatingLetterbox, setIsUpdatingLetterbox] = useState(false)
   const [letterboxUpdateError, setLetterboxUpdateError] = useState(null)
   const [inspectorSettingsClipboard, setInspectorSettingsClipboard] = useState(null)
+  const [opticalFlowUiError, setOpticalFlowUiError] = useState(null)
   // Flame-style "commit render" (flatten adjustment clip onto the stack).
   // Progress shape matches the exporter's onProgress payload.
   const [commitRenderState, setCommitRenderState] = useState({
@@ -585,6 +596,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     resizeClip,
     updateClipSpeed,
     updateClipReverse,
+    updateClipFrameSampling,
     updateAudioClipProperties,
     toggleKeyframe,
     setKeyframe,
@@ -699,6 +711,10 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     }
     return orderedSelectedClips[0] || null
   }, [orderedSelectedClips, inspectorClipId])
+
+  useEffect(() => {
+    setOpticalFlowUiError(null)
+  }, [selectedClip?.id])
   const transformHistorySessionClipRef = useRef(null)
   const adjustmentHistorySessionClipRef = useRef(null)
 
@@ -938,6 +954,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     return {
       speed: Number.isFinite(Number(clip.speed)) ? Number(clip.speed) : 1,
       reverse: !!clip.reverse,
+      frameSampling: normalizeFrameSamplingMode(clip.frameSampling),
     }
   }, [])
 
@@ -950,6 +967,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     if (clip.type === 'video') {
       next.speed = Number.isFinite(Number(clip.speed)) ? Number(clip.speed) : 1
       next.reverse = !!clip.reverse
+      next.frameSampling = normalizeFrameSamplingMode(clip.frameSampling)
     }
     return Object.keys(next).length > 0 ? next : null
   }, [])
@@ -967,6 +985,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
       }
       if (hasOwn(timingPayload, 'reverse')) {
         next.reverse = !!timingPayload.reverse
+      }
+      if (hasOwn(timingPayload, 'frameSampling')) {
+        next.frameSampling = normalizeFrameSamplingMode(timingPayload.frameSampling)
       }
     }
 
@@ -1353,7 +1374,10 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     if (!selectedClip || !canResetTiming) return false
     const currentSpeed = Number.isFinite(Number(selectedClip.speed)) ? Number(selectedClip.speed) : 1
     const currentReverse = !!selectedClip.reverse
-    return currentSpeed !== 1 || (selectedClip.type === 'video' && currentReverse)
+    const currentFrameSampling = normalizeFrameSamplingMode(selectedClip.frameSampling)
+    return currentSpeed !== 1
+      || (selectedClip.type === 'video' && currentReverse)
+      || (selectedClip.type === 'video' && currentFrameSampling !== FRAME_SAMPLING_MODE.FRAME)
   }, [canResetTiming, selectedClip])
 
   const handleResetTiming = useCallback(() => {
@@ -1361,10 +1385,12 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
 
     const currentSpeed = Number.isFinite(Number(selectedClip.speed)) ? Number(selectedClip.speed) : 1
     const currentReverse = !!selectedClip.reverse
+    const currentFrameSampling = normalizeFrameSamplingMode(selectedClip.frameSampling)
     const shouldResetSpeed = currentSpeed !== 1
     const shouldResetReverse = selectedClip.type === 'video' && currentReverse
+    const shouldResetFrameSampling = selectedClip.type === 'video' && currentFrameSampling !== FRAME_SAMPLING_MODE.FRAME
 
-    if (!shouldResetSpeed && !shouldResetReverse) {
+    if (!shouldResetSpeed && !shouldResetReverse && !shouldResetFrameSampling) {
       return false
     }
 
@@ -1375,8 +1401,29 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     if (shouldResetReverse) {
       updateClipReverse(selectedClip.id, false, false)
     }
+    if (shouldResetFrameSampling) {
+      updateClipFrameSampling(selectedClip.id, FRAME_SAMPLING_MODE.FRAME, false)
+    }
     return true
-  }, [canResetTiming, hasTimingResetChanges, saveToHistory, selectedClip, updateClipReverse, updateClipSpeed])
+  }, [canResetTiming, hasTimingResetChanges, saveToHistory, selectedClip, updateClipFrameSampling, updateClipReverse, updateClipSpeed])
+
+  const handleBuildOpticalFlow = useCallback(async () => {
+    if (!selectedClip || selectedClip.type !== 'video') return
+    setOpticalFlowUiError(null)
+    try {
+      await buildOpticalFlowCache(selectedClip.id)
+    } catch (error) {
+      if (!/cancelled/i.test(error?.message || '')) {
+        setOpticalFlowUiError(error?.message || 'Optical Flow could not be built.')
+      }
+    }
+  }, [selectedClip])
+
+  const handleCancelOpticalFlow = useCallback(async () => {
+    if (!selectedClip || selectedClip.type !== 'video') return
+    setOpticalFlowUiError(null)
+    await cancelOpticalFlowCache(selectedClip.id)
+  }, [selectedClip])
 
   const renderAdjustmentSlider = (control, values, groupKey = null) => {
     const propertyPath = groupKey ? `${groupKey}.${control.key}` : control.key
@@ -1965,8 +2012,16 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
       : targetScopedTimingSettings
     const shouldApplyTimingSpeed = Boolean(nextTiming && hasOwn(nextTiming, 'speed') && currentTimingSettings.speed !== nextTiming.speed)
     const shouldApplyTimingReverse = Boolean(nextTiming && hasOwn(nextTiming, 'reverse') && currentTimingSettings.reverse !== nextTiming.reverse)
+    const shouldApplyTimingFrameSampling = Boolean(
+      nextTiming
+      && hasOwn(nextTiming, 'frameSampling')
+      && currentTimingSettings.frameSampling !== nextTiming.frameSampling
+    )
     const shouldApplyTimingDuration = Boolean(nextTiming && hasOwn(nextTiming, 'duration') && currentTimingSettings.duration !== nextTiming.duration)
-    const shouldApplyTiming = shouldApplyTimingSpeed || shouldApplyTimingReverse || shouldApplyTimingDuration
+    const shouldApplyTiming = shouldApplyTimingSpeed
+      || shouldApplyTimingReverse
+      || shouldApplyTimingFrameSampling
+      || shouldApplyTimingDuration
     const shouldApplyAudio = objectHasDifferences(targetAudioSettings, nextAudio)
     const shouldApplyTextStyle = objectHasDifferences(targetTextStyle, nextTextStyle)
     const shouldApplyTitleAnimation = nextTitleAnimation !== undefined && (
@@ -2005,6 +2060,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     if (shouldApplyTimingReverse) {
       updateClipReverse(selectedClip.id, nextTiming.reverse, false)
     }
+    if (shouldApplyTimingFrameSampling) {
+      updateClipFrameSampling(selectedClip.id, nextTiming.frameSampling, false)
+    }
     if (shouldApplyTimingDuration) {
       resizeClip(selectedClip.id, nextTiming.duration)
     }
@@ -2040,6 +2098,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     transform,
     updateAudioClipProperties,
     updateClipAdjustments,
+    updateClipFrameSampling,
     updateClipReverse,
     updateClipSpeed,
     updateClipTransform,
@@ -2263,6 +2322,13 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
   // Handle render cache for clips with effects
   const handleRenderCache = useCallback(async () => {
     if (!selectedClip || isRendering) return
+    if (normalizeFrameSamplingMode(selectedClip.frameSampling) === FRAME_SAMPLING_MODE.OPTICAL_FLOW) {
+      setRenderProgress({
+        status: 'error',
+        error: 'Mask render caches cannot be combined with Optical Flow yet. The mask remains available in live preview and final export.',
+      })
+      return
+    }
     
     const enabledEffects = (selectedClip.effects || []).filter(
       (e) => e.enabled && !isManagedEffectType(e?.type)
@@ -3189,7 +3255,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
   const effectsHaveEdits = (clip, settings) => (Number(settings?.blur) || 0) > 0
     || clip?.transform?.motionBlurEnabled === true
     || (clip?.effects || []).some((effect) => effect?.enabled && effect.type !== 'mask')
-  const motionHasEdits = (clip) => (Number(clip?.speed) || 1) !== 1 || !!clip?.reverse
+  const motionHasEdits = (clip) => (Number(clip?.speed) || 1) !== 1
+    || !!clip?.reverse
+    || normalizeFrameSamplingMode(clip?.frameSampling) !== FRAME_SAMPLING_MODE.FRAME
   const maskHasEdits = (clip) => !!normalizeShapeMask(clip?.shapeMask)
     || (clip?.effects || []).some((effect) => effect?.enabled && effect.type === 'mask')
 
@@ -3206,6 +3274,25 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
     const typeBadgeClassName = isShapeInspector
       ? 'bg-cyan-500/15 text-cyan-300'
       : (isImageInspector ? 'bg-emerald-500/15 text-emerald-300' : 'bg-blue-500/15 text-blue-300')
+    const frameSamplingMode = normalizeFrameSamplingMode(selectedClip.frameSampling)
+    const opticalFlowSourceFps = Number(selectedAsset?.settings?.fps ?? selectedAsset?.fps ?? selectedClip.sourceFps) || timecodeFps
+    const opticalFlowTargetFps = getRequiredOpticalFlowTargetFps(selectedClip, {
+      timelineFps: timecodeFps,
+      sourceFps: opticalFlowSourceFps,
+    })
+    const opticalFlowStatus = getOpticalFlowClipStatus(selectedClip, {
+      timelineFps: timecodeFps,
+      sourceFps: opticalFlowSourceFps,
+      requireUrl: true,
+    })
+    const opticalFlowProgress = Math.max(0, Math.min(100, Number(selectedClip.opticalFlowCache?.progress) || 0))
+    const opticalFlowUnsupportedReason = selectedClip.reverse
+      ? 'Reverse playback is not supported yet.'
+      : selectedAsset?.settings?.hasAlpha === true
+        ? 'Transparent video is not supported yet.'
+        : opticalFlowTargetFps <= opticalFlowSourceFps + 0.001
+          ? 'This clip already supplies at least one source frame per timeline frame. Slow it down to use Optical Flow.'
+          : null
 
     const dotSettings = animatedAdjustments || baseAdjustments || {}
     const dotTransform = animatedTransform || transform || {}
@@ -3882,7 +3969,7 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
               label: 'Reset Timing',
               onClick: handleResetTiming,
               disabled: !hasTimingResetChanges,
-              title: 'Reset speed to 1x and clear reverse',
+              title: 'Reset speed to 1x, clear reverse, and use Frame sampling',
             }) : null,
           }),
         })}
@@ -3984,14 +4071,120 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
                 </div>
 
                 {selectedClip.type === 'video' && (
-                  <label className="flex items-center gap-2 text-[9px] text-sf-text-muted">
-                    <input
-                      type="checkbox"
-                      checked={!!selectedClip.reverse}
-                      onChange={(e) => updateClipReverse(selectedClip.id, e.target.checked, true)}
-                    />
-                    Reverse
-                  </label>
+                  <>
+                    <label className="flex items-center gap-2 text-[9px] text-sf-text-muted">
+                      <input
+                        type="checkbox"
+                        checked={!!selectedClip.reverse}
+                        onChange={(e) => updateClipReverse(selectedClip.id, e.target.checked, true)}
+                      />
+                      Reverse
+                    </label>
+
+                    <div className="rounded border border-sf-dark-600 bg-sf-dark-800/60 p-2 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <label htmlFor={`frame-sampling-${selectedClip.id}`} className="text-[9px] font-medium text-sf-text-secondary">
+                          Frame Sampling
+                        </label>
+                        <select
+                          id={`frame-sampling-${selectedClip.id}`}
+                          value={frameSamplingMode}
+                          onChange={(event) => {
+                            setOpticalFlowUiError(null)
+                            updateClipFrameSampling(selectedClip.id, event.target.value, true)
+                          }}
+                          className="min-w-0 flex-1 max-w-36 bg-sf-dark-700 border border-sf-dark-600 rounded px-2 py-1 text-[10px] text-sf-text-primary focus:outline-none focus:border-sf-accent"
+                        >
+                          <option value={FRAME_SAMPLING_MODE.FRAME}>Frame</option>
+                          <option value={FRAME_SAMPLING_MODE.BLEND}>Frame Blend</option>
+                          <option value={FRAME_SAMPLING_MODE.OPTICAL_FLOW}>Optical Flow (AI, Beta)</option>
+                        </select>
+                      </div>
+
+                      {frameSamplingMode === FRAME_SAMPLING_MODE.FRAME && (
+                        <p className="text-[9px] leading-relaxed text-sf-text-muted">
+                          Holds the nearest source frame during slow motion.
+                        </p>
+                      )}
+                      {frameSamplingMode === FRAME_SAMPLING_MODE.BLEND && (
+                        <p className="text-[9px] leading-relaxed text-sf-text-muted">
+                          Blends neighboring source frames during final export. Preview remains approximate.
+                        </p>
+                      )}
+                      {frameSamplingMode === FRAME_SAMPLING_MODE.OPTICAL_FLOW && (
+                        <div className="space-y-2">
+                          <p className="text-[9px] leading-relaxed text-sf-text-muted">
+                            Creates smoother in-between frames locally with GPU-powered AI. Audio timing is unchanged.
+                          </p>
+
+                          {opticalFlowUnsupportedReason ? (
+                            <div className="flex items-start gap-1.5 text-[9px] text-amber-300">
+                              <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" aria-hidden="true" />
+                              <span>{opticalFlowUnsupportedReason}</span>
+                            </div>
+                          ) : opticalFlowStatus.state === 'hydrating' ? (
+                            <div className="flex items-center gap-1.5 text-[9px] text-sf-text-secondary" role="status">
+                              <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
+                              Checking saved Optical Flow cache…
+                            </div>
+                          ) : opticalFlowStatus.state === 'rendering' ? (
+                            <div className="space-y-1.5">
+                              <div className="flex items-center justify-between text-[9px] text-sf-text-secondary">
+                                <span className="flex items-center gap-1">
+                                  <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
+                                  {selectedClip.opticalFlowCache?.phase === 'decoding'
+                                    ? 'Preparing source frames'
+                                    : selectedClip.opticalFlowCache?.phase === 'encoding'
+                                      ? 'Finishing smooth motion'
+                                      : 'Creating smooth motion'}
+                                </span>
+                                <span>{Math.round(opticalFlowProgress)}%</span>
+                              </div>
+                              <div className="h-1 overflow-hidden rounded bg-sf-dark-600">
+                                <div className="h-full bg-sf-accent transition-[width]" style={{ width: `${opticalFlowProgress}%` }} />
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => void handleCancelOpticalFlow()}
+                                className="w-full rounded border border-sf-dark-600 px-2 py-1 text-[9px] text-sf-text-secondary hover:border-sf-dark-500 hover:text-sf-text-primary"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {opticalFlowStatus.state === 'ready' && (
+                                <div className="flex items-center gap-1 text-[9px] text-emerald-300">
+                                  <Check className="w-3 h-3" aria-hidden="true" />
+                                  Ready at {Math.round(Number(opticalFlowStatus.cache?.targetFps) || opticalFlowTargetFps)} fps
+                                </div>
+                              )}
+                              {(opticalFlowUiError || selectedClip.opticalFlowCache?.error) && (
+                                <div className="flex items-start gap-1.5 text-[9px] text-red-300" role="alert">
+                                  <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" aria-hidden="true" />
+                                  <span>{opticalFlowUiError || selectedClip.opticalFlowCache.error}</span>
+                                </div>
+                              )}
+                              {opticalFlowStatus.state === 'stale' && !selectedClip.opticalFlowCache?.error && (
+                                <div className="text-[9px] text-amber-300">The clip timing changed. Rebuild the cache.</div>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => void handleBuildOpticalFlow()}
+                                disabled={!!opticalFlowUnsupportedReason}
+                                className="w-full rounded border border-sf-accent/50 bg-sf-accent/15 px-2 py-1.5 text-[9px] font-medium text-sf-text-primary hover:bg-sf-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {opticalFlowStatus.state === 'ready' ? 'Rebuild Optical Flow' : 'Build Optical Flow Cache'}
+                              </button>
+                              <p className="text-[8px] leading-relaxed text-sf-text-muted">
+                                Analyzes only this clip's used source range and stores the result in the project cache.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             )}
@@ -4147,7 +4340,8 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
                     <>
                       <button
                         onClick={handleRenderCache}
-                        className="flex-1 flex items-center justify-center gap-1.5 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-[10px] rounded transition-colors"
+                        disabled={normalizeFrameSamplingMode(selectedClip.frameSampling) === FRAME_SAMPLING_MODE.OPTICAL_FLOW}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-[10px] rounded transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <Play className="w-3 h-3" />
                         {selectedClip.cacheStatus === 'cached' ? 'Re-render' : 
@@ -4176,7 +4370,9 @@ function InspectorPanel({ isExpanded, onToggleExpanded, isFullHeight = false, on
                 
                 {/* Info text */}
                 <p className="text-[9px] text-sf-text-muted">
-                  {selectedClip.cacheStatus === 'cached' 
+                  {normalizeFrameSamplingMode(selectedClip.frameSampling) === FRAME_SAMPLING_MODE.OPTICAL_FLOW
+                    ? 'Mask render cache is disabled while Optical Flow is selected; masks still render live and on export.'
+                    : selectedClip.cacheStatus === 'cached'
                     ? 'Using cached render for smooth playback'
                     : 'Render cache for smooth masked playback'}
                 </p>

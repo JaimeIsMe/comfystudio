@@ -44,7 +44,7 @@ import {
 import MasterAudioMeter from './AudioMeter'
 import GenerateMusicPopover from './GenerateMusicPopover'
 import { analyzeAudioSource } from '../services/audioAnalysis'
-import { getClipPlaybackTimeAtTimeline } from './CanvasPreviewRenderer'
+import { getClipPlaybackTimeAtTimeline } from '../utils/clipPlaybackTiming'
 import { canRevealAssetInFileManager, getRevealInFileManagerLabel, revealAssetInFileManager } from '../utils/revealInFileManager'
 import { useI18n } from '../i18n/I18nContext'
 import { quoteCssFontFamily } from '../utils/fontFamily'
@@ -1126,7 +1126,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
     // Same speed/ramp/reverse/trim math the preview uses, so the source
     // player lands on the frame the monitor is showing.
     const seekTime = playheadInside
-      ? getClipPlaybackTimeAtTimeline(targetClip, playhead, 0)
+      ? getClipPlaybackTimeAtTimeline(targetClip, playhead, 0, { useFrameSampling: false })
       : (Number(targetClip.trimStart) || 0)
 
     const trimStart = Number(targetClip.trimStart) || 0
@@ -2859,6 +2859,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
       enabled: isClipEnabled(clip),
       transform: clip.transform,
       effects: clip.effects,
+      frameSampling: clip.type === 'video' ? clip.frameSampling : undefined,
       ...(audioSplitState?.rightClipOptions || {}),
       saveHistory: false,
     })
@@ -4044,6 +4045,7 @@ function Timeline({ onActiveToolChange, onStatusChange }) {
               enabled: isClipEnabled(clip),
               transform: clip.transform,
               effects: clip.effects,
+              frameSampling: clip.type === 'video' ? clip.frameSampling : undefined,
               ...(clip.type === 'audio'
                 ? {
                     gainDb: clip.gainDb,

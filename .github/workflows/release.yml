@@ -23,6 +23,32 @@ env:
   RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
+  preflight:
+    name: Release Preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Verify RIFE source and package hardening
+        run: npm run test:rife-hardening
+
+      - name: Verify native media helpers
+        run: npm run runtime:verify-native
+
   ensure-release:
     name: Ensure Release Exists
     runs-on: ubuntu-latest
@@ -48,12 +74,14 @@ jobs:
 
   build-windows:
     name: Build Windows
-    needs: ensure-release
-    runs-on: windows-latest
+    needs: [ensure-release, preflight]
+    runs-on: windows-2022
     env:
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      npm_config_arch: x64
+      npm_config_platform: win32
     steps:
       - uses: actions/checkout@v6
         with:
@@ -86,8 +114,48 @@ jobs:
           Import-Module TrustedSigning -ErrorAction Stop
           Get-Command Invoke-TrustedSigning | Out-Null
 
+      - name: Install pinned Vulkan SDK
+        shell: pwsh
+        run: |
+          $pins = Get-Content scripts/rife-runtime/pins.json -Raw | ConvertFrom-Json
+          $sdk = $pins.optionalSdks.vulkanWindowsX64
+          $installer = Join-Path $env:RUNNER_TEMP "VulkanSDK-$($sdk.version)-Installer.exe"
+          Invoke-WebRequest -Uri $sdk.url -OutFile $installer
+          $actual = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
+          if ($actual -ne $sdk.sha256) {
+            throw "Vulkan SDK hash mismatch: expected $($sdk.sha256), got $actual"
+          }
+          $process = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList @(
+            '--accept-licenses',
+            '--default-answer',
+            '--confirm-command',
+            'install'
+          )
+          if ($process.ExitCode -ne 0) {
+            throw "Vulkan SDK installer failed with status $($process.ExitCode)"
+          }
+          $sdkRoot = "C:\VulkanSDK\$($sdk.version)"
+          if (-not (Test-Path (Join-Path $sdkRoot 'Include\vulkan\vulkan.h'))) {
+            throw "Vulkan SDK was not installed at $sdkRoot"
+          }
+          "VULKAN_SDK=$sdkRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          (Join-Path $sdkRoot 'Bin') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Install dependencies
         run: npm ci
+
+      - name: Build and verify Windows RIFE runtime
+        shell: pwsh
+        run: |
+          python scripts/rife-runtime/build.py build `
+            --platform win32 `
+            --arch x64 `
+            --generator "Visual Studio 17 2022" `
+            --vulkan-sdk $env:VULKAN_SDK `
+            --work-dir (Join-Path $env:RUNNER_TEMP 'vrife') `
+            --clean `
+            --replace
+          node scripts/runtime-package-gate.cjs staged --platform win32 --arch x64
 
       - name: Read app version
         id: app_version
@@ -97,7 +165,29 @@ jobs:
           "app_version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Build Windows artifacts
-        run: npm run build && npx electron-builder --win --publish never
+        run: npm run build && npx electron-builder --win --x64 --publish never
+
+      - name: Verify packaged Windows runtime and signatures
+        shell: pwsh
+        run: |
+          $resources = Join-Path $PWD 'release\win-unpacked\resources'
+          foreach ($executable in @(
+            (Join-Path $PWD 'release\win-unpacked\Velorn.exe'),
+            (Join-Path $resources 'bin\rife\rife-ncnn-vulkan.exe'),
+            (Join-Path $resources 'bin\ffmpeg.exe'),
+            (Join-Path $resources 'bin\ffprobe.exe')
+          )) {
+            $signature = Get-AuthenticodeSignature $executable
+            if ($signature.Status -ne 'Valid') {
+              throw "Invalid Authenticode signature for $executable`: $($signature.Status)"
+            }
+          }
+          node scripts/runtime-package-gate.cjs packaged `
+            --resources $resources `
+            --platform win32 `
+            --arch x64 `
+            --signed-package `
+            --host-executable (Join-Path $PWD 'release\win-unpacked\Velorn.exe')
 
       - name: Upload Windows release assets
         shell: pwsh
@@ -112,8 +202,11 @@ jobs:
 
   build-linux:
     name: Build Linux
-    needs: ensure-release
+    needs: [ensure-release, preflight]
     runs-on: ubuntu-latest
+    env:
+      npm_config_arch: x64
+      npm_config_platform: linux
     steps:
       - uses: actions/checkout@v6
         with:
@@ -130,10 +223,54 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             binutils \
-            fakeroot
+            build-essential \
+            cmake \
+            fakeroot \
+            libvulkan-dev \
+            mesa-vulkan-drivers \
+            ninja-build \
+            vulkan-tools
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Build and verify Linux RIFE runtime
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            ubuntu:20.04 \
+            /bin/bash -euo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                binutils \
+                build-essential \
+                ca-certificates \
+                cmake \
+                git \
+                libvulkan-dev \
+                ninja-build \
+                python3
+              python3 scripts/rife-runtime/build.py build \
+                --platform linux \
+                --arch x64 \
+                --clean \
+                --replace
+            '
+          sudo chown -R "$(id -u):$(id -g)" \
+            build/rife-runtime/linux-x64 \
+            build/rife-runtime-work/linux-x64
+          LAVAPIPE_ICD=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' -print -quit)
+          if [ -z "$LAVAPIPE_ICD" ]; then
+            echo "Mesa lavapipe Vulkan driver was not found" >&2
+            exit 1
+          fi
+          VK_ICD_FILENAMES="$LAVAPIPE_ICD" \
+            node scripts/runtime-package-gate.cjs staged \
+              --platform linux \
+              --arch x64 \
+              --smoke-rife
 
       - name: Prepare Linux icons
         run: |
@@ -148,7 +285,14 @@ jobs:
           echo "app_version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build Linux artifacts
-        run: npm run build && npx electron-builder --linux --publish never
+        run: npm run build && npx electron-builder --linux --x64 --publish never
+
+      - name: Verify packaged Linux runtime
+        run: |
+          node scripts/runtime-package-gate.cjs packaged \
+            --resources release/linux-unpacked/resources \
+            --platform linux \
+            --arch x64
 
       - name: Upload Linux release assets
         env:
@@ -161,15 +305,27 @@ jobs:
             --clobber
 
   build-macos:
-    name: Build macOS
-    needs: ensure-release
-    runs-on: macos-latest
+    name: Build macOS (${{ matrix.arch }})
+    needs: [ensure-release, preflight]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: macos-15-intel
+            asset_label: Mac (Intel)
+          - arch: arm64
+            runner: macos-15
+            asset_label: Mac (Apple Silicon)
     env:
       CSC_LINK: ${{ secrets.CSC_LINK }}
       CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      npm_config_arch: ${{ matrix.arch }}
+      npm_config_platform: darwin
     steps:
       - uses: actions/checkout@v6
         with:
@@ -181,8 +337,38 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
+      - name: Install native build tools
+        run: brew install ninja
+
+      - name: Install pinned MoltenVK SDK
+        run: |
+          SDK_URL=$(node -p "require('./scripts/rife-runtime/pins.json').optionalSdks.moltenVkMac.url")
+          SDK_SHA=$(node -p "require('./scripts/rife-runtime/pins.json').optionalSdks.moltenVkMac.sha256")
+          SDK_ARCHIVE="$RUNNER_TEMP/MoltenVK-all.tar"
+          SDK_PARENT="$RUNNER_TEMP/moltenvk-sdk"
+          curl --fail --location --retry 3 "$SDK_URL" --output "$SDK_ARCHIVE"
+          echo "$SDK_SHA  $SDK_ARCHIVE" | shasum -a 256 --check
+          mkdir -p "$SDK_PARENT"
+          tar -xf "$SDK_ARCHIVE" -C "$SDK_PARENT"
+          SDK_ROOT="$SDK_PARENT/MoltenVK/MoltenVK"
+          test -f "$SDK_ROOT/include/vulkan/vulkan.h"
+          test -f "$SDK_ROOT/static/MoltenVK.xcframework/macos-arm64_x86_64/libMoltenVK.a"
+          echo "MOLTENVK_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+
       - name: Install dependencies
         run: npm ci
+
+      - name: Build and verify macOS RIFE runtime
+        run: |
+          python3 scripts/rife-runtime/build.py build \
+            --platform darwin \
+            --arch "${{ matrix.arch }}" \
+            --vulkan-sdk "$MOLTENVK_SDK_ROOT" \
+            --clean \
+            --replace
+          node scripts/runtime-package-gate.cjs staged \
+            --platform darwin \
+            --arch "${{ matrix.arch }}"
 
       - name: Assert macOS signing and notarization secrets
         run: |
@@ -213,7 +399,29 @@ jobs:
           echo "app_version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build macOS artifacts
-        run: npm run build && npx electron-builder --mac --publish never
+        run: npm run build && npx electron-builder --mac --${{ matrix.arch }} --publish never
+
+      - name: Verify packaged macOS runtime and signatures
+        run: |
+          APP_PATH=$(find release -type d -name 'Velorn.app' -print -quit)
+          if [ -z "$APP_PATH" ]; then
+            echo "Packaged Velorn.app was not found" >&2
+            exit 1
+          fi
+          RESOURCES="$APP_PATH/Contents/Resources"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          for executable in \
+            "$RESOURCES/bin/rife/rife-ncnn-vulkan" \
+            "$RESOURCES/bin/ffmpeg" \
+            "$RESOURCES/bin/ffprobe"; do
+            codesign --verify --strict --verbose=2 "$executable"
+          done
+          node scripts/runtime-package-gate.cjs packaged \
+            --resources "$RESOURCES" \
+            --platform darwin \
+            --arch "${{ matrix.arch }}" \
+            --signed-package \
+            --host-executable "$APP_PATH/Contents/MacOS/Velorn"
 
       - name: Upload macOS release assets
         env:
@@ -221,6 +429,5 @@ jobs:
         run: |
           VERSION="${{ steps.app_version.outputs.app_version }}"
           gh release upload "$RELEASE_TAG" \
-            "release/Velorn-${VERSION}-mac-arm64.dmg#Mac (Apple Silicon)" \
-            "release/Velorn-${VERSION}-mac-x64.dmg#Mac (Intel)" \
+            "release/Velorn-${VERSION}-mac-${{ matrix.arch }}.dmg#${{ matrix.asset_label }}" \
             --clobber

@@ -9,8 +9,7 @@ const { PassThrough } = require('node:stream')
 const { spawnSync } = require('node:child_process')
 
 const ffmpegPath = require('ffmpeg-static')
-const ffprobePackage = require('ffprobe-static')
-const ffprobePath = ffprobePackage?.path || ffprobePackage
+const ffprobePath = require('@derhuerst/ffprobe-static')
 const {
   GIF_DITHER_FILTER,
   GIF_PALETTE_FILTER,
