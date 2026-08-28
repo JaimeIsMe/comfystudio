@@ -150,6 +150,7 @@ test('source patch removes WebP linkage and exposes PNG-only stb paths', () => {
   assert.match(patch, /^-\s+add_subdirectory\(libwebp\)/m)
   assert.match(patch, /^-set\(RIFE_LINK_LIBRARIES ncnn webp /m)
   assert.match(patch, /^\+set\(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded"\)/m)
+  assert.match(patch, /^\+#include <objbase\.h>/m)
   assert.match(patch, /^\+#define STBI_ONLY_PNG/m)
   assert.match(patch, /^\+\s+int success = stbi_write_png_to_func\(/m)
   assert.match(patch, /^\+\s+if \(format != PATHSTR\("png"\)\)/m)

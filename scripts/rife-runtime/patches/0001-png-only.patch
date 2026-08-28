@@ -72,10 +72,14 @@ diff --git a/src/main.cpp b/src/main.cpp
 index 2b47317..666b9b7 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
-@@ -6,23 +6,16 @@
+@@ -6,23 +6,20 @@
  #include <vector>
  #include <clocale>
  
++#if _WIN32
++#include <objbase.h>
++#endif
++
 -#if _WIN32
 -// image decoder and encoder with wic
 -#include "wic_image.h"
