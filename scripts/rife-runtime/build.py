@@ -90,6 +90,23 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def canonical_patch_bytes(path: Path = PATCH_PATH) -> bytes:
+    """Return the trusted patch with deterministic LF line endings."""
+    raw = path.read_bytes()
+    normalized = raw.replace(b"\r\n", b"\n")
+    if b"\r" in normalized:
+        raise BuildError(f"Source patch contains unsupported carriage returns: {path}")
+    try:
+        normalized.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise BuildError(f"Source patch is not valid UTF-8: {path}") from error
+    return normalized
+
+
+def sha256_source_patch(path: Path = PATCH_PATH) -> str:
+    return hashlib.sha256(canonical_patch_bytes(path)).hexdigest()
+
+
 def write_text_lf(path: Path, contents: str) -> None:
     """Write deterministic LF text on every supported Python/platform pair."""
     with path.open("w", encoding="utf-8", newline="\n") as handle:
@@ -297,8 +314,10 @@ def prepare_source(
         shutil.copy2(source_header, wrapper_dir / "src" / filename)
         verify_file(wrapper_dir / "src" / filename, expected, f"patched source/{filename}")
 
-    run(["git", "-C", wrapper_dir, "apply", "--check", PATCH_PATH])
-    run(["git", "-C", wrapper_dir, "apply", PATCH_PATH])
+    canonical_patch_path = work_dir / "source-patch.lf"
+    write_text_lf(canonical_patch_path, canonical_patch_bytes().decode("utf-8"))
+    run(["git", "-C", wrapper_dir, "apply", "--check", canonical_patch_path])
+    run(["git", "-C", wrapper_dir, "apply", canonical_patch_path])
 
     # These upstream WebP helpers are not referenced after the patch. Removing
     # them as well makes accidental reintroduction during later CMake edits fail
@@ -671,7 +690,7 @@ def stage_runtime(
 
         license_files = sorted(f"licenses/{filename}" for filename in applicable_licenses.values())
 
-        patch_hash = sha256_file(PATCH_PATH)
+        patch_hash = sha256_source_patch()
         provenance = {
             "schemaVersion": 1,
             "platform": args.platform,
@@ -833,7 +852,7 @@ def verify_staged_runtime(stage_dir: Path) -> dict[str, Any]:
 
     expected_source_patch = {
         "path": PATCH_PATH.relative_to(REPO_ROOT).as_posix(),
-        "sha256": sha256_file(PATCH_PATH),
+        "sha256": sha256_source_patch(),
         "removedUpstreamFiles": ["src/FindWebP.cmake", "src/webp_image.h"],
         "unfetchedSubmodules": ["src/libwebp"],
     }

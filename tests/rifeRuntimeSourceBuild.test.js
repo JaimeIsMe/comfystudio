@@ -183,6 +183,28 @@ test('builder forces LF source checkouts instead of inheriting Windows autocrlf'
   assert.doesNotMatch(source, /\b(?:str|Path) \| (?:str|Path|None)\b/)
 })
 
+test('builder canonicalizes a Windows CRLF checkout of the trusted patch', (t) => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'velorn-rife-crlf-patch-'))
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
+  const crlfPatch = path.join(temporary, 'source.patch')
+  const canonical = fs.readFileSync(patchPath, 'utf8').replace(/\r?\n/g, '\r\n')
+  fs.writeFileSync(crlfPatch, canonical, 'utf8')
+
+  const probe = [
+    'import importlib.util, pathlib, sys',
+    'spec = importlib.util.spec_from_file_location("velorn_rife_builder", sys.argv[1])',
+    'module = importlib.util.module_from_spec(spec)',
+    'spec.loader.exec_module(module)',
+    'print(module.sha256_source_patch(pathlib.Path(sys.argv[2])))',
+  ].join('; ')
+  const result = spawnSync('python3', ['-c', probe, scriptPath, crlfPatch], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stdout.trim(), hashFile(patchPath))
+})
+
 test('builder enables the pinned ncnn source on modern CMake releases', () => {
   const source = fs.readFileSync(scriptPath, 'utf8')
   assert.match(source, /-DCMAKE_POLICY_VERSION_MINIMUM=3\.5/)
