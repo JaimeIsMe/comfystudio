@@ -274,6 +274,17 @@ function readMacSigningIdentity(filePath) {
   return { teamIdentifier, identifier }
 }
 
+function windowsSignatureEnvironment(environment = process.env) {
+  const result = { ...environment }
+  // GitHub Actions launches electron-builder from PowerShell 7, whose module
+  // path is not compatible with the Windows PowerShell process used below.
+  // Omitting it lets powershell.exe restore its native built-in module paths.
+  for (const key of Object.keys(result)) {
+    if (key.toLowerCase() === 'psmodulepath') delete result[key]
+  }
+  return result
+}
+
 function readWindowsSigningIdentities(targetPath, hostExecutablePath) {
   const script = [
     "$ErrorActionPreference = 'Stop'",
@@ -299,7 +310,7 @@ function readWindowsSigningIdentities(targetPath, hostExecutablePath) {
     '-Command', script,
   ], {
     env: {
-      ...process.env,
+      ...windowsSignatureEnvironment(),
       VELORN_RIFE_SIGNATURE_TARGET: targetPath,
       VELORN_RIFE_SIGNATURE_HOST: hostExecutablePath || '',
     },
@@ -662,4 +673,5 @@ module.exports = {
   sha256File,
   validateRifeRuntime,
   verifyPlatformSignature,
+  windowsSignatureEnvironment,
 }

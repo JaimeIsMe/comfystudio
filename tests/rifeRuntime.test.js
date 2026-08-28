@@ -4,7 +4,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
-const { resolveRifeRuntime } = require('../electron/rifeRuntime')
+const { resolveRifeRuntime, windowsSignatureEnvironment } = require('../electron/rifeRuntime')
 
 function createRuntime(root, platform = 'linux') {
   fs.mkdirSync(path.join(root, 'rife-v4.6'), { recursive: true })
@@ -52,4 +52,16 @@ test('reports a missing model or executable without guessing another path', (t) 
   assert.equal(result.available, false)
   assert.equal(result.missingPaths.length, 3)
   assert.match(result.error, /smooth-motion engine is missing/i)
+})
+
+test('Windows signature checks discard incompatible inherited PowerShell module paths', () => {
+  const environment = windowsSignatureEnvironment({
+    Path: 'C:\\Windows\\System32',
+    PSModulePath: 'C:\\Program Files\\PowerShell\\Modules',
+    pSmOdUlEpAtH: 'C:\\another-inherited-module-path',
+    VELORN_TEST_VALUE: 'preserved',
+  })
+  assert.equal(environment.Path, 'C:\\Windows\\System32')
+  assert.equal(environment.VELORN_TEST_VALUE, 'preserved')
+  assert.equal(Object.keys(environment).some((key) => key.toLowerCase() === 'psmodulepath'), false)
 })
