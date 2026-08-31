@@ -59,6 +59,11 @@ const {
 } = require('./mainWindowBounds')
 const { createRifeInterpolationCache } = require('./rifeInterpolation')
 const { resolveRifeRuntime } = require('./rifeRuntime')
+const {
+  ProvenanceExportError,
+  inspectProvenanceExport,
+  validatePublicProvenanceReviewUrl,
+} = require('./provenanceExport')
 
 const isDev = !app.isPackaged
 
@@ -5132,6 +5137,41 @@ ipcMain.handle('shell:openExternal', async (_event, url) => {
     return { success: true }
   } catch (error) {
     return { success: false, error: error?.message || 'Failed to open URL.' }
+  }
+})
+
+// Provenance remains an explicit, local-first post-export action. This
+// handler streams the finished file through SHA-256 and returns only the
+// allowlisted public facts; it never returns media bytes or the local path.
+ipcMain.handle('provenance:inspectExport', async (_event, outputPath) => {
+  try {
+    const inspection = await inspectProvenanceExport(outputPath)
+    return { success: true, ...inspection }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof ProvenanceExportError
+        ? error.message
+        : 'Could not prepare the finished export for provenance review.',
+    }
+  }
+})
+
+// Keep the browser/network boundary out of Electron. The renderer supplies a
+// fully reviewed issue link, and main opens it only after pinning the exact
+// public HTTPS host, project path, and #issue/v1 fragment shape.
+ipcMain.handle('provenance:openReview', async (_event, reviewUrl) => {
+  try {
+    const target = validatePublicProvenanceReviewUrl(reviewUrl)
+    await shell.openExternal(target)
+    return { success: true }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof ProvenanceExportError
+        ? error.message
+        : 'Could not open the public provenance review.',
+    }
   }
 })
 

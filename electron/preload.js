@@ -90,6 +90,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   writeFileFromArrayBuffer: (filePath, arrayBuffer) => ipcRenderer.invoke('fs:writeFileFromArrayBuffer', filePath, arrayBuffer),
 
+  // Creator provenance is deliberately narrower than the general filesystem
+  // and shell bridges: hash one finished export locally, then open only the
+  // fixed public #issue/v1 review page after a separate user action.
+  inspectExportForProvenance: (outputPath) => ipcRenderer.invoke('provenance:inspectExport', outputPath),
+  openProvenanceReview: (reviewUrl) => ipcRenderer.invoke('provenance:openReview', reviewUrl),
+
   // ============================================
   // Export Operations
   // ============================================

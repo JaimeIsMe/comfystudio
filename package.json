@@ -44,6 +44,7 @@
     "test:audio-preview": "node --test ./src/utils/audioPreviewScheduling.test.js",
     "test:audio-clip-split": "node --test ./src/utils/audioClipSplit.test.js",
     "test:hardware-export-ffmpeg": "node --test ./tests/hardwareExportFfmpeg.test.js",
+    "test:creator-provenance": "node --test ./src/services/creatorProvenance.test.mjs ./tests/provenanceExport.test.js ./tests/creatorProvenanceIntegration.test.js",
     "test:system-fonts": "node --test ./tests/systemFonts.test.js ./src/services/systemFonts.test.js ./src/utils/fontFamily.test.mjs",
     "test:gif-import": "node --test ./tests/animatedGifTranscode.test.js",
     "test:gif-export": "node --test ./tests/gifExportFfmpeg.test.js",

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Download, Plus, Trash2, Play, Settings, Film, Clock, RotateCcw, Sparkles, Square } from 'lucide-react'
+import { Download, Plus, Trash2, Play, Settings, Film, Clock, RotateCcw, Sparkles, Square, ShieldCheck, ExternalLink } from 'lucide-react'
 import useProjectStore, { RESOLUTION_PRESETS, FPS_PRESETS } from '../stores/projectStore'
 import useTimelineStore from '../stores/timelineStore'
 import useAssetsStore from '../stores/assetsStore'
@@ -29,8 +29,43 @@ import {
 import { useI18n } from '../i18n/I18nContext'
 import { hasUsableProxy } from '../services/proxyCache'
 import { normalizeTransparentExportSettings, supportsTransparentExport } from '../utils/alphaMedia.mjs'
+import {
+  createCreatorProvenanceReview,
+  isProvenanceEligibleExport,
+} from '../services/creatorProvenance.mjs'
 
 const EXPORT_SETTINGS_STORAGE_PREFIX = 'comfystudio-export-settings-v1'
+
+const EMPTY_PROVENANCE_REVIEW = Object.freeze({
+  status: 'idle',
+  review: null,
+  error: '',
+  notice: '',
+})
+
+function publicProvenanceFields(review, t) {
+  const { request } = review
+  return [
+    [t('export.provenance.fields.requestContract'), request.contract],
+    [t('export.provenance.fields.contractVersion'), String(request.version)],
+    [t('export.provenance.fields.requestId'), request.requestId],
+    [t('export.provenance.fields.network'), request.network],
+    [t('export.provenance.fields.mediaSha256'), request.media.sha256],
+    [t('export.provenance.fields.manifestContract'), request.manifest.contract],
+    [t('export.provenance.fields.manifestVersion'), String(request.manifest.version)],
+    [t('export.provenance.fields.creatorStatement'), request.manifest.statement],
+    [t('export.provenance.fields.declaredAt'), request.manifest.declaredAt],
+    [t('export.provenance.fields.mediaByteLength'), request.manifest.media.byteLength],
+    [t('export.provenance.fields.mimeType'), request.manifest.media.mimeType],
+    [t('export.provenance.fields.lifecycleContract'), request.manifest.lifecycle.contract],
+    [t('export.provenance.fields.lifecycleVersion'), String(request.manifest.lifecycle.version)],
+    [t('export.provenance.fields.lifecycleAction'), request.manifest.lifecycle.action],
+    [t('export.provenance.fields.committedMediaSha256'), request.commitment.mediaSha256],
+    [t('export.provenance.fields.manifestSha256'), request.commitment.manifestSha256],
+    [t('export.provenance.fields.commitmentStatement'), request.commitment.statementType],
+    [t('export.provenance.fields.commitmentVersion'), String(request.commitment.version)],
+  ]
+}
 
 const EXPORT_FORMATS = [
   { id: 'mp4', label: 'MP4 (H.264/H.265)' },
@@ -405,6 +440,8 @@ function ExportPanel() {
   const [exportProgress, setExportProgress] = useState(0)
   const [exportError, setExportError] = useState(null)
   const [exportResult, setExportResult] = useState(null)
+  const [manualProvenanceCandidate, setManualProvenanceCandidate] = useState(null)
+  const [provenanceReviewState, setProvenanceReviewState] = useState(EMPTY_PROVENANCE_REVIEW)
   const [externalExportNotice, setExternalExportNotice] = useState(null)
   const [etaSeconds, setEtaSeconds] = useState(null)
   const [renderFps, setRenderFps] = useState(null)
@@ -452,6 +489,7 @@ function ExportPanel() {
   // successful worker startup as a completed export.
   const workerExportCompletionRef = useRef(null)
   const nvencCheckRequestRef = useRef(0)
+  const provenanceAttemptRef = useRef(0)
   const [nvencStatus, setNvencStatus] = useState({
     checked: false,
     available: false,
@@ -475,6 +513,10 @@ function ExportPanel() {
   useEffect(() => {
     if (previousSettingsStorageKeyRef.current === settingsStorageKey) return
     previousSettingsStorageKeyRef.current = settingsStorageKey
+    provenanceAttemptRef.current += 1
+    setManualProvenanceCandidate(null)
+    setProvenanceReviewState(EMPTY_PROVENANCE_REVIEW)
+    setExportResult(null)
     setSettings(loadSavedExportSettings(settingsStorageKey, defaultSettings))
     setQueue([])
   }, [defaultSettings, settingsStorageKey])
@@ -486,6 +528,13 @@ function ExportPanel() {
   useEffect(() => {
     queueRef.current = queue
   }, [queue])
+
+  useEffect(() => () => {
+    // Hashing runs in the main process, so unmounting cannot safely abort the
+    // file descriptor mid-read. Invalidating the attempt guarantees a late
+    // result can never restore a stale review in this panel.
+    provenanceAttemptRef.current += 1
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -598,6 +647,9 @@ function ExportPanel() {
       if (!completion) {
         // Agent/MCP exports intentionally return after startup. Preserve their
         // visible progress without giving them ownership of a UI job promise.
+        provenanceAttemptRef.current += 1
+        setManualProvenanceCandidate(null)
+        setProvenanceReviewState(EMPTY_PROVENANCE_REVIEW)
         setIsExporting(true)
         setExportError(null)
         setExportResult(null)
@@ -625,6 +677,11 @@ function ExportPanel() {
         })
         return
       }
+      if (!completion) {
+        provenanceAttemptRef.current += 1
+        setManualProvenanceCandidate(null)
+        setProvenanceReviewState(EMPTY_PROVENANCE_REVIEW)
+      }
       // Stringified so saved devtools logs keep nested fields (frameSources,
       // perf) instead of collapsing them to {…}.
       console.log('[ExportPanel] Worker export complete', JSON.stringify(data))
@@ -647,6 +704,11 @@ function ExportPanel() {
             : `Background export failed: ${msg || 'Unknown error'}`,
         })
         return
+      }
+      if (!completion) {
+        provenanceAttemptRef.current += 1
+        setManualProvenanceCandidate(null)
+        setProvenanceReviewState(EMPTY_PROVENANCE_REVIEW)
       }
       workerExportCompletionRef.current = null
       if (isCleanExportCancellation(msg)) {
@@ -913,6 +975,9 @@ function ExportPanel() {
 
   const runQueue = async () => {
     if (queueControllerRef.current.running) return
+    provenanceAttemptRef.current += 1
+    setManualProvenanceCandidate(null)
+    setProvenanceReviewState(EMPTY_PROVENANCE_REVIEW)
     queueControllerRef.current.running = true
     queueControllerRef.current.paused = false
     setQueueRunning(true)
@@ -1410,13 +1475,102 @@ function ExportPanel() {
 
   const handleStartExport = async () => {
     if (isExporting || queueRunning) return
+    const jobSettings = Object.freeze({ ...settings })
+    const exportAttempt = ++provenanceAttemptRef.current
+    setManualProvenanceCandidate(null)
+    setProvenanceReviewState(EMPTY_PROVENANCE_REVIEW)
     try {
-      await runExportJob(settings)
+      const result = await runExportJob(jobSettings)
+      if (exportAttempt !== provenanceAttemptRef.current) return
+      const candidate = Object.freeze({
+        outputPath: result?.outputPath,
+        format: jobSettings.format,
+      })
+      if (isProvenanceEligibleExport(candidate)) {
+        setManualProvenanceCandidate(candidate)
+      }
     } catch (err) {
       const cancelled = isCleanExportCancellation(err)
       setExportError(cancelled ? null : (err.message || 'Export failed'))
       setExportStatus(cancelled ? 'Export stopped' : 'Export failed')
       setIsExporting(false)
+    }
+  }
+
+  const handlePrepareProvenanceReview = async () => {
+    const candidate = manualProvenanceCandidate
+    if (!candidate || provenanceReviewState.status === 'hashing') return
+    if (!window.electronAPI?.inspectExportForProvenance) {
+      setProvenanceReviewState({
+        status: 'error',
+        review: null,
+        error: t('export.provenance.desktopOnly'),
+        notice: '',
+      })
+      return
+    }
+
+    const attempt = ++provenanceAttemptRef.current
+    setProvenanceReviewState({ status: 'hashing', review: null, error: '', notice: '' })
+    try {
+      const inspection = await window.electronAPI.inspectExportForProvenance(candidate.outputPath)
+      if (attempt !== provenanceAttemptRef.current) return
+      if (inspection?.success !== true) {
+        throw new Error(inspection?.error || 'Local hashing did not complete.')
+      }
+      const review = await createCreatorProvenanceReview({
+        outputPath: candidate.outputPath,
+        format: candidate.format,
+        byteLength: inspection.byteLength,
+        mediaSha256: inspection.sha256,
+        mimeType: inspection.mimeType,
+      })
+      if (attempt !== provenanceAttemptRef.current) return
+      setProvenanceReviewState({ status: 'ready', review, error: '', notice: '' })
+    } catch {
+      if (attempt !== provenanceAttemptRef.current) return
+      setProvenanceReviewState({
+        status: 'error',
+        review: null,
+        error: t('export.provenance.prepareFailed'),
+        notice: '',
+      })
+    }
+  }
+
+  const handleOpenProvenanceReview = async () => {
+    const review = provenanceReviewState.review
+    if (!review || provenanceReviewState.status !== 'ready') return
+    if (!window.electronAPI?.openProvenanceReview) {
+      setProvenanceReviewState({
+        status: 'ready',
+        review,
+        error: t('export.provenance.openDesktopOnly'),
+        notice: '',
+      })
+      return
+    }
+
+    const attempt = provenanceAttemptRef.current
+    setProvenanceReviewState({ status: 'opening', review, error: '', notice: '' })
+    try {
+      const result = await window.electronAPI.openProvenanceReview(review.issueUrl)
+      if (attempt !== provenanceAttemptRef.current) return
+      if (result?.success !== true) throw new Error('The public review did not open.')
+      setProvenanceReviewState({
+        status: 'ready',
+        review,
+        error: '',
+        notice: t('export.provenance.opened'),
+      })
+    } catch {
+      if (attempt !== provenanceAttemptRef.current) return
+      setProvenanceReviewState({
+        status: 'ready',
+        review,
+        error: t('export.provenance.openFailed'),
+        notice: '',
+      })
     }
   }
 
@@ -1432,6 +1586,9 @@ function ExportPanel() {
     }
 
     setIsXmlExporting(true)
+    provenanceAttemptRef.current += 1
+    setManualProvenanceCandidate(null)
+    setProvenanceReviewState(EMPTY_PROVENANCE_REVIEW)
     setExportError(null)
     setExportResult(null)
     setExportProgress(0)
@@ -2353,6 +2510,109 @@ function ExportPanel() {
               )}
               {exportResult.encoderUsed && exportResult.format !== 'png-seq' && exportResult.encoderUsed !== 'png-sequence' && (
                 <div>{t('export.encoder')}: {exportResult.encoderUsed}</div>
+              )}
+            </div>
+          )}
+
+          {manualProvenanceCandidate?.outputPath === exportResult?.outputPath && !exportError && (
+            <div className="mt-3 min-h-0 max-h-80 overflow-y-auto rounded-lg border border-sf-accent/35 bg-sf-dark-800/70 p-3">
+              <div className="flex items-start gap-2">
+                <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-sf-accent" />
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-semibold text-sf-text-primary">{t('export.provenance.title')}</span>
+                    <span className="rounded border border-sf-dark-600 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-sf-text-muted">
+                      {t('export.provenance.optional')}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[10px] leading-relaxed text-sf-text-secondary">
+                    {t('export.provenance.intro')}
+                  </p>
+                </div>
+              </div>
+
+              {(provenanceReviewState.status === 'idle' || provenanceReviewState.status === 'error') && (
+                <div className="mt-3">
+                  {provenanceReviewState.error && (
+                    <div className="mb-2 text-[10px] leading-relaxed text-sf-error">
+                      {provenanceReviewState.error}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handlePrepareProvenanceReview}
+                    className="rounded border border-sf-accent/50 bg-sf-accent/10 px-2.5 py-1.5 text-[10px] font-medium text-sf-accent transition-colors hover:bg-sf-accent/20"
+                  >
+                    {t('export.provenance.prepare')}
+                  </button>
+                </div>
+              )}
+
+              {provenanceReviewState.status === 'hashing' && (
+                <div className="mt-3 rounded border border-sf-dark-600 bg-sf-dark-900/70 p-2.5 text-[10px] text-sf-text-secondary">
+                  {t('export.provenance.hashing')}
+                </div>
+              )}
+
+              {provenanceReviewState.review && (
+                <div className="mt-3 space-y-2.5">
+                  <div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-sf-text-muted">
+                      {t('export.provenance.reviewHeading')}
+                    </div>
+                    <div className="mt-1 rounded border border-sf-dark-600 bg-sf-dark-900/70">
+                      {publicProvenanceFields(provenanceReviewState.review, t).map(([label, value]) => (
+                        <div
+                          key={label}
+                          className="grid grid-cols-[8.5rem_minmax(0,1fr)] gap-2 border-b border-sf-dark-700 px-2.5 py-1.5 last:border-b-0"
+                        >
+                          <span className="text-[9px] text-sf-text-muted">{label}</span>
+                          <span className="break-all font-mono text-[9px] text-sf-text-secondary">{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded border border-sf-success/30 bg-sf-success/5 p-2 text-[10px] leading-relaxed text-sf-text-secondary">
+                    {t('export.provenance.notIncluded')}
+                  </div>
+                  <div className="rounded border border-sf-warning/40 bg-sf-warning/5 p-2 text-[10px] leading-relaxed text-sf-text-secondary">
+                    {t('export.provenance.readableLink')}
+                  </div>
+                  <p className="text-[10px] leading-relaxed text-sf-text-muted">
+                    {t('export.provenance.reviewOnly')}
+                  </p>
+                  <p className="text-[10px] leading-relaxed text-sf-text-muted">
+                    {t('export.provenance.claimBoundary')}
+                  </p>
+
+                  {provenanceReviewState.error && (
+                    <div className="text-[10px] leading-relaxed text-sf-error">
+                      {provenanceReviewState.error}
+                    </div>
+                  )}
+                  {provenanceReviewState.notice && (
+                    <div className="text-[10px] leading-relaxed text-sf-success">
+                      {provenanceReviewState.notice}
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleOpenProvenanceReview}
+                    disabled={provenanceReviewState.status === 'opening'}
+                    className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-[10px] font-medium transition-colors ${
+                      provenanceReviewState.status === 'opening'
+                        ? 'cursor-not-allowed border-sf-dark-600 bg-sf-dark-800 text-sf-text-muted'
+                        : 'border-sf-accent bg-sf-accent text-white hover:bg-sf-accent-hover'
+                    }`}
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    {provenanceReviewState.status === 'opening'
+                      ? t('export.provenance.opening')
+                      : t('export.provenance.open')}
+                  </button>
+                </div>
               )}
             </div>
           )}
